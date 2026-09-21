@@ -37,7 +37,7 @@
     "@xterm/headless": "^6.0.0",
     "better-sqlite3": "^11.8.1",
     "croner": "^9.0.0",
-    "express": "^4.21.2",
+    "express": "^5.2.1",
     "node-pty": "^1.1.0",
     "unpdf": "^1.8.0",
     "web-push": "^3.6.7",
@@ -46,7 +46,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
-    "@types/express": "^4.17.21",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.10.5",
     "@types/web-push": "^3.6.4",
     "@types/ws": "^8.5.13",
