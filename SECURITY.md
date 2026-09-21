@@ -19,7 +19,8 @@ unattended. That is the product, not a bug. Everything below is about bounding i
 token is a single credential, not a login, and anyone who holds it can open a shell through the
 terminal WebSocket. Do not expose the port to a network you do not control. If you want it on your
 phone, put an authenticating tunnel in front of it — the daemon is not the thing that should be
-deciding whether a stranger gets in.
+deciding whether a stranger gets in. The recipe we use (Cloudflare Tunnel + Access in front of
+`127.0.0.1:7777`) is in [CONFIGURATION.md §4](./CONFIGURATION.md#4-optional-reach-it-from-your-phone).
 
 ## The boundaries that do exist
 

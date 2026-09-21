@@ -100,7 +100,12 @@ CHRONOS_PROFILES=work=/opt/shared/.claude-work # for directories that don't foll
 
 ### 4. Optional: reach it from your phone
 
-Both are off unless configured, and the daemon says so at boot.
+The Phone surface (`/phone`) is a PWA. The daemon itself still only listens on localhost — Chronos
+does **not** ship a public tunnel. Two outbound options need no inbound port at all (Telegram and
+the optional relay Worker). To open Desk / Phone from the public internet the way this project is
+run day-to-day, put **Cloudflare Tunnel + Cloudflare Access** in front of `127.0.0.1:7777`.
+
+Telegram and the relay are off unless configured, and the daemon says so at boot:
 
 ```bash
 CHRONOS_TG_TOKEN=            # from @BotFather; enables the Telegram bot
@@ -109,6 +114,83 @@ CHRONOS_TG_CHAT_ID=          # locks control + notifications to one chat. /start
 CHRONOS_RELAY_URL=wss://your-relay.workers.dev/ws   # see relay/ — remote triggers, no inbound port
 CHRONOS_RELAY_TOKEN=
 ```
+
+#### Cloudflare Tunnel + Access (recommended for `/phone`)
+
+This matches the reference setup: a named tunnel whose only public hostname points at the local
+daemon, with a Zero Trust Access app on that hostname so strangers never reach the admin token or
+the terminal WebSocket. Access is the authenticator; Chronos stays a single-operator local daemon
+behind it. See [SECURITY.md](./SECURITY.md).
+
+**You need:** a domain on Cloudflare, a [Zero Trust](https://one.dash.cloudflare.com/) team (the
+free tier is enough for one operator), Homebrew `cloudflared`, and Chronos already serving
+`http://127.0.0.1:7777` (default `CHRONOS_PORT`).
+
+1. **Create a named tunnel.** In Zero Trust → *Networks* → *Tunnels* → *Create a tunnel* →
+   Cloudflared. Name it something stable (`chronos-desk`). Cloudflare shows an install token once —
+   copy it.
+
+2. **Save the token on the Mac** (never commit it):
+
+   ```bash
+   mkdir -p ~/.cloudflared
+   # paste the token only — one line, no quotes
+   pbpaste > ~/.cloudflared/chronos-desk.token
+   chmod 600 ~/.cloudflared/chronos-desk.token
+   ```
+
+   The filename `chronos-desk.token` is what `npm run install:launchd -- --all` looks for when it
+   installs the optional `sh.chronos.cloudflared` agent. Use that name, or edit the generated plist
+   later.
+
+3. **Public hostname → localhost.** Still on the tunnel: *Public Hostname* → *Add*.
+
+   | field | value |
+   |---|---|
+   | Subdomain | e.g. `desk` |
+   | Domain | your zone |
+   | Type | HTTP |
+   | URL | `127.0.0.1:7777` |
+
+   Leave path empty so `/desk`, `/phone`, `/api`, and the WebSocket upgrade all share one host.
+   Save. Cloudflare stores the ingress remotely — `cloudflared tunnel run --token-file …` needs no
+   local `config.yml`.
+
+4. **Protect it with Access.** Zero Trust → *Access* → *Applications* → *Add an application* →
+   *Self-hosted*.
+
+   - Application domain: the same hostname (`desk.example.com`).
+   - Session duration: something phone-friendly (e.g. 30 days / `720h`) so you are not re-authing
+     every morning.
+   - Identity providers: leave the team defaults (One-time PIN / Google / etc.).
+   - Policy: **Allow**, include only *Emails* → your address (or a tight group). Name it clearly
+     (`you only`). No bypass policies, no “Everyone”.
+
+5. **Run `cloudflared` at login.** From the Chronos checkout:
+
+   ```bash
+   brew install cloudflared          # once
+   npm run install:launchd -- --all  # loads sh.chronos.cloudflared when the token file exists
+   ```
+
+   That renders `launchd/sh.chronos.cloudflared.plist.template` with this machine's paths and
+   bootstraps it (`RunAtLoad` + `KeepAlive`). Equivalent manual command:
+
+   ```bash
+   cloudflared tunnel run --token-file ~/.cloudflared/chronos-desk.token
+   ```
+
+6. **Install the PWA.** On the phone, open `https://desk.example.com/phone`, complete the Access
+   login, then use the browser's *Add to Home Screen*. After that, Web Push (`CHRONOS_PUSH`) and the
+   service worker talk to the same origin through the tunnel.
+
+**Checks.** Tunnel *Healthy* in the Zero Trust UI; `curl -sI https://desk.example.com/` returns an
+Access redirect (or 200 only *after* you have an Access session cookie); without a session you must
+not see Chronos HTML. If the tunnel is up but Access is missing, you have published an unauthenticated
+shell to the internet — fix Access before you bookmark it.
+
+**Not the same as** the optional `relay/` Worker (daemon dials *out* for remote triggers) or the
+sandbox egress “tunnel” (agent CONNECT proxy). Those are unrelated knobs.
 
 ---
 
