@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chronos — the night shift, automated</title>
+<meta name="description" content="Chronos is a local daemon that runs AI coding agents unattended and supervises them like a team. Open source, Apache 2.0, one always-on Mac.">
+<!-- CANONICAL_URL placeholder: replace every occurrence of "https://chronos.example" in this file with the real domain in one pass once it's assigned. -->
+<link rel="canonical" href="https://chronos.example/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Chronos">
+<meta property="og:title" content="Chronos — the night shift, automated">
+<meta property="og:description" content="A local daemon that runs AI coding agents unattended and supervises them like a team. Open source, Apache 2.0.">
+<meta property="og:url" content="https://chronos.example/">
+<meta property="og:image" content="https://chronos.example/assets/og-cover.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Chronos — the night shift, automated">
+<meta name="twitter:description" content="A local daemon that runs AI coding agents unattended and supervises them like a team.">
+<meta name="twitter:image" content="https://chronos.example/assets/og-cover.jpg">
+<meta name="theme-color" content="#07080b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f1e7" media="(prefers-color-scheme: light)">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,900;1,9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a href="#top" class="brand">
+      <span class="mascot brand-mascot" data-mascot-src="assets/mascot.svg" aria-hidden="true">
+        <svg class="mascot-fallback" viewBox="0 0 150 180" aria-hidden="true">
+          <g class="limbs">
+            <path d="M26 66 q -13 6 -13 17" fill="none" stroke="#7C87A3" stroke-width="9" stroke-linecap="round"></path>
+            <path d="M124 66 q 13 6 13 17" fill="none" stroke="#7C87A3" stroke-width="9" stroke-linecap="round"></path>
+            <path d="M56 133 V150 M94 133 V150" fill="none" stroke="#7C87A3" stroke-width="11" stroke-linecap="round"></path>
+            <path d="M50 157 h16 M100 157 h-16" fill="none" stroke="#6A7593" stroke-width="11" stroke-linecap="round"></path>
+          </g>
+          <g class="frame">
+            <rect x="16" y="14" width="118" height="16" rx="8" fill="#7C87A3"></rect>
+            <rect x="16" y="118" width="118" height="16" rx="8" fill="#7C87A3"></rect>
+          </g>
+          <g class="glass">
+            <path d="M28 30 C 30 52, 62 64, 75 76 C 88 64, 120 52, 122 30 Z" fill="#0E1424"></path>
+            <path d="M28 118 C 30 96, 62 88, 75 78 C 88 88, 120 96, 122 118 Z" fill="#0E1424"></path>
+          </g>
+          <path class="sand-top" d="M34.6 38.2 Q 75 51.2 115.4 38.2 L 75 76 Z" fill="#FFB020"></path>
+          <rect class="stream" x="73.3" y="74" width="3.4" height="34" fill="#FFB020"></rect>
+          <path class="sand-bottom" d="M34.6 114.1 Q 75 101.1 115.4 114.1 L 122 120 L 28 120 Z" fill="#FFB020"></path>
+          <g class="eye">
+            <circle cx="59" cy="50" r="10" fill="#EDE7DA"></circle>
+            <circle cx="91" cy="50" r="10" fill="#EDE7DA"></circle>
+            <circle cx="60.5" cy="50" r="4.6" fill="#1B2136"></circle>
+            <circle cx="92.5" cy="50" r="4.6" fill="#1B2136"></circle>
+          </g>
+        </svg>
+      </span>
+      <span class="brand-name">Chronos</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a class="text-link" href="https://github.com/leorfer23/getchronos/blob/main/README.md">Docs</a>
+      <button id="groundToggle" class="ground-toggle" type="button" aria-label="Toggle between ink and paper grounds">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+        <span class="ground-toggle-label">Ink</span>
+      </button>
+      <a class="btn btn-ghost" href="https://github.com/leorfer23/getchronos">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+        GitHub
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero" id="top" aria-label="Introduction">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="hero-clock"><span id="clockValue" class="value">03:07</span><span>· night shift</span></p>
+      <h1>Somewhere, right now, an agent is working the night shift.</h1>
+      <p id="localTimeLine" class="hero-local-line">It is 03:07 where you are. Good — this is when it matters.</p>
+      <p class="hero-sub">Give Chronos a project, a repo, and a ticket. It spawns the agent, watches for trouble, and tells you what happened.</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="https://github.com/leorfer23/getchronos">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+          View on GitHub
+        </a>
+      </div>
+      <div class="quickstart">
+        <div class="quickstart-bar">
+          <span class="quickstart-label">quickstart.sh</span>
+          <button class="copy-btn" type="button" data-copy="git clone https://github.com/leorfer23/getchronos.git && cd getchronos
+npm ci
+npm start">copy</button>
+        </div>
+        <pre><code>git clone https://github.com/leorfer23/getchronos.git &amp;&amp; cd getchronos
+npm ci
+npm start</code></pre>
+      </div>
+      <div class="scrubber-wrap">
+        <div class="scrubber-label"><span>23:40</span><span>drag the night</span><span>07:30</span></div>
+        <input type="range" id="scrubber" class="scrubber" min="0" max="470" step="1" value="207" aria-label="Time of night, 23:40 to 07:30">
+        <div class="scrubber-ticks"><span>dusk</span><span>deep night</span><span>pre-dawn</span><span>dawn</span></div>
+        <button id="jump3am" class="jump-3am" type="button">jump to 3am <kbd>3</kbd></button>
+      </div>
+    </div>
+    <aside class="hero-desk" aria-label="A mock of the Chronos Desk, for illustration only">
+      <div class="desk-mock-title">
+        <h2>the desk (mock)</h2>
+      </div>
+      <div class="desk-grid">
+        <div class="desk-card" data-state="idle" data-timeline="1:working;290:review;322:review;395:done">
+          <div class="desk-card-name">acme-api</div>
+          <div class="desk-card-state"><span class="desk-dot" aria-hidden="true"></span><span class="state-text">idle</span></div>
+        </div>
+        <div class="desk-card" data-state="idle" data-timeline="78:working;92:stalled">
+          <div class="desk-card-name">storefront</div>
+          <div class="desk-card-state"><span class="desk-dot" aria-hidden="true"></span><span class="state-text">idle</span></div>
+        </div>
+        <div class="desk-card" data-state="idle" data-timeline="1:working;207:waiting;209:working;395:done">
+          <div class="desk-card-name">docs-site</div>
+          <div class="desk-card-state"><span class="desk-dot" aria-hidden="true"></span><span class="state-text">idle</span></div>
+        </div>
+        <div class="desk-card" data-state="idle" data-timeline="10:working">
+          <div class="desk-card-name">mobile-app</div>
+          <div class="desk-card-state"><span class="desk-dot" aria-hidden="true"></span><span class="state-text">idle</span></div>
+        </div>
+      </div>
+      <p class="desk-caption">A mock of the real Desk — demo names, no live data. Drag the clock above to watch it change.</p>
+    </aside>
+  </div>
+</section>
+
+<section class="log" id="log" aria-labelledby="log-heading">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="log-heading">The night's log</h2>
+      <p>Nine hours, real behavior, nothing invented. Every line below maps to something true in the daemon's own docs.</p>
+    </div>
+    <ol class="log-list">
+      <li class="log-entry" data-time="1" data-active="false">
+        <time class="log-time">23:41</time>
+        <h3>Ticket filed. Worktree opened.</h3>
+        <p>A ticket is a commitment — a key, a lifecycle, a file the agent actually reads. Its own git worktree means it can't fight another agent over a dirty tree.</p>
+        <span class="path">src/tickets.ts · src/worktrees.ts</span>
+      </li>
+      <li class="log-entry" data-time="78" data-active="false">
+        <time class="log-time">00:58</time>
+        <h3>A cheap model grades. An expensive one builds.</h3>
+        <p>Every ticket is graded for difficulty before anything spends real money, so a trivial fix never gets billed to the model reserved for the hard stuff.</p>
+        <span class="path">src/quota-gate.ts</span>
+      </li>
+      <li class="log-entry" data-time="92" data-active="false">
+        <time class="log-time">01:12</time>
+        <h3>storefront stalls. It files a card. It does not retry.</h3>
+        <p>When a run stops emitting progress, the supervisor kills it and opens an approval card. An automatic retry on a real failure is just the same failure again, twice as expensive.</p>
+        <span class="path">src/monitor.ts</span>
+      </li>
+      <li class="log-entry" data-time="207" data-active="false">
+        <time class="log-time">03:07</time>
+        <span class="mascot" data-mascot-src="assets/mascot.svg" aria-hidden="true">
+          <svg class="mascot-fallback" viewBox="0 0 150 180" aria-hidden="true">
+            <g class="limbs">
+              <path d="M26 66 q -13 6 -13 17" fill="none" stroke="#7C87A3" stroke-width="9" stroke-linecap="round"></path>
+              <path d="M124 66 q 13 6 13 17" fill="none" stroke="#7C87A3" stroke-width="9" stroke-linecap="round"></path>
+              <path d="M56 133 V150 M94 133 V150" fill="none" stroke="#7C87A3" stroke-width="11" stroke-linecap="round"></path>
+              <path d="M50 157 h16 M100 157 h-16" fill="none" stroke="#6A7593" stroke-width="11" stroke-linecap="round"></path>
+            </g>
+            <g class="frame">
+              <rect x="16" y="14" width="118" height="16" rx="8" fill="#7C87A3"></rect>
+              <rect x="16" y="118" width="118" height="16" rx="8" fill="#7C87A3"></rect>
+            </g>
+            <g class="glass">
+              <path d="M28 30 C 30 52, 62 64, 75 76 C 88 64, 120 52, 122 30 Z" fill="#0E1424"></path>
+              <path d="M28 118 C 30 96, 62 88, 75 78 C 88 88, 120 96, 122 118 Z" fill="#0E1424"></path>
+            </g>
+            <path class="sand-top" d="M34.6 38.2 Q 75 51.2 115.4 38.2 L 75 76 Z" fill="#FFB020"></path>
+            <rect class="stream" x="73.3" y="74" width="3.4" height="34" fill="#FFB020"></rect>
+            <path class="sand-bottom" d="M34.6 114.1 Q 75 101.1 115.4 114.1 L 122 120 L 28 120 Z" fill="#FFB020"></path>
+            <g class="eye">
+              <circle cx="59" cy="50" r="10" fill="#EDE7DA"></circle>
+              <circle cx="91" cy="50" r="10" fill="#EDE7DA"></circle>
+              <circle cx="60.5" cy="50" r="4.6" fill="#1B2136"></circle>
+              <circle cx="92.5" cy="50" r="4.6" fill="#1B2136"></circle>
+            </g>
+          </svg>
+        </span>
+        <h3>docs-site stops and asks. Your phone buzzes.</h3>
+        <p><code>mc ask</code> parks the run on a real question instead of guessing. It goes to the coordinator first, who answers it from the project's own memory, or wakes you.</p>
+        <span class="path">src/asks.ts · src/ask-robert.ts</span>
+      </li>
+      <li class="log-entry" data-time="209" data-active="false">
+        <time class="log-time">03:09</time>
+        <h3>You answer from bed. It resumes.</h3>
+        <p>A headless run can be interrupted into a live terminal mid-flight, and back out again, without losing its context.</p>
+        <span class="path">POST /api/runs/:id/continue</span>
+      </li>
+      <li class="log-entry" data-time="290" data-active="false">
+        <time class="log-time">04:30</time>
+        <h3>A review run reads the diff.</h3>
+        <p>Plan, build, review, grade, CI-fix, merge-gate — each is its own run, with its own prompt and its own tool scope.</p>
+        <span class="path">src/runner.ts</span>
+      </li>
+      <li class="log-entry" data-time="322" data-active="false">
+        <time class="log-time">05:02</time>
+        <h3>Rework, round two. Oldest complaint first.</h3>
+        <p>Every review is fed back in full, in order, with one instruction: satisfy all of them at once. A ticket once oscillated three rounds because it wasn't.</p>
+        <span class="path">src/tickets.ts · evals/cases/rework.json</span>
+      </li>
+      <li class="log-entry" data-time="395" data-active="false">
+        <time class="log-time">06:15</time>
+        <h3>Merge gate.</h3>
+        <p>The last run before anything lands checks what was promised against what actually shipped.</p>
+        <span class="path">src/runner.ts</span>
+      </li>
+      <li class="log-entry" data-time="470" data-active="false">
+        <time class="log-time">07:30</time>
+        <h3>You wake up. The PR is open.</h3>
+        <p>What it cost and what it learned are both sitting there — the learning part a file you can read, not a black box, mirrored one-way to <code>notes/&lt;project&gt;/*.md</code>.</p>
+        <span class="path">src/notes.ts · src/recall.ts</span>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section class="proof" aria-labelledby="proof-heading">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="proof-heading">This is the actual Desk</h2>
+      <p>Not a mock this time — the real wall of cards.</p>
+    </div>
+    <div class="proof-grid">
+      <figure class="proof-item">
+        <div class="media-frame" data-label="the desk — a wall of terminal cards">
+          <img src="assets/desk-hero.webp" alt="The Chronos Desk showing a wall of live terminal cards" loading="lazy" onerror="this.remove()">
+        </div>
+        <p>The Desk</p>
+      </figure>
+      <figure class="proof-item">
+        <div class="media-frame" data-label="a ticket moving through a run">
+          <img src="assets/ticket-run.webp" alt="A ticket's run in progress on the Desk" loading="lazy" onerror="this.remove()">
+        </div>
+        <p>Ticket → run</p>
+      </figure>
+      <figure class="proof-item">
+        <div class="media-frame" data-label="an agent's question, parked">
+          <img src="assets/ask.webp" alt="An agent's question parked on the Desk, waiting for an answer" loading="lazy" onerror="this.remove()">
+        </div>
+        <p>Stop and ask</p>
+      </figure>
+      <figure class="proof-item">
+        <div class="media-frame" data-label="triage from the phone">
+          <img src="assets/phone.webp" alt="The Chronos phone surface, used to triage from bed" loading="lazy" onerror="this.remove()">
+        </div>
+        <p>Phone</p>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="backends" aria-labelledby="backends-heading">
+  <div class="wrap">
+    <div class="backends-head">
+      <h2 id="backends-heading">Drives whichever CLI you already pay for</h2>
+    </div>
+    <div class="backend-pills">
+      <span class="pill">Claude Code</span>
+      <span class="pill">Codex</span>
+      <span class="pill">Cursor</span>
+      <span class="pill">Grok</span>
+      <span class="pill">opencode</span>
+    </div>
+    <p class="backends-note">One interface behind all of them, so a cheap model can grade a ticket and an expensive one can build it.</p>
+  </div>
+</section>
+
+<section class="guardrails" aria-labelledby="guardrails-heading">
+  <div class="wrap guardrails-grid">
+    <div>
+      <h2 id="guardrails-heading">Guardrails, honestly</h2>
+      <ul>
+        <li><strong>Sandbox, per job:</strong> off / guard / strict. guard denies secrets and every other project's directories, kernel-enforced via Seatbelt. macOS-only — elsewhere jobs run unsandboxed, and the daemon says so.</li>
+        <li><strong>Project scoping is a security boundary.</strong> Any endpoint that touches a run or ticket by id checks it belongs to the caller's project. A missed check once let one project drain another's mailbox.</li>
+        <li><strong>Budgets and a burn guard:</strong> wall-clock timeout, per-run and daily spend caps, concurrency limits, and a halt on runs/hour and $/hour — a runaway can spend a whole day's budget in four minutes.</li>
+        <li><strong>Agents run with <code>--dangerously-skip-permissions</code>.</strong> That's what unattended autonomy means. Everything above exists to bound it.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>What this is not</h2>
+      <ul>
+        <li>Not a hosted service, a CI system, or a product with a support contract.</li>
+        <li>Built for one trusted operator on one machine — no multi-user model. The admin token is a bearer credential, not a login.</li>
+        <li>Not something that quietly retries a real failure, or merges a change without the checks you configured.</li>
+        <li>Open because the patterns are worth stealing — not because it's finished.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <a href="#top" class="brand">
+          <span class="mascot brand-mascot" data-mascot-src="assets/mascot.svg" aria-hidden="true">
+            <svg class="mascot-fallback" viewBox="0 0 150 180" aria-hidden="true">
+              <g class="limbs">
+                <path d="M26 66 q -13 6 -13 17" fill="none" stroke="#7C87A3" stroke-width="9" stroke-linecap="round"></path>
+                <path d="M124 66 q 13 6 13 17" fill="none" stroke="#7C87A3" stroke-width="9" stroke-linecap="round"></path>
+                <path d="M56 133 V150 M94 133 V150" fill="none" stroke="#7C87A3" stroke-width="11" stroke-linecap="round"></path>
+                <path d="M50 157 h16 M100 157 h-16" fill="none" stroke="#6A7593" stroke-width="11" stroke-linecap="round"></path>
+              </g>
+              <g class="frame">
+                <rect x="16" y="14" width="118" height="16" rx="8" fill="#7C87A3"></rect>
+                <rect x="16" y="118" width="118" height="16" rx="8" fill="#7C87A3"></rect>
+              </g>
+              <g class="glass">
+                <path d="M28 30 C 30 52, 62 64, 75 76 C 88 64, 120 52, 122 30 Z" fill="#0E1424"></path>
+                <path d="M28 118 C 30 96, 62 88, 75 78 C 88 88, 120 96, 122 118 Z" fill="#0E1424"></path>
+              </g>
+              <path class="sand-top" d="M34.6 38.2 Q 75 51.2 115.4 38.2 L 75 76 Z" fill="#FFB020"></path>
+              <rect class="stream" x="73.3" y="74" width="3.4" height="34" fill="#FFB020"></rect>
+              <path class="sand-bottom" d="M34.6 114.1 Q 75 101.1 115.4 114.1 L 122 120 L 28 120 Z" fill="#FFB020"></path>
+              <g class="eye">
+                <circle cx="59" cy="50" r="10" fill="#EDE7DA"></circle>
+                <circle cx="91" cy="50" r="10" fill="#EDE7DA"></circle>
+                <circle cx="60.5" cy="50" r="4.6" fill="#1B2136"></circle>
+                <circle cx="92.5" cy="50" r="4.6" fill="#1B2136"></circle>
+              </g>
+            </svg>
+          </span>
+          <span class="brand-name">Chronos</span>
+        </a>
+        <p>A local daemon that runs AI coding agents unattended, and supervises them like a team. Built for one operator, one always-on Mac, and the nights that made the guardrails necessary.</p>
+      </div>
+      <div class="footer-links">
+        <div class="footer-col">
+          <h4>Project</h4>
+          <ul>
+            <li><a href="https://github.com/leorfer23/getchronos">GitHub</a></li>
+            <li><a href="https://github.com/leorfer23/getchronos/blob/main/README.md">README</a></li>
+            <li><a href="https://github.com/leorfer23/getchronos/blob/main/CONTRIBUTING.md">Contributing</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Docs</h4>
+          <ul>
+            <li><a href="https://github.com/leorfer23/getchronos/blob/main/ARCHITECTURE.md">Architecture</a></li>
+            <li><a href="https://github.com/leorfer23/getchronos/blob/main/MISSION-CONTROL.md">Mission Control</a></li>
+            <li><a href="https://github.com/leorfer23/getchronos/blob/main/LEADS.md">Leads</a></li>
+            <li><a href="https://github.com/leorfer23/getchronos/blob/main/CONFIGURATION.md">Configuration</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Legal</h4>
+          <ul>
+            <li><a href="https://github.com/leorfer23/getchronos/blob/main/LICENSE">Apache 2.0</a></li>
+            <li><a href="https://github.com/leorfer23/getchronos/blob/main/SECURITY.md">Security</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 Chronos contributors.</span>
+      <span>It's later than you think. <a href="#top">Back to the top of the night.</a></span>
+    </div>
+  </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
