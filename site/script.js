@@ -45,7 +45,7 @@
   var localLine = document.getElementById('localTimeLine');
   var logEntries = Array.prototype.slice.call(document.querySelectorAll('.log-entry[data-time]'));
   var deskCards = Array.prototype.slice.call(document.querySelectorAll('.desk-card[data-timeline]'));
-  var logRailMascot = document.getElementById('logRailMascot');
+  var logRailMascot = document.querySelector('.log-rail-mascot');
   var logListEl = document.querySelector('.log-list');
   var nightLogWrap = document.querySelector('.night-log-wrap');
   var html = document.documentElement;

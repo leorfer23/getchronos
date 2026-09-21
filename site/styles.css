@@ -512,6 +512,23 @@ section {
   max-width: 46ch;
 }
 
+.hero-capacity-claim {
+  margin-top: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+  max-width: 46ch;
+}
+
+.hero-supporting-line {
+  margin-top: var(--space-5);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 16px;
+  color: var(--ink-tertiary);
+}
+
 .hero-actions {
   margin-top: var(--space-6);
   display: flex;
@@ -599,7 +616,10 @@ section {
 }
 
 .rail-mascot {
-  height: 58px;
+  /* Above the mascot's own documented 96px halftone-legibility floor —
+     below it the dot screen "turns to mud" and the animation reads as
+     invisible, which is what happened at the old 58px. */
+  height: 104px;
   margin: 0 auto var(--space-3);
 }
 
@@ -1317,6 +1337,14 @@ input[type='range'].scrubber::-moz-range-thumb {
 
 /* copy pass v2: hero-block, fact lists, compare, desk centerpiece */
 
+.hero {
+  /* No override here fell through to the generic 96px section padding,
+     stacked with .night-intro's own 48px top padding below = ~226px of
+     dead air before the headline. Tightened so the first screen is full. */
+  padding-top: var(--space-6);
+  padding-bottom: var(--space-12);
+}
+
 .hero-grid-v2 {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
@@ -1330,25 +1358,259 @@ input[type='range'].scrubber::-moz-range-thumb {
      has no matching named area in .hero-grid-v2 and corrupts its implicit
      tracks. Reset back to normal auto-placement here. */
   grid-area: auto;
+  /* Same class also sets padding-top:48px for its other use — not needed
+     here now that .hero itself is tight. */
+  padding-top: 0;
 }
 
 .hero-visual {
   min-width: 0;
-  padding-top: var(--space-12);
 }
 
 .hero-illustration {
-  aspect-ratio: 4 / 5;
+  /* Matches app-fleet-scale.png's real 1344x768 (7:4) so nothing crops. */
+  aspect-ratio: 7 / 4;
   margin-bottom: var(--space-6);
+}
+
+/* Default (no JS): show the static illustration, hide the live scene.
+   The inline <script> in <head> flips html.no-js -> html.js before paint. */
+.hero-live-desk {
+  display: none;
+}
+
+html.js .hero-live-desk {
+  display: block;
+  margin-bottom: var(--space-6);
+}
+
+html.js .hero-illustration {
+  display: none;
 }
 
 .hero-clock-overlay {
   text-align: center;
 }
 
-.hero-mascot {
-  height: 48px;
-  margin: 0 auto var(--space-3);
+/* living hero Desk scene */
+
+.hero-live-desk {
+  position: relative;
+  aspect-ratio: 7 / 4;
+  border: 2px dotted var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-2);
+  overflow: hidden;
+  padding: var(--space-3) var(--space-3) 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.live-lamp-glow {
+  position: absolute;
+  inset: -30% -10% 30% -10%;
+  background: radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 62%);
+  animation: live-lamp-drift 8s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@keyframes live-lamp-drift {
+  0%, 100% {
+    opacity: 0.55;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.9;
+    transform: translateY(5px);
+  }
+}
+
+.live-wall {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+}
+
+.live-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 6px 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 600ms var(--ease-out);
+}
+
+.live-bar {
+  display: block;
+  height: 4px;
+  width: 34%;
+  border-radius: 2px;
+  background-image: radial-gradient(var(--ink-secondary) 0.5px, transparent 0.6px);
+  background-size: 3px 3px;
+  opacity: 0.8;
+}
+
+.live-line {
+  display: block;
+  height: 3px;
+  border-radius: 1.5px;
+  width: 72%;
+  background-image: radial-gradient(var(--ink-secondary) 0.5px, transparent 0.6px);
+  background-size: 3px 3px;
+  transform-origin: left center;
+  transform: scaleX(0);
+  animation: live-type 700ms steps(8, end) forwards, live-idle-pulse 4.2s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 220ms + 300ms), calc(var(--i, 0) * 220ms + 1400ms);
+}
+
+.live-line:nth-child(3) {
+  width: 50%;
+}
+
+@keyframes live-type {
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes live-idle-pulse {
+  0%, 100% {
+    opacity: 0.75;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.live-line-cursor {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.live-line-cursor .live-line {
+  width: 48%;
+}
+
+.live-cursor {
+  width: 4px;
+  height: 8px;
+  flex-shrink: 0;
+  background: var(--accent);
+  animation: live-blink 1s steps(2, jump-none) infinite;
+  animation-delay: 1.6s;
+}
+
+@keyframes live-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.live-card--ok {
+  animation: live-card-ok 1s var(--ease-out) forwards;
+  animation-delay: 4.6s;
+}
+
+@keyframes live-card-ok {
+  from {
+    border-color: var(--border);
+  }
+  to {
+    border-color: #6fcf97;
+  }
+}
+
+.live-card--ok .live-bar {
+  animation: live-bar-ok 1s var(--ease-out) forwards;
+  animation-delay: 4.6s;
+}
+
+@keyframes live-bar-ok {
+  to {
+    background-image: none;
+    background-color: #6fcf97;
+    opacity: 1;
+  }
+}
+
+.live-card--blocked {
+  animation: live-card-blocked 800ms var(--ease-out) forwards;
+  animation-delay: 6s;
+}
+
+@keyframes live-card-blocked {
+  from {
+    border-color: var(--border);
+  }
+  to {
+    border-color: #e2604f;
+  }
+}
+
+.live-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #fdf6ea;
+  background: #e2604f;
+  padding: 2px 5px;
+  border-radius: 2px;
+  opacity: 0;
+  transform: scale(0.7);
+  animation: live-badge-in 500ms var(--ease-out) forwards;
+  animation-delay: 6.2s;
+}
+
+@keyframes live-badge-in {
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.live-desk-bar {
+  position: relative;
+  z-index: 1;
+  height: 10px;
+  margin-top: 6px;
+  border-radius: 3px 3px 0 0;
+  background-image: radial-gradient(var(--accent) 0.6px, transparent 0.7px);
+  background-size: 4px 4px;
+  opacity: 0.5;
+}
+
+.live-desk-mascot {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  margin-top: -8px;
+}
+
+.live-desk-mascot .mascot {
+  height: 132px;
+}
+
+@media (max-width: 640px) {
+  .live-desk-mascot .mascot {
+    height: 110px;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1358,10 +1620,6 @@ input[type='range'].scrubber::-moz-range-thumb {
 
   .hero-visual {
     padding-top: var(--space-8);
-  }
-
-  .hero-illustration {
-    aspect-ratio: 16 / 10;
   }
 }
 
@@ -1444,6 +1702,22 @@ input[type='range'].scrubber::-moz-range-thumb {
 
 .desk-facts {
   max-width: 900px;
+}
+
+.desk-fleet-reinforcement {
+  margin: var(--space-10) 0 0;
+  max-width: 640px;
+}
+
+.desk-fleet-reinforcement .media-frame {
+  aspect-ratio: 7 / 4;
+}
+
+.desk-fleet-reinforcement figcaption {
+  margin-top: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink-tertiary);
 }
 
 .proof-grid-3 {
