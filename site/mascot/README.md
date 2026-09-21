@@ -41,6 +41,16 @@ The whole system is three inks plus a ground. Nothing else.
 | ground · paper | `#EFE6D4` | Dawn only |
 | misregistration | `#C0506A` | Stray flecks only. Never a fill. |
 
+**One documented exception: the two status inks.** The `app-fleet*` illustrations add a muted riso
+green and a dusty riso red. These are not decoration — they are **the Desk's real semantic status
+colours**: green for a finished card, red for a `BLOCKED` badge. `working`, `blocked` and `done` are
+real run states in `src/`.
+
+The rule: **green and red are only ever status.** They may appear inside a terminal panel or on a
+state badge, and nowhere else — never on Tock, never on the mark, never on UI chrome, never as
+decoration or an accent. Amber remains the only accent colour. Everything outside status stays three
+inks.
+
 ## How the halftone is built
 
 Every fill is a `<pattern>` of dots at a **3-unit pitch**, one pattern per ink, each on its own
@@ -112,6 +122,9 @@ one copy of every vector asset, so nothing can drift out of sync.
 | `site/assets/mascot-dawn.png` | Dawn, on cream paper |
 | `site/assets/mascot-404.png` | 404 |
 | `site/assets/mascot-states.png` | Four empty states in one sheet — **rendered from the SVG poses**, not generated |
+| `site/assets/app-fleet-scale.png` | **Lead capacity image.** Desk-level perspective, the wall receding — Tock small on the desk gives the proportion. Use this where the point is scale. |
+| `site/assets/app-fleet.png` | The cleanest, most orderly version: a curved wall of terminals, Tock centred. Use as a section image or a card. |
+| `site/assets/app-fleet-grid.png` | Orderly head-on grid. Alternate. |
 
 `mascot.svg` carries its own `<style>` block, so the animation works **without any page CSS** and
 still honours `prefers-reduced-motion`. If you inline it instead, the same named groups are there
