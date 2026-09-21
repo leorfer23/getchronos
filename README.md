@@ -210,7 +210,7 @@ flowchart LR
 - You want a hosted service, a support contract, or a team product with roles and seats — none of
   that exists here (see "What this is not" above).
 - You need sandboxing on Windows or Linux — the sandbox is macOS/Seatbelt only; other platforms run
-  the daemon unsandboxed, and it says so at boot.
+  the daemon unsandboxed, and it logs a warning for every job that hits that path (`src/sandbox.ts`).
 - You want spend capped by default — `CHRONOS_DAILY_BUDGET` is opt-in, not a starting guardrail.
 - You want a polished onboarding wizard — there's no Spaces form yet; the first project is created
   with `curl` or a copy-pasted Robert command (see [Your first project](#your-first-project)).
@@ -395,10 +395,12 @@ It tracks spend per run (`mc cost`), but the cap is opt-in: `CHRONOS_DAILY_BUDGE
 (uncapped). See [CONFIGURATION.md](./CONFIGURATION.md).
 
 **Does it run on Linux?**
-CI runs the full test suite on `ubuntu-latest` as well as `macos-latest`
-(`.github/workflows/ci.yml`), so the daemon itself works there. What doesn't: the sandbox
-(`guard`/`strict`) is Seatbelt, a macOS-only mechanism — on any other platform jobs run
-**unsandboxed**, and the daemon says so at boot.
+CI runs on `ubuntu-latest` as well as `macos-latest` (`.github/workflows/ci.yml`), so the daemon
+itself works there — the SBPL-profile assertions skip off macOS since they read a sandbox profile
+that only exists there (commit `cc0d386`); everything else, including the credential-boundary
+tests, runs on both. What doesn't run at all on Linux: the sandbox (`guard`/`strict`) is Seatbelt, a
+macOS-only mechanism — on any other platform jobs run **unsandboxed**, and the daemon logs a warning
+for each job that hits that path (`src/sandbox.ts`).
 
 **Which agent CLIs does it drive?**
 `claude-code`, `codex`, `cursor-agent`, `grok`, `opencode`, plus `openai-api` directly with no CLI —
@@ -410,7 +412,7 @@ work. There is no Chronos-operated server for any of it to go to.
 
 **How do I stop it?**
 Kill the daemon process — it's a single Node process and every agent is its child — or
-`POST /runs/:id/kill` for one run. There is no `/stop` endpoint.
+`POST /api/runs/:id/kill` for one run. There is no `/stop` endpoint.
 
 ---
 
