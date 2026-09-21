@@ -19,6 +19,7 @@ three inks on a navy ground.**
 | `poses/alert.svg` | A run is live and he is watching it. |
 | `poses/asking.svg` | 03:07. A run stopped to ask you something. Heavy lids, under-eye bags. |
 | `poses/done.svg` | Dawn. Printed on cream paper stock instead of navy. |
+| `poses/stalled.svg` | A run stopped emitting. Sand sits in both bulbs and **nothing is flowing**. |
 | `poses/404.svg` | Both bulbs empty. Lost. |
 | `texture-halftone.svg` | A genuinely tileable 96×96 halftone paper texture for page backgrounds. |
 | `animations.html` | Live demo of every animated state. |
@@ -83,6 +84,11 @@ SVG** so the character stays on model — never prompted from scratch. Spend is 
 They are illustrations for the landing page and social card only. **The mark, the favicon and every
 pose stay hand-built SVG.** If a generated image and the SVG ever disagree, the SVG is right.
 
+**Do not generate UI states.** An attempt to produce the four empty states by generation gave three
+panels with *four eyes* — a face duplicated into both bulbs — because the model has no constraint
+keeping one face per character. Anything that must be consistent across a set is built from the
+poses, where consistency is structural. Generation is for the big one-off illustrations only.
+
 ## What the landing consumes: `site/assets/`
 
 The landing page imports these **fixed names**. They are copies — this directory
@@ -93,7 +99,7 @@ The landing page imports these **fixed names**. They are copies — this directo
 | `site/assets/mascot.svg` | **Self-animating.** Drop it in as `<img src>` and it bobs, blinks and pours on its own. |
 | `site/assets/logo.svg` | Mark + wordmark lockup |
 | `site/assets/favicon.svg` | Solid-ink mark for ≤32px |
-| `site/assets/poses/*.svg` | idle · alert · asking · done · 404 |
+| `site/assets/poses/*.svg` | idle · alert · asking · stalled · done · 404 |
 | `site/assets/texture-halftone.svg` | Tileable 96×96 page background |
 | `site/assets/og-card.png` | **1200×630** social card, headline space on the left |
 | `site/assets/og-card-alt.png` | Alternate social card |
@@ -102,7 +108,7 @@ The landing page imports these **fixed names**. They are copies — this directo
 | `site/assets/mascot-asking.png` | 03:07, the phone buzzing |
 | `site/assets/mascot-dawn.png` | Dawn, on cream paper |
 | `site/assets/mascot-404.png` | 404 |
-| `site/assets/mascot-states.png` | Four empty states in one sheet |
+| `site/assets/mascot-states.png` | Four empty states in one sheet — **rendered from the SVG poses**, not generated |
 
 `mascot.svg` carries its own `<style>` block, so the animation works **without any page CSS** and
 still honours `prefers-reduced-motion`. If you inline it instead, the same named groups are there

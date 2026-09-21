@@ -39,7 +39,7 @@ Priced on 1MP output; higher resolutions cost proportionally more. All calls her
 
 | 14 | 2026-09-21 | nano-banana/edit | 1344×768 | 1 | 0.0398 | 0.0398 | 0.5572 | OG retake: Tock large right, clean headline space left (came back letterboxed; cropped to `og-card-alt.png`) | alt |
 | 15 | 2026-09-21 | nano-banana/edit | 1344×768 | 1 | 0.0398 | 0.0398 | 0.5970 | OG retake: Tock large right under an amber lamp, clean left half → **`site/assets/og-card.png` 1200×630** | yes — shipped |
-| 16 | 2026-09-21 | nano-banana/edit | 1024² | 1 | 0.0398 | 0.0398 | 0.6368 | Empty states retake, prompted for identical proportions across all four panels | yes — replaces grid-states |
+| 16 | 2026-09-21 | nano-banana/edit | 1024² | 1 | 0.0398 | 0.0398 | 0.6368 | Empty states retake, prompted for identical proportions across all four panels | **no — rejected, see below** |
 
 **Total: USD 0.6368 of 5.00.** 16 images kept, 1 call refused at no charge.
 Remaining before the 4.00 stop line: USD 3.3632.
@@ -49,3 +49,12 @@ Remaining before the 4.00 stop line: USD 3.3632.
 That asset is better built natively anyway: a generated texture does not tile, and
 `texture-halftone.svg` does, because the dot screen is an SVG `<pattern>` and the grain uses
 `stitchTiles="stitch"`.
+
+## Rejected: the generated empty states
+Both generated attempts at the four empty states were discarded. The retake (#16) came back with
+**four eyes in three of the four panels** — the model duplicated the face into both bulbs. Nothing
+in the prompt can reliably hold "one face per character" across a set.
+
+`site/assets/mascot-states.png` is now **rendered from the SVG poses**, which are consistent by
+construction, and a `stalled` pose was added to cover the fourth state. No further spend was made
+chasing it. Total stands at USD 0.6368.
