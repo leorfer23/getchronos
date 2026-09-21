@@ -34,7 +34,33 @@ features are off and how to turn them on.
 
 **Then read [CONFIGURATION.md § the five minutes that matter](./CONFIGURATION.md).** Three defaults
 are worth a decision before you point this at a repo you care about: spend is uncapped, the merge
-gate can land its own PRs, and the daemon can redeploy itself.
+gate can land its own PRs, and the daemon can redeploy itself. Copy `.secrets.example` → `.secrets`
+and at least set a daily budget and `CHRONOS_PROTECTED_DIRS_EXTRA` (where this machine keeps its
+checkouts).
+
+### Your first project
+
+The Desk opens with no projects. A **project** (`workspace`) is the unit of isolation — its own
+tickets, memory, budget, sandbox rules and CLI login. Create one, attach a checkout, then open a
+terminal from the quick bar.
+
+```bash
+TOKEN=$(cat .admin-token)   # written on first boot next to the code; never commit it
+PORT=${CHRONOS_PORT:-7777}
+
+# 1. Project — pin the CLI profile that should be billed for it (~/.claude is the default)
+curl -sS -H "x-mc-admin: $TOKEN" -H "content-type: application/json" \
+  -X POST "http://localhost:$PORT/api/workspaces" \
+  -d "{\"slug\":\"personal\",\"name\":\"Personal\",\"config_dir\":\"$HOME/.claude\"}"
+
+# 2. Repo under that project — use the workspace `id` from the response
+curl -sS -H "x-mc-admin: $TOKEN" -H "content-type: application/json" \
+  -X POST "http://localhost:$PORT/api/workspaces/<WS_ID>/repos" \
+  -d "{\"name\":\"my-app\",\"path\":\"$HOME/code/my-app\"}"
+```
+
+Or ask Robert in the Desk chat: *create a personal project on ~/.claude and add ~/code/my-app as a
+repo*. On `/desk`, pick the project in the quick bar, type what the terminal should do, ⏎.
 
 To run it for real, on boot and across crashes:
 
