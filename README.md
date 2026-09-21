@@ -30,37 +30,51 @@ npm start
 
 Open <http://localhost:7777/desk>. That is the whole install: no configuration file, no database to
 create, no account. The daemon boots with an empty environment and tells you which optional
-features are off and how to turn them on.
+features are off and how to turn them on. The Desk is empty until you add a project — next section.
 
-**Then read [CONFIGURATION.md § the five minutes that matter](./CONFIGURATION.md).** Three defaults
-are worth a decision before you point this at a repo you care about: spend is uncapped, the merge
-gate can land its own PRs, and the daemon can redeploy itself. Copy `.secrets.example` → `.secrets`
-and at least set a daily budget and `CHRONOS_PROTECTED_DIRS_EXTRA` (where this machine keeps its
-checkouts).
+**Before pointing this at a repo you care about**, read [CONFIGURATION.md § the five minutes that
+matter](./CONFIGURATION.md). Spend is uncapped by default; copy `.secrets.example` → `.secrets` and
+set at least `CHRONOS_DAILY_BUDGET` and `CHRONOS_PROTECTED_DIRS_EXTRA`.
 
-### Your first project
+---
 
-The Desk opens with no projects. A **project** (`workspace`) is the unit of isolation — its own
-tickets, memory, budget, sandbox rules and CLI login. Create one, attach a checkout, then open a
-terminal from the quick bar.
+## Your first project
+
+There is no Spaces form yet — create the project and attach a repo via the admin API (or ask Robert
+in the Desk chat to run the same calls). `.admin-token` is written next to the code on first boot;
+never commit it.
 
 ```bash
-TOKEN=$(cat .admin-token)   # written on first boot next to the code; never commit it
+TOKEN=$(cat .admin-token)
 PORT=${CHRONOS_PORT:-7777}
+AUTH=(-H "x-mc-admin: $TOKEN" -H "content-type: application/json")
 
-# 1. Project — pin the CLI profile that should be billed for it (~/.claude is the default)
-curl -sS -H "x-mc-admin: $TOKEN" -H "content-type: application/json" \
-  -X POST "http://localhost:$PORT/api/workspaces" \
-  -d "{\"slug\":\"personal\",\"name\":\"Personal\",\"config_dir\":\"$HOME/.claude\"}"
+# 1. Create a project (workspace). Pin the CLI profile that should be billed for it.
+WS=$(curl -sS "${AUTH[@]}" -X POST "http://localhost:$PORT/api/workspaces" \
+  -d "{\"slug\":\"personal\",\"name\":\"Personal\",\"config_dir\":\"$HOME/.claude\"}")
+echo "$WS" | tee /tmp/chronos-ws.json
+WS_ID=$(echo "$WS" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
 
-# 2. Repo under that project — use the workspace `id` from the response
-curl -sS -H "x-mc-admin: $TOKEN" -H "content-type: application/json" \
-  -X POST "http://localhost:$PORT/api/workspaces/<WS_ID>/repos" \
-  -d "{\"name\":\"my-app\",\"path\":\"$HOME/code/my-app\"}"
+# 2. Attach a checkout. delivery=pr opens PRs; default_branch is used when omitted from git.
+#    path must be an absolute path to an existing git checkout on this machine.
+curl -sS "${AUTH[@]}" -X POST "http://localhost:$PORT/api/workspaces/$WS_ID/repos" \
+  -d "{\"name\":\"my-app\",\"path\":\"$HOME/code/my-app\",\"delivery\":\"pr\",\"default_branch\":\"main\"}"
 ```
 
-Or ask Robert in the Desk chat: *create a personal project on ~/.claude and add ~/code/my-app as a
-repo*. On `/desk`, pick the project in the quick bar, type what the terminal should do, ⏎.
+Same thing via Robert (Desk chat composer, bottom of `/desk`):
+
+> create a project slug=personal name=Personal config_dir=~/.claude, then add repo my-app at
+> ~/code/my-app with delivery=pr and default_branch=main
+
+### Open a terminal and watch it
+
+1. Reload `/desk`. The project appears in the quick-bar client dropdown (leftmost select).
+2. Pick **Personal**, leave the CLI/model defaults (or choose Claude / Cursor / Grok).
+3. Type a goal — e.g. `list the top-level files and stop` — and press ⏎.
+4. The rail grows a card (state chip + one line). Open it: **Focus** is the plain-English story
+   (`Understanding:` → narration → `Summary:`); the raw PTY is beside it if you want the tools.
+
+Blank terminal (no seed): empty ⏎. Full spawn dialog (cwd, brief, kind): ⇧N.
 
 To run it for real, on boot and across crashes:
 
