@@ -10,7 +10,9 @@ import { mainCheckouts } from "./terminal.js";
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", args, { cwd, stdio: "pipe", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).toString().trim();
 
-test("a read-only dir wins over the agent's own grants, keeps worktree paths writable, seals its git state", () => {
+// Reads the SBPL text `buildProfile` emits, which is null off macOS — the rule it guards is real
+// everywhere, but only a Mac can be shown it. `mainCheckouts` below stays platform-agnostic.
+test("a read-only dir wins over the agent's own grants, keeps worktree paths writable, seals its git state", { skip: sandboxAvailable() ? false : "sandbox-exec is macOS-only — no profile to read" }, () => {
   const p = buildProfile("guard", "/r/repo", ["/r/repo", "/r/.chronos-worktrees/repo", "/r/repo/tickets/ws"], "/cfg", [], false, ["/r/repo"])!;
   const at = (s: string) => p.indexOf(s);
   const allowOwn = at('(allow file-write* (subpath "/r/repo")');
