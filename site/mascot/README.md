@@ -10,7 +10,10 @@ three inks on a navy ground.**
 
 ## The files
 
-| File | What it is |
+**`site/assets/` is the source of truth.** The landing imports from there, and so do the pages in
+this directory. Nothing here is a copy — edit `site/assets/mascot.svg` and the landing changes.
+
+| File (under `site/assets/`) | What it is |
 |---|---|
 | `mascot.svg` | The canonical character, at rest. Start here. |
 | `logo.svg` | Lockup: mark + the `chronos` wordmark. The wordmark is outlines, so it needs no font. |
@@ -22,8 +25,8 @@ three inks on a navy ground.**
 | `poses/stalled.svg` | A run stopped emitting. Sand sits in both bulbs and **nothing is flowing**. |
 | `poses/404.svg` | Both bulbs empty. Lost. |
 | `texture-halftone.svg` | A genuinely tileable 96×96 halftone paper texture for page backgrounds. |
-| `animations.html` | Live demo of every animated state. |
-| `gen/` | Generated illustrations for the landing hero and OG card. Not the mark. |
+| `site/mascot/animations.html` | Live demo of every animated state. |
+| `site/mascot/gen/` | Generated illustrations for the landing hero and OG card. Not the mark. |
 
 ## The three inks
 
@@ -91,8 +94,8 @@ poses, where consistency is structural. Generation is for the big one-off illust
 
 ## What the landing consumes: `site/assets/`
 
-The landing page imports these **fixed names**. They are copies — this directory
-(`site/mascot/`) is the source of truth.
+The landing page imports these **fixed names**. This is the canonical location — there is exactly
+one copy of every vector asset, so nothing can drift out of sync.
 
 | Path | What |
 |---|---|
