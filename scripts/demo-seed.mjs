@@ -46,8 +46,14 @@ async function main() {
   console.log(`Seeding demo data at ${BASE} ...`);
 
   // A throwaway config_dir — never the operator's real ~/.claude — even though default_backend
-  // "mock" means nothing here ever spawns a real agent CLI or touches real credentials.
-  const configDir = process.env.CHRONOS_DEMO_CONFIG_DIR ?? fs.mkdtempSync(path.join(os.tmpdir(), "chronos-demo-config-"));
+  // "mock" means nothing here ever spawns a real agent CLI or touches real credentials. A FIXED,
+  // clean path (not the machine's random per-process tmp dir, e.g. /var/folders/.../T/xyz123): a
+  // ticket's "Read <path>/..." instruction embeds this verbatim, and that text is what a Desk
+  // screenshot shows — an ugly, machine-specific hash there reads as a leaked real path even though
+  // it isn't one. Never the operator's real $HOME (that WOULD leak the real username).
+  const configDir = process.env.CHRONOS_DEMO_CONFIG_DIR ?? "/tmp/chronos-demo/config";
+  fs.rmSync(configDir, { recursive: true, force: true });
+  fs.mkdirSync(configDir, { recursive: true });
   const ws = await call("POST", "/workspaces", {
     slug: "demo",
     name: "Demo",
@@ -60,8 +66,10 @@ async function main() {
   console.log(`workspace: ${ws.id} (${ws.slug})`);
 
   // Ticket creation writes a ticket file under `<repo.path>/.mc/tickets`, so each fake repo needs a
-  // real (but empty and throwaway) directory on disk — it never needs to be a git checkout.
-  const reposDir = process.env.CHRONOS_DEMO_REPOS_DIR ?? fs.mkdtempSync(path.join(os.tmpdir(), "chronos-demo-repos-"));
+  // real directory on disk. Fixed clean path, same reasoning as configDir above — this is what
+  // shows up (verbatim) in a Desk session's "Read <path>/DEM-N.md" instruction.
+  const reposDir = process.env.CHRONOS_DEMO_REPOS_DIR ?? "/tmp/chronos-demo/repos";
+  fs.rmSync(reposDir, { recursive: true, force: true });
   // delivery: "pr" requires the path to actually be a git repo, so give each fake project a
   // throwaway local-only git history — no remote, nothing pushed anywhere.
   const initGitRepo = (repoPath, name) => {
@@ -175,7 +183,7 @@ async function main() {
 
   // ── Desk terminal sessions ──────────────────────────────────────────────────────────────────
   // /desk and /phone.html are wired to live terminal SESSIONS, not tickets/runs — the wall of
-  // terminal cards, and the phone's Working/Needs-you/Finished lists, both read `sessions`. This
+  // terminal cards, and the phone's Needs-you/Finished/Working lists, both read `sessions`. This
   // scratch demo never spawns a real agent CLI (no real credentials, nothing billed), so every
   // session below opens on backend "mock", whose interactiveArgs (src/backends/mock.ts) is a
   // harmless `node -e` script: it prints a short plausible transcript once the ticket brief is
@@ -186,9 +194,29 @@ async function main() {
   const setState = (id, state, extra = {}) =>
     call("POST", `/sessions/${id}/status`, { state, ...extra });
 
+  // The Desk's "Progress" panel (static/desk.html's Focus view) is NOT the raw PTY output — it
+  // reads each backend's own on-disk transcript file (src/focus.ts: "derived from each CLI's own
+  // on-disk transcript, not by parsing the raw TUI byte stream"). "mock" isn't a registered backend
+  // there, so it falls through to the claude-shaped adapter: a JSONL file at
+  // `<configDir>/projects/<anything>/<sessionId>.jsonl`, one line per assistant turn, each an
+  // {"Understanding:"|"Summary:"}-tagged text block (src/focus.ts phaseOf/claudeLine — the same
+  // convention this session's own replies follow). Writing one directly is what makes the Desk hero
+  // show real activity instead of "0 messages, nothing reported yet".
+  const transcriptDir = path.join(configDir, "projects", "demo");
+  fs.mkdirSync(transcriptDir, { recursive: true });
+  const writeFocusTranscript = (sessionId, turns) => {
+    const lines = turns.map((text) =>
+      JSON.stringify({ type: "assistant", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text }] } }));
+    fs.writeFileSync(path.join(transcriptDir, `${sessionId}.jsonl`), lines.join("\n") + "\n");
+  };
+
   // One Lead, supervising the checkout-redesign goal.
   const lead = await session({ ticket_id: goal.id, role: "lead", created_by: "operator" });
   await setState(lead.id, "working", { label: "watching the board" });
+  writeFocusTranscript(lead.id, [
+    "Understanding: I'm the Lead for DEM-5, \"Ship checkout redesign\". Two workers are on it — cart-drawer persistence and the pricing API migration. I'll watch for asks and steer, not build directly.",
+    "Both workers opened. cart-drawer's first pass is in; pricing flagged a scope question rather than guessing.\n\n**Summary:** 2 workers running, 1 blocked — waiting on the operator's call on the pricing endpoint before pricing can continue.",
+  ]);
 
   // A Lead's workers are stamped with its lead_id only when the caller presents the Lead's OWN
   // credential (x-mc-lead) — by design, nothing else can claim a worker for a Lead it doesn't own
@@ -208,24 +236,48 @@ async function main() {
   // on a different ticket (below) instead.
   const workerCart = await session({ ticket_id: cart.id, role: "worker", created_by: "lead" }, leadToken);
   await setState(workerCart.id, "working", { label: "persisting cart state to sessionStorage" });
+  writeFocusTranscript(workerCart.id, [
+    "Understanding: Fix DEM-6 — the cart drawer loses its contents on refresh. Persist across reloads; leave the promo-code question for the operator rather than guess.",
+    "Found the cart context in src/cart/CartDrawer.tsx — refresh currently remounts it from empty state. Added a sessionStorage-backed persist/restore behind the existing feature check.\n\n**Summary:** Cart contents now survive a refresh; tests green. Left the promo-code question open.",
+  ]);
 
   // Worker on the pricing migration: blocked on its own question — this is the Desk wall's/phone's
   // "needs you" session (distinct ticket from DEM-6's run-based ask, so nothing duplicates).
   await call("PATCH", `/tickets/${pricing.id}`, { status: "blocked" });
   const workerPricing = await session({ ticket_id: pricing.id, role: "worker", created_by: "lead" }, leadToken);
-  const pricingQuestion = "Keep the old /v1/pricing endpoint alive during the migration, or cut over all at once?";
-  await setState(workerPricing.id, "blocked", { reason: "question", label: "old pricing endpoint during migration?" });
+  // No custom `label` here — creating the ask below sets the terminal's own blocked label from its
+  // question text, so a separate one just gets overwritten (and a long one truncates awkwardly in
+  // that single-line slot). Keep the question itself short enough to read cleanly wherever it renders.
+  const pricingQuestion = "Keep /v1/pricing alive during the migration, or cut over at once?";
+  await setState(workerPricing.id, "blocked", { reason: "question" });
   await call("POST", "/asks", { session_id: workerPricing.id, question: pricingQuestion, options: ["Dual-write during migration", "Cut over at once"] });
+  writeFocusTranscript(workerPricing.id, [
+    "Understanding: Migrate checkout to the v2 pricing API (DEM-7). The old /v1/pricing endpoint is also used by two other flows, so cutting it over isn't only checkout's call to make.",
+    "Wired the v2 client behind a flag; checkout now reads from it in a local test.\n\n**Summary:** Blocked — filed an ask rather than assume: keep /v1/pricing alive during the migration (dual-write), or cut everything over at once?",
+  ]);
 
-  // An unrelated engineer, outside the Lead's goal entirely — the flaky webhook-retry test.
-  await call("PATCH", `/tickets/${t4.id}`, { status: "in_progress" });
+  // An unrelated engineer, outside the Lead's goal entirely — blocked on its own question too, and
+  // (unlike the two workers above) NOT under a live Lead, so it's the one that surfaces in the
+  // phone's top-level "Needs you" list (LEADS.md: a Lead's own worker wakes the Lead, not the
+  // operator's phone — by design, see static/phone.html's isWorker() filter).
+  await call("PATCH", `/tickets/${t4.id}`, { status: "blocked" });
   const independent = await session({ ticket_id: t4.id, role: "worker", created_by: "operator" });
-  await setState(independent.id, "working", { label: "adding a retry-jitter unit test" });
+  const retryQuestion = "Land the retry-jitter fix now, or dig for the real race first?";
+  await setState(independent.id, "blocked", { reason: "question" });
+  await call("POST", "/asks", { session_id: independent.id, question: retryQuestion, options: ["Land the mitigation", "Dig for the real race"] });
+  writeFocusTranscript(independent.id, [
+    "Understanding: DEM-4 — the webhook-retry test fails about 1 in 20 runs, looks like a timing race.",
+    "Added jitter to the retry backoff and a deterministic clock in the test; it now passes 50/50 locally, but that could just be narrowing the window rather than fixing the race.\n\n**Summary:** Blocked — land the mitigation now, or keep digging for the actual race before calling it fixed?",
+  ]);
 
   // A finished session, for the Desk's "Recent" list: opens, "finishes", and its terminal is
   // killed — no live process left over.
   const finished = await session({ ticket_id: docs.id, role: "worker", created_by: "operator" });
   await setState(finished.id, "done", { label: "fixed three dead links" });
+  writeFocusTranscript(finished.id, [
+    "Understanding: docs-site — fix the broken links in the quickstart guide.",
+    "Fixed three dead links and added a redirect check to CI so this doesn't silently regress.\n\n**Summary:** Quickstart links fixed; CI now catches the next one.",
+  ]);
   await call("PATCH", `/sessions/${finished.id}`, { goal: "Fix broken links in quickstart", goal_done: true });
   await call("POST", `/sessions/${finished.id}/kill`, {});
 

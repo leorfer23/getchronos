@@ -28,9 +28,17 @@ its own question), one independent worker, and one finished/killed session for t
 
 Those sessions never spawn a real agent CLI or touch real credentials: `mock.ts` now also implements
 `interactiveArgs()`, a harmless `node -e` script that prints a short plausible transcript once the
-ticket brief is typed in (the same way a real agent's first turn would be), then idles. The actual
-state each screenshot shows (working / blocked / done) comes from `mc state`-equivalent API calls and
-an ask the seed script makes afterward, not from anything that script prints.
+ticket brief is typed in (the same way a real agent's first turn would be), then idles — that's what
+keeps the terminal itself looking alive. The Desk's "Progress" panel is separate: it reads each
+backend's own on-disk transcript file, not the raw terminal output (`src/focus.ts`), so the seed
+script also writes a small JSONL file in the shape Focus expects (`"Understanding:"` / `"Summary:"`
+tagged text, the same convention a real agent's replies follow) for each session. The state each
+screenshot shows (working / blocked / done) comes from `mc state`-equivalent API calls and an ask the
+seed script makes, and both repos and the demo config dir live at a **fixed, clean path**
+(`/tmp/chronos-demo/…`, overridable via `CHRONOS_DEMO_REPOS_DIR`/`CHRONOS_DEMO_CONFIG_DIR`) rather
+than a random per-run tmp directory — a ticket's "Read `<path>`/…" instruction embeds that path
+verbatim, and a Desk screenshot shows it, so it needs to read clean rather than like a machine-specific
+hash. It's still never the operator's real `$HOME` — that would leak the real username.
 
 A Lead's workers are only linked to it (`lead_id`) when the caller presents that Lead's own
 credential (`x-mc-lead`) — nothing else can claim a worker for a Lead it doesn't own. That credential
