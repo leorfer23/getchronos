@@ -16,12 +16,28 @@
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
   <a href="#how-it-works">How it works</a> ·
-  <a href="#documentation">Docs</a> ·
-  <a href="#landing-page">Landing</a>
+  <a href="#documentation">Docs</a>
 </p>
+<!-- TODO(domain): add landing link to nav once one is picked -->
 
 <p align="center">
   <img src="site/assets/desk-hero.png" alt="The Desk: live agent terminals as a wall of cards" width="880">
+</p>
+
+<p align="center">
+  <sub>
+    <a href="#quickstart">Quickstart</a> ·
+    <a href="#your-first-project">Your first project</a> ·
+    <a href="#the-shape-of-it">The shape of it</a> ·
+    <a href="#how-it-works">How it works</a> ·
+    <a href="#is-this-for-you">Is this for you?</a> ·
+    <a href="#what-is-actually-interesting-here">What's interesting</a> ·
+    <a href="#surfaces">Surfaces</a> ·
+    <a href="#backends">Backends</a> ·
+    <a href="#guardrails-honestly">Guardrails</a> ·
+    <a href="#faq">FAQ</a> ·
+    <a href="#documentation">Documentation</a>
+  </sub>
 </p>
 
 ---
@@ -145,12 +161,16 @@ same agent with you watching, and a headless run can be interrupted into one mid
 Sixty seconds, start to finish:
 
 1. You file a ticket (`mc ticket new`, or the Desk composer) — a title, a body, a repo.
-2. **plan** grades it and picks a model tier for the build.
-3. **build** opens its own git worktree, does the work, opens a PR.
+2. **plan** grades its difficulty 1–5; that grade routes the build to a model tier
+   (`CHRONOS_ROUTE_MODELS`).
+3. **build** opens its own git worktree and does the work on a `mc/<key>` branch — it does not push
+   or open anything yet.
 4. **review** reads the diff. Not satisfied → back to **build** with every unresolved point fed in
-   full, oldest first, so a fix round can't re-break what an earlier one demanded.
-5. Clean review → **merge gate** re-reads the PR and writes `MERGE-GATE: APPROVE` or
-   `MERGE-GATE: HOLD`. `APPROVE` merges; `HOLD` sends it back to **build**.
+   full, oldest first, so a fix round can't re-break what an earlier one demanded. Approved →
+   `shipPR()` commits, pushes the branch and runs `gh pr create`.
+5. On a project with the merge gate on, it re-checks CI itself and writes `MERGE-GATE: APPROVE` or
+   `MERGE-GATE: HOLD` against the PR — `APPROVE` merges it, `HOLD` sends it back to **build**. Without
+   the gate, green CI merges on its own (`CHRONOS_AUTO_MERGE`, on by default).
 
 ```mermaid
 flowchart LR
@@ -168,7 +188,32 @@ flowchart LR
   <img src="site/assets/ticket-run.png" alt="A ticket's runs on the Desk: plan, build, review, merge gate" width="880">
 </p>
 
-`src/tickets.ts`, `src/dispatcher.ts`, `src/merge-gate.ts`
+`src/tickets.ts`, `src/dispatcher.ts`, `src/reviews.ts`, `src/merge-gate.ts`, `src/delivery.ts`
+
+---
+
+## Is this for you?
+
+**Yes, if:**
+- You already pay for at least one agent CLI (Claude Code, Codex, Cursor, Grok, or opencode) and
+  want it running unattended instead of babysat.
+- You run on one always-on Mac and are fine with a kernel-enforced (Seatbelt) sandbox, not a
+  container or VM.
+- You're comfortable being the on-call human — approving asks, reading SQLite directly, tuning
+  budgets and protected directories yourself.
+- You want tickets to ship as real PRs (or direct commits) with a review gate in front of merge, not
+  a black box that pushes to `main` on its own.
+- You're fine with no configuration UI yet — the admin API and the Desk chat (Robert) are the
+  interface.
+
+**No, if:**
+- You want a hosted service, a support contract, or a team product with roles and seats — none of
+  that exists here (see "What this is not" above).
+- You need sandboxing on Windows or Linux — the sandbox is macOS/Seatbelt only; other platforms run
+  the daemon unsandboxed, and it says so at boot.
+- You want spend capped by default — `CHRONOS_DAILY_BUDGET` is opt-in, not a starting guardrail.
+- You want a polished onboarding wizard — there's no Spaces form yet; the first project is created
+  with `curl` or a copy-pasted Robert command (see [Your first project](#your-first-project)).
 
 ---
 
@@ -342,10 +387,32 @@ See [SECURITY.md](./SECURITY.md) for the threat model and how to report a proble
 
 ---
 
-## Landing page
+## FAQ
 
-No domain yet. Once one is picked, it goes here — for now the source lives in this repo's
-[`site/`](./site/). **TODO: pick and link the domain.**
+**What does it cost to run?**
+Whatever your own CLI subscriptions or API usage already cost you — Chronos adds no fee of its own.
+It tracks spend per run (`mc cost`), but the cap is opt-in: `CHRONOS_DAILY_BUDGET` defaults to `0`
+(uncapped). See [CONFIGURATION.md](./CONFIGURATION.md).
+
+**Does it run on Linux?**
+CI runs the full test suite on `ubuntu-latest` as well as `macos-latest`
+(`.github/workflows/ci.yml`), so the daemon itself works there. What doesn't: the sandbox
+(`guard`/`strict`) is Seatbelt, a macOS-only mechanism — on any other platform jobs run
+**unsandboxed**, and the daemon says so at boot.
+
+**Which agent CLIs does it drive?**
+`claude-code`, `codex`, `cursor-agent`, `grok`, `opencode`, plus `openai-api` directly with no CLI —
+see [Backends](#backends). You bring your own auth for each.
+
+**Where does my data live?**
+On your machine: SQLite for state, `notes/<project>/*.md` for memory, git worktrees for the actual
+work. There is no Chronos-operated server for any of it to go to.
+
+**How do I stop it?**
+Kill the daemon process — it's a single Node process and every agent is its child — or
+`POST /runs/:id/kill` for one run. There is no `/stop` endpoint.
+
+---
 
 ## Licence
 
