@@ -334,7 +334,7 @@ test("the phone shows Leads, not their workers — a Lead's terminals are a coun
   // Every list the home screen paints, and the app badge with them — a badge that counts a card the
   // list does not show is a phone that says "1" forever.
   assert.match(html, /const live = S\.sessions\.filter\(\(s\) => s\.live && !isWorker\(s\)\)\.sort\(byRank\);/);
-  assert.match(html, /recent = S\.ended\.filter\(\(s\) => !isWorker\(s\)\)\.slice\(0, 5\);/);
+  assert.match(html, /recent = S\.ended\.filter\(\(s\) => !isWorker\(s\)\)\.slice\(0, 20\);/);
   assert.match(html, /const needsCount = \(\) => S\.sessions\.filter\(\(x\) => x\.live && !isWorker\(x\) &&/);
   // What is lost by hiding them is given back as one chip: how many, and how many are asking.
   assert.match(html, /const kids = workersOf\(s\);/);
