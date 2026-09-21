@@ -243,6 +243,14 @@ code, .mono {
   transition: transform var(--duration-slow) var(--ease-out);
 }
 
+/* The mascot's own ground rect ships hardcoded navy (#1E2430) — close to
+   but not exactly our --bg-1, which read as a faint tile edge behind it.
+   Match whatever ground the page is actually on. */
+.mascot [id*='ground' i],
+.mascot [class*='ground' i] {
+  fill: var(--bg-1) !important;
+}
+
 html[data-scene='dawn'] .mascot [id*='ground' i],
 html[data-scene='dawn'] .mascot [class*='ground' i] {
   fill: var(--bg-2) !important;
@@ -1286,7 +1294,10 @@ input[type='range'].scrubber::-moz-range-thumb {
 }
 
 .night-404 .mascot {
-  height: 88px;
+  /* The mascot's own README: halftone dots "turn to mud" below 96px tall.
+     88px was under that floor — that's the washed-out look, not a bug in
+     the art. Sized well clear of it here. */
+  height: 160px;
 }
 
 .night-404 .hero-clock {
@@ -1413,12 +1424,21 @@ input[type='range'].scrubber::-moz-range-thumb {
   font-size: 34px;
 }
 
+.desk-centerpiece {
+  /* The Desk is the centerpiece — pull it closer to what precedes it
+     instead of stacking two full section paddings (~192px read as a
+     dead gap after the short "what it actually is" list). */
+  padding-top: var(--space-8);
+}
+
 .desk-centerpiece .section-head {
   max-width: 720px;
 }
 
 .desk-hero-frame {
-  aspect-ratio: 21 / 9;
+  /* Matches desk-hero.png's real 2880x1800 (16:10) ratio exactly, so
+     object-fit: cover never crops the header bar / model chips at top. */
+  aspect-ratio: 16 / 10;
   margin-bottom: var(--space-10);
 }
 
@@ -1432,12 +1452,6 @@ input[type='range'].scrubber::-moz-range-thumb {
 
 .night-log-intro {
   padding-bottom: var(--space-4);
-}
-
-@media (max-width: 900px) {
-  .desk-hero-frame {
-    aspect-ratio: 4 / 3;
-  }
 }
 
 @media (max-width: 640px) {
