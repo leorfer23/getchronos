@@ -41,14 +41,19 @@ Priced on 1MP output; higher resolutions cost proportionally more. All calls her
 | 15 | 2026-09-21 | nano-banana/edit | 1344×768 | 1 | 0.0398 | 0.0398 | 0.5970 | OG retake: Tock large right under an amber lamp, clean left half → **`site/assets/og-card.png` 1200×630** | yes — shipped |
 | 16 | 2026-09-21 | nano-banana/edit | 1024² | 1 | 0.0398 | 0.0398 | 0.6368 | Empty states retake, prompted for identical proportions across all four panels | **no — rejected, see below** |
 
-**Total: USD 0.6368 of 5.00.** 16 images kept, 1 call refused at no charge.
-Remaining before the 4.00 stop line: USD 3.3632.
+**Total: USD 0.7960 of 5.00.** 20 images kept, 1 call refused at no charge.
+Remaining before the 4.00 stop line: USD 3.2040.
 
 ## Note on the one failure
 `grain` returned **HTTP 422** — the model refused a subject-less pure-texture prompt. No charge.
 That asset is better built natively anyway: a generated texture does not tile, and
 `texture-halftone.svg` does, because the dot screen is an SVG `<pattern>` and the grain uses
 `stitchTiles="stitch"`.
+
+| 17 | 2026-09-21 | nano-banana/edit | 1024² | 1 | 0.0398 | 0.0398 | 0.6766 | 2×2 exploration: the Desk wall, many terminals at once, four stagings | yes — chose the composition |
+| 18 | 2026-09-21 | nano-banana/edit | 16:9 | 1 | 0.0398 | 0.0398 | 0.7164 | **`site/assets/app-fleet.png`** — curved wall, 18 panels, one red blocked, Tock supervising | yes — shipped |
+| 19 | 2026-09-21 | nano-banana/edit | 16:9 | 1 | 0.0398 | 0.0398 | 0.7562 | **`site/assets/app-fleet-grid.png`** — orderly head-on grid wall | yes — alt |
+| 20 | 2026-09-21 | nano-banana/edit | 16:9 | 1 | 0.0398 | 0.0398 | 0.7960 | **`site/assets/app-fleet-scale.png`** — desk-level perspective, wall receding | yes — alt |
 
 ## Rejected: the generated empty states
 Both generated attempts at the four empty states were discarded. The retake (#16) came back with
@@ -58,3 +63,11 @@ in the prompt can reliably hold "one face per character" across a set.
 `site/assets/mascot-states.png` is now **rendered from the SVG poses**, which are consistent by
 construction, and a `stalled` pose was added to cover the fourth state. No further spend was made
 chasing it. Total stands at USD 0.6368.
+
+## Palette note: two spot inks for status
+The fleet illustrations use **two extra spot inks** beyond the three-ink system: a muted riso green
+and a dusty riso red. This is deliberate, not drift. The whole point of the image is that many
+agents are running in *different* states at once, and colour is the only thing that reads at a
+glance across a wall of small panels. Riso is a spot-colour process, so extra plates are native to
+the medium. Green and red appear **only** as run status inside terminal panels — never on Tock,
+never on the mark, never in the UI chrome.
