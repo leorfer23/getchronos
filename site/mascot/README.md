@@ -4,6 +4,10 @@ Tock is a small hourglass creature who works the night shift. He is the characte
 page, the favicon, the 404 and the OG card. He is drawn in one house style: **risograph halftone,
 three inks on a navy ground.**
 
+> **Scope.** Tock is a *visual mascot and nothing else.* He is not an agent, not an assistant, and
+> not a persona you can talk to. The product's assistant is **Robert**, and that name is unchanged
+> in the code and the docs. Never use "Tock" as an agent name, a handle, or a speaker in copy.
+
 ## The files
 
 | File | What it is |
