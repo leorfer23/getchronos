@@ -11,35 +11,48 @@
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,900;1,9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <pattern id="riso-dot-slate" width="4" height="4" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" class="riso-dot-slate-fill"></circle>
+    </pattern>
+    <pattern id="riso-dot-amber" width="4" height="4" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" class="riso-dot-amber-fill"></circle>
+    </pattern>
+    <pattern id="riso-dot-ink" width="4" height="4" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" class="riso-dot-ink-fill"></circle>
+    </pattern>
+  </defs>
+</svg>
 <main class="night-404" id="main">
-  <span class="mascot" data-mascot-src="assets/mascot.svg" aria-hidden="true">
+  <span class="mascot" data-mascot-src="assets/poses/404.svg" aria-hidden="true">
     <svg class="mascot-fallback" viewBox="0 0 150 180" aria-hidden="true">
       <g class="limbs">
-        <path d="M26 66 q -13 6 -13 17" fill="none" stroke="#7C87A3" stroke-width="9" stroke-linecap="round"></path>
-        <path d="M124 66 q 13 6 13 17" fill="none" stroke="#7C87A3" stroke-width="9" stroke-linecap="round"></path>
-        <path d="M56 133 V150 M94 133 V150" fill="none" stroke="#7C87A3" stroke-width="11" stroke-linecap="round"></path>
-        <path d="M50 157 h16 M100 157 h-16" fill="none" stroke="#6A7593" stroke-width="11" stroke-linecap="round"></path>
+        <path d="M26 66 q -13 6 -13 17" fill="none" stroke="var(--ink-secondary)" stroke-width="9" stroke-linecap="round"></path>
+        <path d="M124 66 q 13 6 13 17" fill="none" stroke="var(--ink-secondary)" stroke-width="9" stroke-linecap="round"></path>
+        <path d="M56 133 V150 M94 133 V150" fill="none" stroke="var(--ink-secondary)" stroke-width="11" stroke-linecap="round"></path>
+        <path d="M50 157 h16 M100 157 h-16" fill="none" stroke="var(--ink-secondary)" stroke-width="11" stroke-linecap="round"></path>
       </g>
       <g class="frame">
-        <rect x="16" y="14" width="118" height="16" rx="8" fill="#7C87A3"></rect>
-        <rect x="16" y="118" width="118" height="16" rx="8" fill="#7C87A3"></rect>
+        <rect x="16" y="14" width="118" height="16" rx="8" fill="url(#riso-dot-slate)"></rect>
+        <rect x="16" y="118" width="118" height="16" rx="8" fill="url(#riso-dot-slate)"></rect>
       </g>
       <g class="glass">
-        <path d="M28 30 C 30 52, 62 64, 75 76 C 88 64, 120 52, 122 30 Z" fill="#0E1424"></path>
-        <path d="M28 118 C 30 96, 62 88, 75 78 C 88 88, 120 96, 122 118 Z" fill="#0E1424"></path>
+        <path d="M28 30 C 30 52, 62 64, 75 76 C 88 64, 120 52, 122 30 Z" fill="var(--bg-2)"></path>
+        <path d="M28 118 C 30 96, 62 88, 75 78 C 88 88, 120 96, 122 118 Z" fill="var(--bg-2)"></path>
       </g>
-      <path class="sand-top" d="M34.6 38.2 Q 75 51.2 115.4 38.2 L 75 76 Z" fill="#FFB020"></path>
-      <rect class="stream" x="73.3" y="74" width="3.4" height="34" fill="#FFB020"></rect>
-      <path class="sand-bottom" d="M34.6 114.1 Q 75 101.1 115.4 114.1 L 122 120 L 28 120 Z" fill="#FFB020"></path>
+      <path class="sand-top" d="M34.6 38.2 Q 75 51.2 115.4 38.2 L 75 76 Z" fill="url(#riso-dot-amber)"></path>
+      <rect class="stream" x="73.3" y="74" width="3.4" height="34" fill="var(--accent)"></rect>
+      <path class="sand-bottom" d="M34.6 114.1 Q 75 101.1 115.4 114.1 L 122 120 L 28 120 Z" fill="url(#riso-dot-amber)"></path>
       <g class="eye">
-        <circle cx="59" cy="50" r="10" fill="#EDE7DA"></circle>
-        <circle cx="91" cy="50" r="10" fill="#EDE7DA"></circle>
-        <circle cx="60.5" cy="50" r="4.6" fill="#1B2136"></circle>
-        <circle cx="92.5" cy="50" r="4.6" fill="#1B2136"></circle>
+        <circle cx="59" cy="50" r="10" fill="url(#riso-dot-ink)"></circle>
+        <circle cx="91" cy="50" r="10" fill="url(#riso-dot-ink)"></circle>
+        <circle cx="60.5" cy="50" r="4.6" fill="#1b2136"></circle>
+        <circle cx="92.5" cy="50" r="4.6" fill="#1b2136"></circle>
       </g>
     </svg>
   </span>

@@ -24,6 +24,13 @@
     return 'dawn';
   }
 
+  var SCENE_LABEL = {
+    dusk: 'dusk',
+    'deep-night': 'deep night',
+    'pre-dawn': 'pre-dawn',
+    dawn: 'dawn',
+  };
+
   function realMinuteInWindow() {
     var now = new Date();
     var rm = now.getHours() * 60 + now.getMinutes();
@@ -33,19 +40,38 @@
   }
 
   var scrubber = document.getElementById('scrubber');
-  var clockValue = document.getElementById('clockValue');
+  var clockValues = Array.prototype.slice.call(document.querySelectorAll('.clock-value'));
+  var sceneLabels = Array.prototype.slice.call(document.querySelectorAll('.scene-label'));
   var localLine = document.getElementById('localTimeLine');
   var logEntries = Array.prototype.slice.call(document.querySelectorAll('.log-entry[data-time]'));
   var deskCards = Array.prototype.slice.call(document.querySelectorAll('.desk-card[data-timeline]'));
+  var logRailMascot = document.getElementById('logRailMascot');
+  var logListEl = document.querySelector('.log-list');
+  var nightLogWrap = document.querySelector('.night-log-wrap');
   var html = document.documentElement;
 
+  var RATE = {
+    working: { haiku: 0.01, sonnet: 0.028, opus: 0.06 },
+    review: { haiku: 0.008, sonnet: 0.018, opus: 0.075 },
+  };
+
   var deskTimelines = deskCards.map(function (card) {
-    var raw = card.getAttribute('data-timeline') || '';
-    var steps = raw.split(';').filter(Boolean).map(function (chunk) {
-      var parts = chunk.split(':');
-      return { at: Number(parts[0]), state: parts[1] };
-    });
-    return { card: card, steps: steps };
+    var steps = [];
+    try {
+      steps = JSON.parse(card.getAttribute('data-timeline') || '[]');
+    } catch (e) {
+      steps = [];
+    }
+    return {
+      card: card,
+      steps: steps,
+      nameEl: card.querySelector('.desk-card-name'),
+      modelEl: card.querySelector('.desk-card-model'),
+      stateTextEl: card.querySelector('.state-text'),
+      lineEl: card.querySelector('.desk-card-line'),
+      elapsedEl: card.querySelector('.desk-elapsed'),
+      costEl: card.querySelector('.desk-cost'),
+    };
   });
 
   function stateLabel(state) {
@@ -59,15 +85,38 @@
     }
   }
 
+  function cardMetrics(steps, min) {
+    var state = 'idle';
+    var model = '';
+    var line = '—';
+    var stateStart = 0;
+    var cost = 0;
+    for (var i = 0; i < steps.length; i++) {
+      var step = steps[i];
+      if (min < step.at) break;
+      var segEnd = i + 1 < steps.length && steps[i + 1].at <= min ? steps[i + 1].at : min;
+      var segMinutes = Math.max(0, segEnd - step.at);
+      var rateTable = RATE[step.state];
+      var rate = (rateTable && rateTable[step.model]) || 0;
+      cost += segMinutes * rate;
+      state = step.state;
+      model = step.model;
+      line = step.line;
+      stateStart = step.at;
+    }
+    return { state: state, model: model, line: line, elapsed: Math.max(0, min - stateStart), cost: cost };
+  }
+
   function applyDeskState(min) {
     deskTimelines.forEach(function (entry) {
-      var current = 'idle';
-      entry.steps.forEach(function (step) {
-        if (min >= step.at) current = step.state;
-      });
-      entry.card.setAttribute('data-state', current);
-      var stateEl = entry.card.querySelector('.desk-card-state .state-text');
-      if (stateEl) stateEl.textContent = stateLabel(current);
+      if (!entry.steps.length) return;
+      var m = cardMetrics(entry.steps, min);
+      entry.card.setAttribute('data-state', m.state);
+      if (entry.stateTextEl) entry.stateTextEl.textContent = stateLabel(m.state);
+      if (entry.modelEl) entry.modelEl.textContent = m.state === 'idle' ? '—' : m.model;
+      if (entry.lineEl) entry.lineEl.textContent = m.state === 'idle' ? '—' : m.line;
+      if (entry.elapsedEl) entry.elapsedEl.textContent = m.state === 'idle' ? '0m' : m.elapsed + 'm';
+      if (entry.costEl) entry.costEl.textContent = '$' + m.cost.toFixed(2);
     });
   }
 
@@ -83,18 +132,34 @@
   }
 
   var wasInFlipZone = false;
+  var lastMinute = 0;
 
   function setMinute(min, opts) {
     min = Math.max(0, Math.min(SCRUB_MAX, min));
+    lastMinute = min;
     var scene = sceneForMinute(min);
     html.setAttribute('data-scene', scene);
     if (scrubber && Number(scrubber.value) !== min) scrubber.value = String(min);
-    if (clockValue) clockValue.textContent = minuteToClock(min);
+    if (clockValues.length) {
+      var clockText = minuteToClock(min);
+      clockValues.forEach(function (el) {
+        el.textContent = clockText;
+        el.setAttribute('data-text', clockText);
+      });
+    }
+    sceneLabels.forEach(function (el) {
+      el.textContent = SCENE_LABEL[scene];
+    });
     applyDeskState(min);
     applyLogActive(min);
 
-    var sandLevel = min / SCRUB_MAX;
-    html.style.setProperty('--sand', sandLevel.toFixed(3));
+    var p = min / SCRUB_MAX;
+    html.style.setProperty('--sand', p.toFixed(3));
+
+    if (logRailMascot && logListEl) {
+      var travel = Math.max(0, logListEl.offsetHeight - logRailMascot.offsetHeight);
+      logRailMascot.style.top = (p * travel) + 'px';
+    }
 
     var tired = min >= 200 && min <= 220;
     var mascots = document.querySelectorAll('.mascot');
@@ -113,32 +178,71 @@
     wasInFlipZone = inFlipZone;
   }
 
+  function playRange() {
+    if (!nightLogWrap) return null;
+    var rect = nightLogWrap.getBoundingClientRect();
+    var vh = window.innerHeight;
+    var playStart = vh * 0.5;
+    var playEnd = playStart - (rect.height - vh * 0.4);
+    if (playEnd >= playStart) playEnd = playStart - 1;
+    return { top: rect.top, playStart: playStart, playEnd: playEnd };
+  }
+
+  function progressToScrollTop(p) {
+    var range = playRange();
+    if (!range || !nightLogWrap) return null;
+    var docTop = nightLogWrap.getBoundingClientRect().top + window.scrollY;
+    var desiredViewportTop = range.playStart - p * (range.playStart - range.playEnd);
+    return docTop - desiredViewportTop;
+  }
+
+  var scrollRAF = null;
+  function onScroll() {
+    if (scrollRAF) return;
+    scrollRAF = requestAnimationFrame(function () {
+      scrollRAF = null;
+      var range = playRange();
+      if (!range) return;
+      var p = (range.playStart - range.top) / (range.playStart - range.playEnd);
+      p = Math.max(0, Math.min(1, p));
+      setMinute(Math.round(p * SCRUB_MAX));
+    });
+  }
+
+  window.addEventListener('scroll', onScroll, { passive: true });
+
   function initLocalTime() {
     var rm = realMinuteInWindow();
-    if (rm !== null) {
-      if (localLine) {
-        localLine.textContent = 'It is ' + minuteToClock(rm) + ' where you are. Good — this is when it matters.';
+    if (localLine) {
+      if (rm !== null) {
+        localLine.textContent = "It's " + minuteToClock(rm) + " where you are right now — good, this is when it matters. The night below starts at dusk regardless; drag or scroll to live through it.";
+      } else {
+        localLine.textContent = 'A local daemon that runs AI coding agents unattended, and supervises them like a team.';
       }
-      setMinute(rm);
-    } else {
-      if (localLine) {
-        localLine.textContent = "Somewhere right now it's 03:07 and Chronos is mid-shift. Drag the clock to see the rest of the night.";
-      }
-      setMinute(207);
     }
+    setMinute(0, { silent: true });
   }
 
   if (scrubber) {
     scrubber.setAttribute('max', String(SCRUB_MAX));
     scrubber.addEventListener('input', function () {
-      setMinute(Number(scrubber.value));
+      var min = Number(scrubber.value);
+      setMinute(min);
+      var target = progressToScrollTop(min / SCRUB_MAX);
+      if (target !== null) window.scrollTo({ top: target, behavior: 'auto' });
     });
+  }
+
+  function jumpTo(min) {
+    setMinute(min);
+    var target = progressToScrollTop(min / SCRUB_MAX);
+    if (target !== null) window.scrollTo({ top: target, behavior: reduceMotion ? 'auto' : 'smooth' });
   }
 
   var jump3am = document.getElementById('jump3am');
   if (jump3am) {
     jump3am.addEventListener('click', function () {
-      setMinute(207);
+      jumpTo(207);
     });
   }
 
@@ -146,35 +250,17 @@
     if (e.key !== '3') return;
     var tag = (e.target && e.target.tagName) || '';
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-    setMinute(207);
+    jumpTo(207);
   });
 
   var groundToggle = document.getElementById('groundToggle');
   if (groundToggle) {
     groundToggle.addEventListener('click', function () {
-      var current = html.getAttribute('data-scene');
-      var toPaper = current !== 'dawn';
-      setMinute(toPaper ? 460 : 100);
+      var toPaper = html.getAttribute('data-scene') !== 'dawn';
+      jumpTo(toPaper ? 460 : 20);
       var label = toPaper ? 'Paper' : 'Ink';
       groundToggle.querySelector('.ground-toggle-label').textContent = label;
       groundToggle.setAttribute('aria-label', 'Switch to ' + (toPaper ? 'ink' : 'paper') + ' ground (currently ' + label + ')');
-    });
-  }
-
-  if (!reduceMotion && logEntries.length && 'IntersectionObserver' in window) {
-    var observer = new IntersectionObserver(
-      function (entries) {
-        entries.forEach(function (entry) {
-          if (entry.isIntersecting) {
-            var t = Number(entry.target.getAttribute('data-time'));
-            setMinute(t, { silent: true });
-          }
-        });
-      },
-      { rootMargin: '-45% 0px -45% 0px', threshold: 0 }
-    );
-    logEntries.forEach(function (entry) {
-      observer.observe(entry);
     });
   }
 
@@ -216,10 +302,12 @@
           return 'id="' + id + suffix + '"';
         });
         ids.forEach(function (id) {
-          var re = new RegExp('(url\\(#' + id + '\\)|href="#' + id + '")', 'g');
-          svgText = svgText.replace(re, function (m) {
-            return m.indexOf('url(') === 0 ? 'url(#' + id + suffix + ')' : 'href="#' + id + suffix + '"';
-          });
+          // Covers url(#id), href="#id" AND bare CSS "#id{...}" selectors an
+          // embedded <style> block may use (e.g. the mascot's self-animation
+          // rules) — all share the literal "#id" substring, so one pass does it.
+          var esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          var re = new RegExp('#' + esc + '(?![\\w-])', 'g');
+          svgText = svgText.replace(re, '#' + id + suffix);
         });
         el.innerHTML = svgText;
         el.classList.add('mascot--loaded');
@@ -228,7 +316,14 @@
   });
 
   if (reduceMotion) {
+    window.removeEventListener('scroll', onScroll);
     var rm2 = realMinuteInWindow();
+    if (localLine) {
+      localLine.textContent =
+        rm2 !== null
+          ? "It's " + minuteToClock(rm2) + ' where you are right now.'
+          : 'A local daemon that runs AI coding agents unattended, and supervises them like a team.';
+    }
     setMinute(rm2 !== null ? rm2 : 207, { silent: true });
   } else {
     initLocalTime();
