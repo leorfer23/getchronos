@@ -1,6 +1,30 @@
-# Chronos
+<p align="center">
+  <img src="site/assets/logo.svg" alt="Chronos" width="120">
+</p>
 
-A local daemon that runs AI coding agents unattended, and supervises them like a team.
+<h1 align="center">Chronos</h1>
+
+<p align="center"><strong>A local daemon that runs AI coding agents unattended, and supervises them like a team.</strong></p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Licence: Apache 2.0"></a>
+  <a href="https://github.com/leorfer23/getchronos/actions/workflows/ci.yml"><img src="https://github.com/leorfer23/getchronos/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg" alt="Node >=22">
+  <img src="https://img.shields.io/badge/sandbox-macOS%20only-lightgrey.svg" alt="Sandbox: macOS only">
+</p>
+
+<p align="center">
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#documentation">Docs</a> ·
+  <a href="#landing-page">Landing</a>
+</p>
+
+<p align="center">
+  <img src="site/assets/desk-hero.png" alt="The Desk: live agent terminals as a wall of cards" width="880">
+</p>
+
+---
 
 You give it a project, a repo, and a ticket. It picks a model, opens a git worktree, spawns an agent
 CLI headless, watches the transcript for signs it has stalled, lets it stop and ask you a question,
@@ -76,7 +100,8 @@ Same thing via Robert (Desk chat composer, bottom of `/desk`):
 
 Blank terminal (no seed): empty ⏎. Full spawn dialog (cwd, brief, kind): ⇧N.
 
-To run it for real, on boot and across crashes:
+<details>
+<summary>Run it for real: on boot and across crashes (launchd)</summary>
 
 ```bash
 npm run install:launchd          # renders launchd/*.plist.template for this machine and loads it
@@ -88,6 +113,8 @@ home directory, checkout path and node binary. The installer records the **absol
 that ran it**, so the daemon always uses the runtime `node_modules` was built against —
 `better-sqlite3` is native and aborts on a major-version mismatch. Re-run it after changing node
 version or moving the checkout.
+
+</details>
 
 ---
 
@@ -110,6 +137,38 @@ may write anything at all.
 **A terminal** is the other half. Not everything should be headless — a live PTY on the Desk is the
 same agent with you watching, and a headless run can be interrupted into one mid-flight
 (`POST /api/runs/:id/continue`) without losing its context.
+
+---
+
+## How it works
+
+Sixty seconds, start to finish:
+
+1. You file a ticket (`mc ticket new`, or the Desk composer) — a title, a body, a repo.
+2. **plan** grades it and picks a model tier for the build.
+3. **build** opens its own git worktree, does the work, opens a PR.
+4. **review** reads the diff. Not satisfied → back to **build** with every unresolved point fed in
+   full, oldest first, so a fix round can't re-break what an earlier one demanded.
+5. Clean review → **merge gate** re-reads the PR and writes `MERGE-GATE: APPROVE` or
+   `MERGE-GATE: HOLD`. `APPROVE` merges; `HOLD` sends it back to **build**.
+
+```mermaid
+flowchart LR
+    T[ticket filed] --> P[plan]
+    P --> B[build]
+    B --> R[review]
+    R -- rework --> B
+    R -- clean --> PR[PR opened]
+    PR --> G[merge gate]
+    G -- APPROVE --> M[merged]
+    G -- HOLD --> B
+```
+
+<p align="center">
+  <img src="site/assets/ticket-run.png" alt="A ticket's runs on the Desk: plan, build, review, merge gate" width="880">
+</p>
+
+`src/tickets.ts`, `src/dispatcher.ts`, `src/merge-gate.ts`
 
 ---
 
@@ -151,6 +210,10 @@ expensive, and you find out in the morning.
 `mc ask` parks a run on a human question instead of guessing. The question goes to the coordinator
 first, who answers it if it is derivable from the project's own memos and escalates to your phone if
 it is not. Read-only runs never park — a planner that waits is a slot held for nothing.
+
+<p align="center">
+  <img src="site/assets/ask.png" alt="An agent's question parked on the Desk, waiting on an answer" width="720">
+</p>
 
 `src/asks.ts`, `src/ask-robert.ts`
 
@@ -201,6 +264,10 @@ offered under that name.
 | **Telegram** | control + notifications with no inbound port, via long-polling |
 | **`mc` CLI** | what agents themselves use: `mc steps`, `mc ask`, `mc review`, `mc learn` |
 | **REST + WebSocket** | everything above is a client of this |
+
+<p align="center">
+  <img src="site/assets/phone.png" alt="The Phone PWA: triaging an agent's question from bed" width="360">
+</p>
 
 The Telegram bot is off until `CHRONOS_TG_TOKEN` is set. `relay/` is an optional Cloudflare Worker
 that gives you remote triggers without opening a port — the daemon dials **out** to it.
@@ -262,8 +329,9 @@ See [SECURITY.md](./SECURITY.md) for the threat model and how to report a proble
 
 | | |
 |---|---|
-| [CONFIGURATION.md](./CONFIGURATION.md) | every environment variable, grouped, with defaults |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | the design: execution model, data model, API, relay |
+| [CONFIGURATION.md](./CONFIGURATION.md) | every environment variable, grouped, with defaults |
+| [LEADS.md](./LEADS.md) | Leads — a Robert for one goal, driving its own worker terminals |
 | [MISSION-CONTROL.md](./MISSION-CONTROL.md) | tickets, reviews, the board, worker visibility and HITL |
 | [CLAUDE.md](./CLAUDE.md) | the gotchas — read before changing code |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | how to work on it |
@@ -271,6 +339,13 @@ See [SECURITY.md](./SECURITY.md) for the threat model and how to report a proble
 | `agents/README.md` | how an executive is defined |
 | `notes/example/README.md` | the three memos and what belongs in each |
 | `relay/README.md`, `desktop/README.md` | the optional pieces |
+
+---
+
+## Landing page
+
+No domain yet. Once one is picked, it goes here — for now the source lives in this repo's
+[`site/`](./site/). **TODO: pick and link the domain.**
 
 ## Licence
 
