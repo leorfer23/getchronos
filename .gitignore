@@ -1,0 +1,64 @@
+node_modules
+dist/
+.DS_Store
+tsconfig.tsbuildinfo
+
+# ── Secrets ────────────────────────────────────────────────────────────────
+# .secrets is the machine-local env file; secrets/ holds per-project capsules
+# written by `mc ws create`. Neither is ever tracked. The template IS.
+.secrets*
+!.secrets.example
+secrets/
+.admin-token
+.vapid.json
+.push-subscriptions.json
+relay/.relay-secrets
+relay/.dev.vars
+
+# ── Runtime state ──────────────────────────────────────────────────────────
+# The database is the source of truth for tickets, memos, runs and chat. None
+# of it belongs in git, and the daemon writes to this checkout continuously.
+*.db
+*.db-shm
+*.db-wal
+*.db.bak-*
+chronos.db.*
+backups/
+sessions/
+projects/
+*.log
+*.log.*.gz
+
+# ── Operator content ───────────────────────────────────────────────────────
+# Your own memory, tickets, reports and uploads. `notes/` is a one-way mirror
+# of the memos table (see notes/example/README.md); everything under it is
+# yours and much of it is confidential. Only the example templates are tracked.
+notes/*
+!notes/example/
+tickets/
+attachments/
+reports/
+.last-cleanup
+
+# Per-project skills you author for your own clients. The generic ones ship in
+# skills/; anything you drop in skills-vault/<slug>/ stays on your machine.
+skills-vault/*
+!skills-vault/README.md
+!skills-vault/example/
+
+# Scratch space for scripts that only make sense on your machine.
+local/*
+!local/README.md
+
+# An executive you have parked: the loader skips any `_`-prefixed agent directory, and a persona
+# you wrote for yourself is as personal as a memo. `agents/<id>/` for the ones you want tracked.
+agents/_*/
+!agents/_blocks/
+!agents/_mcp/
+
+# ── Build artifacts ────────────────────────────────────────────────────────
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+relay/node_modules/
+__pycache__/
+*.pyc

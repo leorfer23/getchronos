@@ -1,0 +1,2638 @@
+#!/usr/bin/env node
+// `mc` — Mission Control CLI for AGENTS. Lets a running agent read & write the backlog over the
+// local API (no direct DB/file access needed; the daemon does the writes). Lives outside any
+// workspace repo so the per-workspace sandbox lets every agent reach it. Network → localhost only.
+//
+// Context comes from env injected by the session/job spawner:
+//   MC_API             base API url (default http://localhost:7777/api)
+//   MC_WORKSPACE       workspace id (default --workspace for ticket new)
+//   MC_WORKSPACE_TOKEN this workspace's API credential (PER-24) — scopes every call below to it
+//   MC_REPO            repo id (default --repo)
+//   MC_TICKET          the ticket key this agent is working (for `mc done`, `mc note`)
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { spawn, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+const API = process.env.MC_API || "http://localhost:7777/api";
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// Sent on every call when present — the API 404s any request this token doesn't own the workspace
+// of (see checkScope in api.ts). Absent for a bare/manual `mc` invocation outside a spawned session.
+const WS_TOKEN_HEADERS = process.env.MC_WORKSPACE_TOKEN ? { "x-mc-workspace-token": process.env.MC_WORKSPACE_TOKEN } : {};
+// A Lead's own credential (LEADS.md). Sent IN ADDITION to the workspace token, on the calls where the
+// daemon must know WHICH Lead is calling rather than only which workspace: `mc session new` stamps the
+// new terminal's `lead_id` from it, which is what makes that terminal the Lead's — its stops wake the
+// Lead instead of Robert, and only that Lead may type into it. Never sent from a worker; only a Lead's
+// env carries MC_LEAD_TOKEN.
+const LEAD_HEADERS = process.env.MC_LEAD_TOKEN ? { "x-mc-lead": process.env.MC_LEAD_TOKEN } : {};
+
+function parse(argv) {
+  const pos = [], opt = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith("--")) { const k = a.slice(2); const v = argv[i + 1]?.startsWith("--") ? "true" : argv[++i]; opt[k] = v ?? "true"; }
+    else pos.push(a);
+  }
+  return { pos, opt };
+}
+async function req(method, path, body, headers) {
+  const r = await fetch(API + path, {
+    method,
+    headers: { ...(body ? { "content-type": "application/json" } : {}), ...WS_TOKEN_HEADERS, ...headers },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await r.text();
+  let json; try { json = JSON.parse(text); } catch { json = text; }
+  if (!r.ok) throw new Error(typeof json === "object" && json?.error ? json.error : `${r.status} ${text}`);
+  return json;
+}
+function readStdin() {
+  return new Promise((resolve) => {
+    if (process.stdin.isTTY) return resolve("");
+    let d = ""; process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (c) => (d += c));
+    process.stdin.on("end", () => resolve(d));
+    setTimeout(() => resolve(d), 250); // don't hang if nothing piped
+  });
+}
+async function findSkill(wsId, ref) {
+  const all = await req("GET", "/workspaces/" + wsId + "/skills");
+  const s = all.find((x) => x.slug === ref || x.id === ref || x.id.startsWith(ref) || x.name?.toLowerCase() === String(ref).toLowerCase());
+  if (!s) throw new Error(`skill not found: ${ref}`);
+  return s;
+}
+async function findByKey(key) {
+  const all = await req("GET", "/tickets");
+  const t = all.find((x) => x.key?.toLowerCase() === String(key).toLowerCase() || x.id === key);
+  if (!t) throw new Error(`ticket not found: ${key}`);
+  return t;
+}
+const die = (m) => { console.error("mc: " + m); process.exit(1); };
+// Piggyback printing: `mc step`/`mc note` (and `mc inbox`) responses carry any undelivered operator
+// mailbox messages (see src/messages.ts) — surface them loudly so the worker actually reads them.
+function printMessages(msgs) {
+  if (!msgs || !msgs.length) return;
+  console.log("📨 MESSAGE FROM OPERATOR — incorporate before continuing:");
+  for (const m of msgs) console.log(`  [${m.from_who}] ${m.text}`);
+}
+
+// How each directed link type reads from the perspective of the ticket you're looking at.
+const LINK_LABEL = {
+  blocks: { out: "blocks", in: "blocked by" },
+  parent: { out: "parent of", in: "child of" },
+  relates: { out: "relates to", in: "relates to" },
+  duplicates: { out: "duplicates", in: "duplicated by" },
+};
+
+// Admin token from ~/chronos/.admin-token (same as `mc ws create`). Global notes cross client walls,
+// so promoting one is admin-gated → only runnable on the daemon host where the token is readable.
+// The installed copy lives at ~/.mc/bin/mc, so REPO_ROOT is ~/.mc — fall back to the daemon's own
+// home checkout, else the token is only ever found when running the in-repo copy.
+const TOKEN_FILES = [path.join(REPO_ROOT, ".admin-token"), path.join(os.homedir(), "chronos", ".admin-token")];
+function adminToken() {
+  // CHRONOS_ADMIN is what the executives' processes carry (see WarmManager extraEnv); the _TOKEN name
+  // is what a human shell exports. Accept both, or an admin-gated command works for the operator and mystery-
+  // fails for Robert.
+  if (process.env.CHRONOS_ADMIN_TOKEN) return process.env.CHRONOS_ADMIN_TOKEN;
+  if (process.env.CHRONOS_ADMIN) return process.env.CHRONOS_ADMIN;
+  for (const f of TOKEN_FILES) {
+    try { const t = fs.readFileSync(f, "utf8").trim(); if (t) return t; } catch {}
+  }
+  return null;
+}
+function adminHeaders() {
+  const token = adminToken();
+  if (!token) die(`admin token not readable at ${TOKEN_FILES.join(" or ")} — this action is admin-gated; run on the daemon machine.`);
+  return { "x-mc-admin": token };
+}
+// `session send`/`key` are admin-gated OR a live Lead's own credential (LEADS.md: x-mc-lead). A
+// Lead's env carries MC_LEAD_TOKEN, not the admin token — so it needs its own header, tried first
+// only when no admin token is readable (the daemon host itself may be a Lead's operator too).
+function handHeaders() {
+  const token = adminToken();
+  if (token) return { "x-mc-admin": token };
+  if (process.env.MC_LEAD_TOKEN) return { "x-mc-lead": process.env.MC_LEAD_TOKEN };
+  die(`neither an admin token (${TOKEN_FILES.join(" or ")}) nor MC_LEAD_TOKEN is set — typing into a terminal needs one or the other.`);
+}
+
+const HELP = `mc — Mission Control backlog CLI
+  mc ticket new --title "..." [--priority P1|P2|P3] [--body "..."] [--status backlog] [--parent GOAL-KEY]
+                [--workspace ID] [--repo ID] [--backend claude-code|cursor-agent] [--model m]
+                (--parent GOAL-KEY files this ticket as a child of a goal → the goal's agents inherit context)
+  mc ticket list [--workspace ID] [--status s]
+  mc ticket get <KEY>
+  mc goal <KEY>              goal completion: % done + child tickets (a goal = any ticket with children).
+                            Group work under a goal via --parent on 'ticket new' or 'mc ticket link GOAL parent CHILD'.
+                            Goals are umbrellas: they are never planned/built by an agent, only tracked.
+  mc ticket update <KEY> [--status s] [--priority p] [--title t] [--difficulty 1-5] [--pr-state open|merged|closed]
+  mc ticket rm <KEY>         delete a ticket
+  mc ticket links [<KEY>]                       list a ticket's relationships (defaults to MC_TICKET)
+  mc ticket link <FROM> <type> <TO>             add a relationship (type: blocks|parent|relates|duplicates)
+                                                e.g. 'mc ticket link ACM-10 blocks ACM-12' → ACM-12 can't build until ACM-10 is done
+  mc ticket unlink <FROM> <type> <TO>           remove a relationship
+  mc verdict <reviewId> approve|changes ["notes"] [--lens NAME]   deliver a QA verdict (--lens when on a review panel)
+  mc review <KEY> [--report "<md>" | --report -]   move to review; --report attaches the build handoff (feeds the review card + PR body). "-" reads markdown from stdin.
+  mc done [<KEY>]            mark done (defaults to MC_TICKET)
+  mc dismiss [<KEY>] ["why"] decided against it — closes the ticket without deleting it (keeps the reason)
+  mc note [<KEY>] "text"     append a note to the ticket's work log (local only)
+  mc comment [<KEY>] "text"  post a comment to the ticket's linked Jira/ClickUp issue (explicit push)
+  mc push-status [<KEY>] [--hours N]   push the ticket's current status out to Jira/ClickUp (explicit push)
+  mc hours <N> [<KEY>]       write Hours Spent on the linked Jira issue (status untouched) + log it locally
+  mc pdf <file>              print a PDF's text layer — ~5-10x cheaper than vision-reading pages.
+                             Empty output = scanned PDF: Read the PDF itself (vision) instead.
+  mc remember "<short rule>" [--topic T] [--detail "longer why/how"] [--workspace ID]
+                             put a rule EVERY future agent here must know into the memory tree: the line
+                             (≤200 chars) goes under ## T in the ★ memory-index (always in the prompt);
+                             --detail goes to the memory-<t> branch memo, read on demand. Refused when
+                             either would pass its cap — condense first. Use for "remember / always / from now on".
+  mc learn "<durable fact>" [--label L] [--workspace ID]   note a fact in the session-learnings inbox (NOT auto-loaded; the operator promotes it)
+  mc lesson list [--state active|proposed] [--topic build|review|comms] [--repo ID]
+                             rules this workspace has learned; ● active (injected into agents), ○ proposed
+  mc lesson add "<rule>" [--scope "src/api/**"] [--topic build|review|comms] [--repo ID]
+                             record a durable rule — one imperative sentence a FUTURE agent needs
+  mc lesson promote|archive|rm <id>
+  mc plan [<KEY>] "<md>" [--difficulty 1-5]   save a plan → ticket 'planned' (provisional grade; drives build-agent routing)
+  mc grade [<KEY>] <1-5> "<review note>"       second-pass difficulty grade (1=one-liner … 5=architectural) → build-agent routing
+  mc memo list                       workspace notes vault (🌐=global, ★=auto-loads into agents, 📌=pinned)
+  mc memo get <name|slug>
+  mc memo context                    print the notes that auto-seed every agent here
+  mc memo new --title "..." [--body "..."] [--pin] [--context] [--repos a,b] [--global] [--workspace ID]
+  mc memo edit <name> [--body "..."] [--title t] [--pin true|false] [--context true|false] [--repos a,b|none] [--global]
+  mc memo append <name> "text" [--heading "..."]
+  mc memo rm <name>
+  mc worklog [<workspace>] [--limit N]   what has been FINISHED here, newest first, with what each piece left pending
+  mc worklog add "<what>" --outcome "..." [--pending "a;b"] [--next "c;d"] [--pr URL] [--ticket KEY] [<workspace>]
+                             record work the daemon did not see (a call, a decision, work done outside a terminal)
+  mc worklog backfill <workspace> [--since 7d] [--limit N]   summarize already-ended terminals/runs into the ledger (costs model calls; idempotent)
+  mc jot list [--date YYYY-MM-DD] [--workspace ID]   the Desk's parked cards (▶ Run opens a terminal from one); --date = one day's plan
+  mc jot new --date YYYY-MM-DD --title "..." [--body "..." | --body -]   file a card for a day (a "plan tomorrow" terminal's one write)
+  (notes flagged --context auto-load into every agent's system prompt in this workspace)
+  (--repos a,b scopes a ★ context memo to specific repos [names or ids]: it loads ONLY for agents in those repos; omit = workspace-wide. --repos none clears the scope.)
+  (--global = operator profile: crosses ALL workspaces; admin-gated, run on the daemon host. Pair with --context to inject.)
+  mc job list [--workspace ID]
+  mc job get <ID|name>
+  mc job run <ID|name>       dispatch a job now (headless)
+  mc job rm <ID|name>        delete a job
+  mc job new --name "..." --goal "..." [--cron "0 9 * * 1-5" | --at "2026-09-12 09:00"] [--backend b] [--model m]
+             [--workspace ID] [--cwd path] [--sandbox guard|strict|off]
+             [--allowed-tools "..."] [--disallowed-tools "..."]
+             (--cwd defaults to the current dir, else $HOME with a note; an explicit --cwd outside the workspace's repos/landing dir is refused)
+  mc job update <ID|name> [--cwd path] [--sandbox guard|strict|off] [--model m] [--backend b] [--name "..."] [--goal "..."]
+             [--cron "..." | --at "..." | --manual] [--tz Area/City] [--allowed-tools "..."] [--disallowed-tools "..."]
+             [--timeout-sec N] [--budget USD] [--notify all|failures|off] [--enabled true|false]
+  mc skill list [--status active|pending|archived] [--workspace ID]   reusable procedures in this ws
+  mc skill view <slug> [refFile]     full SKILL.md (or a reference file); counts as a use
+  mc skill new --name "short-name" --description "when X, do Y" [--category c] [--tags a,b]
+               [--body "..."]        (or pipe the markdown body via stdin/heredoc)
+  mc skill patch <slug> --old "exact text" --new "replacement"        improve a skill in place
+  mc skill append <slug> "text" [--heading "..."]                     add to a skill
+  (new/patched skills land 'pending' for human approval unless the workspace auto-publishes)
+  mc pad list [--status open|done] [--workspace ID]   the client's parked rows (decided, not started)
+  mc pad show <id>                   one row in full — its title, status, and everything written on it
+  mc pad add "<title>" [--body "..."]   park a thought (body may be piped on stdin) — any terminal, own client
+  mc pad append <id> "<text>"        ADD to a row's detail without replacing it — the usual one; any terminal
+  mc pad edit <id> [--title t] [--body b]   replace a field outright
+  mc pad done|reopen <id>            tick it off, or put it back
+  mc pad rm <id>                     delete the row
+  mc pad run <id> [--backend b] [--model m]   open a terminal seeded from the row
+  mc idea list [--status proposed|promoted|killed|expired] [--workspace ID]   idea pool cards
+  mc idea new --title "..." --pitch "..." --kind expansion|new|improvement|ux-ui|qa|visibility
+              [--source manual|followups|miner|signals] [--repo name|ID] [--source-ref ID]
+              [--workspace ID]       file a card into the idea pool (staging, not a ticket)
+  mc recall "<query>" [--workspace ID]                     search THIS workspace's memory (memos, skills, lessons, past sessions) — run before starting work
+  mc memory conflicts [--workspace ID]                    two things you were told that disagree; settle with: resolve|dismiss <id>
+  mc search "<query>" [--workspace ID] [--kind ticket|session|event|job|skill]
+  mc ws list                         list projects  (alias: mc project list)
+  mc ws create <slug>                scaffold a new project (identity capsule)
+             [--name N] [--kind client|personal] [--git-name N] [--git-email E]
+             [--budget USD] [--concurrent N] [--config-dir DIR] [--secrets FILE]
+             (creates config dir + 0600 secrets file, then registers the ws; admin-gated → run on daemon host)
+  mc repo list [--workspace ID]      list repos in a workspace
+  mc repo add <name> --path ABS [--workspace ID] [--remote URL] [--branch main] [--delivery commit|pr]
+             register a repo in a workspace (admin-gated → run on daemon host)
+  mc repo patch <id> [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr]   edit a repo (admin-gated)
+  mc repo remove <id>                unregister a repo (admin-gated)
+  mc desk                    open the Desk wall — every terminal as a card, grouped by client
+  mc goal set "<what this terminal is for>" [--kind pr|investigation|qa]
+                             set THIS terminal's objective (the title on its Desk card). Yours from
+                             then on — the daemon stops deriving the title from your Understanding.
+  mc goal done | mc goal clear                  tick the objective off / drop it
+  mc state <state> ["label"] [--on subagents|ci|terminal|command|robert|person|deploy|other] [--eta 10m] [--reason auth|approval]
+                             what your card says. working = colour for your line · waiting = on something that
+                             is not the operator (--on, --eta) · blocked = a wall you can't pass · decide = a
+                             decision only the operator can make · review = finished, read the Result · idle = clear
+  mc progress <n>/<of> ["step"] | mc progress clear   a step counter on your card
+  mc hook claude|cursor|grok  (run by the CLI's lifecycle hooks — not by hand)
+  mc statusline claude        (Claude's statusLine — reports usage-limit %, prints "5h 34% · week 71%")
+  mc usage                    subscription usage per CLI/profile (Claude 5h/week, Grok week, Cursor —)
+  mc session list [--workspace ID]   live terminals + their tickets
+  mc session new [--ticket KEY] [--backend b] [--model m] [--workspace ID] [--cwd p] [--title t]
+                 [--goal "what it's for"] [--kind pr|investigation|qa] [--description "the brief"]
+                 [--slice N]
+                                     spawn another agent terminal (e.g. a helper on your ticket)
+                                     --slice N (inside a Lead) links it to that slice of your board
+                                     and marks the slice 'doing'
+  mc session attach <ID>             drive a live terminal from here (ctrl-] detaches, ctrl-C hits the agent)
+  mc session focus <ID> [-n 20]      what that terminal is doing, in plain English (read-only)
+  mc session send <ID> "text" [--no-enter]   type into that terminal and press enter (admin-gated,
+                                     or a Lead's own credential — MC_LEAD_TOKEN — into its own workers)
+  mc session key <ID> enter|esc|tab|up|down|ctrl-c|ctrl-d   send one keystroke (esc interrupts a turn)
+  mc session key <ID> down,down,enter  a sequence = one answer (the third option in a menu)
+  mc lead new "<goal>" [--workspace ID] [--description "..."] [--backend b] [--model m] [--kind k]
+                                     open a Lead: Robert's deputy for one goal, in one workspace
+                                     (LEADS.md) — it opens/drives/closes its own workers and reports
+                                     with a receipt. Refused from inside a Lead (no nesting).
+  mc lead list [--workspace ID]      live leads + how many workers each has open
+  mc lead wait [--timeout 9m]        (INSIDE a Lead) block until one of YOUR workers stops, then print
+                                     what each one said. Costs nothing while it waits — never sleep-poll
+  mc lead inbox [--all]              (INSIDE a Lead) worker events still outstanding (--all = history)
+  mc lead workers                    (INSIDE a Lead) one line per worker: state, goal, branch, minutes
+  mc lead broadcast "text" [--only id8,id8] [--except id8,id8]
+                                     (INSIDE a Lead) type one line into every live worker you own —
+                                     one result line each; a rate-limited worker is reported, not fatal
+  mc lead board                      (INSIDE a Lead) your plan: n, status, worker, PR, title + done/total.
+                                     Durable — this is what rebuilds the picture after a compaction
+  mc lead board add "title" ["title" ...]      append slices (numbered in order)
+  mc lead board set <n> [--status todo|doing|review|done|dropped] [--worker id8] [--pr URL] [--note "..."]
+  mc lead close-done [--rm-worktrees] (INSIDE a Lead) close YOUR live workers whose goal is ticked;
+                                     --rm-worktrees tries a non-force remove of each claim and prints
+                                     refusals (never force — ask the operator via mc ask-robert)
+  mc lead adopt <leadId>             (INSIDE a Lead) take an ENDED Lead's live workers + board + inbox
+                                     in this workspace (lead.adopted bus event)
+  mc report done|partial|blocked "summary" [--pr URL] [--tests "what you ran + result"]
+             [--verified "how you checked"] [--question "what you need decided"] [--next "what is left"]
+                                     (INSIDE a Lead's worker) hand your slice back to your Lead BEFORE
+                                     you stop — it reads this, not your scrollback. done also ticks
+                                     your goal for review; blocked declares you blocked
+  mc desk digest [--lines N]         every live terminal: goal, state, and what it last said
+  mc desk watch <id> --every 10m [--note "..."]  Robert re-reads that terminal every N minutes and
+                                     reports on Telegram (--note = what to watch for). --every takes
+                                     5, "10m" or "1h"
+  mc desk unwatch <id>               stop watching it
+  mc desk watches                    every standing watch + when the next report is due
+  mc robert wakes [--ack <id>]       the durable wake queue: what Robert still owes a turn, what is
+                                     parked after too many failures, and whether anything is armed
+  mc desk log [--since today|24h|7d] the day's ledger — every terminal worked on, what it cost,
+                             what it left behind, and how to reopen it
+  mc session reopen <ID>             reopen an ended terminal on its own transcript (context intact)
+  mc session goal <ID> "title" [--kind pr|investigation|qa]   retitle SOMEONE ELSE'S card
+  mc session done <ID>               tick that terminal's goal off — closes its row in the day's log
+  mc session kill <ID>
+  mc agents [--ws ID] [--all]        one line per agent: state icon, name, progress, blocked reason, ticket
+                                     (--all includes recently-settled agents + pending reviews)
+  mc wall [--watch] [--open]         one Herdr tab per live session — every agent at a glance
+                                     tabs carry their state (working/blocked/idle) + a ⌂ board tab
+                                     (--open puts it on the operator's screen in Terminal.app)
+  mc reviews list                    pending review queue
+  mc reviews approve|changes|merge <ID>
+  mc verdict <reviewId> approve|changes ["notes"]   AI reviewer verdict on a build (read-only review agents)
+  mc run list [--job ID]             recent headless runs
+  mc run get <ID>                    a run's transcript (events)
+  mc steps declare "step one" "step two" ...   declare your plan for this run (3-8 concrete milestones)
+  mc steps                           show this run's checklist + progress (✔ done / ▶ active / ○ todo / – skipped)
+  mc step start|done|skip <n> ["note"]   transition step <n> (done/skip take an optional one-line note)
+  (steps only work inside a dispatched run — MC_RUN is set by the spawner, not in a plain shell)
+  (mc step / mc note responses print any 📨 operator messages waiting for this run — piggyback delivery)
+  mc tell <ticket|run|agent> "message"   send a message to a worker's mailbox (no MC_RUN needed)
+                                     ticket key is preferred — durable across park/resume/retry
+  mc inbox                          manual mailbox check for this run (rarely needed — see 📨 above)
+  mc ask "question" [--options "a,b,c"] [--wait <min>]   ask the operator a question, wait for an answer
+                                     (min 5, 0 = fire-and-forget; on timeout, follow the printed parking
+                                     instructions — you'll be resumed automatically once it's answered)
+  mc ask-robert "question" [--options "a,b"] [--wait <min>]   (in a Desk TERMINAL) ask Robert; he
+                                     answers what is routine and puts the rest on the operator's phone with his
+                                     recommendation. Blocks until answered (default --wait 15)
+                                     Inside a Lead's worker this behaves as 'mc ask-lead' — pass
+                                     --robert to go over your Lead's head anyway
+  mc ask-lead "question" [--options "a,b"] [--wait <min>]   (in a Lead's WORKER) ask your own Lead: it
+                                     knows the goal and answers in seconds, and passes up what only
+                                     Robert or the operator can settle. Falls back to Robert if it
+                                     does not answer, or ends. Default --wait 10
+  mc asks [--all]                    open asks (id8, age, ticket, question); --all includes answered
+  mc answer <id8> "text"             operator side: answer an open ask (no MC_RUN needed)
+  mc ask hold <id8> <+2h|+2d|ISO> ["why"]      "later" is an answer: date the question OFF the live
+                                     "needs you" list; it comes back on that date with the same card.
+                                     Never closes it — only an answer does. 'null' as the date lifts a hold. (admin-gated)
+  mc review hold <reviewId8> <until> ["why"]   same, for a pending review (admin-gated)
+  mc recover hold <r:id8|t:KEY> <until> ["why"]  same, for a stalled-work call (admin-gated)
+  mc activity [--ws ID] [--topic t] [-n 50]   durable decision/activity trail (bus events)
+  mc cost [--ws ID] [--from DATE] [--to DATE]  combined cost ledger: headless by stage + Desk terminals
+  mc report [--workspace ID] [--from DATE] [--to DATE]  weekly client work report (last 7 days default)
+  mc cal [--days N]                  upcoming calendar events
+  mc fleet [--watch]                 one-glance fleet board (live runs, queue, spend, 5h tokens per workspace)
+                                     + "needs you": blocked agents and stalled work awaiting your call
+  mc worktree <repo>                 (in a TERMINAL) claim your own checkout of that repo once you
+                                     know which one you need — prints the path to cd into
+  mc worktree list                   every chronos worktree: dirty / unpushed / busy
+  mc worktree rm [<path|branch|repo>] [--force]   remove YOUR claimed worktree (no ref = yours; cd out first) —
+                                     a Lead may remove a worker's tree (never --force on one); otherwise
+                                     Robert's. Refuses if it would lose work — that refusal is the sentence
+                                     for the operator, not a wall to route around.
+  mc accel status [--repo ID]        per-repo status of graphify/ast-grep/repomix: enabled? installed? fresh?
+  mc accel enable <tool> [--mode m]  flip a tool on for this repo (admin-gated → daemon host); tool is
+                                     graphify|ast-grep|repomix, --repo defaults to MC_REPO
+  mc accel disable <tool>            flip it back off (admin-gated)
+  mc accel build graphify [--force]  admin: extract code-only graphify artifact for this repo
+  mc accel query graphify "<q>" [--budget N]  workspace-scoped graphify query (budget 100..2000, default 800)
+  mc vars                            shared env vars this workspace was given (names + time left, never values)
+  mc vars export                     shell exports for them — eval "$(mc vars export)" pulls a var added
+                                     AFTER your terminal opened into your shell. Never run it bare: it prints
+                                     the secrets. Terminals opened since already have them in their env.
+  mc vars set NAME VALUE [--hours N] hand this workspace a var (admin-gated → daemon host; no --hours = forever)
+  mc vars rm NAME                    take it back (admin-gated)
+  mc clip                            print what the operator last copied (their Mac clipboard, via the daemon)
+  mc clip set "text"                 put text ON his clipboard for him to paste elsewhere
+  mc thread sticky [slug|clear]      which project the operator's next untagged message lands on
+  mc thread route "text"             where that message WOULD go, and why (nothing is sent)
+  mc heavy -- <command…>             run a FULL test suite, typecheck or build under one of a few
+                                     machine-wide slots — the Mac is shared with every other agent.
+                                     Waits its turn, then runs the command normally (its output, its
+                                     exit code). A single targeted test file does not need it.
+  mc machine                         how loaded this Mac is: load per core, swap, free memory, heavy
+                                     slots in use, and whether an agent may open a terminal right now
+  mc status                          daemon health: active / queued / spend
+  mc reviews                         every review waiting on you (shared command)
+  mc cost [today|7d|30d]             combined spend (headless + Desk) by workspace (shared command)
+  mc quota                           what each provider credential has LEFT: headroom, runway,
+                                     reset time, login state + the last dispatch verdicts (shared command)
+  mc altitude [30d|mtd|qtd|last-quarter|...]  the /altitude dashboard as text: spend, usage, terminals
+                                     over a window, by client, with a sparkline (shared command)
+  mc jobs | mc jobs run <name|id>    scheduled jobs, or run one now (shared command)
+  mc auto [<ws>] [plan|build|review on|off]   show/flip a workspace's autonomy switches
+  mc stop robert | mc stop <run-id> | mc stop all   stop an in-flight agent turn or run
+Env: MC_WORKSPACE / MC_REPO / MC_TICKET seed the defaults.`;
+
+async function findJob(ref) {
+  const all = await req("GET", "/jobs");
+  const j = all.find((x) => x.id === ref || x.name?.toLowerCase() === String(ref).toLowerCase());
+  if (!j) throw new Error(`job not found: ${ref}`);
+  return j;
+}
+
+function durMin(v) {
+  const m = /^(\d+(?:\.\d+)?)\s*(m|min|h|d)?$/i.exec(String(v).trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  const unit = (m[2] || "m").toLowerCase();
+  return Math.round(unit === "h" ? n * 60 : unit === "d" ? n * 1440 : n) || null;
+}
+
+/**
+ * `mc hook claude|cursor|grok` — the command every Chronos terminal's CLI runs on its lifecycle hooks
+ * (installed by the daemon, term-hooks.ts). Reads the hook's JSON on stdin, turns it into one of a
+ * handful of card events and posts it. Outside a Chronos terminal (no MC_SESSION) it does nothing.
+ * It must never get in the agent's way: no stderr, exit 0, and cursor gets the "allow" it expects.
+ */
+async function hook(backend) {
+  // Its own stdin read: readStdin()'s safety timer would hold every hook — and the agent's turn — open 250ms.
+  const raw = await new Promise((resolve) => {
+    if (process.stdin.isTTY) return resolve("");
+    let d = "";
+    const t = setTimeout(() => { process.stdin.destroy(); resolve(d); }, 1000);
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (c) => (d += c));
+    process.stdin.on("end", () => { clearTimeout(t); resolve(d); });
+  });
+  let j = {};
+  try { j = JSON.parse(raw || "{}"); } catch {}
+  const name = String(j.hook_event_name || j.hookEventName || "").toLowerCase();
+  const reply = () => {
+    if (backend !== "cursor") return;
+    if (name === "beforesubmitprompt") process.stdout.write('{"continue":true}');
+    else if (name === "pretooluse" || name === "subagentstart") process.stdout.write('{"permission":"allow"}');
+    else process.stdout.write("{}");
+  };
+  const sid = process.env.MC_SESSION;
+  if (!sid) return reply();
+  // A `claude -p` the agent runs from inside its terminal inherits MC_SESSION. Its turns are not the
+  // card's: Chronos pins a Desk claude's session id to the terminal id, so anything else is a child.
+  if (backend === "claude" && j.session_id && j.session_id !== sid) return reply();
+  const tool = String(j.tool_name || j.toolName || "");
+  let input = j.tool_input || j.toolInput || {};
+  if (typeof input === "string") { try { input = JSON.parse(input); } catch { input = {}; } }
+  let ev = null;
+  if (name === "userpromptsubmit" || name === "beforesubmitprompt") ev = { event: "prompt" };
+  else if (name === "stop" || name === "stopfailure") {
+    ev = { event: "stop", error: name === "stopfailure" ? String(j.error || j.reason || "error") : j.status === "error" ? "error" : null };
+    // Some CLIs (grok) list what is still running in the background when the turn ends.
+    const bg = j.background_tasks || j.backgroundTasks;
+    if (Array.isArray(bg)) ev.tasks = bg.slice(0, 20).map((t, i) => ({ key: String(t.id || t.agentId || t.agent_id || t.taskId || i), label: String(t.description || t.agentType || t.agent_type || t.type || "") }));
+  } else if (name === "subagentstart")
+    ev = { event: "subagent_start", key: String(j.agent_id || j.agentId || j.subagent_id || j.subagentId || j.tool_call_id || ""), label: j.description || j.task || j.agent_type || j.agentType || j.subagent_type || j.subagentType || null };
+  else if (name === "subagentstop")
+    ev = { event: "subagent_stop", key: j.agent_id || j.agentId || j.subagent_id || j.subagentId || null, label: j.description || j.task || null };
+  else if (name === "pretooluse" && /^(AskUserQuestion|ask_user_question|ask_user)$/i.test(tool)) {
+    const q = Array.isArray(input.questions) ? input.questions[0] || {} : input;
+    const opts = (q.options || []).map((o) => (typeof o === "string" ? o : o?.label)).filter(Boolean);
+    ev = { event: "ask", question: String(q.question || q.header || "asked you"), options: opts };
+  } else if (name === "pretooluse" && /^ExitPlanMode$/i.test(tool)) ev = { event: "ask", question: "approve the plan?", options: ["yes", "no"] };
+  else if (name === "posttooluse" && /^(AskUserQuestion|ask_user_question|ask_user|ExitPlanMode)$/i.test(tool)) ev = { event: "answered" };
+  // Grok fires this per tool even when always-approve auto-answers it — no PostToolUse/answered
+  // follows, so tag it "permission": term-status.ts self-clears it on the CLI's next hook call
+  // instead of leaving the card parked on decide (chronos.err.log evidence: 4f3f3f5e, 6f2ad905).
+  else if (name === "permissionrequest") ev = { event: "ask", question: `allow ${tool || "a tool"}?`, options: ["yes", "no"], kind: "permission" };
+  else if (name === "notification" && /permission|elicitation(?!_complete|_response)/.test(String(j.notification_type || j.notificationType || j.matcher || "")))
+    ev = { event: "ask", question: String(j.message || "needs your input").slice(0, 300), options: [] };
+  else if (name === "sessionend") ev = { event: "session_end" };
+  if (ev) {
+    for (const k of Object.keys(ev)) if (ev[k] == null || ev[k] === "") delete ev[k];
+    let t;
+    let res = null;
+    try {
+      res = await Promise.race([req("POST", `/sessions/${sid}/hook`, ev), new Promise((r) => { t = setTimeout(r, 2000); })]);
+    } catch {}
+    clearTimeout(t);
+    // Claude adds a UserPromptSubmit hook's stdout to the turn as context: the memory the prompt missed.
+    if (backend === "claude" && name === "userpromptsubmit" && res && res.memory_notice) process.stdout.write(res.memory_notice + "\n");
+  }
+  reply();
+}
+
+/**
+ * `mc statusline claude` — installed as every Claude profile's statusLine (term-hooks.ts). The statusLine
+ * stdin is the one place claude hands out its usage-limit percentages; we pass them to the daemon
+ * (usage-meter.ts) and print them. Must stay fast and silent: it runs on every repaint.
+ */
+async function statusline() {
+  const raw = await new Promise((resolve) => {
+    if (process.stdin.isTTY) return resolve("");
+    let d = "";
+    const t = setTimeout(() => { process.stdin.destroy(); resolve(d); }, 1000);
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (c) => (d += c));
+    process.stdin.on("end", () => { clearTimeout(t); resolve(d); });
+  });
+  let j = {};
+  try { j = JSON.parse(raw || "{}"); } catch {}
+  const rl = j.rate_limits;
+  const parts = [];
+  if (j.model?.display_name) parts.push(j.model.display_name);
+  if (rl && typeof rl === "object") {
+    for (const [k, label] of [["five_hour", "5h"], ["seven_day", "week"], ["spend_limit", "spend"]]) {
+      const p = rl[k]?.used_percentage;
+      if (typeof p === "number") parts.push(`${label} ${Math.round(p)}%${p >= 95 ? " ‼" : p >= 80 ? " !" : ""}`);
+    }
+    let t;
+    try {
+      await Promise.race([
+        req("POST", "/usage/report", { cli: "claude", config_dir: process.env.CLAUDE_CONFIG_DIR || null, rate_limits: rl }),
+        new Promise((r) => { t = setTimeout(r, 800); }),
+      ]);
+    } catch {}
+    clearTimeout(t);
+  }
+  // Exit now: a daemon that never answers must not hold the statusLine (and claude's repaint) open.
+  process.stdout.write(parts.join(" · "), () => process.exit(0));
+}
+
+async function usage(asJson) {
+  const u = await req("GET", "/usage");
+  if (asJson) return console.log(JSON.stringify(u, null, 2));
+  const when = (iso) => (iso ? new Date(iso).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "");
+  for (const m of u.meters) {
+    const who = m.cli === "claude" ? `claude ${m.scope}` : m.cli;
+    if (!m.windows.length) { console.log(`${who.padEnd(24)} —  ${m.note || "no reading"}`); continue; }
+    const ws = m.windows.map((w) => `${w.name} ${Math.round(w.usedPct)}%${w.usedPct >= u.critPct ? " ‼" : w.usedPct >= u.warnPct ? " !" : ""}${w.resetsAt ? ` (resets ${when(w.resetsAt)})` : ""}`);
+    console.log(`${who.padEnd(24)} ${ws.join(" · ")}   [${m.source}, ${when(m.at)}]`);
+  }
+}
+
+// ───────────────────────────── machine governor (src/machine.ts) ─────────────────────────────
+
+// How long a heavy slot has been held, for the waiting line. (`mc fleet` has its own, in seconds.)
+const heldFor = (ms) => (ms < 60_000 ? Math.round(ms / 1000) + "s" : ms < 3_600_000 ? Math.round(ms / 60_000) + "m" : (ms / 3_600_000).toFixed(1) + "h");
+
+/**
+ * `mc heavy -- <command…>` — take one of a few machine-wide slots, run the command, give the slot
+ * back. The Mac is shared with every other agent, and five full vitest pools at once is what makes
+ * the operator's Desk crawl (see src/machine.ts for the measurements).
+ *
+ * Parsed from raw argv, before parse()/--help: everything after `--` belongs to the command, flags
+ * and all. Fail-open by design — a daemon that is down must never stop an agent running its tests.
+ */
+async function heavy(argv) {
+  const at = argv.indexOf("--");
+  // `--` is mandatory and is what makes `mc heavy -- npm test -- --help` reach npm intact. Without it
+  // there is no way to tell mc's own flags from the command's, so say so rather than guessing.
+  if (at < 0 && (argv.includes("--help") || argv.includes("-h") || !argv.length)) return console.log(HELP);
+  const command = at >= 0 ? argv.slice(at + 1) : [];
+  if (!command.length) die("usage: mc heavy -- <command…>    e.g. mc heavy -- npm test");
+  const label = command.join(" ").slice(0, 120);
+  const session_id = process.env.MC_SESSION || null;
+
+  let slotId = null;
+  let announced = false;
+  // Said ONCE, and only when we are actually queued: the request itself long-polls for up to 55s, so
+  // waiting silently for a minute would read as a hung command.
+  const announce = async () => {
+    if (announced) return;
+    announced = true;
+    const m = await req("GET", "/machine").catch(() => null);
+    const holders = m?.heavy?.holders ?? [];
+    const who = holders.map((h) => `${h.slot_id.slice(0, 8)} ${h.label.slice(0, 24)} ${heldFor(h.held_ms)}`).join(", ");
+    console.error(`waiting for a heavy slot (${holders.length}/${m?.heavy?.slots ?? "?"} busy${who ? ": " + who : ""})`);
+  };
+  // Our place in line. The daemon hands it back with every refusal; sending it on the next poll
+  // resumes the SAME queue entry instead of re-joining at the back behind later arrivals.
+  let ticket = null;
+  for (;;) {
+    let grant;
+    const nudge = setTimeout(() => void announce(), 750);
+    try {
+      grant = await req("POST", "/machine/slots", { session_id, label, ticket });
+    } catch (e) {
+      clearTimeout(nudge);
+      console.error(`mc heavy: no slot service (${e.message}) — running anyway, unthrottled`);
+      break;
+    }
+    clearTimeout(nudge);
+    if (grant.granted) { slotId = grant.slot_id; break; }
+    ticket = grant.ticket ?? ticket;
+    await announce(); // the long poll expired with every slot still busy — ask again
+  }
+
+  // The slot must come back whatever happens: a clean exit, a ctrl-C, a `kill`. Without this a
+  // crashed suite parks a permit for the full 90s heartbeat timeout with nothing running in it.
+  let released = false;
+  const release = async () => {
+    if (released || !slotId) return;
+    released = true;
+    try { await req("DELETE", "/machine/slots/" + slotId); } catch {}
+  };
+  const beat = slotId ? setInterval(() => { req("PUT", "/machine/slots/" + slotId).catch(() => {}); }, 30_000) : null;
+  beat?.unref?.();
+
+  const child = spawn(command[0], command.slice(1), { stdio: "inherit" });
+  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { try { child.kill(sig); } catch {} });
+  const code = await new Promise((resolve) => {
+    child.on("error", (e) => { console.error(`mc heavy: ${command[0]}: ${e.message}`); resolve(127); });
+    // A signalled command reports as 128+signo, the way a shell would.
+    child.on("exit", (c, sig) => resolve(sig ? 128 + (os.constants.signals[sig] ?? 0) : (c ?? 0)));
+  });
+  if (beat) clearInterval(beat);
+  await release();
+  process.exit(code);
+}
+
+(async () => {
+  // Before parse(): `mc heavy -- npm test -- --help` must reach npm, not print mc's usage.
+  if (process.argv[2] === "heavy") return await heavy(process.argv.slice(3));
+  const { pos, opt } = parse(process.argv.slice(2));
+  // `workspace` is what the schema and the API call it, and renaming a column that is a foreign key
+  // in nineteen tables buys nothing. But most people have one of these per repo or per product, not
+  // per client, so `mc project` is the same command under the word they would reach for first.
+  if (pos[0] === "project" || pos[0] === "projects") pos[0] = "ws";
+  const cmd = pos[0];
+  try {
+    // ANY `--help` / `-h` must print usage and exit — never run the command. Agents (Robert) reach
+    // for `mc session new --help` to check flags; without this, parse() treats `--help` as an
+    // ignored option and `session new` still POSTs an empty terminal (blank card on the Desk,
+    // closed seconds later). Same trap for every other mutating subcommand.
+    if (!cmd || cmd === "help" || cmd === "-h" || cmd === "--help"
+        || "help" in opt || "h" in opt
+        || pos.includes("-h") || pos.includes("--help")) {
+      return console.log(HELP);
+    }
+    if (cmd === "hook") return await hook(pos[1] || "claude");
+    if (cmd === "statusline") return await statusline();
+    if (cmd === "usage") return await usage("json" in opt);
+
+    if (cmd === "pdf") {
+      const file = pos[1] || die("usage: mc pdf <file.pdf>");
+      // Extraction runs in the daemon (pdf.js lives there; this script has no node_modules).
+      const out = await req("POST", "/pdf/text", { path: path.resolve(file) });
+      if (out.empty) return console.error("(no text layer — likely a scanned PDF; vision-Read the file itself)");
+      return console.log(out.text);
+    }
+
+    if (cmd === "ticket" && pos[1] === "new") {
+      const title = opt.title || pos.slice(2).join(" ");
+      if (!title) die("ticket new needs --title");
+      const parent = opt.parent ? await findByKey(opt.parent) : null;
+      const t = await req("POST", "/tickets", {
+        workspace_id: opt.workspace || process.env.MC_WORKSPACE,
+        repo_id: opt.repo || process.env.MC_REPO || null,
+        title,
+        priority: opt.priority,
+        status: opt.status,
+        backend: opt.backend,
+        model: opt.model,
+        description: opt.body,
+        parent_id: parent?.id,
+      });
+      return console.log(`created ${t.key} — ${t.title}${parent ? ` (under goal ${parent.key})` : ""}`);
+    }
+    // `mc goal` is overloaded on purpose: with a KEY it reports a ticket-goal's completion, with
+    // `set`/`done` it drives THIS terminal's objective — the line the operator reads on the Desk wall.
+    if (cmd === "goal" && (pos[1] === "set" || pos[1] === "done" || pos[1] === "clear")) {
+      const sid = process.env.MC_SESSION || die("no MC_SESSION — `mc goal set` only works inside a terminal session");
+      // `goal_source: "agent"` is the important bit: it tells the daemon YOU named this card, which
+      // stops the automatic title deriver (desk-title.ts) from renaming it from your next
+      // "Understanding:" line. Your words win from here on.
+      const kind = opt.kind ? String(opt.kind).toLowerCase() : null;
+      if (kind && !["pr", "investigation", "qa"].includes(kind)) die("--kind must be pr, investigation or qa");
+      const body =
+        pos[1] === "set"
+          ? {
+              goal: pos.slice(2).join(" ") || die('mc goal set "<what this terminal is for>" [--kind pr|investigation|qa]'),
+              goal_source: "agent",
+              ...(kind ? { goal_kind: kind } : {}),
+            }
+        : pos[1] === "clear" ? { goal: null, goal_source: "agent" }
+        : { goal_done: true };
+      const s2 = await req("PATCH", "/sessions/" + sid, body);
+      return console.log(pos[1] === "done" ? `✅ goal reached — ${s2.goal ?? ""}` : `🎯 ${s2.goal ?? "(cleared)"}`);
+    }
+    if (cmd === "goal") {
+      const t = await findByKey(pos[1] || process.env.MC_TICKET || die("goal needs a KEY"));
+      const full = await req("GET", "/tickets/" + t.id);
+      const g = full.goal;
+      if (!g) return console.log(`${t.key} — ${t.title}\n(not a goal yet — no child tickets. Attach children: mc ticket link ${t.key} parent <CHILD>)`);
+      const pct = Math.round((g.done / g.total) * 100);
+      const summary = [`${g.done}/${g.total} done`, g.in_progress && `${g.in_progress} in progress`, g.blocked && `${g.blocked} blocked`].filter(Boolean).join(", ");
+      const kids = g.children.map((c) => `  ${c.status === "done" ? "✅" : c.blocked ? "⛔" : "·"} ${c.key}\t${c.status}\t${c.title}`).join("\n");
+      return console.log(`🎯 ${t.key} — ${t.title}\n${summary} (${pct}% complete)\n${kids}`);
+    }
+    // Self-reported lifecycle. The daemon can see that a terminal has gone silent, but only the agent
+    // knows WHY: finished, or stuck waiting on a decision. Saying so turns an amber card red.
+    // Open the Desk wall in its own native window (token injected — a browser tab can't attach to
+    // /term without it). Falls back to the browser if mc-app was never built.
+    if (cmd === "desk" && !pos[1]) {
+      const { spawn } = await import("node:child_process");
+      const url = (process.env.MC_API || "http://localhost:7777/api").replace(/\/api\/?$/, "") + "/desk";
+      // The bundle's executable rather than the ~/.mc/bin symlink: the Dock takes the icon and the
+      // app name from the bundle the running executable sits in, and a symlinked path is not it.
+      const bundled = path.join(os.homedir(), ".mc/mc-app.app/Contents/MacOS/mc-app");
+      const app = fs.existsSync(bundled) ? bundled : path.join(os.homedir(), ".mc/bin/mc-app");
+      // ✕ hides the window instead of quitting the app now (desktop/app.swift), so "already
+      // running, window closed" is the normal case — spawning here would give him a second Dock
+      // icon and a second WKWebView on the same Desk. `open -b` re-activates the live one, which
+      // lands in applicationShouldHandleReopen and puts the window back.
+      if (spawnSync("pgrep", ["-f", "mc-app.app/Contents/MacOS/mc-app"]).status === 0) {
+        spawnSync("open", ["-b", "sh.chronos.app"]);
+        return console.log(`desk → ${url} (raised the window that was already open)`);
+      }
+      if (fs.existsSync(app)) {
+        spawn(app, [url], { detached: true, stdio: "ignore" }).unref();
+        return console.log(`desk → ${url} (native window)`);
+      }
+      spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
+      return console.log(`desk → ${url} (browser — build the native window with: scripts/build-app.sh)`);
+    }
+    if (cmd === "state") {
+      const USAGE = 'mc state working|waiting|blocked|decide|review|idle ["label"] [--on subagents|ci|terminal|command|robert|person|deploy|other] [--eta 10m] [--reason auth|approval|hitl]';
+      const st = pos[1] || die(USAGE);
+      const STATES = ["working", "waiting", "blocked", "decide", "review", "done", "idle"];
+      if (!STATES.includes(st)) die(`unknown state '${st}'\n${USAGE}`);
+      const label = pos.slice(2).join(" ") || null;
+      // A terminal's card (term-status.ts). A dispatched run has no card — it keeps the old overlay.
+      if (!process.env.MC_SESSION) {
+        const rid = process.env.MC_RUN || die("no MC_SESSION/MC_RUN — run this inside an agent session");
+        const legacy = st === "decide" ? "blocked" : st === "waiting" ? "working" : st === "review" ? "done" : st;
+        const a = await req("POST", `/agents/${rid}/report`, {
+          state: legacy, state_label: label,
+          ...(legacy === "blocked" ? { blocked_reason: opt.reason || "question" } : {}),
+        });
+        return console.log(`${a.state}${a.state_label ? " · " + a.state_label : ""}`);
+      }
+      if (opt.on && !["subagents", "ci", "terminal", "command", "robert", "person", "deploy", "other"].includes(opt.on)) die(`--on must be one of subagents|ci|terminal|command|robert|person|deploy|other`);
+      const etaMin = opt.eta ? durMin(opt.eta) : null;
+      if (opt.eta && !etaMin) die('--eta takes minutes: 10, "10m", "2h"');
+      const r = await req("POST", `/sessions/${process.env.MC_SESSION}/status`, {
+        state: st, label,
+        ...(opt.reason ? { reason: opt.reason } : {}),
+        ...(opt.on ? { on: opt.on } : {}),
+        ...(etaMin ? { eta_min: etaMin } : {}),
+      });
+      return console.log(r ? `${r.word}${r.line ? " · " + r.line : ""}` : "ok");
+    }
+    // `mc progress 2/5 "running migrations"` — a step counter on the card. `mc progress clear` drops it.
+    if (cmd === "progress") {
+      const sid = process.env.MC_SESSION || die("no MC_SESSION — `mc progress` only works inside a terminal session");
+      const arg = pos[1] || die('mc progress <n>/<of> ["what this step is"] | mc progress clear');
+      if (arg === "clear") { await req("POST", `/sessions/${sid}/progress`, { n: null }); return console.log("progress cleared"); }
+      const m = /^(\d+)\/(\d+)$/.exec(arg) || die("progress is n/of, e.g. 2/5");
+      const r = await req("POST", `/sessions/${sid}/progress`, { n: Number(m[1]), of: Number(m[2]), label: pos.slice(2).join(" ") || null });
+      return console.log(`${r.word} · ${r.line}`);
+    }
+    if (cmd === "ticket" && pos[1] === "list") {
+      const qs = new URLSearchParams();
+      const wsq = opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
+      if (opt.status) qs.set("status", opt.status);
+      const all = await req("GET", "/tickets?" + qs.toString());
+      if (!all.length) return console.log("(no tickets)");
+      // ⇄ marks a mirror: status_source 'external' means this status is a copy of ClickUp/Jira's own
+      // board, not real Chronos work — see TicketStatusSource (src/types.ts).
+      return console.log(all.map((t) => `${t.key}\t${t.status_source === "external" ? "⇄ " : ""}${t.status}\t${t.priority}\t${t.title}`).join("\n"));
+    }
+    if (cmd === "ticket" && pos[1] === "get") {
+      const t = await findByKey(pos[2] || die("ticket get needs a KEY"));
+      const full = await req("GET", "/tickets/" + t.id);
+      let out = full.markdown || JSON.stringify(full, null, 2);
+      if (full.blocked) out += `\n\n⛔ BLOCKED — upstream 'blocks' ticket still open; build is gated.`;
+      if (full.links?.length)
+        out += "\n\n## Links\n" + full.links.map((l) => `- ${LINK_LABEL[l.type][l.dir]} ${l.ticket.key} (${l.ticket.status}) — ${l.ticket.title}`).join("\n");
+      return console.log(out);
+    }
+    if (cmd === "ticket" && pos[1] === "update") {
+      const t = await findByKey(pos[2] || die("ticket update needs a KEY"));
+      const patch = {};
+      for (const k of ["status", "priority", "title", "backend", "model", "complexity"]) if (opt[k]) patch[k] = opt[k];
+      if (opt.difficulty) patch.complexity = String(opt.difficulty);
+      if (opt["pr-state"]) patch.pr_state = opt["pr-state"];
+      const u = await req("PATCH", "/tickets/" + t.id, patch);
+      return console.log(`updated ${u.key} → ${u.status}`);
+    }
+    if (cmd === "ticket" && pos[1] === "rm") {
+      const t = await findByKey(pos[2] || die("ticket rm needs a KEY"));
+      const r = await req("DELETE", "/tickets/" + t.id);
+      console.log(`deleted ${t.key}`);
+      if (r?.external) console.log(r.external);
+      return;
+    }
+    if (cmd === "ticket" && pos[1] === "link") {
+      // mc ticket link <FROM> <blocks|parent|relates|duplicates> <TO>
+      const type = pos[3];
+      if (!pos[2] || !type || !pos[4]) die("usage: mc ticket link <FROM> <blocks|parent|relates|duplicates> <TO>");
+      if (!["blocks", "parent", "relates", "duplicates"].includes(type)) die(`bad type: ${type}`);
+      const from = await findByKey(pos[2]);
+      const to = await findByKey(pos[4]);
+      await req("POST", "/tickets/" + from.id + "/links", { to_id: to.id, type });
+      return console.log(`${from.key} ${type} ${to.key}`);
+    }
+    if (cmd === "ticket" && pos[1] === "unlink") {
+      // mc ticket unlink <FROM> <blocks|parent|relates|duplicates> <TO>
+      const type = pos[3];
+      if (!pos[2] || !type || !pos[4]) die("usage: mc ticket unlink <FROM> <type> <TO>");
+      const from = await findByKey(pos[2]);
+      const full = await req("GET", "/tickets/" + from.id);
+      const link = (full.links || []).find((l) => l.dir === "out" && l.type === type && l.ticket.key === pos[4].toUpperCase());
+      if (!link) die(`no ${type} link ${pos[2]} → ${pos[4]}`);
+      await req("DELETE", "/tickets/" + from.id + "/links/" + link.id);
+      return console.log(`unlinked ${from.key} ${type} ${pos[4].toUpperCase()}`);
+    }
+    if (cmd === "ticket" && pos[1] === "links") {
+      const t = await findByKey(pos[2] || process.env.MC_TICKET || die("ticket links needs a KEY"));
+      const full = await req("GET", "/tickets/" + t.id);
+      const links = full.links || [];
+      if (!links.length) return console.log("(no links)");
+      const rel = (l) => LINK_LABEL[l.type][l.dir];
+      return console.log(links.map((l) => `${rel(l)}\t${l.ticket.key}\t${l.ticket.status}\t${l.ticket.title}`).join("\n"));
+    }
+    // Deciding not to do something is a decision. `mc ticket rm` erases the evidence it was ever
+    // considered; this keeps the ticket, the reason, and the audit trail — off every active board.
+    if (cmd === "dismiss") {
+      const hasKey = pos[1] && pos[1].match(/^[A-Za-z]+-\d+$/);
+      const key = (hasKey ? pos[1] : process.env.MC_TICKET) || die("dismiss needs a KEY (or set MC_TICKET)");
+      const reason = (hasKey ? pos.slice(2) : pos.slice(1)).join(" ").trim();
+      const t = await findByKey(key);
+      // Reason first: it has to reach the ticket's Buzz thread before the close takes that thread down.
+      if (reason) await req("POST", "/tickets/" + t.id + "/note", { text: `dismissed: ${reason}` });
+      const u = await req("PATCH", "/tickets/" + t.id, { status: "dismissed" });
+      return console.log(`${u.key} → ${u.status}${reason ? ` — ${reason}` : ""}`);
+    }
+    // "Later" is an answer (src/holds.ts): the item leaves the live "needs you" list and comes back on
+    // its date. Matched before `mc ask`/`mc review` so their own handlers never see this shape.
+    if (["ask", "review", "reviews", "recover", "recovery"].includes(cmd) && pos[1] === "hold") {
+      const kind = cmd === "ask" ? "ask" : cmd.startsWith("recover") ? "recovery" : "review";
+      const path = kind === "ask" ? "asks" : kind === "review" ? "reviews" : "recovery";
+      const id = pos[2] || die(`mc ${cmd} hold needs an id: mc ${cmd} hold <id> <+2d|ISO|null> ["why"]`);
+      const raw = pos[3] || die(`mc ${cmd} hold needs a date: mc ${cmd} hold ${id} +2d ["why"]`);
+      const until = raw === "null" || raw === "none" ? null : raw;
+      const reason = pos.slice(4).join(" ") || null;
+      const out = await req("POST", `/${path}/${encodeURIComponent(id)}/hold`, { until, reason }, adminHeaders());
+      if (!out.hold_until) return console.log(`⏰ hold lifted on ${id} — back on the live list now`);
+      return console.log(
+        `⏰ ${id} → later, back ${out.hold_until.slice(0, 16).replace("T", " ")}` +
+        (out.hold_reason ? ` (${out.hold_reason})` : "") + `. Nothing was decided.`
+      );
+    }
+    if (cmd === "review" || cmd === "done") {
+      const key = pos[1] || process.env.MC_TICKET || die(`${cmd} needs a KEY (or set MC_TICKET)`);
+      const t = await findByKey(key);
+      const status = cmd === "review" ? "review" : "done";
+      const body = { status };
+      if (cmd === "review" && opt.report != null) {
+        const report = opt.report === "-" ? await readStdin() : opt.report;
+        if (report && report.trim()) body.report = report;
+      }
+      const u = await req("PATCH", "/tickets/" + t.id, body);
+      return console.log(`${u.key} → ${u.status}${body.report ? " (+handoff report)" : ""}`);
+    }
+    if (cmd === "note") {
+      const hasKey = pos[1] && !pos[1].includes(" ") && (process.env.MC_TICKET ? pos[1].match(/^[A-Za-z]+-\d+$/) : true);
+      const key = hasKey ? pos[1] : process.env.MC_TICKET;
+      const text = (hasKey ? pos.slice(2) : pos.slice(1)).join(" ");
+      if (!key) die("note needs a KEY or MC_TICKET");
+      if (!text) die("note needs text");
+      const t = await findByKey(key);
+      const r = await req("POST", "/tickets/" + t.id + "/note", { text, run_id: process.env.MC_RUN || undefined });
+      console.log(`noted on ${t.key}`);
+      return printMessages(r.messages);
+    }
+    if (cmd === "comment") {
+      const hasKey = pos[1] && !pos[1].includes(" ") && (process.env.MC_TICKET ? pos[1].match(/^[A-Za-z]+-\d+$/) : true);
+      const key = hasKey ? pos[1] : process.env.MC_TICKET;
+      const text = (hasKey ? pos.slice(2) : pos.slice(1)).join(" ");
+      if (!key) die("comment needs a KEY or MC_TICKET");
+      if (!text) die("comment needs text");
+      const t = await findByKey(key);
+      const r = await req("POST", "/tickets/" + t.id + "/push-comment", { body: text });
+      return console.log(`commented on ${t.key} → ${r.external_system} ${r.external_id}`);
+    }
+    if (cmd === "push-status") {
+      const key = pos[1] || process.env.MC_TICKET || die("push-status needs a KEY (or set MC_TICKET)");
+      const t = await findByKey(key);
+      const hours = opt.hours != null ? Number(opt.hours) : undefined;
+      if (hours != null && !(hours > 0)) die("--hours must be a positive number");
+      const r = await req("POST", "/tickets/" + t.id + "/push-status", hours != null ? { hours } : undefined);
+      return console.log(`${t.key} (${t.status}) → ${r.external_system} ${r.external_id} status "${r.status}"`);
+    }
+    // Hours Spent lives in the Jira issue's Details, so it can be written any time — this does NOT
+    // move the ticket's status. Closing still goes through `mc done` / `mc push-status`.
+    if (cmd === "hours") {
+      const args = pos.slice(1);
+      const keyArg = args.find((a) => /^[A-Za-z]+-\d+$/.test(a));
+      const numArg = args.find((a) => a !== keyArg && /^\d+(\.\d+)?$/.test(a));
+      const key = keyArg || process.env.MC_TICKET || die("hours needs a KEY (or set MC_TICKET)");
+      const hours = Number(numArg ?? opt.hours ?? die('hours needs a number: mc hours 3.5 [<KEY>]'));
+      if (!(hours > 0)) die("hours must be a positive number");
+      const t = await findByKey(key);
+      const r = await req("POST", "/tickets/" + t.id + "/push-hours", { hours });
+      return console.log(`${t.key} → ${r.external_system} ${r.external_id} Hours Spent = ${r.hours}`);
+    }
+    if (cmd === "remember") {
+      const fact = opt.body ?? pos.slice(1).join(" ");
+      if (!fact) die('remember needs a rule: mc remember "<short rule>" [--topic T] [--detail "…"]');
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (!wsId) die("remember needs --workspace or MC_WORKSPACE");
+      const r = await req("POST", "/workspaces/" + wsId + "/remember", { fact, topic: opt.topic, detail: opt.detail, session: process.env.MC_SESSION || undefined });
+      return console.log(r.added
+        ? `remembered ✓ under ${r.topic} in memory-index${r.branch ? ` (detail → ${r.branch.slug})` : ""}`
+        : `already in memory-index${r.branch ? ` (detail added → ${r.branch.slug})` : ""}`);
+    }
+    if (cmd === "learn") {
+      const fact = opt.body ?? pos.slice(1).join(" ");
+      if (!fact) die('learn needs a fact: mc learn "<durable fact>"');
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (!wsId) die("learn needs --workspace or MC_WORKSPACE");
+      await req("POST", "/workspaces/" + wsId + "/learn", { fact, label: opt.label || process.env.MC_TICKET || undefined });
+      return console.log("learned ✓");
+    }
+    if (cmd === "lesson") {
+      const sub = pos[1] || "list";
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (sub === "list") {
+        const rows = await req("GET", "/lessons?" + new URLSearchParams({
+          ...(wsId ? { workspace: wsId } : {}),
+          ...(opt.repo ? { repo: opt.repo } : {}),
+          state: opt.state || "active",
+          ...(opt.topic ? { topic: opt.topic } : {}),
+        }));
+        if (!rows.length) return console.log("no lessons");
+        for (const l of rows)
+          console.log(`${l.state === "active" ? "●" : "○"} [${l.topic}] ${l.rule}${l.scope ? `  (${l.scope})` : ""}  ·${l.hits} ${l.id.slice(0, 8)}`);
+        return;
+      }
+      if (sub === "add") {
+        const rule = opt.body ?? pos.slice(2).join(" ");
+        if (!rule) die('lesson add needs a rule: mc lesson add "<rule>" [--scope glob] [--topic build|review|comms]');
+        if (!wsId) die("lesson add needs --workspace or MC_WORKSPACE");
+        const l = await req("POST", "/lessons", {
+          workspace_id: wsId,
+          repo_id: opt.repo || process.env.MC_REPO || null,
+          rule,
+          scope: opt.scope || null,
+          topic: opt.topic || "build",
+          source: "operator",
+          source_ref: process.env.MC_TICKET || null,
+        });
+        return console.log(`lesson ${l.state} ✓ ${l.id.slice(0, 8)}`);
+      }
+      if (sub === "promote" || sub === "archive") {
+        const id = pos[2] || die(`lesson ${sub} needs an id`);
+        const l = await req("PATCH", "/lessons/" + id, { state: sub === "promote" ? "active" : "archived" });
+        return console.log(`${l.id.slice(0, 8)} → ${l.state}`);
+      }
+      if (sub === "rm") {
+        const id = pos[2] || die("lesson rm needs an id");
+        await req("DELETE", "/lessons/" + id);
+        return console.log("removed ✓");
+      }
+      die("lesson: list|add|promote|archive|rm");
+    }
+    if (cmd === "plan") {
+      const key = process.env.MC_TICKET || (pos[1] && /^[A-Za-z]+-\d+$/.test(pos[1]) ? pos[1] : null);
+      const md = opt.body ?? (process.env.MC_TICKET ? pos.slice(1) : pos.slice(2)).join(" ");
+      if (!key) die("plan needs MC_TICKET or a KEY");
+      if (!md) die("plan needs the plan markdown (--body \"...\" or inline)");
+      const t = await findByKey(key);
+      const difficulty = opt.difficulty ?? opt.complexity;
+      await req("POST", "/tickets/" + t.id + "/plan", { markdown: md, difficulty });
+      return console.log(`plan saved on ${t.key} → planned (awaiting human)${difficulty ? ` [d${difficulty}]` : ""}`);
+    }
+    if (cmd === "grade") {
+      const key = process.env.MC_TICKET || (pos[1] && /^[A-Za-z]+-\d+$/.test(pos[1]) ? pos[1] : null);
+      const rest = process.env.MC_TICKET ? pos.slice(1) : pos.slice(2);
+      const difficulty = opt.difficulty ?? rest[0];
+      const note = opt.note ?? opt.body ?? rest.slice(opt.difficulty ? 0 : 1).join(" ");
+      if (!key) die("grade needs MC_TICKET or a KEY");
+      if (!/^[1-5]$/.test(String(difficulty))) die("grade needs a difficulty 1-5: mc grade <1-5> \"<review note>\"");
+      const t = await findByKey(key);
+      await req("POST", "/tickets/" + t.id + "/grade", { difficulty: Number(difficulty), note });
+      return console.log(`graded ${t.key} → difficulty ${difficulty}/5`);
+    }
+    if (cmd === "verdict") {
+      const reviewId = pos[1];
+      const decision = pos[2];
+      if (!reviewId || !["approve", "changes"].includes(decision)) die('verdict needs: mc verdict <reviewId> approve|changes ["notes"] [--lens NAME]');
+      const notes = opt.notes ?? (pos.slice(3).join(" ") || undefined);
+      await req("POST", "/reviews/" + reviewId + "/verdict", { decision, notes, lens: opt.lens || process.env.MC_REVIEW_LENS || null });
+      return console.log(`verdict ${decision} recorded on review ${reviewId.slice(0, 8)}`);
+    }
+    if (cmd === "memo") {
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      const sub = pos[1] || "list";
+      const findMemo = async (ref) => {
+        const all = await req("GET", "/notes" + (wsId ? "?workspace=" + wsId : ""));
+        const n = all.find((x) => x.id === ref || x.id.startsWith(ref) || x.slug === ref ||
+          x.title?.toLowerCase() === String(ref).toLowerCase());
+        if (!n) throw new Error(`memo not found: ${ref}`);
+        return n;
+      };
+      // --repos "a,b" → repo ids (accepts names or ids). "" / "none" / "clear" → null (workspace-wide).
+      const resolveRepos = async (csv) => {
+        if (csv == null) return undefined;
+        const s = String(csv).trim();
+        if (s === "" || s === "none" || s === "clear") return null;
+        const ws = await req("GET", "/workspaces/" + wsId);
+        return s.split(",").map((tok) => tok.trim()).filter(Boolean).map((tok) => {
+          const hit = (ws.repos || []).find((r) => r.name?.toLowerCase() === tok.toLowerCase() || r.id === tok || r.id.startsWith(tok));
+          if (!hit) die(`repo not found in workspace: ${tok}`);
+          return hit.id;
+        });
+      };
+      const repoNames = async (ids) => {
+        if (!ids || !ids.length) return null;
+        const ws = await req("GET", "/workspaces/" + wsId);
+        return ids.map((id) => (ws.repos || []).find((r) => r.id === id)?.name || id.slice(0, 8)).join(",");
+      };
+      if (sub === "list") {
+        const all = await req("GET", "/notes" + (wsId ? "?workspace=" + wsId : ""));
+        if (!all.length) return console.log("(no memos)");
+        const ws = all.some((n) => n.repo_ids && n.repo_ids.length) ? await req("GET", "/workspaces/" + wsId) : null;
+        const nameOf = (id) => (ws?.repos || []).find((r) => r.id === id)?.name || id.slice(0, 8);
+        return console.log(all.map((n) => {
+          const scope = n.repo_ids && n.repo_ids.length ? `\t↳ repos: ${n.repo_ids.map(nameOf).join(",")}` : "";
+          return `${n.scope === "global" ? "🌐" : n.context ? "★" : n.pinned ? "📌" : "·"} ${n.slug}\t${n.title}${scope}`;
+        }).join("\n"));
+      }
+      if (sub === "context") {
+        const all = await req("GET", "/notes" + (wsId ? "?workspace=" + wsId : ""));
+        const ctx = all.filter((n) => n.context);
+        if (!ctx.length) return console.log("(no context-flagged memos — these auto-load into every agent)");
+        return console.log(ctx.map((n) => `# ${n.title} (${n.slug})\n${n.body}`).join("\n\n"));
+      }
+      if (sub === "get") {
+        const n = await findMemo(pos[2] || die("memo get needs a name/slug"));
+        return console.log(n.body);
+      }
+      if (sub === "new") {
+        const title = opt.title || pos.slice(2).join(" ");
+        if (!title) die("memo new needs a title");
+        if (!wsId) die("memo new needs --workspace or MC_WORKSPACE");
+        const global = opt.global === "true";
+        const body = { workspace_id: wsId, title, body: opt.body, pinned: opt.pin === "true", context: opt.context === "true" };
+        if (global) body.scope = "global";
+        const repo_ids = await resolveRepos(opt.repos);
+        if (repo_ids && repo_ids.length) body.repo_ids = repo_ids;
+        const n = await req("POST", "/notes", body, global ? adminHeaders() : undefined);
+        const scopeTag = n.repo_ids && n.repo_ids.length ? ` [repos: ${await repoNames(n.repo_ids)}]` : "";
+        return console.log(`created memo ${n.slug}${global ? " 🌐 (global)" : ""}${scopeTag} — ${n.title}`);
+      }
+      if (sub === "edit" || sub === "set") {
+        const n = await findMemo(pos[2] || die("memo edit needs a name/slug"));
+        const body = opt.body ?? pos.slice(3).join(" ");
+        const global = opt.global === "true";
+        if (!body && !opt.title && opt.pin == null && opt.context == null && !global && opt.repos == null) die("memo edit needs --body, --title, --pin, --context, --repos, or --global");
+        const patch = { body: body || undefined, title: opt.title, pinned: opt.pin == null ? undefined : opt.pin === "true", context: opt.context == null ? undefined : opt.context === "true" };
+        if (global) patch.scope = "global";
+        const repo_ids = await resolveRepos(opt.repos); // undefined=leave, null=clear, array=re-scope
+        if (repo_ids !== undefined) patch.repo_ids = repo_ids;
+        // Any touch of a global note is admin-gated server-side (its body reaches all workspaces).
+        const admin = global || n.scope === "global" ? adminHeaders() : undefined;
+        const u = await req("PATCH", "/notes/" + n.id, patch, admin);
+        const scopeTag = u.repo_ids && u.repo_ids.length ? ` [repos: ${await repoNames(u.repo_ids)}]` : (repo_ids === null ? " [workspace-wide]" : "");
+        return console.log(`updated memo ${u.slug}${scopeTag}`);
+      }
+      if (sub === "append") {
+        const n = await findMemo(pos[2] || die("memo append needs a name/slug"));
+        const text = opt.body ?? pos.slice(3).join(" ");
+        if (!text) die("memo append needs text");
+        await req("PATCH", "/notes/" + n.id, { append: text, heading: opt.heading }, n.scope === "global" ? adminHeaders() : undefined);
+        return console.log(`appended to memo ${n.slug}`);
+      }
+      if (sub === "rm") {
+        const n = await findMemo(pos[2] || die("memo rm needs a name/slug"));
+        await req("DELETE", "/notes/" + n.id, undefined, n.scope === "global" ? adminHeaders() : undefined);
+        return console.log(`deleted memo ${n.slug}`);
+      }
+      die("memo: unknown subcommand " + sub);
+    }
+    if (cmd === "worklog") {
+      const sub = ["add", "backfill"].includes(pos[1]) ? pos[1] : null;
+      const wsRef = opt.workspace || (sub ? pos[sub === "add" ? 3 : 2] : pos[1]) || process.env.MC_WORKSPACE;
+      if (!wsRef) die("worklog needs a workspace (positional, --workspace, or MC_WORKSPACE)");
+      // Accept a slug/name/id prefix like the rest of the CLI; the API wants the full id.
+      const all = await req("GET", "/workspaces");
+      const w = all.find((x) => x.id === wsRef || x.id.startsWith(wsRef) || x.slug === wsRef ||
+        x.name?.toLowerCase() === String(wsRef).toLowerCase());
+      if (!w) die(`no workspace matching '${wsRef}' — mc ws list`);
+      const items = (csv) => String(csv ?? "").split(";").map((x) => x.trim()).filter(Boolean);
+      if (sub === "add") {
+        const what = pos[2] || opt.what || die('usage: mc worklog add "<what>" --outcome "..." [--pending "a;b"] [--next "c;d"]');
+        const outcome = opt.outcome || die("worklog add needs --outcome (one line: shipped X / failed because Y / stopped at Z)");
+        const body = { what, outcome, pending: items(opt.pending), next: items(opt.next) };
+        if (opt.pr) body.pr = opt.pr;
+        if (opt.ticket) body.ticket = opt.ticket;
+        // A Lead writes with its credential; author is forced server-side to lead:<id8>.
+        const wlH = process.env.MC_LEAD_TOKEN && !adminToken()
+          ? { "x-mc-lead": process.env.MC_LEAD_TOKEN }
+          : adminHeaders();
+        const e = await req("POST", "/workspaces/" + w.id + "/worklog", body, wlH);
+        return console.log(`logged ${e.at} · ${e.what} · ${e.outcome}`);
+      }
+      if (sub === "backfill") {
+        const r = await req("POST", "/workspaces/" + w.id + "/worklog/backfill",
+          { since: opt.since || "7d", limit: opt.limit ? Number(opt.limit) : undefined }, adminHeaders());
+        return console.log(`backfilled ${w.slug}: ${r.added} entr${r.added === 1 ? "y" : "ies"} from ${r.scanned} scanned since ${r.since.slice(0, 10)}`);
+      }
+      const n = Number(opt.limit ?? 25) || 25;
+      const d = await req("GET", `/workspaces/${w.id}/worklog?limit=${n}`);
+      if (!d.entries.length) return console.log(`(nothing logged in ${w.slug} yet — mc worklog backfill ${w.slug} --since 7d)`);
+      return console.log(d.entries.map((e) => [
+        `${e.at} · ${e.what} · ${e.outcome}` + (e.ticket ? ` · ${e.ticket}` : "") + (e.pr ? ` · ${e.pr}` : ""),
+        ...e.pending.map((p) => `    pending: ${p}`),
+        ...e.next.map((x) => `    next: ${x}`),
+      ].join("\n")).join("\n"));
+    }
+    if (cmd === "jot") {
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      const sub = pos[1] || "list";
+      if (!wsId) die("jot needs --workspace or MC_WORKSPACE");
+      if (sub === "list") {
+        const rows = await req("GET", "/workspaces/" + wsId + "/jots" + (opt.date ? "?date=" + encodeURIComponent(opt.date) : ""));
+        if (!rows.length) return console.log(opt.date ? `(no cards for ${opt.date})` : "(no cards)");
+        return console.log(rows.map((j) => {
+          const mark = j.status === "done" ? "✓" : j.session_id ? "▶" : "·";
+          const day = j.for_date ? `Next Day ${j.for_date.slice(5)} - ` : "";
+          return `${mark} ${day}${j.title}${j.source === "nextday" ? "  (planner)" : ""}`;
+        }).join("\n"));
+      }
+      if (sub === "new") {
+        const title = opt.title || pos.slice(2).join(" ");
+        if (!title) die("jot new needs --title");
+        // An agent may only file DATED cards (the daemon refuses a bare one from a workspace token);
+        // The operator at the wall files undated ones from the Desk itself.
+        if (!opt.date) die("jot new needs --date YYYY-MM-DD (the day the card is for)");
+        let body = opt.body ?? null;
+        if (body === "-") body = (await readStdin()).trim() || null;
+        const j = await req("POST", "/workspaces/" + wsId + "/jots", {
+          title, body, for_date: opt.date, planned_by: process.env.MC_SESSION || null,
+        });
+        return console.log(`filed card for ${j.for_date}: ${j.title}`);
+      }
+      die("jot: unknown subcommand " + sub);
+    }
+    if (cmd === "job" && pos[1] === "list") {
+      const wsq = opt.workspace || process.env.MC_WORKSPACE;
+      let all = await req("GET", "/jobs");
+      if (wsq) all = all.filter((j) => j.workspace_id === wsq);
+      if (!all.length) return console.log("(no jobs)");
+      return console.log(all.map((j) => {
+        const sched = j.trigger_type === "cron" ? `cron(${j.cron_expr})` : j.trigger_type;
+        return `${j.enabled ? "●" : "○"} ${j.id.slice(0, 8)}\t${sched}\t${j.backend}/${j.model || "·"}\t${j.name}`;
+      }).join("\n"));
+    }
+    if (cmd === "job" && pos[1] === "get") {
+      const j = await findJob(pos[2] || die("job get needs <ID|name>"));
+      return console.log(JSON.stringify(j, null, 2));
+    }
+    if (cmd === "job" && pos[1] === "run") {
+      const j = await findJob(pos[2] || die("job run needs <ID|name>"));
+      const r = await req("POST", "/jobs/" + j.id + "/run");
+      return console.log(`▶ ${j.name} — run ${r.run_id || ""} ${r.status || ""}`.trim());
+    }
+    if (cmd === "job" && pos[1] === "rm") {
+      const j = await findJob(pos[2] || die("job rm needs <ID|name>"));
+      await req("DELETE", "/jobs/" + j.id);
+      return console.log(`deleted job ${j.name}`);
+    }
+    if (cmd === "job" && (pos[1] === "update" || pos[1] === "edit")) {
+      const j = await findJob(pos[2] || die("job update needs <ID|name>"));
+      const num = (k) => { const n = Number(opt[k]); if (!Number.isFinite(n)) die(`--${k} needs a number`); return n; };
+      const patch = {};
+      for (const [flag, field] of [["name", "name"], ["goal", "goal"], ["cwd", "cwd"], ["sandbox", "sandbox"], ["model", "model"], ["backend", "backend"], ["allowed-tools", "allowed_tools"], ["disallowed-tools", "disallowed_tools"], ["notify", "notify"], ["tz", "timezone"]])
+        if (opt[flag] !== undefined) patch[field] = opt[flag];
+      if (patch.cwd) patch.cwd = path.resolve(patch.cwd);
+      if (opt.cron) Object.assign(patch, { trigger_type: "cron", cron_expr: opt.cron, run_at: null });
+      else if (opt.at) Object.assign(patch, { trigger_type: "once", run_at: new Date(opt.at).toISOString(), cron_expr: null });
+      else if (opt.manual) Object.assign(patch, { trigger_type: "manual", cron_expr: null, run_at: null });
+      if (opt["timeout-sec"] !== undefined) patch.timeout_sec = num("timeout-sec");
+      if (opt.budget !== undefined) patch.max_budget_usd = num("budget");
+      if (opt.enabled !== undefined) patch.enabled = opt.enabled !== "false";
+      if (!Object.keys(patch).length) die("job update: nothing to change (see mc help)");
+      const u = await req("PATCH", "/jobs/" + j.id, patch);
+      const shown = Object.keys(patch).map((k) => `${k}=${JSON.stringify(k === "enabled" ? !!u[k] : u[k])}`);
+      return console.log(`updated job ${u.id.slice(0, 8)} — ${u.name}: ${shown.join(" ")}`);
+    }
+    if (cmd === "job" && pos[1] === "new") {
+      if (!opt.name) die("job new needs --name");
+      if (!opt.goal) die("job new needs --goal");
+      const body = {
+        name: opt.name,
+        goal: opt.goal,
+        workspace_id: opt.workspace || process.env.MC_WORKSPACE || null,
+        backend: opt.backend,
+        model: opt.model,
+        cwd: path.resolve(opt.cwd || process.cwd()),
+        sandbox: opt.sandbox,
+        allowed_tools: opt["allowed-tools"],
+        disallowed_tools: opt["disallowed-tools"],
+        trigger_type: opt.cron ? "cron" : opt.at ? "once" : "manual",
+        cron_expr: opt.cron || null,
+        run_at: opt.at ? new Date(opt.at).toISOString() : null,
+        timezone: opt.tz || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      };
+      let j;
+      try {
+        j = await req("POST", "/jobs", body);
+      } catch (e) {
+        // An explicit --cwd is refused loudly. The implicit one (wherever the shell happens to be) keeps
+        // the old $HOME default, but says so instead of swapping it silently.
+        if (opt.cwd || !/^cwd rejected/.test(e.message)) throw e;
+        console.error(`note: ${body.cwd} is not an allowed job dir — using the default ($HOME); pass --cwd to choose`);
+        delete body.cwd;
+        j = await req("POST", "/jobs", body);
+      }
+      return console.log(`created job ${j.id.slice(0, 8)} — ${j.name} · cwd ${j.cwd} · sandbox ${j.sandbox}${opt.cron ? ` (cron ${opt.cron})` : opt.at ? ` (once at ${j.run_at})` : ""}`);
+    }
+    if (cmd === "skill") {
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      const sub = pos[1] || "list";
+      if (!wsId) die("skill needs --workspace or MC_WORKSPACE");
+      if (sub === "list") {
+        const qs = opt.status ? "?status=" + opt.status : "?status=active";
+        const all = await req("GET", "/workspaces/" + wsId + "/skills" + qs);
+        if (!all.length) return console.log("(no skills)");
+        return console.log(all.map((s) => `${s.slug}\t${s.status}\t${s.usage_count}×\t${s.category || "·"}\t${s.description}`).join("\n"));
+      }
+      if (sub === "view") {
+        const s = await findSkill(wsId, pos[2] || die("skill view needs a <slug>"));
+        if (pos[3]) { const ref = await req("GET", "/skills/" + s.id + "?ref=" + encodeURIComponent(pos[3])); return console.log(ref); }
+        const full = await req("GET", "/skills/" + s.id + "?use=1");
+        return console.log(full.body || "(empty skill)");
+      }
+      if (sub === "new") {
+        const name = opt.name || die("skill new needs --name");
+        const body = opt.body ?? (await readStdin());
+        const s = await req("POST", "/workspaces/" + wsId + "/skills", {
+          name, description: opt.description || opt.desc,
+          category: opt.category || null,
+          tags: opt.tags ? opt.tags.split(",").map((x) => x.trim()).filter(Boolean) : null,
+          body: body || undefined,
+        });
+        return console.log(`created skill ${s.slug} → ${s.status}${s.status === "pending" ? " (awaiting approval)" : ""}`);
+      }
+      if (sub === "patch") {
+        const s = await findSkill(wsId, pos[2] || die("skill patch needs a <slug>"));
+        if (opt.old == null || opt.new == null) die('skill patch needs --old "..." --new "..."');
+        const u = await req("PATCH", "/skills/" + s.id, { old: opt.old, new: opt.new });
+        return console.log(`patched ${u.slug} → v${u.version} (${u.status})`);
+      }
+      if (sub === "append") {
+        const s = await findSkill(wsId, pos[2] || die("skill append needs a <slug>"));
+        const text = opt.body ?? pos.slice(3).join(" ") ?? (await readStdin());
+        if (!text) die("skill append needs text");
+        const u = await req("PATCH", "/skills/" + s.id, { append: text, heading: opt.heading });
+        return console.log(`appended to ${u.slug} → v${u.version} (${u.status})`);
+      }
+      if (sub === "rm") {
+        const s = await findSkill(wsId, pos[2] || die("skill rm needs a <slug>"));
+        await req("DELETE", "/skills/" + s.id);
+        return console.log(`deleted skill ${s.slug}`);
+      }
+      die("skill: unknown subcommand " + sub);
+    }
+    // ── the pad ────────────────────────────────────────────────────────────────────────────
+    // Rows parked against a client: work decided but not started, because nobody knows enough yet to
+    // write the prompt. Named `pad` rather than `note` because `mc note` is already the ticket
+    // comment. `add` and `append` work from any terminal on its own client (the row is stamped as the
+    // agent's); edit/done/rm/run stay admin-gated, which Robert satisfies (CHRONOS_ADMIN in his env)
+    // and a sandboxed worker does not — a worker may add to the operator's list, never rewrite it.
+    if (cmd === "pad") {
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      const sub = pos[1] || "list";
+
+      // A terminal writes as itself even when the admin token happens to be readable, so its rows are
+      // stamped `agent` rather than passing for the operator's own. Robert (no MC_SESSION) writes as admin.
+      const padAuth = () => (process.env.MC_SESSION && process.env.MC_WORKSPACE_TOKEN) ? {} : adminToken() ? adminHeaders() : {};
+
+      // Rows are addressed by id prefix, because nobody is going to type a UUID. Ambiguity is an
+      // error rather than a guess: picking the wrong row silently is worse than asking again.
+      const findPad = async (ref) => {
+        if (!ref) die("which row? pass the id prefix from `mc pad list`");
+        if (!wsId) die("pad needs --workspace or MC_WORKSPACE");
+        const all = await req("GET", "/workspaces/" + wsId + "/jots");
+        const hits = all.filter((j) => j.id === ref || j.id.startsWith(ref));
+        if (!hits.length) die(`no row starting with '${ref}' in this client's pad`);
+        if (hits.length > 1) die(`'${ref}' matches ${hits.length} rows — use more characters`);
+        return hits[0];
+      };
+
+      if (sub === "list") {
+        if (!wsId) die("pad needs --workspace or MC_WORKSPACE");
+        const rows = await req("GET", "/workspaces/" + wsId + "/jots" + (opt.status ? "?status=" + opt.status : ""));
+        if (!rows.length) return console.log("(nothing parked)");
+        return console.log(rows.map((j) => {
+          const mark = j.status === "done" ? "✓" : j.session_id ? "▶" : "·";
+          const detail = (j.body || "").replace(/\s+/g, " ").trim();
+          return `${mark} ${j.id.slice(0, 8)}\t${j.title}${detail ? "\t— " + detail.slice(0, 70) : ""}`;
+        }).join("\n"));
+      }
+
+      if (sub === "show") {
+        const j = await findPad(pos[2]);
+        return console.log(
+          `${j.id}\n${j.title}\nstatus: ${j.status}${j.session_id ? ` · ran as terminal ${j.session_id.slice(0, 8)}` : ""}\n\n${j.body || "(no detail yet)"}`,
+        );
+      }
+
+      if (sub === "add") {
+        if (!wsId) die("pad add needs --workspace or MC_WORKSPACE");
+        const title = opt.title || pos.slice(2).join(" ");
+        if (!title) die('pad add needs a title: mc pad add "the flyway rollback" [--body "..."]');
+        // Body may be piped, so a long brief does not have to survive shell quoting.
+        const body = opt.body || (await readStdin()).trim() || null;
+        const j = await req("POST", "/workspaces/" + wsId + "/jots", {
+          title, body, ...(process.env.MC_SESSION ? { planned_by: process.env.MC_SESSION } : {}),
+        }, padAuth());
+        return console.log(`parked ${j.id.slice(0, 8)} — ${j.title}`);
+      }
+
+      // The one an agent reaches for most: you learned something about a parked thought, so add it to
+      // what is already written rather than replacing it. Never destructive.
+      if (sub === "append") {
+        const j = await findPad(pos[2]);
+        const text = opt.body || pos.slice(3).join(" ") || (await readStdin()).trim();
+        if (!text) die('pad append needs text: mc pad append <id> "what you just learned"');
+        await req("POST", "/jots/" + j.id + "/append", { text }, padAuth());
+        return console.log(`appended to ${j.id.slice(0, 8)} — ${j.title}`);
+      }
+
+      if (sub === "edit") {
+        const j = await findPad(pos[2]);
+        const patch = {};
+        if (opt.title) patch.title = opt.title;
+        // --body replaces outright; that is what `edit` means, and `append` exists for the other case.
+        if (opt.body !== undefined) patch.body = opt.body || null;
+        if (!Object.keys(patch).length) die("pad edit needs --title or --body (to add to the detail, use `mc pad append`)");
+        await req("PATCH", "/jots/" + j.id, patch, adminHeaders());
+        return console.log(`updated ${j.id.slice(0, 8)}`);
+      }
+
+      if (sub === "done" || sub === "reopen") {
+        const j = await findPad(pos[2]);
+        await req("PATCH", "/jots/" + j.id, { status: sub === "done" ? "done" : "open" }, adminHeaders());
+        return console.log(`${j.id.slice(0, 8)} — ${j.title} → ${sub === "done" ? "done" : "open"}`);
+      }
+
+      if (sub === "rm") {
+        const j = await findPad(pos[2]);
+        await req("DELETE", "/jots/" + j.id, undefined, adminHeaders());
+        return console.log(`deleted ${j.id.slice(0, 8)} — ${j.title}`);
+      }
+
+      // Turns the row into a working terminal on the wall, seeded from what has accumulated in it.
+      if (sub === "run") {
+        const j = await findPad(pos[2]);
+        const r = await req("POST", "/jots/" + j.id + "/run", {
+          ...(opt.backend ? { backend: opt.backend } : {}),
+          ...(opt.model ? { model: opt.model } : {}),
+          ...(opt.cwd ? { cwd: opt.cwd } : {}),
+        }, adminHeaders());
+        return console.log(`running ${j.title} → terminal ${r.session.id.slice(0, 8)} (mc desk to watch it)`);
+      }
+
+      die(`unknown: mc pad ${sub} (list|show|add|append|edit|done|reopen|rm|run)`);
+    }
+    if (cmd === "idea") {
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      const sub = pos[1] || "list";
+      if (!wsId) die("idea needs --workspace or MC_WORKSPACE");
+      if (sub === "list") {
+        const qs = opt.status ? "?status=" + opt.status : "?status=proposed";
+        const all = await req("GET", "/workspaces/" + wsId + "/ideas" + qs);
+        if (!all.length) return console.log("(no ideas)");
+        return console.log(all.map((i) => `${i.status}\t${i.kind}\t${i.source}\t${i.title}\t${(i.pitch || "").replace(/\s+/g, " ").slice(0, 80)}`).join("\n"));
+      }
+      if (sub === "new") {
+        const title = opt.title || die("idea new needs --title");
+        const pitch = opt.pitch || die("idea new needs --pitch");
+        const kind = opt.kind || die("idea new needs --kind (expansion|new|improvement|ux-ui|qa|visibility)");
+        let repo_id = opt.repo || process.env.MC_REPO || null;
+        // Resolve repo name → id when the operator/agent passes a friendly name.
+        if (repo_id && !/^[0-9a-f-]{36}$/i.test(repo_id)) {
+          const ws = await req("GET", "/workspaces/" + wsId);
+          const hit = (ws.repos || []).find((r) => r.name?.toLowerCase() === String(repo_id).toLowerCase() || r.id === repo_id);
+          if (!hit) die(`repo not found in workspace: ${repo_id}`);
+          repo_id = hit.id;
+        }
+        const idea = await req("POST", "/workspaces/" + wsId + "/ideas", {
+          title, pitch, kind,
+          acceptance: opt.acceptance || null,
+          source: opt.source || "manual",
+          source_ref: opt["source-ref"] || null,
+          repo_id,
+        });
+        return console.log(`created idea ${idea.id.slice(0, 8)} — ${idea.title} (${idea.kind}/${idea.source})`);
+      }
+      die("idea: unknown subcommand " + sub + " (list|new)");
+    }
+    if (cmd === "recall") {
+      const q = opt.query || pos.slice(1).join(" ");
+      if (!q) die('recall needs a query: mc recall "<topic>"');
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (!wsId) die("recall needs --workspace or MC_WORKSPACE — memory is workspace-walled");
+      const r = await req("GET", "/workspaces/" + wsId + "/recall?" + new URLSearchParams({ q }).toString());
+      return console.log(r.text);
+    }
+    if (cmd === "memory" && pos[1] === "conflicts") {
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (!wsId) die("memory conflicts needs --workspace or MC_WORKSPACE — memory is workspace-walled");
+      const settle = pos[2];
+      if (settle === "resolve" || settle === "dismiss") {
+        const id = pos[3];
+        if (!id) die(`memory conflicts ${settle} needs a conflict id`);
+        await req("POST", "/workspaces/" + wsId + "/memory/conflicts/" + id, { status: settle === "resolve" ? "resolved" : "dismissed" });
+        return console.log(`${settle}d ${id.slice(0, 8)}`);
+      }
+      const r = await req("GET", "/workspaces/" + wsId + "/memory/conflicts?limit=20");
+      const rows = r.conflicts || [];
+      if (!rows.length) return console.log("(no memory conflicts — nothing you were told disagrees)");
+      return console.log(rows.map((c) => {
+        const conf = c.confidence == null ? "" : ` ${Math.round(c.confidence * 100)}%`;
+        return `${c.id.slice(0, 8)}  ${c.relation}${conf}\n  new: "${c.source_text}"\n  old: "${c.target_text}"` +
+          (c.reason ? `\n  why: ${c.reason}` : "");
+      }).join("\n\n") + "\n\nsettle one: mc memory conflicts resolve|dismiss <id>");
+    }
+    if (cmd === "search") {
+      const q = opt.query || pos.slice(1).join(" ");
+      if (!q) die("search needs a query");
+      const qs = new URLSearchParams({ q });
+      const wsq = opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
+      if (opt.kind) qs.set("kind", opt.kind);
+      const hits = await req("GET", "/search?" + qs.toString());
+      if (!hits.length) return console.log("(no matches)");
+      return console.log(hits.slice(0, 30).map((h) => `${h.kind}\t${(h.title || "").slice(0, 50)}\t${(h.snippet || "").replace(/\s+/g, " ").slice(0, 80)}`).join("\n"));
+    }
+    if (cmd === "ws" && pos[1] === "create") {
+      const slug = pos[2] || die("ws create needs a <slug>");
+      if (!/^[a-z0-9-]+$/.test(slug)) die(`invalid slug "${slug}" — lowercase letters, digits & hyphens only`);
+      const name = opt.name || slug[0].toUpperCase() + slug.slice(1);
+      const configDir = opt["config-dir"] || path.join(os.homedir(), ".claude-" + slug);
+      const secretsFile = opt.secrets || path.join(REPO_ROOT, "secrets", slug + ".env");
+      const created = [];
+      if (!fs.existsSync(configDir)) { fs.mkdirSync(configDir, { recursive: true }); created.push("config dir " + configDir); }
+      if (!fs.existsSync(secretsFile)) {
+        fs.mkdirSync(path.dirname(secretsFile), { recursive: true });
+        fs.writeFileSync(secretsFile, `# per-workspace secrets — injected ONLY into this workspace's runs\n# one KEY=VALUE per line, e.g.:\n# CLIENT_API_KEY=...\n`, { mode: 0o600 });
+        created.push("secrets file " + secretsFile + " (0600)");
+      }
+      const showScaffold = () => created.length && console.log("scaffolded (left in place):\n  " + created.join("\n  "));
+      const body = { slug, name, kind: opt.kind || "client", config_dir: configDir, secrets_file: secretsFile, sandbox_mode: "guard" };
+      if (opt["git-name"]) body.git_name = opt["git-name"];
+      if (opt["git-email"]) body.git_email = opt["git-email"];
+      if (opt.budget) body.daily_budget_usd = Number(opt.budget);
+      if (opt.concurrent) body.max_concurrent = Number(opt.concurrent);
+      const tokenFile = path.join(REPO_ROOT, ".admin-token");
+      let token; try { token = fs.readFileSync(tokenFile, "utf8").trim(); } catch {}
+      if (!token) { showScaffold(); die(`admin token not readable at ${tokenFile} — run \`mc ws create\` on the daemon machine (workspace creation is admin-gated).`); }
+      let w;
+      try { w = await req("POST", "/workspaces", body, { "x-mc-admin": token }); }
+      catch (e) {
+        showScaffold();
+        if (/dashboard-only|admin token/.test(e.message)) die(`server rejected the admin token (403) — run \`mc ws create\` on the daemon machine.`);
+        die(e.message); // 409 slug/config_dir collision surfaced verbatim; nothing deleted
+      }
+      console.log(`created workspace ${w.slug} (${w.id.slice(0, 8)}) — ${w.name}`);
+      if (created.length) console.log("scaffolded:\n  " + created.join("\n  "));
+      console.log(`\nnext steps:
+  1. authenticate the CLI under the new config dir:
+       CLAUDE_CONFIG_DIR=${configDir} claude login
+  2. add this client's MCP servers there (CLAUDE_CONFIG_DIR=${configDir} claude mcp add ...)
+  3. put client API keys / creds in the secrets file:
+       ${secretsFile}
+  4. add a repo:  mc repo list --workspace ${w.id.slice(0, 8)}   (then add via the dashboard/repo flow)`);
+      return;
+    }
+    // One visible thread, N conversations: which project the untagged next message lands on.
+    // `mc thread route "text"` answers "where would this go, and why" without sending anything.
+    if (cmd === "thread") {
+      const sub = pos[1] || "sticky";
+      const surface = opt.surface || "web";
+      if (sub === "route") {
+        const text = opt.text ?? pos.slice(2).join(" ");
+        if (!text) die('usage: mc thread route "what you would type"');
+        const x = await req("GET", `/thread/route?surface=${encodeURIComponent(surface)}&text=${encodeURIComponent(text)}`, null, adminHeaders());
+        const lines = [
+          `${x.workspace ? "#" + x.workspace.slug : "the whole shop (#all)"}\tby ${x.route.how} (${x.route.confidence})\t${x.route.why}`,
+          `text → ${x.route.text}`,
+          `sticky: ${x.sticky ? (x.sticky.slug ?? "fleet") + " @ " + x.sticky.at : "none"} · expires after ${x.stickyMinutes}m`,
+          ...(x.signals.length ? x.signals.map((sg) => `signal: ${sg.how}\t${sg.why}\t→ ${sg.workspaces.join("|")}`) : ["signal: none"]),
+        ];
+        return console.log(lines.join("\n"));
+      }
+      if (sub === "sticky") {
+        const want = pos[2];
+        if (!want) {
+          const x = await req("GET", `/thread/route?surface=${encodeURIComponent(surface)}`, null, adminHeaders());
+          return console.log(x.sticky ? `${x.sticky.slug ?? "fleet"} (since ${x.sticky.at}, expires after ${x.stickyMinutes}m)` : "auto — the router reads it from each message");
+        }
+        if (want === "clear" || want === "auto" || want === "all") {
+          await req("POST", "/thread/sticky", { ws: null, surface }, adminHeaders());
+          return console.log("auto — the router reads it from each message");
+        }
+        const all = await req("GET", "/workspaces");
+        const w = all.find((x) => x.slug === want || x.id === want || x.id.startsWith(want));
+        if (!w) die(`no such project: ${want}`);
+        await req("POST", "/thread/sticky", { ws: w.id, surface }, adminHeaders());
+        return console.log(`→ #${w.slug}`);
+      }
+      die("usage: mc thread sticky [slug|clear] | mc thread route \"text\"");
+    }
+    if (cmd === "ws" && pos[1] === "list") {
+      const all = await req("GET", "/workspaces");
+      return console.log(all.map((w) => `${w.id.slice(0, 8)}\t${w.slug}\t${w.name}\t${(w.repos || []).length} repos`).join("\n"));
+    }
+    if (cmd === "repo" && pos[1] === "list") {
+      const wsq = opt.workspace || process.env.MC_WORKSPACE;
+      const all = await req("GET", "/workspaces");
+      const list = (wsq ? all.filter((w) => w.id === wsq) : all).flatMap((w) => (w.repos || []).map((r) => `${r.id.slice(0, 8)}\t${w.slug}\t${r.name}\t${r.path}\t${r.delivery || "commit"}`));
+      return console.log(list.length ? list.join("\n") : "(no repos)");
+    }
+    if (cmd === "repo" && pos[1] === "add") {
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (!wsId) die("repo add needs --workspace or MC_WORKSPACE");
+      const name = pos[2];
+      if (!name || !opt.path) die("usage: mc repo add <name> --path <absolute-path> [--remote URL] [--branch B] [--delivery commit|pr]");
+      if (!path.isAbsolute(opt.path)) die(`--path must be absolute: ${opt.path}`);
+      const body = { name, path: opt.path, git_remote: opt.remote || null, default_branch: opt.branch || "main", delivery: opt.delivery || "commit" };
+      let r;
+      try { r = await req("POST", "/workspaces/" + wsId + "/repos", body, adminHeaders()); }
+      catch (e) {
+        if (/dashboard-only|admin token|403/.test(e.message)) die("server rejected the admin token — repo registration is admin-gated; run on the daemon host.");
+        die(e.message);
+      }
+      return console.log(`added repo ${r.name} (${r.id.slice(0, 8)}) → ${r.path} [${r.delivery}]`);
+    }
+    if (cmd === "repo" && (pos[1] === "patch" || pos[1] === "remove")) {
+      const prefix = pos[2];
+      if (!prefix) die(`usage: mc repo ${pos[1]} <id>` + (pos[1] === "patch" ? " [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr]" : ""));
+      const all = await req("GET", "/workspaces");
+      const matches = all.flatMap((w) => (w.repos || [])).filter((r) => r.id.startsWith(prefix));
+      if (!matches.length) die(`no repo matching '${prefix}' — mc repo list`);
+      if (matches.length > 1) die(`'${prefix}' is ambiguous (${matches.length} repos) — use a longer id`);
+      const repoId = matches[0].id;
+      if (pos[1] === "remove") {
+        try { await req("DELETE", "/repos/" + repoId, undefined, adminHeaders()); }
+        catch (e) { if (/dashboard-only|admin token|403/.test(e.message)) die("server rejected the admin token — repo removal is admin-gated; run on the daemon host."); die(e.message); }
+        return console.log(`removed repo ${matches[0].name} (${repoId.slice(0, 8)})`);
+      }
+      const patch = {};
+      if (opt.name) patch.name = opt.name;
+      if (opt.path) { if (!path.isAbsolute(opt.path)) die(`--path must be absolute: ${opt.path}`); patch.path = opt.path; }
+      if ("remote" in opt) patch.git_remote = opt.remote === "true" ? null : opt.remote;
+      if (opt.branch) patch.default_branch = opt.branch;
+      if (opt.delivery) patch.delivery = opt.delivery;
+      if (!Object.keys(patch).length) die("nothing to patch — pass --name/--path/--remote/--branch/--delivery");
+      let r;
+      try { r = await req("PATCH", "/repos/" + repoId, patch, adminHeaders()); }
+      catch (e) { if (/dashboard-only|admin token|403/.test(e.message)) die("server rejected the admin token — repo edits are admin-gated; run on the daemon host."); die(e.message); }
+      return console.log(`patched repo ${r.name} (${r.id.slice(0, 8)}) → ${r.path} [${r.delivery}]`);
+    }
+    if (cmd === "session" && pos[1] === "list") {
+      const qs = new URLSearchParams({ status: "live" });
+      const wsq = opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
+      const all = await req("GET", "/sessions?" + qs.toString());
+      if (!all.length) return console.log("(no live sessions)");
+      return console.log(all.map((s) => `${s.id.slice(0, 8)}\t${s.backend}/${s.model || "·"}\t${s.role}\t${s.ticket_key || "chat"}\t${s.title || ""}`).join("\n"));
+    }
+    if (cmd === "session" && pos[1] === "new") {
+      let ws = opt.workspace || process.env.MC_WORKSPACE, repo = opt.repo || process.env.MC_REPO, ticketId = null;
+      if (opt.ticket) { const t = await findByKey(opt.ticket); ticketId = t.id; ws = t.workspace_id; repo = t.repo_id || repo; }
+      // Workspace-only bound: an agent (MC_WORKSPACE set) may only spawn terminals inside its own
+      // workspace. Reject any --workspace or --ticket that points elsewhere, then force its own.
+      const own = process.env.MC_WORKSPACE;
+      if (own) {
+        if (opt.workspace && opt.workspace !== own) die("cannot spawn in another workspace");
+        if (ws && ws !== own) die("ticket belongs to another workspace");
+        ws = own;
+      }
+      const s = await req("POST", "/sessions", {
+        ticket_id: ticketId, workspace_id: ws || null, repo_id: repo || null,
+        backend: opt.backend, model: opt.model, role: opt.role || "worker",
+        cwd: opt.cwd, title: opt.title, goal: opt.goal,
+        // Same three the Desk dialog sends: the daemon composes them into the terminal's first
+        // prompt, so a terminal opened from here is already working rather than sitting at a cursor.
+        goal_kind: opt.kind, description: opt.description,
+        // Signs the day's log: a terminal Robert opened should not read as one you opened. The
+        // OWNERSHIP link is the x-mc-lead header below, not this label — this string is cosmetic.
+        // Without MC_AGENT_NAME, a bare `mc session new` used to sign "operator" and skip machine
+        // admission — if we have MC_SESSION, sign as that terminal so admission still applies.
+        created_by: opt.by || process.env.MC_AGENT_NAME
+          || (process.env.MC_SESSION ? `agent:${process.env.MC_SESSION.slice(0, 8)}` : null)
+          || (ticketId ? "ticket" : "operator"),
+        // Which slice of the Lead's board this worker is for. Honoured only for a caller that
+        // presented that Lead's credential — the daemon reads it from the header, not from here.
+        slice: opt.slice ? Number(opt.slice) : undefined,
+      }, LEAD_HEADERS);
+      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})`);
+    }
+    // A Lead (LEADS.md): Robert's deputy for one goal, in one workspace. Opened the same way as any
+    // other terminal (POST /sessions, role "lead") — the daemon does the rest (its own lead_token,
+    // MC_LEAD_TOKEN in its env so the workers IT opens are stamped `lead_id`, its persona).
+    if (cmd === "lead" && pos[1] === "new") {
+      if (process.env.MC_LEAD) die("a lead may not open a lead");
+      const goal = pos.slice(2).join(" ");
+      if (!goal) die('mc lead new "<goal>" [--workspace ID] [--description "..."] [--backend b] [--model m] [--kind pr|investigation|qa]');
+      let ws = opt.workspace || process.env.MC_WORKSPACE;
+      const own = process.env.MC_WORKSPACE;
+      if (own) {
+        if (opt.workspace && opt.workspace !== own) die("cannot spawn in another workspace");
+        ws = own;
+      }
+      const s = await req("POST", "/sessions", {
+        workspace_id: ws || null,
+        role: "lead",
+        goal,
+        goal_kind: opt.kind,
+        description: opt.description,
+        backend: opt.backend,
+        model: opt.model,
+        created_by: opt.by || process.env.MC_AGENT_NAME || "operator",
+      });
+      return console.log(`spawned lead ${s.id.slice(0, 8)} — ${goal}`);
+    }
+    // Every live Lead + how many workers it currently has open (rows whose `lead_id` is that Lead),
+    // plus cost/tokens of the Lead and its workers (same numbers /desk/log uses).
+    if (cmd === "lead" && pos[1] === "list") {
+      const qs = new URLSearchParams({ status: "live" });
+      const wsq = opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
+      const all = await req("GET", "/sessions?" + qs.toString());
+      const leads = all.filter((s) => s.role === "lead");
+      if (!leads.length) return console.log("(no live leads)");
+      const workspacesById = new Map((await req("GET", "/workspaces")).map((w) => [w.id, w.name]));
+      // Prefer the daemon's rollup when we have a Lead credential for that row; otherwise sum what
+      // /sessions already carries (frozen cost columns) so the list still works outside a Lead.
+      const lines = [];
+      for (const s of leads) {
+        const id8 = s.id.slice(0, 8);
+        const workers = all.filter((x) => x.lead_id === s.id);
+        let cost = Number(s.cost_usd || 0) + workers.reduce((a, w) => a + Number(w.cost_usd || 0), 0);
+        let tin = Number(s.tokens_in || 0) + workers.reduce((a, w) => a + Number(w.tokens_in || 0), 0);
+        let tout = Number(s.tokens_out || 0) + workers.reduce((a, w) => a + Number(w.tokens_out || 0), 0);
+        lines.push(
+          `${id8}\t${workspacesById.get(s.workspace_id) || s.workspace_id || "?"}\t${workers.length}` +
+          `\t$${cost.toFixed(2)}\t${tin}→${tout}\t${s.goal || s.title || ""}`,
+        );
+      }
+      return console.log(lines.join("\n"));
+    }
+    // ── A Lead's own inbox, board and hands (LEADS.md). Only a Lead's env carries MC_LEAD_TOKEN, and
+    // the daemon scopes every one of these to THAT Lead: its own workers, its own events, its own
+    // board, never another Lead's.
+    if (cmd === "lead" && ["wait", "inbox", "workers", "broadcast", "board", "close-done", "adopt"].includes(pos[1])) {
+      if (!process.env.MC_LEAD_TOKEN)
+        die(`MC_LEAD_TOKEN is not set — \`mc lead ${pos[1]}\` runs inside a Lead terminal (LEADS.md).`);
+      const H = { "x-mc-lead": process.env.MC_LEAD_TOKEN };
+      // Take over an ended Lead's live workers + board + inbox in this workspace.
+      if (pos[1] === "adopt") {
+        const ref = pos[2] || die("mc lead adopt <leadId> — the ended Lead whose workers you are taking");
+        const r = await req("POST", "/leads/me/adopt", { lead_id: ref }, H);
+        return console.log(
+          `adopted ${String(r.from).slice(0, 8)} → ${String(r.to).slice(0, 8)}: ` +
+          `${r.workers} worker(s), ${r.slices} slice(s), ${r.events} event(s)`,
+        );
+      }
+      // Close only THIS Lead's live workers whose goal is ticked. Optional --rm-worktrees tries a
+      // non-force remove of each closed worker's claim and prints every refusal — a Lead may never
+      // force (LEADS.md Powers); the refusal is what you carry to the operator via mc ask-robert.
+      if (pos[1] === "close-done") {
+        const rm = !!(opt["rm-worktrees"] || opt.rm_worktrees);
+        const r = await req("POST", "/leads/me/close-done", { rm_worktrees: rm }, H);
+        if (!r.closed.length) return console.log("(no done workers to close)");
+        console.log(`closed ${r.closed.length}: ${r.closed.map((id) => id.slice(0, 8)).join(" ")}`);
+        if (rm && r.worktrees) {
+          for (const w of r.worktrees) {
+            if (w.ok) console.log(`  worktree ${w.id8}: ${w.path ? "removed " + w.path : "nothing claimed"}`);
+            else console.log(`  worktree ${w.id8}: REFUSED — ${w.error}`);
+          }
+        }
+        return;
+      }
+      // One line into every live worker this Lead owns. Measured: a Lead typed the same standing
+      // instruction into five workers one at a time. Each worker's own result is printed, so a
+      // rate-limited one is visible rather than a silent gap.
+      if (pos[1] === "broadcast") {
+        const text = pos.slice(2).join(" ");
+        if (!text) die('mc lead broadcast "text" [--only id8,id8] [--except id8,id8]');
+        const csv = (v) => (v && v !== "true" ? v.split(",").map((s) => s.trim()).filter(Boolean) : undefined);
+        const { sent } = await req("POST", "/leads/me/broadcast", { text, only: csv(opt.only), except: csv(opt.except) }, H);
+        if (!sent.length) return console.log("(no live workers matched)");
+        return console.log(sent.map((r) => `${r.id8}\t${r.ok ? "sent" : "FAILED — " + r.error}`).join("\n"));
+      }
+      // The plan, durable. `mc lead board` after a compaction is what tells a Lead which slices exist,
+      // who is on each, and what is already merged — none of which survives in its context window.
+      if (pos[1] === "board") {
+        const show = async () => {
+          const { slices, done, total } = await req("GET", "/leads/me/board", null, H);
+          if (!slices.length) return console.log('(no board yet — `mc lead board add "<slice>"`)');
+          const rows = slices.map(
+            (s) => `${s.n}\t${s.status}\t${s.session_id ? s.session_id.slice(0, 8) : "-"}\t${s.pr_url || "-"}\t${s.title}` +
+              (s.note ? `\n    ${s.note}` : ""),
+          );
+          return console.log([...rows, `─────\n${done}/${total} done`].join("\n"));
+        };
+        if (pos[2] === "add") {
+          const titles = pos.slice(3);
+          if (!titles.length) die('mc lead board add "title" ["title" ...]');
+          for (const title of titles) await req("POST", "/leads/me/board", { title }, H);
+          return show();
+        }
+        if (pos[2] === "set") {
+          const n = Number(pos[3]);
+          if (!Number.isInteger(n) || n < 1) die("mc lead board set <n> [--status s] [--worker id8] [--pr URL] [--note \"...\"]");
+          const patch = {};
+          if (opt.status) patch.status = opt.status;
+          // `--worker none` unlinks; anything else is an id8 the daemon resolves against THIS Lead's
+          // own workers and refuses if it is not one of them.
+          if (opt.worker) patch.session_id = opt.worker === "none" ? null : opt.worker;
+          if (opt.pr) patch.pr_url = opt.pr === "none" ? null : opt.pr;
+          if (opt.note) patch.note = opt.note === "none" ? null : opt.note;
+          if (opt.title) patch.title = opt.title;
+          if (!Object.keys(patch).length) die("nothing to set — pass --status/--worker/--pr/--note/--title");
+          await req("PATCH", "/leads/me/board/" + n, patch, H);
+          return show();
+        }
+        if (pos[2]) die(`unknown: mc lead board ${pos[2]} (try: board | board add | board set)`);
+        return show();
+      }
+      const workerTable = async () => {
+        const { workers, totals, lead: me } = await req("GET", "/leads/me/workers", null, H);
+        const costLine = (c) =>
+          c && (c.cost_usd != null || c.tokens_in != null)
+            ? `$${Number(c.cost_usd || 0).toFixed(2)} · ${c.tokens_in || 0}→${c.tokens_out || 0}`
+            : null;
+        if (!workers.length) {
+          const mine = costLine(me);
+          return "(no workers open)" + (mine ? `\nlead\t${mine}` : "");
+        }
+        const rows = workers.map((w) => {
+          const done = w.goal_done ? " ✓" : "";
+          const prog = w.progress ? ` ${w.progress.n}/${w.progress.of}` : "";
+          const cost = costLine(w);
+          return `${w.id8}\t${w.word}${done}${prog}\t${w.minutes_live}m\t${w.goal || "(no goal)"}${
+            w.worktree_branch ? `\t${w.worktree_branch}` : ""
+          }${cost ? `\t${cost}` : ""}\n    ${w.line || "(nothing on its card)"}`;
+        });
+        if (totals) {
+          rows.push(
+            `─────\nlead+workers\t$${Number(totals.cost_usd || 0).toFixed(2)}\t${totals.tokens_in || 0}→${totals.tokens_out || 0}\t${totals.workers} live`,
+          );
+        }
+        return rows.join("\n");
+      };
+      // One block per event, rendered BY THE DAEMON (src/lead-report.ts leadEventLines): a stop, a
+      // report and an ask read differently and formatting three shapes in two places is how they
+      // drift. Newlines are preserved, which is the whole reason this is read rather than typed.
+      const printEvents = (events) => {
+        for (const e of events) console.log(e.lines.join("\n"));
+      };
+      if (pos[1] === "workers") return console.log(await workerTable());
+      if (pos[1] === "inbox") {
+        const all = opt.all && opt.all !== "false";
+        const { events } = await req("GET", "/leads/me/events" + (all ? "?all=1" : ""), null, H);
+        if (!events.length) return console.log(all ? "(no worker events yet)" : "(nothing outstanding)");
+        return printEvents(events);
+      }
+      // `wait`: loop 55s long-polls until something lands or the deadline passes. 9m by default
+      // because Claude Code's Bash tool kills a command at 10m — a longer default would look like a
+      // crash to the very agent this exists for.
+      const spec = opt.timeout || "9m";
+      const min = durMin(spec) || die('mc lead wait --timeout takes minutes: 30, "9m", "1h"');
+      const deadline = Date.now() + min * 60_000;
+      do {
+        const ms = Math.min(55_000, Math.max(1_000, deadline - Date.now()));
+        const { events } = await req("GET", `/leads/me/events/wait?timeout_ms=${ms}`, null, H);
+        if (events.length) return printEvents(events);
+      } while (Date.now() < deadline);
+      console.log(`(no worker events in ${spec})`);
+      return console.log(await workerTable());
+    }
+    // Attach this terminal to a live PTY session over /term — the same socket the dashboard used.
+    // Keystrokes go straight to the agent (ctrl-C interrupts IT, not this bridge); ctrl-] detaches
+    // and leaves the session running. This is what `mc wall` runs inside each Herdr tab.
+    if (cmd === "session" && pos[1] === "attach") {
+      const ref = pos[2] || die("session attach needs an ID");
+      const all = await req("GET", "/sessions?status=live");
+      const s = all.find((x) => x.id === ref || x.id.startsWith(ref));
+      if (!s) die(`no live session matching ${ref}`);
+      const token = adminToken();
+      if (!token) die(`admin token not readable at ${TOKEN_FILES.join(" or ")} — attach runs on the daemon host.`);
+      const url = API.replace(/^http/, "ws").replace(/\/api\/?$/, "") + `/term?id=${s.id}&token=${encodeURIComponent(token)}`;
+      const sock = new WebSocket(url);
+      sock.binaryType = "arraybuffer";
+      const send = (m) => { if (sock.readyState === 1) sock.send(JSON.stringify(m)); };
+      const size = () => send({ t: "resize", cols: process.stdout.columns || 100, rows: process.stdout.rows || 30 });
+      const restore = () => { try { if (process.stdin.isTTY) process.stdin.setRawMode(false); } catch {} };
+      sock.onopen = () => {
+        size();
+        if (process.stdin.isTTY) process.stdin.setRawMode(true);
+        process.stdin.resume();
+        process.stdin.on("data", (d) => {
+          if (d.length === 1 && d[0] === 0x1d) { restore(); console.log("\r\n[detached — session still running]"); process.exit(0); }
+          send({ t: "in", d: d.toString("utf8") });
+        });
+        process.stdout.on("resize", size);
+      };
+      sock.onmessage = (e) => process.stdout.write(typeof e.data === "string" ? e.data : Buffer.from(e.data));
+      sock.onerror = () => {};
+      sock.onclose = (e) => { restore(); console.log(`\r\n[session closed${e.reason ? ": " + e.reason : ""}]`); process.exit(0); };
+      return new Promise(() => {}); // held open until onclose/ctrl-] exits
+    }
+    // The wall: one Herdr tab per live session, each attached to the real terminal. Run it once to
+    // sync, or `--watch` to keep the tabs tracking sessions as they come and go.
+    // Fleet view of every live/active agent (session or run), one line each — the terminal-native
+    // replacement for the deprecated dashboard's occupant list. State icons + blocked_reason surface
+    // who needs a human without opening `mc wall`.
+    if (cmd === "agents") {
+      const qs = new URLSearchParams();
+      const wsq = opt.ws || opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
+      if (opt.all) qs.set("include_settled", "1");
+      const [rows, roll] = await Promise.all([req("GET", "/agents?" + qs.toString()), req("GET", "/agents/rollup" + (wsq ? "?workspace=" + wsq : ""))]);
+      if (!rows.length) return console.log("(no agents)");
+      const ICON = { blocked: "🔴", working: "🟢", done: "✅", idle: "⚪", unknown: "❓" };
+      for (const a of rows) {
+        const who = (a.name || a.label || a.id8).slice(0, 40);
+        const bits = [ICON[a.state] || "❓", who];
+        if (a.progress) bits.push(a.progress);
+        if (a.state === "blocked") bits.push([a.blocked_reason, a.state_label].filter(Boolean).join(": "));
+        if (a.ticket_key) bits.push(a.ticket_key);
+        console.log(bits.join(" · "));
+      }
+      return console.log(`── ${roll.counts.blocked} blocked · ${roll.counts.working} working · ${roll.counts.done} done`);
+    }
+    if (cmd === "wall") {
+      const herdr = (args) => {
+        const r = spawnSync("herdr", args, { encoding: "utf8" });
+        if (r.error) die("herdr not found — install it first: brew install herdr");
+        const line = (r.stdout || "").trim().split("\n").filter(Boolean).pop() || "";
+        if (!line) { // some commands (pane run) succeed silently
+          if (r.status === 0) return {};
+          die(`herdr ${args.join(" ")}: ${(r.stderr || "").trim() || "no response — is the herdr server running? (run `herdr` once)"}`);
+        }
+        let j; try { j = JSON.parse(line); } catch { die(`herdr ${args.join(" ")}: ${(r.stderr || line).trim()}`); }
+        if (j.error) die(`herdr ${args.join(" ")}: ${j.error.message}`);
+        return j.result;
+      };
+      // The socket only exists once a herdr server is up — start a headless one rather than making
+      // The operator open the TUI first. `herdr` attaches to it later either way.
+      if (spawnSync("herdr", ["tab", "list"], { encoding: "utf8" }).status !== 0) {
+        spawnSync("sh", ["-c", "herdr server >/dev/null 2>&1 &"]);
+        for (let i = 0; i < 20 && spawnSync("herdr", ["tab", "list"]).status !== 0; i++) spawnSync("sleep", ["0.25"]);
+      }
+      const BOARD = "⌂ fleet·board";
+      const MINE = /·([0-9a-f]{8}|board)$/; // tabs this wall owns — label ends in the short id (or the board)
+      const label = (s) => `${s.ticket_key || s.title?.slice(0, 24) || "chat"}·${s.id.slice(0, 8)}`;
+      const self = fileURLToPath(import.meta.url);
+      const sync = async () => {
+        const live = await req("GET", "/sessions?status=live");
+        // Headless runs are work too — they get a read-only tab following their event stream.
+        const running = (await req("GET", "/runs")).filter((r) => r.status === "running");
+        const jobName = new Map(running.length ? (await req("GET", "/jobs")).map((j) => [j.id, j.name]) : []);
+        if (!herdr(["workspace", "list"]).workspaces.length) herdr(["workspace", "create", "--label", "mc", "--no-focus"]);
+        const wanted = new Map([
+          // Work that is NOT running has no process to attach to, so it can never earn a tab — and a
+          // wall with no tab for it reads as "nothing needs me". The board tab is that missing half.
+          [BOARD, { cwd: null, id: "fleet", args: ["fleet", "--watch"] }],
+          ...live.map((s) => [label(s), { cwd: s.cwd, id: s.id, args: ["session", "attach", s.id] }]),
+          ...running.map((r) => [`▸${jobName.get(r.job_id) || "run"}·${r.id.slice(0, 8)}`, { cwd: null, id: r.id, args: ["run", "watch", r.id] }]),
+        ]);
+        // Chronos already grades every agent idle|working|blocked|done — the same vocabulary herdr
+        // renders. Push it in and the wall sorts and colours itself instead of being a row of labels.
+        const agents = await req("GET", "/agents");
+        const stateOf = new Map(agents.map((a) => [a.id, a]));
+        // Stalls count as "needs you" even though no agent is alive to be blocked — they are the
+        // whole reason the board tab exists, so it must go red for them too.
+        const needsYou = agents.filter((a) => a.state === "blocked").length + (await req("GET", "/recovery")).length;
+        const report = (pane, lab, id) => {
+          // herdr has no "done" — a finished agent is simply not busy. Keep the word in the message
+          // so the tab still says WHY it went quiet.
+          const a = stateOf.get(id);
+          const state = id === "fleet" ? (needsYou ? "blocked" : "idle") : !a ? "unknown" : a.state === "done" ? "idle" : a.state;
+          const msg = id === "fleet"
+            ? (needsYou ? `${needsYou} item(s) waiting on you` : "fleet board")
+            : a?.blocked_reason || a?.state_label || a?.state || "";
+          herdr(["pane", "report-agent", pane, "--source", "chronos", "--agent", lab, "--state", state, ...(msg ? ["--message", String(msg)] : [])]);
+        };
+        const mine = herdr(["tab", "list"]).tabs.filter((t) => MINE.test(t.label || ""));
+        const paneOfTab = new Map();
+        for (const p of herdr(["pane", "list"]).panes) if (!paneOfTab.has(p.tab_id)) paneOfTab.set(p.tab_id, p.pane_id);
+        const have = new Set();
+        let opened = 0, revived = 0;
+        for (const t of mine) {
+          const w = wanted.get(t.label);
+          if (!w) { herdr(["tab", "close", t.tab_id]); continue; } // session/run ended
+          // A herdr restart brings the tab back but not the process in it — the pane is a bare shell
+          // again. Re-run the command instead of trusting the tab's existence.
+          const pane = paneOfTab.get(t.tab_id);
+          const info = pane ? herdr(["pane", "process-info", "--pane", pane]).process_info : null;
+          const alive = info?.foreground_processes?.some((p) => (p.cmdline || "").includes(w.id));
+          if (!alive && pane) { herdr(["pane", "run", pane, self, ...w.args]); revived++; }
+          if (pane) report(pane, t.label, w.id);
+          have.add(t.label);
+        }
+        for (const [lab, w] of wanted) {
+          if (have.has(lab)) continue;
+          const t = herdr(["tab", "create", "--label", lab, "--no-focus", "--cwd", w.cwd || os.homedir()]);
+          herdr(["pane", "run", t.root_pane.pane_id, self, ...w.args]);
+          report(t.root_pane.pane_id, lab, w.id);
+          opened++;
+        }
+        return { live: wanted.size, opened, revived, blocked: needsYou };
+      };
+      if (opt.watch === "true" || pos[1] === "watch") {
+        for (;;) {
+          const r = await sync();
+          process.stdout.write(`\r[wall] ${r.live} tab(s)${r.blocked ? ` · 🚫${r.blocked} blocked` : ""}${r.opened ? ` · +${r.opened}` : ""}${r.revived ? ` · ${r.revived} revived` : ""}   `);
+          await new Promise((done) => setTimeout(done, 5000));
+        }
+      }
+      const r = await sync();
+      // --open puts the wall on the operator's screen, so an agent (Robert) can answer "show me the
+      // terminals" by itself instead of telling him which command to type.
+      if (opt.open === "true" || pos[1] === "open") {
+        spawnSync("osascript", ["-e", 'tell application "Terminal" to do script "herdr"', "-e", 'tell application "Terminal" to activate']);
+      }
+      return console.log(`wall synced — ${r.live} live, ${r.opened} tab(s) opened, ${r.revived} revived.${opt.open === "true" || pos[1] === "open" ? " Opened on screen." : " Open it with: herdr"}`);
+    }
+    // What is that terminal actually doing, in plain English — the Focus feed the session writes for
+    // its operator. Read-only and non-destructive: no channel binding, no keystrokes.
+    if (cmd === "session" && pos[1] === "focus") {
+      const ref = pos[2] || die("session focus needs an ID");
+      const all = await req("GET", "/sessions");
+      const s = all.find((x) => x.id === ref || x.id.startsWith(ref));
+      if (!s) die(`no session matching ${ref}`);
+      const nIdx = process.argv.indexOf("-n");
+      const n = Number(opt.n ?? (nIdx >= 0 ? process.argv[nIdx + 1] : 20)) || 20;
+      const f = await req("GET", "/sessions/" + s.id + "/focus");
+      if (!f.events.length) return console.log(`${s.ticket_key || "chat"} · ${f.live ? "live" : "ended"} · (no focus events yet)`);
+      const body = f.events.slice(-n).map((e) => `[${e.kind}] ${e.text.replace(/\s+/g, " ").slice(0, 300)}`);
+      return console.log(`${s.ticket_key || "chat"} · ${s.backend}/${s.model || "·"} · ${f.live ? "live" : "ended"}\n` + body.join("\n"));
+    }
+    // Type into someone else's terminal. Admin-gated by the daemon (a workspace token is a client
+    // wall), so this is the overseer's hand, not a worker's: `mc session send`, `mc session key`.
+    if (cmd === "session" && (pos[1] === "send" || pos[1] === "key")) {
+      const ref = pos[2] || die(`session ${pos[1]} needs an ID`);
+      const s = (await req("GET", "/sessions?status=live")).find((x) => x.id === ref || x.id.startsWith(ref));
+      if (!s) die(`no live session matching ${ref}`);
+      const body =
+        pos[1] === "key"
+          ? keysBody((pos[3] || die("mc session key <ID> enter|esc|tab|up|down|ctrl-c|ctrl-d  (or a comma list)")).toLowerCase())
+          : { text: pos.slice(3).join(" ") || die('mc session send <ID> "<what to type>" [--no-enter]'), enter: !opt["no-enter"] };
+      if (process.env.MC_AGENT_NAME || opt.by) body.by = opt.by || process.env.MC_AGENT_NAME;
+      await req("POST", "/sessions/" + s.id + "/input", body, handHeaders());
+      return console.log(`→ ${s.id.slice(0, 8)} ${body.keys ? body.keys.map((k) => `<${k}>`).join("") : body.key ? `<${body.key}>` : JSON.stringify(body.text)}`);
+    }
+    // "down,down,enter" is one answer (the third option in a menu), sent as a spaced sequence.
+    function keysBody(spec) {
+      const ks = spec.split(",").map((k) => k.trim()).filter(Boolean);
+      return ks.length > 1 ? { keys: ks } : { key: ks[0] };
+    }
+    // The whole wall in one read: goal, state, and what each terminal last said about itself. This is
+    // how an agent looks at the screen — `mc session focus` is one card, this is all of them.
+    // The day's ledger: every terminal worked on, what it cost, and how to walk back into it.
+    if (cmd === "desk" && pos[1] === "log") {
+      const since = opt.since || "today";
+      const d = await req("GET", "/desk/log?since=" + encodeURIComponent(since));
+      if (!d.terminals.length) return console.log(`(nothing since ${since})`);
+      const money = (n, est) => (n == null ? "—" : (est ? "~$" : "$") + n.toFixed(2));
+      const kTok = (n) => (n == null ? "—" : n >= 1000 ? Math.round(n / 1000) + "k" : String(n));
+      const lines = d.terminals.map((t) => {
+        const head = [
+          new Date(t.started).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          t.live ? "▶" : t.goal_reached ? "✅" : "·",
+          (t.workspace || "—").padEnd(9).slice(0, 9),
+          t.opened_by.padEnd(8).slice(0, 8),
+          (t.model_minutes ? `${t.minutes}m/${t.model_minutes}m` : `${t.minutes}m`).padStart(9),
+          `${t.turns ?? "—"}t`.padStart(4),
+          money(t.cost_usd, t.cost_estimated).padStart(7),
+          t.branch ? t.branch.slice(0, 24) : "",
+        ].join(" ");
+        const body = ["    " + (t.became || t.asked_for || "(no goal)")];
+        // Only worth a line when the work turned out to be something else than what was asked.
+        if (t.asked_for && t.became && t.asked_for !== t.became) body.push("    asked: " + t.asked_for);
+        if (t.summary) body.push("    → " + String(t.summary).replace(/\s+/g, " ").slice(0, 160));
+        body.push(`    reopen: mc session reopen ${t.id.slice(0, 8)}`);
+        return [head, ...body].join("\n");
+      });
+      const T = d.totals;
+      return console.log(
+        lines.join("\n\n") +
+          `\n\n${T.terminals} terminals · ${T.minutes}m · ${T.turns} turns · ${money(T.cost_usd)}` +
+          ` · +${T.lines_added}/-${T.lines_removed} lines · ${T.blocked} times it needed you`,
+      );
+    }
+    // Retitle or tick off a card that isn't yours. `mc goal set|done` speaks only for the terminal it
+    // runs INSIDE (MC_SESSION); an overseer works on other people's cards, by id.
+    if (cmd === "session" && (pos[1] === "goal" || pos[1] === "done")) {
+      const ref = pos[2] || die(`session ${pos[1]} needs an ID`);
+      const all = await req("GET", "/sessions");
+      const s = all.find((x) => x.id === ref || x.id.startsWith(ref));
+      if (!s) die(`no session matching ${ref}`);
+      const kind = opt.kind ? String(opt.kind).toLowerCase() : null;
+      if (kind && !["pr", "investigation", "qa"].includes(kind)) die("--kind must be pr, investigation or qa");
+      const body =
+        pos[1] === "done"
+          ? { goal_done: true }
+          : {
+              goal: pos.slice(3).join(" ") || die('mc session goal <ID> "<title>" [--kind pr|investigation|qa]'),
+              goal_source: process.env.MC_AGENT_NAME ? "agent" : "human",
+              ...(kind ? { goal_kind: kind } : {}),
+            };
+      const out = await req("PATCH", "/sessions/" + s.id, body);
+      // `done` closes that terminal's row in the day's log: usage frozen, summary written.
+      return console.log(
+        pos[1] === "done" ? `✅ ${s.id.slice(0, 8)} marked done — ${out.goal ?? ""}` : `🎯 ${s.id.slice(0, 8)} — ${out.goal}`,
+      );
+    }
+    // Walk back into an ended terminal: same transcript, same context, still knows what it was doing.
+    // A Lead reopens only its own workers (x-mc-lead); Robert / the operator use the admin token.
+    if (cmd === "session" && (pos[1] === "reopen" || pos[1] === "resume")) {
+      const ref = pos[2] || die("session reopen needs an ID");
+      const all = await req("GET", "/sessions");
+      const s = all.find((x) => x.id === ref || x.id.startsWith(ref));
+      if (!s) die(`no session matching ${ref}`);
+      if (s.status === "live") return console.log(`${s.id.slice(0, 8)} is already live`);
+      const back = await req("POST", "/sessions/" + s.id + "/resume", { cols: 100, rows: 30 }, handHeaders());
+      return console.log(`reopened ${back.id.slice(0, 8)} — ${back.goal || back.title || "terminal"}`);
+    }
+    if (cmd === "desk" && (pos[1] === "digest" || pos[1] === "status")) {
+      const n = Number(opt.lines ?? 2) || 2;
+      const d = await req("GET", `/desk/digest?lines=${n}`);
+      // Two records of one decision disagreeing. Printed even with no terminals open — a quiet desk
+      // is exactly when a contradiction goes unnoticed. Reported, never reconciled here.
+      const div = d.divergence_line ? `\n${d.divergence_line}` : "";
+      if (!d.terminals.length) return console.log("(no live terminals)" + div);
+      const dot = { working: "🟢", waiting: "🟠", blocked: "🔴", done: "✅" };
+      const out = d.terminals.map((t) => {
+        const head = `${dot[t.state] || "·"} ${t.id.slice(0, 8)} ${t.workspace || "—"} · ${t.goal || "(no goal)"}` +
+          (t.goal_kind ? ` [${t.goal_kind}]` : "") +
+          (t.state === "waiting" ? ` · quiet ${t.quiet_for_sec}s` : "") +
+          (t.blocked_reason ? ` · BLOCKED: ${t.state_label || t.blocked_reason}` : "");
+        const says = t.says.map((e) => `    [${e.kind}] ${e.text.replace(/\s+/g, " ").slice(0, 200)}`);
+        // The prompt it is sitting on, with the keystrokes that answer it (relative to the cursor).
+        const p = t.prompt;
+        const ask = !p || p.kind === "turn" ? [] : [
+          `    ASKS (${p.kind}): ${p.question}`,
+          ...(p.options || []).map((o) => `      ${o.offset === 0 ? "enter" : (o.offset > 0 ? "down,".repeat(o.offset) : "up,".repeat(-o.offset)) + "enter"} → ${o.label}`),
+        ];
+        return [head, ...says, ...ask].join("\n");
+      });
+      const needs = d.needs_you.length ? `\n\nneeds you: ${d.needs_you.map((i) => i.slice(0, 8)).join(", ")}` : "";
+      return console.log(out.join("\n") + needs + div);
+    }
+    // Standing watch: Robert re-reads ONE terminal every N minutes and messages the operator on Telegram.
+    if (cmd === "desk" && (pos[1] === "watch" || pos[1] === "unwatch")) {
+      const off = pos[1] === "unwatch";
+      const ref = pos[2] || die(`desk ${pos[1]} needs a terminal id`);
+      const rows = await req("GET", "/sessions?status=live");
+      const id = rows.find((x) => x.id === ref || x.id.startsWith(ref))?.id;
+      if (!id) die(`no live terminal matching ${ref}`);
+      if (off) {
+        await req("DELETE", "/sessions/" + id + "/watch");
+        return console.log(`stopped watching ${id.slice(0, 8)}`);
+      }
+      // The interval is the point of the command, so it is required rather than defaulted: "watch
+      // it" without a cadence is a wish, and guessing 10m puts messages on his phone he never asked for.
+      const every = opt.every ?? pos[3];
+      if (!every) die('desk watch needs an interval: mc desk watch <id> --every 10m [--note "what to watch for"]');
+      const r = await req("POST", "/sessions/" + id + "/watch", {
+        every_min: String(every),
+        note: opt.note ?? null,
+        by: process.env.MC_AGENT_NAME || "operator",
+      });
+      return console.log(
+        `👁 watching ${id.slice(0, 8)} every ${r.every_min}m — first report in ${r.every_min}m` +
+        (opt.note ? `\n   watching for: ${opt.note}` : "")
+      );
+    }
+    if (cmd === "desk" && (pos[1] === "watches" || pos[1] === "watching")) {
+      const { watches } = await req("GET", "/desk/watches");
+      if (!watches.length) return console.log("(nothing is being watched)");
+      const mins = (iso) => (iso ? Math.round((new Date(iso).getTime() - Date.now()) / 60000) : null);
+      return console.log(
+        watches.map((w) => {
+          const due = mins(w.next_due);
+          return `👁 ${w.id.slice(0, 8)} ${w.workspace || "—"} · every ${w.every_min}m · ${w.goal || "(no goal)"}` +
+            (due == null ? "" : ` · next in ${due <= 0 ? "<1" : due}m`) +
+            (w.live ? "" : " · ENDED") +
+            (w.note ? `\n    watching for: ${w.note}` : "");
+        }).join("\n")
+      );
+    }
+    // The wake queue, from the outside: a wake that keeps failing is parked, and this is where it
+    // shows up (plus the one-liner that says whether anything is watching at all).
+    if (cmd === "robert" && (pos[1] === "wakes" || pos[1] === "wake")) {
+      if (opt.ack) {
+        const { wake } = await req("POST", `/robert/wakes/${opt.ack}/ack`, {}, adminHeaders());
+        return console.log(`acked ${wake.id.slice(0, 8)} ${wake.key}`);
+      }
+      const q = await req("GET", "/robert/wakes", undefined, adminHeaders());
+      const sup = await req("GET", "/robert/supervision", undefined, adminHeaders());
+      const line = (w) =>
+        `${w.parked ? "🅿️" : w.claimed_at ? "◐" : "○"} ${w.id.slice(0, 8)} g${w.generation} ${w.key}` +
+        (w.hits > 1 ? ` ·×${w.hits}` : "") +
+        (w.attempts ? ` · ${w.attempts} failed` : "") +
+        (w.last_error ? `\n    ${String(w.last_error).slice(0, 160)}` : "");
+      const out = [
+        q.queued.length ? q.queued.map(line).join("\n") : "(queue empty)",
+        `${sup.ok ? "👁" : "🕳"} ${sup.inFlight} in flight · ${sup.reason}`,
+      ];
+      if (q.recent.length) out.push(`last handled: ${q.recent.slice(0, 3).map((w) => w.key).join(", ")}`);
+      return console.log(out.join("\n"));
+    }
+    // Claim an isolated checkout for THIS terminal, once you know which repo you need. Two agents in
+    // one working tree is a silent data-loss race: a branch switch by one discards the other's
+    // uncommitted edits, and nothing warns either of them.
+    if (cmd === "worktree" || cmd === "wt") {
+      if (pos[1] === "list" || pos[1] === "ls") {
+        const { worktrees } = await req("GET", "/worktrees");
+        if (!worktrees.length) return console.log("(no chronos worktrees)");
+        return console.log(
+          worktrees.map((w) =>
+            `${w.dirty ? "●" : w.unpushed ? "◆" : "○"} ${w.repo} · ${w.branch || "?"}` +
+            (w.busy ? " · BUSY" : "") +
+            (w.dirty ? ` · ${w.dirty_files} uncommitted` : "") +
+            (w.unpushed ? ` · ${w.unpushed} unpushed` : "") +
+            `\n    ${w.path}`
+          ).join("\n")
+        );
+      }
+      // Removal: a terminal may remove the tree IT claimed (we send MC_SESSION; no ref = your own desk
+      // branch); a Lead may remove a worker's tree (x-mc-lead); every other tree is Robert's. It
+      // REFUSES rather than asks: anything that would lose work comes back naming what, so it can be
+      // put in front of the operator. A Lead may never --force a worker's tree.
+      if (pos[1] === "rm" || pos[1] === "remove") {
+        const self = process.env.MC_SESSION;
+        const ref = pos[2] || (self ? "@mine" : die("worktree rm needs a path or branch: mc worktree rm <path|branch> [--force]"));
+        let here = null;
+        try { here = path.resolve(process.cwd()); } catch {}
+        try {
+          // Robert's process carries CHRONOS_ADMIN; the token FILE is deliberately not read here, or any
+          // terminal that can read ~/chronos would skip the ownership check. A Lead's env carries
+          // MC_LEAD_TOKEN — send it so the daemon can recognise a worker's tree as this Lead's.
+          const adm = process.env.CHRONOS_ADMIN_TOKEN || process.env.CHRONOS_ADMIN;
+          const headers = adm
+            ? { "x-mc-admin": adm }
+            : (process.env.MC_LEAD_TOKEN ? { "x-mc-lead": process.env.MC_LEAD_TOKEN } : undefined);
+          const r = await req("DELETE", "/worktrees", { path: ref, force: !!opt.force, ...(self ? { session: self } : {}) },
+            headers);
+          const gone = path.resolve(r.removed);
+          // <parent>/.chronos-worktrees/<repo>/<branch> → <parent>/<repo>
+          const repoDir = path.join(path.dirname(path.dirname(path.dirname(gone))), path.basename(path.dirname(gone)));
+          const inside = !here || here === gone || here.startsWith(gone + path.sep);
+          return console.log(`removed ${r.removed}` + (inside ? `\nyour shell was inside it — cd out now:\n  cd ${repoDir}` : ""));
+        } catch (e) {
+          return die(
+            `refused: ${e.message}\n` +
+            `Nothing was deleted. You can remove only the worktree your own terminal claimed; a Lead may remove a worker's (never --force); any other is Robert's. ` +
+            `If it holds work the operator says to drop, re-run with --force ` +
+            `(--force never overrides "another terminal is working in there"; a Lead must ask via mc ask-robert).`
+          );
+        }
+      }
+      const sessionId = process.env.MC_SESSION || die("mc worktree only works inside a terminal (MC_SESSION)");
+      const repo = pos.slice(1).join(" ") || opt.repo;
+      if (!repo) die('mc worktree needs the repo you are going to work in: mc worktree <repo-name> [--as fix/short-topic]');
+      const r = await req("POST", "/sessions/" + sessionId + "/worktree", { repo, ...(opt.as ? { as: String(opt.as) } : {}) });
+      return console.log(
+        `${r.path}\n` +
+        `branch ${r.branch} in ${r.repo} — cd there before you touch anything:\n  cd ${r.path}`
+      );
+    }
+    // Repo accelerators (graphify/ast-grep/repomix) — an opt-in switch per (repo, tool). Status is
+    // readable by the repo's own workspace; enable/disable is admin-gated like every repo mutation,
+    // so an agent can see whether a tool is on but can't flip it on for itself mid-run.
+    if (cmd === "accel") {
+      const repoId = opt.repo || process.env.MC_REPO;
+      if (!repoId) die("accel needs --repo or MC_REPO (mc worktree sets it for the tree you claimed)");
+      const sub = pos[1] || "status";
+      if (sub === "status") {
+        const rows = await req("GET", "/repos/" + repoId + "/accel");
+        for (const r of rows) {
+          const bits = [r.enabled ? "enabled" : "disabled", r.installed ? `v:${r.version || "yes"}` : "not installed"];
+          if (r.mode) bits.push(`mode:${r.mode}`);
+          if (r.freshness !== "n/a") bits.push(r.freshness);
+          console.log(`  ${r.tool.padEnd(10)} ${bits.join(" · ")}`);
+        }
+        return;
+      }
+      if (sub === "enable" || sub === "disable") {
+        const tool = pos[2] || die(`mc accel ${sub} <graphify|ast-grep|repomix> [--repo ID]`);
+        const body = { enabled: sub === "enable" };
+        if (sub === "enable" && opt.mode !== undefined) body.mode = String(opt.mode);
+        const r = await req("PATCH", `/repos/${repoId}/accel/${tool}`, body, adminHeaders());
+        return console.log(`${r.tool}: ${r.enabled ? "enabled" : "disabled"}${r.mode ? ` (mode ${r.mode})` : ""}`);
+      }
+      if (sub === "build") {
+        const tool = pos[2] || die("mc accel build graphify [--force] [--repo ID]");
+        if (tool !== "graphify") die("only graphify build is supported in the canary");
+        const body = {
+          force: !!opt.force,
+          session_id: process.env.MC_SESSION || null,
+        };
+        const r = await req("POST", `/repos/${repoId}/accel/graphify/build`, body, adminHeaders());
+        return console.log(
+          `graphify build ${r.reused ? "fresh" : "ok"} · ${r.bytes}B · head ${String(r.head).slice(0, 8)} · ${r.durationMs}ms`,
+        );
+      }
+      if (sub === "query") {
+        const tool = pos[2] || die('mc accel query graphify "<question>" [--budget N] [--repo ID]');
+        if (tool !== "graphify") die("only graphify query is supported in the canary");
+        const question = pos[3] || die('mc accel query graphify "<question>" [--budget N]');
+        const body = {
+          question: String(question),
+          session_id: process.env.MC_SESSION || null,
+        };
+        if (opt.budget !== undefined) body.budget = Number(opt.budget);
+        const r = await req("POST", `/repos/${repoId}/accel/graphify/query`, body);
+        process.stdout.write(r.output || "");
+        if (r.output && !String(r.output).endsWith("\n")) process.stdout.write("\n");
+        return;
+      }
+      die("mc accel status | enable | disable | build graphify | query graphify \"<q>\"  [--repo ID]");
+    }
+    // Shared vars — env the operator handed THIS workspace, with a shelf life. They are already in
+    // the environment of any terminal spawned after they were added; `export` is how a terminal that
+    // was ALREADY open picks up one added mid-session, without the value ever hitting the screen.
+    if (cmd === "vars" || cmd === "var") {
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (!wsId) die("vars needs --workspace or MC_WORKSPACE");
+      const base = "/workspaces/" + wsId + "/vars";
+      if (pos[1] === "export") {
+        // An agent carries MC_WORKSPACE_TOKEN and is scoped by it. Run by hand on the daemon host
+        // (the operator, or Robert) there is no workspace token, so fall back to the admin one —
+        // values are the one thing this endpoint will not serve to an anonymous loopback caller.
+        const all = await req("GET", base + "/export", undefined,
+          process.env.MC_WORKSPACE_TOKEN ? undefined : adminHeaders());
+        // Shell-quoted so a value with spaces/$/quotes survives eval intact. Written to stdout with
+        // nothing else on it: the caller runs `eval "$(mc vars export)"`, so this output is consumed,
+        // not read. Never run it bare — that prints the secrets you were given in order not to.
+        const out = Object.entries(all)
+          .map(([k, v]) => `export ${k}='${String(v).replace(/'/g, "'\\''")}'`)
+          .join("\n");
+        if (!out) return process.stderr.write("(no shared vars in this workspace)\n");
+        return process.stdout.write(out + "\n");
+      }
+      if (pos[1] === "set" || pos[1] === "add") {
+        const name = pos[2] || die('mc vars set NAME VALUE [--hours 12]');
+        const value = pos.slice(3).join(" ") || die('mc vars set NAME VALUE [--hours 12]');
+        const hours = opt.hours != null && opt.hours !== "true" ? Number(opt.hours) : null;
+        // Admin-gated like every workspace mutation: an agent must not mint its own credentials.
+        // Readable only on the daemon host, which is where the operator (and Robert) runs this.
+        const v = await req("POST", base, { name, value, hours }, adminHeaders());
+        return console.log(`${v.name} set — ${v.expires_at ? "expires " + v.expires_at : "no expiry"}`);
+      }
+      if (pos[1] === "rm" || pos[1] === "remove" || pos[1] === "delete") {
+        const ref = pos[2] || die("mc vars rm NAME");
+        const all = await req("GET", base);
+        const v = all.find((x) => x.name === ref || x.id === ref || x.id.startsWith(ref));
+        if (!v) die(`no shared var named ${ref}`);
+        await req("DELETE", base + "/" + v.id, undefined, adminHeaders());
+        return console.log(`removed ${v.name}`);
+      }
+      const all = await req("GET", base);
+      if (!all.length) return console.log("(no shared vars in this workspace)");
+      // Names and lifetimes only — the values are the one thing this command must not print.
+      for (const v of all) {
+        const left = v.expires_at
+          ? `expires in ${Math.max(0, Math.round((Date.parse(v.expires_at) - Date.now()) / 3600000))}h`
+          : "no expiry";
+        console.log(`  ${v.name.padEnd(24)} ${left}`);
+      }
+      return console.log('\nuse them: eval "$(mc vars export)" && curl -H "Authorization: Bearer $NAME" ...');
+    }
+    // The Mac clipboard, through the daemon — an agent in a sandbox has no pbpaste of its own.
+    if (cmd === "clip" || cmd === "clipboard") {
+      const by = process.env.MC_AGENT_NAME || process.env.MC_SESSION?.slice(0, 8) || "agent";
+      if (pos[1] === "set" || pos[1] === "copy") {
+        const text = pos.slice(2).join(" ") || die('mc clip set "text to put on the clipboard"');
+        const r = await req("POST", "/clipboard", { text, by });
+        return console.log(`copied to clipboard (${r.describe})`);
+      }
+      const c = await req("GET", "/clipboard?by=" + encodeURIComponent(by));
+      if (!c.chars) return console.log("(clipboard is empty)");
+      // The content itself, raw on stdout — that is the whole job. The describe line goes to stderr
+      // so `mc clip > file` and `$(mc clip)` stay clean.
+      process.stderr.write(`(clipboard: ${c.describe})\n`);
+      return process.stdout.write(c.text.endsWith("\n") ? c.text : c.text + "\n");
+    }
+    if (cmd === "session" && pos[1] === "kill") {
+      const ref = pos[2] || die("session kill needs an ID");
+      // `session list` prints short ids — resolve one back to the full id, or the kill silently no-ops.
+      const id = (await req("GET", "/sessions?status=live")).find((x) => x.id === ref || x.id.startsWith(ref))?.id;
+      if (!id) die(`no live session matching ${ref}`);
+      await req("POST", "/sessions/" + id + "/kill");
+      return console.log(`killed ${id.slice(0, 8)}`);
+    }
+    if (cmd === "reviews" && (pos[1] === "list" || !pos[1])) {
+      const all = await req("GET", "/reviews?state=pending");
+      if (!all.length) return console.log("(review queue empty)");
+      return console.log(all.map((r) => `${r.id.slice(0, 8)}\t${r.state}\t${r.diff_ref ? "has-diff" : "no-diff"}\t${r.ticket_id || ""}`).join("\n"));
+    }
+    if (cmd === "reviews" && ["approve", "changes", "merge"].includes(pos[1])) {
+      const id = pos[2] || die(`reviews ${pos[1]} needs an ID`);
+      const r = await req("POST", `/reviews/${id}/${pos[1]}`);
+      return console.log(`review ${id} → ${pos[1]} ✓`);
+    }
+    if (cmd === "run" && pos[1] === "list") {
+      const all = await req("GET", "/runs" + (opt.job ? "?job_id=" + opt.job : ""));
+      if (!all.length) return console.log("(no runs)");
+      return console.log(all.slice(0, 30).map((r) => `${r.id.slice(0, 8)}\t${r.status}\t${(r.started_at || "").slice(0, 16).replace("T", " ")}\t${r.cost_usd ? "$" + r.cost_usd.toFixed(3) : ""}`).join("\n"));
+    }
+    if (cmd === "run" && pos[1] === "get") {
+      const id = pos[2] || die("run get needs an ID");
+      const evs = await req("GET", "/runs/" + id + "/events");
+      return console.log(evs.map((e) => `[${e.type}] ${JSON.stringify(e.payload).slice(0, 200)}`).join("\n"));
+    }
+    // Headless runs have no PTY to attach to — follow their event stream instead. Exits when the run
+    // leaves 'running', which is what lets `mc wall` close the tab.
+    if (cmd === "run" && pos[1] === "watch") {
+      const ref = pos[2] || die("run watch needs an ID");
+      const id = (await req("GET", "/runs")).find((r) => r.id === ref || r.id.startsWith(ref))?.id;
+      if (!id) die(`no run matching ${ref}`);
+      let seen = 0;
+      for (;;) {
+        const evs = await req("GET", "/runs/" + id + "/events");
+        for (const e of evs.slice(seen)) console.log(`[${e.type}] ${JSON.stringify(e.payload).slice(0, 500)}`);
+        seen = evs.length;
+        const r = await req("GET", "/runs/" + id);
+        if (r.status !== "running" && r.status !== "queued") return console.log(`\n── run ${r.status}${r.cost_usd ? ` · $${r.cost_usd.toFixed(2)}` : ""}`);
+        await new Promise((done) => setTimeout(done, 2000));
+      }
+    }
+    // Structured worker progress. MC_RUN is set by runner.ts on the spawned worker's env — not
+    // present outside a dispatched run (e.g. a plain terminal `mc` invocation), so fail with a
+    // one-line explanation instead of a confusing 404.
+    const requireRun = () => process.env.MC_RUN || die("mc steps only works inside a dispatched run");
+    const STEP_ICON = { todo: "○", active: "▶", done: "✔", skipped: "–" };
+    const renderSteps = (data) => {
+      const { steps, progress } = data;
+      if (!steps.length) return "(no steps declared)";
+      const header = progress ? `${progress.done}/${progress.total}${progress.current ? ` · ${progress.current}` : ""}` : "0/0";
+      const lines = steps.map((s) => `${STEP_ICON[s.status] || "?"} ${s.idx}. ${s.label}${s.note ? `  (${s.note})` : ""}`);
+      return `${header}\n${lines.join("\n")}`;
+    };
+    if (cmd === "steps" && pos[1] === "declare") {
+      const runId = requireRun();
+      const labels = pos.slice(2);
+      if (!labels.length) die('steps declare needs at least one label: mc steps declare "step one" "step two"');
+      const r = await req("POST", "/runs/" + runId + "/steps", { labels });
+      console.log(renderSteps(r));
+      return printMessages(r.messages);
+    }
+    if (cmd === "steps") {
+      const runId = requireRun();
+      const r = await req("GET", "/runs/" + runId + "/steps");
+      return console.log(renderSteps(r));
+    }
+    if (cmd === "step" && ["start", "done", "skip"].includes(pos[1])) {
+      const runId = requireRun();
+      const idx = Number(pos[2]) || die(`step ${pos[1]} needs a step number: mc step ${pos[1]} <n> ["note"]`);
+      const note = pos.slice(3).join(" ") || undefined;
+      const status = pos[1] === "start" ? "active" : pos[1] === "done" ? "done" : "skipped";
+      const r = await req("POST", "/runs/" + runId + "/steps/" + idx, { status, note });
+      console.log(`${STEP_ICON[r.step.status]} ${r.step.idx}. ${r.step.label} → ${r.step.status} (${r.progress.done}/${r.progress.total})`);
+      return printMessages(r.messages);
+    }
+    // Worker HITL question. Files the ask, then long-polls the wait endpoint until answered or the
+    // deadline — 55s per call (server-side cap), looped here so a slow network hop never eats the wait.
+    if (cmd === "ask") {
+      const runId = process.env.MC_RUN || die("mc ask only works inside a dispatched run");
+      const question = pos.slice(1).join(" ");
+      if (!question) die('mc ask needs a question: mc ask "your question" [--options "a,b,c"] [--wait <min>]');
+      const options = opt.options ? opt.options.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+      const waitMin = opt.wait != null ? Number(opt.wait) : 5;
+      const a = await req("POST", "/asks", { run_id: runId, question, options, wait_min: waitMin });
+      const id8 = a.id.slice(0, 8);
+      if (waitMin <= 0) return console.log(`asked (${id8}) — not waiting (--wait 0)`);
+      console.log(`asked (${id8}) — waiting up to ${waitMin}m for an answer…`);
+      const deadline = Date.now() + waitMin * 60_000;
+      for (;;) {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
+        const cur = await req("GET", "/asks/" + a.id + "/wait?timeout_ms=" + Math.min(55_000, remainingMs));
+        if (cur.status === "answered") return console.log(`✅ answer: ${cur.answer}`);
+      }
+      return console.log(
+        `⏸ no answer yet. Commit your WIP now, note where you left off with mc note, then finish your turn cleanly ` +
+        `(do not mark the ticket for review). The system parks this run and resumes you automatically — with your ` +
+        `full context — when the answer arrives.`
+      );
+    }
+    // A TERMINAL's question. `mc ask` needs MC_RUN (a dispatched run); an agent on the Desk wall has
+    // MC_SESSION instead and, before this, no way to ask anybody anything. Robert takes it first:
+    // routine and derivable he answers himself, everything else lands on the operator's phone with his
+    // recommendation attached. Either way this blocks until an answer comes back.
+    // A worker's question to its OWN Lead (LEADS.md). Same primitive as ask-robert — one ask row, one
+    // long-poll — routed to the one agent that already knows this goal, because it wrote the brief.
+    // `mc ask-robert` inside a Lead's worker lands here too: one habit for agents, and the Lead is
+    // always the right first stop. `--robert` is the explicit way over its head.
+    if (cmd === "ask-robert" || cmd === "askrobert" || cmd === "ask-lead" || cmd === "asklead") {
+      const asLead = cmd === "ask-lead" || cmd === "asklead";
+      const sessionId =
+        process.env.MC_SESSION ||
+        die(`mc ${cmd} only works inside a Desk terminal (MC_SESSION is set by the daemon)`);
+      const question = pos.slice(1).join(" ");
+      if (!question) die(`mc ${cmd} needs a question: mc ${cmd} "your question" [--options "a,b"] [--wait <min>]`);
+      const options = opt.options ? opt.options.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+      // A Lead answers from the brief it wrote, so it answers fast: 10m is plenty, and the daemon
+      // hands the question to Robert by itself if it does not (CHRONOS_LEAD_ASK_FALLBACK_MIN).
+      const toLead = (asLead || !!process.env.MC_LEAD_ID) && !opt.robert;
+      const waitMin = opt.wait != null ? Number(opt.wait) : toLead ? 10 : 15;
+      const a = await req("POST", "/asks", {
+        session_id: sessionId, question, options, wait_min: waitMin,
+        ...(toLead ? { route: "lead" } : {}),
+      });
+      // The daemon decides the route, not this flag: MC_LEAD_ID goes stale when the Lead ends, and a
+      // workspace that requires human answers lets no agent decide. Say so in one line when what we
+      // asked for is not what we got, rather than printing "asked your Lead" about a Lead that never
+      // heard it.
+      if (toLead && a.route !== "lead")
+        console.log("(your Lead cannot take this one — it ended, or this client requires a human answer)");
+      const id8 = a.id.slice(0, 8);
+      if (waitMin <= 0) return console.log(`asked (${id8}) — not waiting (--wait 0)`);
+      console.log(`asked ${a.route === "lead" ? "your Lead" : "Robert"} (${id8}) — waiting up to ${waitMin}m…`);
+      const deadline = Date.now() + waitMin * 60_000;
+      for (;;) {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
+        const cur = await req("GET", "/asks/" + a.id + "/wait?timeout_ms=" + Math.min(55_000, remainingMs));
+        if (cur.status === "answered") return console.log(`✅ ${cur.answered_by || "answer"}: ${cur.answer}`);
+        if (cur.status === "cancelled") return console.log(`🚫 question dropped (${id8})`);
+      }
+      // Unlike `mc ask`, nothing parks and resumes a terminal — you are still sitting here. Say what
+      // is true: it is out of your hands now, so do something useful that does not depend on the answer.
+      return console.log(
+        `⏸ no answer yet (${id8}) — it has moved on to whoever can settle it. Do not guess and do not sit idle: say in your ` +
+        `Focus feed what you are blocked on, then either work on something that does not depend on it, ` +
+        `or run \`mc state blocked "<what you need>"\` and stop. Re-check with: mc asks`
+      );
+    }
+    if (cmd === "asks") {
+      const qs = new URLSearchParams();
+      if (!opt.all) qs.set("status", "open");
+      // The endpoint defaults to the LIVE bucket (what needs you now); --all means everything,
+      // deferred rows included, each tagged with the date it comes back on.
+      qs.set("bucket", opt.all ? "all" : "live");
+      const wsq = opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
+      const rows = await req("GET", "/asks?" + qs.toString());
+      if (!rows.length) return console.log("(no asks)");
+      const ageMin = (ts) => Math.round((Date.now() - new Date(ts).getTime()) / 60000);
+      const later = (a) => (a.hold_until ? ` ⏰${a.hold_until.slice(0, 16).replace("T", " ")}` : a.bucket === "aged" ? " 🕰aged" : "");
+      return console.log(
+        rows.map((a) => `${a.id.slice(0, 8)}\t${ageMin(a.created_at)}m\t${a.ticket_key || "-"}\t${a.status}${later(a)}\t${a.question}`).join("\n")
+      );
+    }
+    if (cmd === "answer") {
+      const id8 = pos[1] || die('mc answer needs an id: mc answer <id8> "text"');
+      const text = pos.slice(2).join(" ");
+      if (!text) die('mc answer needs the answer text: mc answer <id8> "text"');
+      // A Lead answering one of its own workers (`mc ask-lead` → this). The header is what authorises
+      // it, and the daemon refuses any ask whose terminal is not this Lead's — sending it costs a
+      // non-Lead nothing, since LEAD_HEADERS is empty without MC_LEAD_TOKEN.
+      const a = await req("POST", "/asks/" + id8 + "/answer", { answer: text }, LEAD_HEADERS);
+      return console.log(`${a.id.slice(0, 8)} → answered`);
+    }
+    // A worker hands its slice back to its Lead in a SHAPE, rather than stopping and being scraped
+    // (LEADS.md). `done` also ticks the card for review and moves its board slice; `blocked` declares
+    // it blocked. The stop that follows within two minutes is suppressed — this replaces it.
+    if (cmd === "report") {
+      const sessionId =
+        process.env.MC_SESSION || die("mc report only works inside a Desk terminal (MC_SESSION is set by the daemon)");
+      const state = pos[1];
+      if (!["done", "partial", "blocked"].includes(state))
+        die('mc report done|partial|blocked "summary" [--pr URL] [--tests "..."] [--verified "..."] [--question "..."] [--next "..."]');
+      const summary = pos.slice(2).join(" ");
+      if (!summary) die('mc report needs a one-line summary: mc report ' + state + ' "what happened"');
+      // --pr is repeatable; parse() keeps the last, so read them off argv directly.
+      const prs = process.argv.reduce((acc, a, i) => (a === "--pr" && process.argv[i + 1] ? [...acc, process.argv[i + 1]] : acc), []);
+      const one = (v) => (v && v !== "true" ? v : undefined);
+      const out = await req("POST", "/sessions/" + sessionId + "/report", {
+        state, summary, prs: prs.length ? prs : undefined,
+        tests: one(opt.tests), verified: one(opt.verified), question: one(opt.question), next: one(opt.next),
+      });
+      return console.log(
+        `📮 reported ${state} to your Lead${out.slice ? ` (slice ${out.slice} → review)` : ""}` +
+        (state === "blocked" ? " — you are declared blocked; wait for its answer." : ""),
+      );
+    }
+    // Operator/manager → worker mailbox. No MC_RUN needed — this is the send side (operator, Robert,
+    // or one worker messaging a sibling ticket's worker); delivery is piggybacked on the RECEIVING
+    // run's own `mc step`/`mc note` checkpoints, not a poll here.
+    if (cmd === "tell") {
+      const target = pos[1] || die('mc tell needs a target and message: mc tell <ticket|run|agent> "message"');
+      const text = pos.slice(2).join(" ");
+      if (!text) die('mc tell needs a message: mc tell <target> "message"');
+      const r = await req("POST", "/messages", { to: target, text });
+      const who = r.resolved.kind === "ticket" ? r.resolved.ticket_key : (r.resolved.ticket_key || r.resolved.run_id.slice(0, 8));
+      return console.log(`📨 → ${who}`);
+    }
+    if (cmd === "inbox") {
+      const runId = process.env.MC_RUN || die("mc inbox only works inside a dispatched run");
+      const r = await req("GET", "/runs/" + runId + "/inbox");
+      if (!r.messages.length) return console.log("(inbox empty)");
+      return printMessages(r.messages);
+    }
+    if (cmd === "activity") {
+      const qs = new URLSearchParams();
+      const wsq = opt.ws || opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
+      if (opt.topic) qs.set("topic", opt.topic);
+      if (opt.actor) qs.set("actor", opt.actor);
+      const nIdx = process.argv.indexOf("-n");
+      const limit = opt.n ?? (nIdx >= 0 ? process.argv[nIdx + 1] : undefined);
+      if (limit) qs.set("limit", limit);
+      const rows = await req("GET", "/activity?" + qs.toString());
+      if (!rows.length) return console.log("(no activity)");
+      return console.log(rows.map((a) => `${(a.ts || "").replace("T", " ").slice(0, 19)}\t${a.actor || "·"}\t${a.topic}\t${a.entity || ""}`).join("\n"));
+    }
+    if (cmd === "cost") {
+      const qs = new URLSearchParams();
+      const wsq = opt.ws || opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
+      if (opt.from) qs.set("from", opt.from);
+      if (opt.to) qs.set("to", opt.to);
+      const body = await req("GET", "/costs?" + qs.toString());
+      const { from, to, rows, total_usd, runs_usd, sessions_usd, sessions_estimated_usd, coverage } = body;
+      if (!rows.length && !(sessions_usd > 0)) return console.log("(no cost data)");
+      const byWs = new Map();
+      for (const r of rows || []) { if (!byWs.has(r.ws_slug)) byWs.set(r.ws_slug, []); byWs.get(r.ws_slug).push(r); }
+      const out = [`cost ${from.slice(0, 10)} → ${to.slice(0, 10)} (headless + Desk)`];
+      for (const [slug, srows] of byWs) {
+        const sub = srows.reduce((s, r) => s + r.cost_usd, 0);
+        out.push(`${slug}\t$${sub.toFixed(2)} headless`);
+        for (const r of srows) out.push(`  ${r.stage}\t${r.runs}×\t$${r.cost_usd.toFixed(2)}\t${r.tokens_in}→${r.tokens_out} tok`);
+      }
+      if (sessions_usd != null) {
+        out.push(`Desk terminals\t$${(sessions_usd || 0).toFixed(2)}` +
+          (sessions_estimated_usd > 0 ? ` (est $${sessions_estimated_usd.toFixed(2)})` : ""));
+      }
+      out.push(`─────\nTOTAL\t$${(total_usd ?? 0).toFixed(2)}  (headless $${(runs_usd ?? 0).toFixed(2)} · Desk $${(sessions_usd ?? 0).toFixed(2)})`);
+      if (coverage?.estimated_usd > 0 || coverage?.unpriced_sessions > 0) {
+        out.push(`coverage: priced $${(coverage.priced_usd || 0).toFixed(2)} · estimated Desk $${(coverage.estimated_usd || 0).toFixed(2)}`);
+      }
+      return console.log(out.join("\n"));
+    }
+    if (cmd === "report") {
+      const qs = new URLSearchParams();
+      const wsq = opt.workspace || opt.ws || process.env.MC_WORKSPACE;
+      if (!wsq) die("report needs --workspace or MC_WORKSPACE");
+      qs.set("workspace", wsq);
+      if (opt.from) qs.set("from", opt.from);
+      if (opt.to) qs.set("to", opt.to);
+      const { markdown } = await req("GET", "/report?" + qs.toString());
+      return console.log(markdown);
+    }
+    if (cmd === "cal") {
+      const days = Number(opt.days || 7);
+      const from = new Date(), to = new Date(Date.now() + days * 864e5);
+      const qs = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() });
+      const wsq = opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
+      const evs = await req("GET", "/calendar?" + qs.toString());
+      if (!evs.length) return console.log("(no events)");
+      return console.log(evs.slice(0, 40).map((e) => `${(e.start || "").replace("T", " ").slice(0, 16)}\t${e.title}`).join("\n"));
+    }
+    if (cmd === "fleet") {
+      const render = async () => {
+      const d = await req("GET", "/fleet");
+      const tok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n)));
+      const dur = (s) => (s < 60 ? Math.round(s) + "s" : s < 3600 ? Math.floor(s / 60) + "m" : Math.floor(s / 3600) + "h" + (Math.floor(s / 60) % 60) + "m");
+      const hhmm = (iso) => { const t = new Date(iso); return String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0"); };
+      const active = (w) => w.live.length || w.queued || w.sessionsLive || w.today.done || w.today.failed || w.today.blocked || w.today.inReview || w.prs.open || w.prs.mergedToday || w.spendToday || w.rateLimitResetsAt;
+      const out = [];
+      for (const w of d.workspaces) {
+        if (!active(w)) continue;
+        const act = [];
+        if (w.live.length) act.push(`▶${w.live.length}`);
+        if (w.queued) act.push(`⏳${w.queued}`);
+        if (w.sessionsLive) act.push(`💻${w.sessionsLive}`);
+        const seg = [w.name + (act.length ? " " + act.join(" ") : "")];
+        const today = [];
+        if (w.today.done) today.push(`✅${w.today.done}`);
+        if (w.today.failed) today.push(`✗${w.today.failed}`);
+        if (w.today.blocked) today.push(`🚫${w.today.blocked}`);
+        if (w.today.inReview) today.push(`⟳${w.today.inReview}`);
+        if (today.length) seg.push("today " + today.join(" "));
+        const pr = [];
+        if (w.prs.open) pr.push(`🔀${w.prs.open}`);
+        if (w.prs.mergedToday) pr.push(`✅🔀${w.prs.mergedToday}`);
+        if (pr.length) seg.push("PR " + pr.join(" "));
+        seg.push(`$${w.spendToday.toFixed(2)}`);
+        if (w.windowTokens) seg.push(`${tok(w.windowTokens)}/5h`);
+        out.push(seg.join(" · "));
+        for (const r of w.live) out.push(`  ▶ ${r.jobName} · ${dur(r.elapsedSec)} · $${r.costSoFar.toFixed(2)} (${r.model})`);
+        if (w.rateLimitResetsAt) out.push(`  ⏸ limited, resets ${hhmm(w.rateLimitResetsAt)}`);
+      }
+      const g = d.global;
+      out.push(`── ▶${g.live} live · ${g.queued} queued · $${g.spendToday.toFixed(2)}/$${g.budget} today · ${tok(g.windowTokens)}/5h`);
+      // Everything above is work in motion. This is the opposite: work that is NOT moving and is
+      // waiting on the operator. It belongs on the same screen, or a quiet fleet reads as "all done".
+      // Both default to the LIVE bucket: an item the operator dated out to Thursday is not something
+      // he needs now. The deferred ones get their own line below, WITH the date — "later" is a
+      // commitment, and a silently missing row reads as a closed one.
+      const [roll, stalls, later, laterReviews] = await Promise.all([
+        req("GET", "/agents/rollup"),
+        req("GET", "/recovery"),
+        req("GET", "/asks?status=open&bucket=dated"),
+        req("GET", "/reviews?state=pending&bucket=dated"),
+      ]);
+      const ago = (iso) => {
+        const ms = Date.now() - Date.parse(iso || "");
+        if (!Number.isFinite(ms)) return "?";
+        const h = Math.floor(ms / 3_600_000);
+        return h < 1 ? `${Math.max(1, Math.floor(ms / 60_000))}m` : h < 48 ? `${h}h` : `${Math.floor(h / 24)}d`;
+      };
+      if (roll.blocked.length || stalls.length) {
+        out.push(`── needs you`);
+        for (const a of roll.blocked)
+          out.push(`  🚫 ${a.ticket_key || a.label?.slice(0, 48) || a.id8} · ${a.blocked_reason || "blocked"} · ${ago(a.updated_at)} · ${a.workspace_slug || "unscoped"}`);
+        // Stalls were raised once and never answered — recovery asks a single time, so this line is
+        // the only thing standing between a dropped run and silence.
+        for (const s of stalls)
+          out.push(`  🩺 ${s.line.split("\n")[0]}\n     → mc recover ${s.id} ok  ·  mc recover ${s.id} no`);
+      }
+      const when = (iso) => iso.slice(0, 16).replace("T", " ");
+      if (later.length || laterReviews.length) {
+        out.push(`── later (comes back on its date; nothing decided)`);
+        for (const a of later) out.push(`  ⏰ ${when(a.hold_until)} · ask ${a.id.slice(0, 8)} · ${a.question.slice(0, 60)}${a.hold_reason ? ` — ${a.hold_reason}` : ""}`);
+        for (const r of laterReviews) out.push(`  ⏰ ${when(r.hold_until)} · review ${r.id.slice(0, 8)}${r.hold_reason ? ` — ${r.hold_reason}` : ""}`);
+      }
+      // Two records of one decision disagreeing. Reported, never reconciled — it closes nothing.
+      for (const d of roll.divergence ?? []) out.push(`  ⚠ ${d.line}`);
+      return out.join("\n");
+      };
+      if (opt.watch === "true" || pos[1] === "watch") {
+        for (;;) {
+          const text = await render();
+          process.stdout.write("\x1b[2J\x1b[H" + text + `\n\n(refreshing every 10s · ${new Date().toTimeString().slice(0, 8)})\n`);
+          await new Promise((done) => setTimeout(done, 10_000));
+        }
+      }
+      return console.log(await render());
+    }
+    // How loaded the Mac is right now, and whether an agent would be let on it (src/machine.ts).
+    if (cmd === "machine") {
+      const m = await req("GET", "/machine");
+      // Swap% is shown for context, never as a verdict: a small, mostly-full swapfile is a calm Mac's
+      // resting state. `pressure` is what actually says the machine is short of memory.
+      const swap = m.swapTotalMb ? `swap ${Math.round(m.swapUsedPct)}% of ${(m.swapTotalMb / 1024).toFixed(1)}G` : "swap n/a";
+      const verdict = m.admission.ok ? "ok for agents" : "SATURATED — " + m.admission.reason;
+      const busy = m.heavy.holders.map((h) => `${h.label.slice(0, 24)} ${heldFor(h.held_ms)}`).join(", ");
+      const waiting = m.heavy.waiting ? ` +${m.heavy.waiting} waiting` : "";
+      return console.log(
+        `load ${m.load1.toFixed(1)} on ${m.ncpu} cores (${m.loadPerCore.toFixed(2)}/core) · memory ${m.pressure} · ${swap} · ` +
+        `heavy ${m.heavy.holders.length}/${m.heavy.slots}${busy ? ` (${busy})` : ""}${waiting} · ${verdict}`,
+      );
+    }
+    if (cmd === "status") {
+      const h = await req("GET", "/health");
+      return console.log(`active ${h.active} · queued ${h.queued} · max ${h.max_concurrent} · spent $${(h.spent_today_usd ?? 0)} / $${h.daily_budget_usd ?? "?"}`);
+    }
+    // Shared command table (daemon-side src/commands.ts): auto, stop, reviews, cost, jobs — the same
+    // commands Buzz and Telegram have. Tried last so mc's own richer subcommands still win, and so a
+    // command added to the table shows up here without touching this script.
+    {
+      const r = await fetch(API + "/command", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...adminHeaders(), ...WS_TOKEN_HEADERS },
+        body: JSON.stringify({ line: pos.join(" "), workspace_id: opt.workspace || opt.ws || null }),
+      });
+      if (r.ok) return console.log((await r.json()).text);
+      if (r.status !== 404) die((await r.json().catch(() => ({}))).error || `command failed (${r.status})`);
+    }
+    die(`unknown command: ${pos.join(" ")}\n` + HELP);
+  } catch (e) {
+    die(e.message || String(e));
+  }
+})();

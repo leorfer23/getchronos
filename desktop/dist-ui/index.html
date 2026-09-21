@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mission Control</title>
+<style>html,body{margin:0;height:100%;background:#0b0e14;color:#6b7787;font:13px ui-monospace,monospace;display:flex;align-items:center;justify-content:center}</style>
+</head><body>
+<div id="m">connecting to Mission Control…</div>
+<script>
+// The native window is configured to open http://localhost:7777 directly (tauri.conf.json).
+// This local shell is the bundler fallback; redirect in case the window loaded it instead.
+const URL='http://localhost:7777';
+fetch(URL+'/api/health').then(r=>{if(r.ok)location.replace(URL);else throw 0;})
+  .catch(()=>{document.getElementById('m').textContent='Chronos daemon not running on :7777 — start it, then reopen.';
+    setTimeout(()=>location.reload(),3000);});
+</script>
+</body></html>

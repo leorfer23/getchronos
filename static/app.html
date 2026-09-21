@@ -1,0 +1,1832 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chronos</title>
+<style>
+  /* Design per the approved mission-ui mockup: verdigris accent on green-biased neutrals,
+     system type, WhatsApp-simple. Same token pattern as the mockup, light+dark. */
+  :root {
+    --bg:#F3F5F3; --surface:#FFFFFF; --surface-2:#EBEEEB; --ink:#1B211E; --muted:#67716B;
+    --faint:#9AA49E; --line:#DEE3DF; --accent:#2E7D64; --accent-ink:#FFFFFF; --accent-soft:#E1EEE8;
+    --accent-soft-ink:#1E5B48; --warn:#9A6B00; --warn-soft:#F5EAD0; --danger:#B23B2E;
+    --danger-soft:#F6E3E0; --ok:#2E7D64; --bubble-me:#DCEDE5; --bubble-agent:#FFFFFF;
+    --term-bg:#10140F; --term-ink:#A9C4A0; --term-dim:#5E6E58;
+    --shadow:0 1px 2px rgba(27,33,30,.06),0 4px 16px rgba(27,33,30,.05);
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg:#121614; --surface:#1B201D; --surface-2:#232925; --ink:#E6ECE8; --muted:#93A099;
+    --faint:#6B7671; --line:#2B322E; --accent:#56B693; --accent-ink:#0D1511; --accent-soft:#1F332B;
+    --accent-soft-ink:#8FD4B8; --warn:#D9A83F; --warn-soft:#33290F; --danger:#E0705F;
+    --danger-soft:#38201C; --ok:#56B693; --bubble-me:#24463A; --bubble-agent:#1F2522;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.25);
+  } }
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif; -webkit-font-smoothing:antialiased; }
+  .mono { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-variant-numeric:tabular-nums; }
+  button { font:inherit; color:inherit; cursor:pointer; }
+  .app { display:flex; flex-direction:column; height:100dvh; max-width:1280px; margin:0 auto; }
+
+  header.bar { display:flex; align-items:center; gap:14px; padding:10px 20px; }
+  .wordmark { font-weight:650; font-size:15px; letter-spacing:-.01em; }
+  .wordmark span { color:var(--accent); }
+  .tabs { display:flex; gap:2px; background:var(--surface-2); border-radius:10px; padding:3px; margin-inline:auto; }
+  .tabs button { border:0; background:transparent; color:var(--muted); font-weight:550; padding:6px 18px; border-radius:8px; }
+  .tabs button.active { background:var(--surface); color:var(--ink); box-shadow:var(--shadow); }
+  .pill { display:flex; align-items:center; gap:7px; font-weight:600; font-size:13px; padding:6px 12px; border-radius:99px; border:0; }
+  .pill .dot { width:7px; height:7px; border-radius:50%; }
+  .pill.run { background:var(--accent-soft); color:var(--accent-soft-ink); } .pill.run .dot { background:var(--ok); }
+  .pill.need { background:var(--warn-soft); color:var(--warn); } .pill.need .dot { background:var(--warn); }
+  .pill[hidden] { display:none; }
+  @media (prefers-reduced-motion: no-preference) { .pill .dot { animation:pulse 2.4s ease-in-out infinite; } @keyframes pulse { 50% { opacity:.45; } } }
+
+  main { flex:1; min-height:0; padding:0 20px 16px; }
+  .view { display:none; height:100%; } .view.active { display:flex; gap:14px; }
+  .pane { background:var(--surface); border:1px solid var(--line); border-radius:14px; overflow:hidden; display:flex; flex-direction:column; }
+  .side { width:300px; flex:none; }
+  .side h2, .bcol h2 { margin:0; padding:14px 16px 8px; font-size:11px; font-weight:650; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); }
+  .scroll { flex:1; overflow-y:auto; min-height:0; }
+
+  /* chat */
+  .agent-row { display:flex; align-items:center; gap:12px; width:100%; padding:10px 14px; border:0; background:transparent; text-align:left; }
+  .agent-row:hover { background:var(--surface-2); } .agent-row.active { background:var(--accent-soft); }
+  .avatar { width:38px; height:38px; border-radius:50%; flex:none; display:grid; place-items:center; font-weight:650; background:var(--surface-2); color:var(--muted); }
+  .agent-row.active .avatar, .av-accent { background:var(--accent); color:var(--accent-ink); }
+  .agent-meta { min-width:0; flex:1; } .agent-name { font-weight:600; }
+  .agent-sub { color:var(--muted); font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chat-main { flex:1; min-width:0; position:relative; }
+  /* Dragging a file over the chat: the whole pane is the target, not a strip at the bottom. */
+  .chat-main.dropping::after { content:"Drop to attach"; position:absolute; inset:8px; z-index:5;
+    border:2px dashed var(--accent); border-radius:14px; display:flex; align-items:center; justify-content:center;
+    font-weight:650; color:var(--accent); background:var(--surface); opacity:.94; pointer-events:none; }
+  .chat-head { display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid var(--line); }
+  .chat-head .avatar { width:34px; height:34px; }
+  .role { color:var(--muted); font-size:12.5px; }
+  .thread { display:flex; flex-direction:column; gap:10px; padding:20px 22px; }
+  .msg { max-width:72%; } .msg .bubble { padding:9px 13px; border-radius:14px; box-shadow:var(--shadow); background:var(--bubble-agent); white-space:pre-wrap; overflow-wrap:break-word; }
+  .msg.me { align-self:flex-end; } .msg.me .bubble { background:var(--bubble-me); border-bottom-right-radius:4px; }
+  .msg.them .bubble { border-bottom-left-radius:4px; }
+  /* Agent replies carry tables and code, which 72% cramps into a scrollbar. Yours stay narrow —
+     a typed line reads better short. */
+  .msg.them { max-width:88%; }
+  /* Typed while a turn was still running: sent, but not yet delivered. Dashed and dimmed so it
+     reads as "waiting its turn" rather than as a message the agent has already seen. */
+  .msg.queued .bubble { opacity:.6; box-shadow:none; border:1px dashed var(--line); }
+  .msg time { display:block; font-size:10.5px; color:var(--faint); margin-top:3px; padding:0 4px; }
+  .msg.me time { text-align:right; }
+  .divider { align-self:center; font-size:11px; color:var(--faint); border-top:1px solid var(--line); width:60%; text-align:center; padding-top:4px; }
+  /* Live action feed while an agent works: what they're DOING, not their raw output. */
+  .acts { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--faint); }
+  .acts .act { display:flex; gap:7px; align-items:baseline; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .acts .act .tick { width:11px; flex:none; text-align:center; }
+  .acts .act.done { opacity:.55; }
+  .acts .act.done .tick::before { content:"·"; }
+  .acts .act.on { color:var(--muted); }
+  .acts .act.on .tick::before { content:"●"; color:var(--accent); font-size:8px; }
+  @media (prefers-reduced-motion: no-preference) { .acts .act.on .tick::before { animation:pulse 1.4s ease-in-out infinite; } }
+  .reply-stream:not(:empty) { margin-top:6px; }
+  .composer { display:flex; align-items:flex-end; gap:10px; padding:12px 16px; border-top:1px solid var(--line); }
+  .composer textarea { flex:1; font:inherit; line-height:1.4; color:var(--ink); background:var(--surface-2); border:0; border-radius:19px; padding:10px 16px; resize:none; max-height:120px; overflow-y:auto; }
+  .composer textarea::placeholder { color:var(--faint); }
+  /* display:flex above outranks [hidden]'s UA display:none — without this the board's per-post
+     reply box was open on every post at once, which is most of why posts ran together. */
+  .composer[hidden] { display:none; }
+  .send { width:38px; height:38px; border-radius:50%; border:0; background:var(--accent); color:var(--accent-ink); display:grid; place-items:center; flex:none; }
+  .send:disabled { opacity:.5; cursor:default; }
+  .attach { width:38px; height:38px; border-radius:50%; border:0; background:var(--surface-2); color:var(--muted); display:grid; place-items:center; flex:none; }
+  .attach:hover { color:var(--ink); }
+  .attach:disabled { opacity:.5; cursor:default; }
+  .stage { display:flex; flex-wrap:wrap; gap:6px; padding:8px 16px 0; }
+  .stage:empty { display:none; }
+  .stage .chipf { display:flex; align-items:center; gap:6px; font-size:12px; background:var(--surface-2); border:1px solid var(--line); border-radius:99px; padding:4px 10px; max-width:240px; }
+  .stage .chipf span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .stage .chipf button { border:0; background:none; color:var(--faint); font-size:13px; padding:0; }
+  .stage .chipf button:hover { color:var(--danger); }
+  .banner { background:var(--warn-soft); color:var(--warn); font-size:12.5px; padding:8px 16px; }
+
+  /* tickets */
+  .t-row { width:100%; text-align:left; border:0; background:transparent; padding:12px 16px; display:flex; flex-direction:column; gap:4px; border-bottom:1px solid var(--line); }
+  .t-row:hover { background:var(--surface-2); } .t-row.active { background:var(--accent-soft); }
+  .key-line { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .key { font-size:12px; color:var(--muted); }
+  .chip { font-size:11px; font-weight:600; padding:2px 8px; border-radius:99px; background:var(--accent-soft); color:var(--accent-soft-ink); }
+  .chip.warn { background:var(--warn-soft); color:var(--warn); }
+  .chip.danger { background:var(--danger-soft); color:var(--danger); }
+  .chip.muted { background:var(--surface-2); color:var(--muted); }
+  .t-title { font-weight:600; } .t-sub { font-size:12px; color:var(--muted); }
+  .t-main { flex:1; min-width:0; }
+  .td-head { padding:16px 22px 12px; border-bottom:1px solid var(--line); }
+  .td-head h1 { margin:4px 0 0; font-size:18px; font-weight:650; letter-spacing:-.01em; text-wrap:balance; }
+  .td-body { flex:1; display:flex; min-height:0; }
+  .timeline { flex:1; overflow-y:auto; padding:16px 22px; display:flex; flex-direction:column; gap:12px; }
+  /* The timeline is a scrolling flex column, so its children are flex items and shrink by default:
+     on a busy ticket the body box was squeezed to a couple of visible lines. Let each block keep
+     its own height and make the column scroll instead. */
+  .timeline > * { flex:none; }
+  .props { width:230px; flex:none; border-left:1px solid var(--line); padding:16px 18px; overflow-y:auto; display:flex; flex-direction:column; gap:13px; font-size:12.5px; }
+  .prop .l { font-size:10px; font-weight:650; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); margin-bottom:2px; }
+  .prop a { color:var(--accent); text-decoration:none; font-weight:600; }
+  .ev { display:flex; gap:10px; align-items:baseline; font-size:12.5px; color:var(--muted); }
+  .ev .ico { width:20px; text-align:center; color:var(--faint); flex:none; }
+  .ev time { margin-left:auto; font-size:11px; color:var(--faint); flex:none; }
+  .comment { display:flex; gap:12px; } .comment .avatar { width:30px; height:30px; font-size:12px; }
+  .c-head { display:flex; align-items:baseline; gap:8px; } .c-head .who { font-weight:650; font-size:13px; }
+  .c-head time { font-size:11px; color:var(--faint); }
+  .c-text { white-space:pre-wrap; overflow-wrap:break-word; }
+  .ask-block { border-left:3px solid var(--warn); background:var(--warn-soft); border-radius:0 10px 10px 0; padding:10px 14px; }
+  .ask-block .who { font-weight:650; font-size:13px; color:var(--warn); }
+  .actions { display:flex; gap:8px; margin-top:9px; }
+  .actions button, .wc-actions button { font-size:12.5px; font-weight:600; padding:5px 12px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--muted); }
+  .actions button.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+  .actions button:hover, .wc-actions button:hover { color:var(--ink); }
+  .mention { color:var(--accent); font-weight:600; }
+  /* The ticket body, rendered (marked + DOMPurify). It used to be esc()'d source, so every ticket
+     opened on its own YAML frontmatter. Type scale is one notch under the page so a long brief
+     reads as reference material, not as the headline. */
+  .md { overflow-wrap:break-word; font-size:13px; color:var(--muted); border:1px solid var(--line);
+    border-radius:10px; padding:12px 14px; max-height:320px; overflow-y:auto; }
+  .md > :first-child { margin-top:0; } .md > :last-child { margin-bottom:0; }
+  .md h1, .md h2, .md h3, .md h4 { color:var(--ink); font-weight:650; letter-spacing:-.01em; margin:14px 0 6px; line-height:1.3; }
+  .md h1 { font-size:15px; } .md h2 { font-size:14px; } .md h3, .md h4 { font-size:13px; }
+  .md p, .md ul, .md ol, .md blockquote, .md table { margin:0 0 8px; }
+  .md ul, .md ol { padding-left:20px; } .md li { margin:2px 0; }
+  .md li::marker { color:var(--faint); }
+  .md a { color:var(--accent); font-weight:600; text-decoration:none; }
+  .md a:hover { text-decoration:underline; }
+  .md code { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:11.5px; background:var(--surface-2);
+    border-radius:5px; padding:1px 5px; }
+  .md pre { background:var(--term-bg); color:var(--term-ink); border-radius:9px; padding:10px 12px; overflow-x:auto; }
+  .md pre code { background:none; padding:0; font-size:11px; color:inherit; }
+  .md blockquote { border-left:3px solid var(--line); padding-left:10px; color:var(--faint); }
+  .md hr { border:0; border-top:1px solid var(--line); margin:12px 0; }
+  .md table { border-collapse:collapse; display:block; overflow-x:auto; max-width:100%; }
+  .md th, .md td { border:1px solid var(--line); padding:4px 8px; text-align:left; }
+  .md th { color:var(--ink); font-weight:650; background:var(--surface-2); }
+  /* Same renderer inside a chat bubble, minus the reference-doc chrome: the bubble already is the
+     container, and an agent's answer is the message rather than an aside, so it reads at body size
+     and body colour. white-space:normal undoes the bubble's pre-wrap — block elements bring their
+     own spacing and pre-wrap would double every gap between them. */
+  .md.md-chat { white-space:normal; font-size:13.5px; color:var(--ink); border:0; border-radius:0;
+    padding:0; max-height:none; overflow-y:visible; }
+  .md.md-chat p, .md.md-chat ul, .md.md-chat ol, .md.md-chat blockquote, .md.md-chat table { margin:0 0 9px; }
+  .md img { max-width:100%; height:auto; border-radius:8px; }
+  .md input[type="checkbox"] { margin-right:4px; }
+
+  /* ticket controls — every mutation the API offers, reachable from this pane */
+  .side-head { display:flex; align-items:center; gap:8px; padding:14px 16px 8px; }
+  .side-head h2 { padding:0; flex:1; }
+  .filters { display:flex; gap:6px; padding:0 12px 10px; }
+  .filters .inp { flex:1; min-width:0; }
+  .inp { font:inherit; font-size:12.5px; color:var(--ink); background:var(--surface-2); border:1px solid var(--line);
+    border-radius:8px; padding:5px 9px; min-width:0; max-width:100%; }
+  .inp:focus-visible { outline:2px solid var(--accent); outline-offset:-1px; }
+  select.inp { appearance:none; padding-right:24px; background-repeat:no-repeat; background-position:right 8px center;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6' viewBox='0 0 9 6'%3E%3Cpath d='M1 1l3.5 3.5L8 1' fill='none' stroke='%2367716B' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E"); }
+  /* The caret is baked into a data URI, so it can't ride currentColor — restate it for dark. */
+  @media (prefers-color-scheme: dark) { select.inp {
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6' viewBox='0 0 9 6'%3E%3Cpath d='M1 1l3.5 3.5L8 1' fill='none' stroke='%2393A099' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E"); } }
+  textarea.inp { resize:vertical; min-height:76px; line-height:1.45; }
+  .btn { font-size:12.5px; font-weight:600; padding:5px 11px; border-radius:8px; border:1px solid var(--line);
+    background:var(--surface); color:var(--muted); white-space:nowrap; }
+  .btn:hover:not(:disabled) { color:var(--ink); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+  .btn.primary:hover:not(:disabled) { color:var(--accent-ink); }
+  .btn.danger { color:var(--danger); border-color:var(--danger-soft); }
+  .btn.danger:hover:not(:disabled) { color:var(--danger); background:var(--danger-soft); }
+  .btn:disabled { opacity:.5; cursor:default; }
+  .td-tools { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:11px; }
+  .td-tools .spacer { flex:1; }
+  .lnk { display:flex; align-items:baseline; gap:5px; }
+  .lnk button { border:0; background:none; color:var(--faint); font-size:12px; padding:0 2px; }
+  .lnk button:hover { color:var(--danger); }
+  .atts { display:flex; flex-wrap:wrap; gap:8px; }
+  .att { position:relative; border:1px solid var(--line); border-radius:9px; overflow:hidden; background:var(--surface-2); }
+  .att img { display:block; width:88px; height:64px; object-fit:cover; }
+  .att .name { display:block; max-width:130px; padding:8px 10px; font-size:11.5px; color:var(--muted);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .att button { position:absolute; top:2px; right:2px; border:0; border-radius:6px; padding:0 4px; font-size:11px;
+    background:var(--surface); color:var(--faint); opacity:0; }
+  .att:hover button { opacity:1; } .att button:hover { color:var(--danger); }
+
+  /* modal sheets (new / edit / link / destructive confirm) */
+  .modal { position:fixed; inset:0; z-index:50; background:rgba(11,16,13,.42); display:grid; place-items:center; padding:20px; }
+  .modal[hidden] { display:none; }
+  .sheet { background:var(--surface); border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow);
+    width:min(560px,100%); max-height:88dvh; overflow-y:auto; padding:20px 22px; }
+  .sheet h3 { margin:0 0 15px; font-size:16px; font-weight:650; letter-spacing:-.01em; }
+  .sheet p { margin:0 0 4px; color:var(--muted); font-size:13px; }
+  .fld { display:flex; flex-direction:column; gap:4px; margin-bottom:11px; }
+  .fld > label { font-size:10px; font-weight:650; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); }
+  .fld .hint { font-size:11.5px; color:var(--faint); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:11px; }
+  .sheet-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; }
+
+  /* inbox — a queue on the left, one decision at a time on the right. The flat column this
+     replaced made you scroll a 500-line diff to answer "should this ship?", and gave a 0-line
+     review the same weight as a 5-file one. */
+  .isec { padding:12px 16px 5px; font-size:10px; font-weight:650; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--faint); display:flex; gap:8px; align-items:baseline; }
+  .isec .n { margin-left:auto; font-variant-numeric:tabular-nums; }
+  .i-row { width:100%; text-align:left; border:0; background:transparent; padding:10px 16px; display:flex;
+    flex-direction:column; gap:4px; border-bottom:1px solid var(--line); }
+  .i-row:hover { background:var(--surface-2); } .i-row.active { background:var(--accent-soft); }
+  .i-row .top { display:flex; align-items:center; gap:7px; }
+  .i-row .k { font-size:12px; color:var(--muted); font-family:ui-monospace,"SF Mono",Menlo,monospace; }
+  .i-row time { margin-left:auto; font-size:11px; color:var(--faint); }
+  /* An ask's question is the row title and can run a full paragraph — clamp it, or one row eats
+     the whole queue. The detail pane has the full text. */
+  .i-row .ttl { font-weight:600; line-height:1.35; display:-webkit-box; -webkit-line-clamp:3;
+    -webkit-box-orient:vertical; overflow:hidden; }
+  .i-more { width:100%; border:0; background:transparent; color:var(--muted); font-size:12.5px;
+    font-weight:600; padding:10px 16px; text-align:left; border-bottom:1px solid var(--line); }
+  .i-more:hover { background:var(--surface-2); color:var(--ink); }
+  .i-row .sub { font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dot-red { width:6px; height:6px; border-radius:50%; background:var(--danger); flex:none; }
+
+  .d-head { padding:16px 22px 12px; border-bottom:1px solid var(--line); }
+  .d-head h1 { margin:5px 0 0; font-size:17px; font-weight:650; letter-spacing:-.01em; text-wrap:balance; }
+  .d-body { flex:1; overflow-y:auto; padding:16px 22px; display:flex; flex-direction:column; gap:14px; }
+  .d-body > * { flex:none; }
+  .blk > .l { font-size:10px; font-weight:650; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--faint); margin-bottom:6px; }
+  .qbox { background:var(--surface-2); border-radius:10px; padding:12px 14px; white-space:pre-wrap;
+    overflow-wrap:break-word; }
+  .gates { display:flex; gap:6px; flex-wrap:wrap; }
+  .gate-out { margin-top:8px; }
+  /* Files first, diff second: "which files, how big" answers most of the question on its own. */
+  .files { display:flex; flex-direction:column; gap:2px; font-size:12.5px; }
+  .files .f { display:flex; gap:10px; align-items:baseline; }
+  .files .p { font-family:ui-monospace,"SF Mono",Menlo,monospace; overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; }
+  .files .n { margin-left:auto; font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:11.5px; flex:none; }
+  .files .n .a { color:var(--ok); } .files .n .d { color:var(--danger); }
+  .nothing { font-size:12.5px; color:var(--faint); font-style:italic; }
+  details.diff > summary { cursor:pointer; font-size:12px; color:var(--muted); font-weight:600; list-style:none; }
+  details.diff > summary::-webkit-details-marker { display:none; }
+  details.diff > summary::before { content:"▸ "; color:var(--faint); }
+  details.diff[open] > summary::before { content:"▾ "; }
+  .diff-body { margin-top:8px; max-height:420px; overflow:auto; background:var(--term-bg); border-radius:10px;
+    padding:10px 12px; font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:11px; line-height:1.55; }
+  .diff-body div { white-space:pre; color:var(--term-dim); }
+  .diff-body .add { color:#7BC48A; } .diff-body .del { color:#E0705F; } .diff-body .hunk { color:#7FA6D8; }
+  .diff-body .file { color:var(--term-ink); font-weight:600; }
+
+  /* The action bar is pinned so the decision is always one reach away, however long the diff is. */
+  .d-acts { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:12px 22px;
+    border-top:1px solid var(--line); background:var(--surface); }
+  .d-acts .spacer { flex:1; }
+  .d-acts .keys { font-size:11px; color:var(--faint); }
+  .d-acts kbd { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:10.5px; background:var(--surface-2);
+    border:1px solid var(--line); border-radius:4px; padding:1px 4px; }
+  /* Approve ships to GitHub, so it stays deliberate — but as a second click on the same button
+     instead of a modal that throws away where you were. */
+  .btn.arm { background:var(--danger); border-color:var(--danger); color:#fff; }
+  .crow { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .crow .grow { flex:1; min-width:120px; }
+
+  /* board */
+  #view-board { justify-content:center; overflow-y:auto; display:none; } #view-board.active { display:flex; }
+  .bcol { width:100%; max-width:700px; display:flex; flex-direction:column; gap:14px; padding-bottom:8px; }
+  .bhead { display:flex; align-items:baseline; gap:10px; padding:0 6px; }
+  .bhead .n { font-size:11px; font-weight:650; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); }
+  .bhead .linklike { margin:0 0 0 auto; }
+  /* One post = one card with its own shadow: the drop shadow is what makes the seam between two
+     stacked posts read at a glance — a hairline border alone did not. */
+  .post { background:var(--surface); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); }
+  .post-head { display:flex; align-items:center; gap:10px; width:100%; text-align:left; border:0;
+    background:transparent; padding:12px 16px; border-radius:13px; }
+  .post-head:hover { background:var(--surface-2); }
+  .post.open > .post-head { border-bottom:1px solid var(--line); border-radius:13px 13px 0 0; }
+  .post-head .avatar { width:32px; height:32px; font-size:12.5px; }
+  .post-head .who { font-weight:650; } .post-head time { font-size:11.5px; color:var(--faint); }
+  /* Collapsed, the first line of the body stands in for it so the feed stays scannable. */
+  .post-peek { flex:1; min-width:0; color:var(--muted); font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .post-head .spacer { flex:1; }
+  .caret { flex:none; color:var(--faint); transition:transform .15s ease; }
+  .post.open .caret { transform:rotate(90deg); }
+  @media (prefers-reduced-motion: reduce) { .caret { transition:none; } }
+  .post-main { padding:12px 18px 14px; }
+  .post:not(.open) .post-main { display:none; }
+  .post-body { white-space:pre-wrap; overflow-wrap:break-word; }
+  .replies { margin-top:12px; border-top:1px solid var(--line); padding-top:12px; display:flex; flex-direction:column; gap:10px; }
+  .replies[hidden] { display:none; }
+  .reply { display:flex; gap:10px; } .reply .avatar { width:26px; height:26px; font-size:11px; }
+  .reply-body { flex:1; min-width:0; white-space:pre-wrap; overflow-wrap:break-word; }
+  .reply-head { display:flex; gap:8px; align-items:baseline; } .reply-head .who { font-weight:650; font-size:13px; }
+  .reply-head time { font-size:11px; color:var(--faint); }
+  .linklike { border:0; background:transparent; color:var(--muted); font-size:12.5px; font-weight:600; padding:0; margin-top:10px; }
+  .linklike:hover { color:var(--accent); }
+
+  /* fleet */
+  #view-fleet { flex-direction:column; overflow-y:auto; }
+  .fsum { display:flex; gap:26px; align-items:center; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px 22px; flex-wrap:wrap; }
+  .stat .n { font-size:19px; font-weight:650; } .stat .l { font-size:11px; color:var(--muted); letter-spacing:.05em; text-transform:uppercase; }
+  .fsum .since { margin-left:auto; font-size:12px; color:var(--faint); }
+  .wgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:14px; }
+  .wcard { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px 16px; display:flex; flex-direction:column; gap:9px; }
+  .wcard.idle { opacity:.78; }
+  .wc-head { display:flex; align-items:center; gap:8px; } .wc-head .key { font-weight:600; color:var(--ink); }
+  .wc-head time { margin-left:auto; font-size:11.5px; color:var(--faint); }
+  .wc-meta { display:flex; gap:8px; flex-wrap:wrap; }
+  .wc-step { font-size:12.5px; color:var(--muted); } .wc-step b { color:var(--ink); font-weight:600; }
+  .term { background:var(--term-bg); color:var(--term-ink); border-radius:10px; font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:11px; line-height:1.6; padding:10px 12px; overflow:hidden; }
+  .term div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .term .dim { color:var(--term-dim); }
+  .wc-actions { display:flex; gap:8px; }
+  .empty { margin:auto; text-align:center; color:var(--faint); padding:40px; }
+  footer.note { text-align:center; color:var(--faint); font-size:11.5px; padding:6px 0 10px; }
+  .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--ink); color:var(--bg); padding:8px 16px; border-radius:10px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <div class="wordmark">chronos<span>.</span></div>
+    <nav class="tabs" id="tabs">
+      <button class="active" data-view="chat">Chat</button>
+      <button data-view="tickets">Tickets</button>
+      <button data-view="inbox">Inbox</button>
+      <button data-view="board">Board</button>
+      <button data-view="fleet">Fleet</button>
+    </nav>
+    <button class="pill run" id="pill-run" hidden><span class="dot"></span><span id="pill-run-n"></span></button>
+    <button class="pill need" id="pill-need" hidden><span class="dot"></span><span id="pill-need-n"></span></button>
+  </header>
+
+  <main>
+    <section class="view active" id="view-chat">
+      <div class="pane side"><h2>Agents</h2><div class="scroll" id="agent-list"></div></div>
+      <div class="pane chat-main">
+        <div class="chat-head"><span class="avatar av-accent" id="chat-av">R</span>
+          <div><div style="font-weight:650" id="chat-name">Robert</div><div class="role" id="chat-role"></div></div>
+          <button class="btn" id="chat-new" style="margin-left:auto" title="Start a fresh context. Everything above the line stays on screen but stops reaching the agent.">New context</button>
+        </div>
+        <div class="banner" id="chat-banner" hidden>No admin token — chat needs the native wrapper (mc-overlay reads ~/chronos/.admin-token). Tickets, Board and Fleet work read-write here.</div>
+        <div class="scroll"><div class="thread" id="thread"></div></div>
+        <div class="stage" id="chat-stage"></div>
+        <div class="composer">
+          <input type="file" id="chat-file" multiple hidden accept="image/*,.pdf,.txt,.md,.markdown,.csv,.tsv,.json,.log,.yml,.yaml,.xml,.html,.toml,.ini">
+          <button class="attach" id="chat-attach" aria-label="Attach a file" title="Attach — the agent reads it from disk"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 12.5l-8.7 8.7a5.5 5.5 0 01-7.8-7.8l8.7-8.7a3.7 3.7 0 015.2 5.2l-8.7 8.7a1.83 1.83 0 01-2.6-2.6l8-8"/></svg></button>
+          <textarea id="chat-input" rows="1" placeholder="Message Robert…" autocomplete="off"></textarea>
+          <button class="send" id="chat-send" aria-label="Send"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8L14 2L11 14L7.5 9.5L2 8Z" fill="currentColor"/></svg></button>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-tickets">
+      <div class="pane side" style="width:340px">
+        <div class="side-head"><h2 id="t-count">Tickets</h2>
+          <button class="btn primary" id="t-new">+ New</button></div>
+        <div class="filters">
+          <input class="inp" id="t-search" type="search" placeholder="Search key or title…" autocomplete="off">
+          <select class="inp" id="t-filter" style="flex:none;width:112px" aria-label="Status filter"></select>
+        </div>
+        <div class="scroll" id="ticket-list"></div>
+      </div>
+      <div class="pane t-main" id="ticket-detail"><div class="empty">Select a ticket</div></div>
+    </section>
+
+    <section class="view" id="view-inbox">
+      <div class="pane side" style="width:340px">
+        <div class="side-head"><h2 id="ib-count">Inbox</h2></div>
+        <div class="scroll" id="ib-list"></div>
+      </div>
+      <div class="pane t-main" id="ib-detail"><div class="empty">loading…</div></div>
+    </section>
+
+    <section class="view" id="view-board">
+      <div class="bcol">
+        <div class="pane" style="flex-direction:row; align-items:center;">
+          <div class="composer" style="flex:1; border:0;">
+            <textarea id="board-input" rows="1" placeholder="Post to the board… @robert wakes him" autocomplete="off"></textarea>
+            <button class="send" id="board-send" aria-label="Post"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8L14 2L11 14L7.5 9.5L2 8Z" fill="currentColor"/></svg></button>
+          </div>
+        </div>
+        <div class="bhead"><span class="n" id="board-count"></span>
+          <button class="linklike" id="board-fold" hidden>Collapse all</button></div>
+        <div id="board-feed"></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-fleet">
+      <div class="fsum" id="fleet-summary"></div>
+      <div class="wgrid" id="fleet-cards" style="margin-top:14px"></div>
+    </section>
+  </main>
+  <footer class="note" id="conn">connecting…</footer>
+</div>
+<div class="modal" id="modal" hidden><div class="sheet" id="modal-body" role="dialog" aria-modal="true"></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="/vendor/marked.min.js"></script>
+<script src="/vendor/purify.min.js"></script>
+<script>
+"use strict";
+// ── plumbing ────────────────────────────────────────────────────────────────
+const TOKEN = window.__MC_TOKEN__ || null; // injected by the native wrapper (see overlay.swift)
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+const MENTION = /(^|[^\w@])@([a-z][\w-]*)/gi;
+const rich = (s) => esc(s).replace(MENTION, '$1<span class="mention">@$2</span>');
+// Attachment lines carry the absolute disk path for the agent's Read tool; bubbles show just the name.
+const tidy = (s) => String(s ?? "").replace(/(📎 [^\n]*?) → [^\n]+/g, "$1");
+// marked (GFM: tables, task lists, autolinks) + DOMPurify — same pipeline as the overlay. Ticket
+// bodies can carry ClickUp/Jira-synced HTML, so everything is sanitized before hitting innerHTML.
+// stripFrontmatter is off for chat: a reply that opens on a `---` rule and hits another one later
+// is not frontmatter, and eating everything between them drops the answer with no trace.
+function mdHtml(src, stripFrontmatter = true) {
+  src = String(src ?? "").replace(/<!--[\s\S]*?-->/g, ""); // template comments are agent-facing noise
+  if (stripFrontmatter) src = src.replace(/^---\n[\s\S]*?\n---\n*/, ""); // already the chips above
+  // A pathological body would otherwise build a DOM nobody scrolls to the end of.
+  if (src.length > 40000) src = src.slice(0, 40000) + "\n\n…truncated";
+  return DOMPurify.sanitize(marked.parse(src, { gfm: true, breaks: true }));
+}
+// Agent replies ARE markdown — tables, headings, **bold** — and used to land in the bubble esc()'d,
+// so every answer showed its own pipes and asterisks. Same marked+DOMPurify pipeline as ticket
+// bodies. Mentions are applied after sanitising, over text nodes only: running MENTION across the
+// rendered HTML string would happily rewrite an href or a class attribute.
+function replyHtml(src) {
+  const host = document.createElement("div");
+  host.innerHTML = mdHtml(src, false);
+  const walk = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+  const hits = [];
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    if (n.parentElement.closest("a, code, pre")) continue; // an @ in a URL or a snippet is not a mention
+    MENTION.lastIndex = 0; // /g test() is stateful; a stale index skips the next match
+    if (MENTION.test(n.nodeValue)) hits.push(n);
+  }
+  for (const n of hits) {
+    const span = document.createElement("span");
+    span.innerHTML = rich(n.nodeValue);
+    n.replaceWith(span);
+  }
+  return host.innerHTML;
+}
+// Rendered markdown brings plain <a href> with it. In the native window that would navigate the
+// whole app to GitHub (WKWebView follows in place, and only target=_blank reaches the Swift
+// createWebViewWith hook) — so route every external link through window.open, which does.
+document.addEventListener("click", (e) => {
+  const a = e.target.closest('a[href^="http"]');
+  if (a) { e.preventDefault(); window.open(a.href); }
+});
+const fmtT = (iso) => { if (!iso) return ""; const d = new Date(iso); const today = new Date().toDateString() === d.toDateString();
+  return today ? d.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" }) : d.toLocaleDateString([], { month:"short", day:"numeric" }) + " " + d.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" }); };
+const elapsed = (sec) => sec >= 3600 ? Math.floor(sec/3600) + "h" + String(Math.floor(sec%3600/60)).padStart(2,"0") : Math.floor(sec/60) + ":" + String(Math.floor(sec%60)).padStart(2,"0");
+async function api(path, opts = {}) {
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  if (TOKEN) headers["x-mc-admin"] = TOKEN;
+  const r = await fetch("/api" + path, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+  return r.json();
+}
+let toastTimer;
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600); }
+
+// ── modal sheets ────────────────────────────────────────────────────────────
+// One host element, innerHTML per sheet. Escape and a backdrop click both close, so nothing
+// destructive is ever one stray keypress from confirming — the confirm button is always explicit.
+function openModal(html, onMount) {
+  $("modal-body").innerHTML = html;
+  $("modal").hidden = false;
+  $("modal-body").querySelectorAll("[data-close]").forEach((b) => b.onclick = closeModal);
+  onMount?.($("modal-body"));
+  // innerHTML doesn't honour autofocus — focus it by hand so a sheet is keyboard-ready on open.
+  $("modal-body").querySelector("[autofocus]")?.focus();
+}
+function closeModal() { $("modal").hidden = true; $("modal-body").innerHTML = ""; }
+$("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeModal(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("modal").hidden) closeModal(); });
+// Submit-while-in-flight guard for every sheet: one click, one request, and the failure path
+// leaves the sheet open with the operator's input intact.
+async function submitting(btn, fn) {
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = "…";
+  try { await fn(); }
+  catch (e) { toast(e.message || String(e)); btn.disabled = false; btn.textContent = label; }
+}
+const opts = (values, sel) => values.map((v) =>
+  `<option value="${esc(v)}"${v === sel ? " selected" : ""}>${esc(String(v).replace(/_/g, " "))}</option>`).join("");
+
+// ── tabs ────────────────────────────────────────────────────────────────────
+const VIEWS = ["chat", "tickets", "inbox", "board", "fleet"];
+function show(view) {
+  for (const b of $("tabs").children) b.classList.toggle("active", b.dataset.view === view);
+  for (const v of VIEWS) $("view-" + v).classList.toggle("active", v === view);
+  if (view === "board") loadBoard();
+  if (view === "fleet") loadFleet();
+  if (view === "tickets") loadTickets();
+  if (view === "inbox") loadInbox();
+}
+$("tabs").addEventListener("click", (e) => e.target.dataset.view && show(e.target.dataset.view));
+$("pill-run").onclick = () => show("fleet");
+$("pill-need").onclick = () => show("inbox");
+
+// ── chat ────────────────────────────────────────────────────────────────────
+// Ada, Nils and Iris were retired. Their panes are gone rather than left
+// showing an empty room: POST /api/agent/exec/:id now 404s for every id, so a pane would have taken
+// a message and failed on send. Their stored history was not deleted and still reads through
+// GET /api/agent/history?ws=agent:<id>.
+const ROSTER = [
+  { id: "robert",   name: "Robert",   role: "Chief of Everything — workforce, Mission Control", thread: null },
+];
+let curAgent = ROSTER[0];
+let sending = false;
+let inflight = null; // the agent whose turn is live — not necessarily the room you are looking at
+let turnSeq = 0;
+// Only a turn whose POST already failed is waiting on /ws to finish it. Without this a push that
+// arrives just after a normal POST resolve would finalize a second time — killing the bubble of the
+// turn the queue had already started and draining another message on top of it.
+let awaitingPush = false;
+// An agent runs one turn at a time, so a second POST would race the first. Anything typed while a
+// turn is live parks here and goes out in order as each turn ends. Entries carry their own agent:
+// switching rooms mid-turn must not redirect what you already typed.
+const outbox = []; // { text, agent, el }
+function renderRoster() {
+  $("agent-list").innerHTML = ROSTER.map((a) =>
+    `<button class="agent-row${a.id === curAgent.id ? " active" : ""}" data-id="${a.id}">
+       <span class="avatar">${a.name[0]}</span>
+       <span class="agent-meta"><span class="agent-name">${a.name}</span><span class="agent-sub">${esc(a.role)}</span></span>
+     </button>`).join("");
+}
+$("agent-list").addEventListener("click", (e) => {
+  const row = e.target.closest(".agent-row"); if (!row) return;
+  curAgent = ROSTER.find((a) => a.id === row.dataset.id); renderRoster();
+  $("chat-av").textContent = curAgent.name[0]; $("chat-name").textContent = curAgent.name;
+  $("chat-role").textContent = curAgent.role; $("chat-input").placeholder = "Message " + curAgent.name + "…";
+  loadThread();
+});
+function msgHtml(m) {
+  let h = "";
+  if (m.source === "divider") return `<div class="divider">new conversation</div>`;
+  if (m.you) h += `<div class="msg me"><div class="bubble">${esc(tidy(m.you))}</div><time>${fmtT(m.created_at)}</time></div>`;
+  if (m.reply) h += `<div class="msg them"><div class="bubble"><div class="md md-chat">${replyHtml(m.reply)}</div></div><time>${fmtT(m.created_at)}</time></div>`;
+  return h;
+}
+async function loadThread() {
+  if (!TOKEN) { $("chat-banner").hidden = false; $("chat-input").disabled = true; $("chat-send").disabled = true; $("chat-attach").disabled = true; $("chat-new").disabled = true; return; }
+  try {
+    const q = curAgent.thread ? "?ws=" + encodeURIComponent(curAgent.thread) : "";
+    const { messages } = await api("/agent/history" + q);
+    $("thread").innerHTML = messages.map(msgHtml).join("") || `<div class="empty">No messages with ${curAgent.name} yet — say something, the conversation persists.</div>`;
+    // A re-render must not swallow what is still parked for this agent — the outbox owns those
+    // nodes, so put them back rather than leaving the queue invisible until it drains.
+    for (const parked of outbox) if (parked.agent.id === curAgent.id) $("thread").append(parked.el);
+    scrollThread();
+  } catch (e) { toast("history: " + e.message); }
+}
+function scrollThread() { const s = $("thread").parentElement; s.scrollTop = s.scrollHeight; }
+const meBubble = (text) => `<div class="msg me"><div class="bubble">${esc(tidy(text))}</div><time>now</time></div>`;
+async function sendChat() {
+  const input = $("chat-input"); let text = input.value.trim();
+  if ((!text && !staged.length) || !TOKEN) return;
+  const agent = curAgent; // the room you typed in, not whichever one you are looking at on delivery
+  // Clear the composer first: the send is no longer blocked while a turn runs, so leaving the text
+  // sitting there through the upload await is a second Enter away from sending it twice.
+  input.value = ""; input.style.height = "auto";
+  if (staged.length) {
+    // Files upload now rather than at delivery — they belong to THIS message, and a queued one must
+    // not pick up whatever ends up staged later. A failure hands message and chips back.
+    const files = staged; staged = []; renderStage();
+    let up;
+    try { up = await uploadStaged(files, agent); }
+    catch (e) {
+      toast("attach: " + (e.message || e));
+      staged = files; renderStage();
+      if (!input.value) { input.value = text; input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; }
+      return;
+    }
+    text += (text ? "\n\n" : "") + "Adjuntos — leelos del disco con tu Read tool. Si una línea trae 'texto:', ese .txt es el contenido ya extraído: leé ese y abrí el PDF solo si falta algo (gráficos, layout).\n" +
+      // A scanned PDF ships without its .txt sidecar (no text layer to extract). Say so, or the
+      // agent goes looking for a "texto:" path that was never there and reports the file as empty.
+      up.map((f) => `📎 ${f.filename} → ${f.path}`
+        + (f.text_path ? ` — texto: ${f.text_path}`
+          : f.mime === "application/pdf" ? " — sin capa de texto: leelo con Read (visión)" : "")).join("\n");
+  }
+  if (sending) queueMsg(text, agent); else deliver(text, agent, null);
+}
+function queueMsg(text, agent) {
+  const el = document.createElement("div");
+  el.className = "msg me queued";
+  el.innerHTML = `<div class="bubble">${esc(tidy(text))}</div><time>queued</time>`;
+  outbox.push({ text, agent, el });
+  if (agent.id === curAgent.id) { $("thread").append(el); scrollThread(); }
+}
+function drain() { const next = outbox.shift(); if (next) deliver(next.text, next.agent, next.el); }
+async function deliver(text, agent, el) {
+  sending = true; inflight = agent;
+  const turn = ++turnSeq; // identifies THIS turn: ROSTER entries are reused, so `agent` cannot
+  const here = agent.id === curAgent.id;
+  if (here) {
+    // A queued bubble was parked above the turn that was running when you typed it. append() MOVES
+    // the node, so it lands under that turn's reply — in the order it is actually being sent.
+    if (el) { el.classList.remove("queued"); el.querySelector("time").textContent = "now"; $("thread").append(el); }
+    else $("thread").insertAdjacentHTML("beforeend", meBubble(text));
+    $("thread").insertAdjacentHTML("beforeend",
+      `<div class="msg them" id="pending"><div class="bubble">
+         <div class="acts"><div class="act on"><span class="tick"></span><span class="what">${agent.name} is thinking…</span></div></div>
+         <div class="reply-stream"></div>
+       </div></div>`);
+    scrollThread();
+  }
+  try {
+    const path = agent.id === "robert" ? "/agent" : "/agent/exec/" + agent.id;
+    const { reply } = await api(path, { method: "POST", body: { text } });
+    finalizePending(reply || "");
+  } catch (e) {
+    // A long turn outlives WKWebView's fetch timeout ("Load failed") while the agent keeps working
+    // server-side. Don't declare failure: keep the live bubble — the reply arrives over /ws as
+    // agent.push and finalizePending runs from there. Only a dead socket leaves the note standing.
+    const acts = document.querySelector("#pending .acts");
+    if (acts) {
+      acts.insertAdjacentHTML("beforeend",
+        `<div class="act on"><span class="tick"></span><span class="what">link dropped — still working, the reply lands here live</span></div>`);
+    }
+    // `sending` stays true: the turn IS live, and releasing it here would stack the next queued
+    // message on top of it. A dead socket would then strand the outbox for good, so re-read the
+    // thread once — that both shows the reply that did land and lets the queue move again.
+    awaitingPush = true;
+    setTimeout(() => {
+      if (!sending || turn !== turnSeq) return; // this turn already finalized; a later one owns the flag
+      sending = false; inflight = null; awaitingPush = false;
+      loadThread().then(drain);
+    }, 90_000);
+  }
+  scrollThread();
+}
+// One exit for both paths (POST response OR the agent.push /ws event — whichever comes first).
+function finalizePending(reply) {
+  const pend = $("pending");
+  if (pend) {
+    pend.remove();
+    $("thread").insertAdjacentHTML("beforeend",
+      `<div class="msg them"><div class="bubble"><div class="md md-chat">${replyHtml(reply)}</div></div><time>${fmtT(new Date().toISOString())}</time></div>`);
+    scrollThread();
+  }
+  // Released even with nothing on screen — you may have switched rooms mid-turn, and the flag that
+  // gates the outbox must not depend on what happens to be rendered.
+  sending = false; inflight = null; awaitingPush = false;
+  drain();
+}
+// Every composer: Enter sends, Shift+Enter breaks the line; the textarea grows to fit
+// (max-height in CSS caps it). Height resets where senders clear .value — that doesn't fire "input".
+function wireComposer(ta, send) {
+  ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; });
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+  });
+}
+// Changing subject: cut the context without losing the transcript. POST /agent/reset kills the
+// agent's process and drops its resume id, then writes a divider row — history keeps rendering in
+// full, the model just starts from the line down.
+$("chat-new").onclick = async () => {
+  if (!TOKEN) return;
+  // Mid-turn the reset would kill the very process producing the answer, and a queued message would
+  // then land in a context the operator never meant it for.
+  if (sending || outbox.length) return toast("finish the turn first — the reset would kill it mid-answer");
+  const agent = curAgent;
+  try {
+    await api("/agent/reset", { method: "POST", body: { ws: agent.thread } });
+    if (agent.id === curAgent.id) {
+      $("thread").insertAdjacentHTML("beforeend", `<div class="divider">new conversation</div>`);
+      scrollThread();
+    }
+    toast(agent.name + " starts fresh from here");
+  } catch (e) { toast("reset: " + (e.message || e)); }
+};
+$("chat-send").onclick = sendChat;
+wireComposer($("chat-input"), sendChat);
+
+// ── chat attachments ────────────────────────────────────────────────────────
+// Picker, paste (screenshots) or drag-drop → staged chips above the composer; they upload on send
+// and ride the message as "📎 name → /abs/path" lines the agent Reads from disk (tidy() hides the
+// path in bubbles). Server side: POST /api/agent/upload → ~/chronos/attachments/chat/<agent>/.
+let staged = []; // File objects waiting to ride the next message
+function renderStage() {
+  $("chat-stage").innerHTML = staged.map((f, i) =>
+    `<div class="chipf"><span>📎 ${esc(f.name)}</span><button data-unstage="${i}" aria-label="Remove">✕</button></div>`).join("");
+  $("chat-stage").querySelectorAll("[data-unstage]").forEach((b) =>
+    b.onclick = () => { staged.splice(Number(b.dataset.unstage), 1); renderStage(); });
+}
+function stageFiles(files) {
+  if (!TOKEN || !files?.length) return;
+  for (const f of files) {
+    if (f.size > 12 * 1024 * 1024) { toast(`${f.name}: max 12MB`); continue; }
+    staged.push(f);
+  }
+  renderStage();
+}
+async function uploadStaged(files, agent) {
+  const out = [];
+  for (const f of files) {
+    const headers = { "Content-Type": f.type || "application/octet-stream", "x-mc-admin": TOKEN };
+    const r = await fetch(`/api/agent/upload?thread=${encodeURIComponent(agent.id)}&filename=${encodeURIComponent(f.name)}`,
+      { method: "POST", headers, body: f });
+    if (!r.ok) throw new Error(f.name + ": " + ((await r.json().catch(() => ({}))).error || r.status));
+    out.push(await r.json());
+  }
+  return out;
+}
+$("chat-attach").onclick = () => $("chat-file").click();
+$("chat-file").addEventListener("change", () => { stageFiles([...$("chat-file").files]); $("chat-file").value = ""; });
+$("chat-input").addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) { e.preventDefault(); stageFiles(files); }
+});
+// Drag a file anywhere over the chat to attach it. The listeners sit on the DOCUMENT, not on the
+// pane: a file dropped on any element that does not preventDefault navigates the WKWebView to
+// file:// — the whole app disappears and only a relaunch brings it back. So every drop is
+// swallowed, and one over the chat view is the only one that does something.
+const chatPane = document.querySelector("#view-chat .chat-main");
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+const chatActive = () => $("view-chat").classList.contains("active");
+let dragDepth = 0; // dragenter/leave fire per element crossed, so a counter beats a boolean
+const dropOff = () => { dragDepth = 0; chatPane.classList.remove("dropping"); };
+document.addEventListener("dragenter", (e) => {
+  if (!hasFiles(e)) return;
+  dragDepth++;
+  if (chatActive()) chatPane.classList.add("dropping");
+});
+document.addEventListener("dragleave", (e) => { if (hasFiles(e) && --dragDepth <= 0) dropOff(); });
+document.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+document.addEventListener("drop", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dropOff();
+  if (chatActive()) stageFiles([...(e.dataTransfer?.files || [])]);
+});
+// Live deltas → the pending bubble narrates what the agent is DOING (tool one-liners from
+// describeTool), then streams the reply text once it starts. Raw thinking stays hidden — the
+// "thinking…" line just persists while reasoning deltas flow.
+const ACTS_SHOWN = 4;
+function onDelta(ev) {
+  if ((ev.ws ?? null) !== curAgent.thread) return;
+  const pend = $("pending");
+  if (!pend) return;
+  const acts = pend.querySelector(".acts");
+  const stream = pend.querySelector(".reply-stream");
+
+  if (ev.kind === "tool" && ev.text) {
+    acts.querySelectorAll(".act.on").forEach((a) => { a.classList.remove("on"); a.classList.add("done"); });
+    acts.insertAdjacentHTML("beforeend",
+      `<div class="act on"><span class="tick"></span><span class="what">${esc(ev.text)}</span></div>`);
+    while (acts.children.length > ACTS_SHOWN) acts.firstElementChild.remove();
+    scrollThread();
+  } else if (ev.kind === "tool_done") {
+    const on = acts.querySelector(".act.on");
+    if (on) { on.classList.remove("on"); on.classList.add("done"); }
+  } else if (ev.kind === "text" && ev.text) {
+    stream.textContent += ev.text;
+    scrollThread();
+  }
+}
+
+// ── tickets ─────────────────────────────────────────────────────────────────
+let curTicket = null, openAsks = [], allTickets = [];
+// Mirrors the server's enums (validation.ts NewTicketSchema/PatchTicketSchema, store LINK_TYPES) —
+// anything the API accepts is offered here, so no ticket field is CLI-only.
+const STATUSES = ["backlog", "spec", "ready", "planning", "planned", "in_progress", "review", "shipping", "blocked", "done", "dismissed"];
+const PRIORITIES = ["P0", "P1", "P2", "P3"];
+const LINK_TYPES = ["blocks", "parent", "relates", "duplicates"];
+const STATUS_CHIP = { in_progress: "", review: "", shipping: "", blocked: "danger", backlog: "muted", spec: "muted", ready: "muted", planned: "muted", planning: "", done: "muted", dismissed: "muted" };
+let wsCache = null;
+const loadWorkspaces = async () => (wsCache ??= await api("/workspaces"));
+const ticketTags = (t) => {
+  if (Array.isArray(t.tags)) return t.tags;
+  if (typeof t.tags === "string" && t.tags.trim()) {
+    try { const p = JSON.parse(t.tags); return Array.isArray(p) ? p : [String(p)]; }
+    catch { return t.tags.split(/\s*,\s*/).filter(Boolean); }
+  }
+  return [];
+};
+
+$("t-filter").innerHTML = `<option value="open">Open</option><option value="all">All</option>` + opts(STATUSES);
+$("t-filter").onchange = renderTickets;
+$("t-search").addEventListener("input", renderTickets);
+$("t-new").onclick = newTicketModal;
+
+async function loadTickets() {
+  try {
+    const [list, asks] = await Promise.all([api("/tickets"), api("/asks?status=open")]);
+    openAsks = asks; allTickets = list;
+    $("pill-need-n").textContent = asks.length + " need you"; $("pill-need").hidden = !asks.length;
+    renderTickets();
+  } catch (e) { toast("tickets: " + e.message); }
+}
+// Filtering is client-side on the full list: the search box has to reach done/dismissed tickets
+// (that's where "what did we ship?" lives) without a round trip per keystroke.
+function renderTickets() {
+  const f = $("t-filter").value, q = $("t-search").value.trim().toLowerCase();
+  const askTickets = new Set(openAsks.map((a) => a.ticket_id).filter(Boolean));
+  const reviewTickets = new Set(inbox.reviews.map((r) => r.ticket_id).filter(Boolean));
+  let rows = allTickets.filter((t) =>
+    f === "all" ? true : f === "open" ? !["done", "dismissed"].includes(t.status) : t.status === f);
+  if (q) rows = rows.filter((t) => `${t.key} ${t.title} ${t.summary || ""}`.toLowerCase().includes(q));
+  rows.sort((a, b) => (askTickets.has(b.id) - askTickets.has(a.id)) || (a.priority || "").localeCompare(b.priority || "") || b.updated_at.localeCompare(a.updated_at));
+  $("t-count").textContent = (f === "open" ? "Open" : f === "all" ? "All" : f.replace("_", " ")) + " · " + rows.length;
+  $("ticket-list").innerHTML = rows.map((t) =>
+    `<button class="t-row${curTicket === t.id ? " active" : ""}" data-id="${t.id}">
+      <span class="key-line"><span class="key mono">${t.key}</span>
+        ${askTickets.has(t.id) ? '<span class="chip warn">Needs you</span>' : `<span class="chip ${STATUS_CHIP[t.status] ?? "muted"}">${t.status.replace("_", " ")}</span>`}
+        ${reviewTickets.has(t.id) ? '<span class="chip warn">to ship</span>' : ""}
+        ${t.blocked ? '<span class="chip danger">blocked</span>' : ""}${t.status_divergent ? '<span class="chip warn">divergent</span>' : ""}</span>
+      <span class="t-title">${esc(t.title)}</span>
+      <span class="t-sub">${esc(t.summary || "")}</span></button>`).join("")
+    || `<div class="empty">${q ? "Nothing matches" : "No tickets here"}</div>`;
+}
+$("ticket-list").addEventListener("click", (e) => {
+  const row = e.target.closest(".t-row"); if (!row) return;
+  curTicket = row.dataset.id;
+  for (const r of $("ticket-list").children) r.classList?.toggle("active", r.dataset?.id === curTicket);
+  loadTicketDetail();
+});
+const EV_ICON = { "ticket.updated": "◆", "ticket.created": "◆", "run.started": "▶", "run.ended": "▶", "review.created": "✓", "review.updated": "✓", "ticket.delivered": "⎇", "ci.failed": "✗", "ask.created": "?", "ask.answered": "?" };
+async function loadTicketDetail() {
+  try {
+    const t = await api("/tickets/" + curTicket);
+    const [acts, boardPosts, atts] = await Promise.all([
+      api("/activity?entity=" + encodeURIComponent(t.key) + "&limit=40").catch(() => []),
+      api("/board?ticket=" + encodeURIComponent(t.id)).catch(() => []),
+      api("/tickets/" + t.id + "/attachments").catch(() => []),
+    ]);
+    const asksHere = openAsks.filter((a) => a.ticket_id === t.id);
+    const events = acts.slice().reverse().map((a) =>
+      `<div class="ev"><span class="ico">${EV_ICON[a.topic] ?? "·"}</span><span>${esc(a.summary || a.topic)}</span><time>${fmtT(a.created_at || a.ts)}</time></div>`).join("");
+    const boardHtml = boardPosts.map((p) =>
+      `<div class="comment"><span class="avatar">${(p.author || "?")[0].toUpperCase()}</span><div style="flex:1;min-width:0">
+        <div class="c-head"><span class="who">${esc(p.author)}</span><span class="chip muted">board</span><time>${fmtT(p.created_at)}</time></div>
+        <div class="c-text md md-chat">${replyHtml(p.body)}</div></div></div>`).join("");
+    const askHtml = asksHere.map((a) =>
+      `<div class="ask-block" data-ask="${a.id}"><div class="who">Waiting on you</div><div>${esc(a.question)}</div>
+        <div class="actions"><input type="text" placeholder="Answer…" style="flex:1;font:inherit;border:1px solid var(--line);border-radius:8px;padding:5px 10px;background:var(--surface);color:var(--ink)">
+        <button class="primary" data-answer="${a.id}">Answer</button></div></div>`).join("");
+    const attHtml = atts.map((a) =>
+      `<div class="att" data-att="${a.id}">
+        <a href="${esc(a.url)}" target="_blank" rel="noopener">${(a.mime || "").startsWith("image/")
+          ? `<img src="${esc(a.url)}" alt="${esc(a.filename || "attachment")}">`
+          : `<span class="name">${esc(a.filename || "file")}</span>`}</a>
+        <button data-rmatt="${a.id}" title="Remove attachment" aria-label="Remove attachment">✕</button></div>`).join("");
+    $("ticket-detail").innerHTML =
+      `<div class="td-head"><div class="key-line"><span class="key mono">${t.key}</span>
+         <span class="chip ${STATUS_CHIP[t.status] ?? "muted"}">${t.status.replace("_", " ")}</span>
+         <span class="chip muted">${esc(t.priority)}</span>${t.backend ? `<span class="chip muted">${esc(t.backend)}</span>` : ""}
+         ${ticketTags(t).map((g) => `<span class="chip muted">${esc(g)}</span>`).join("")}</div>
+        <h1>${esc(t.title)}</h1>
+        <div class="td-tools">
+          <select class="inp" id="t-status" title="Status" aria-label="Status">${opts(STATUSES.includes(t.status) ? STATUSES : [t.status, ...STATUSES], t.status)}</select>
+          <select class="inp" id="t-prio" title="Priority" aria-label="Priority">${opts(PRIORITIES.includes(t.priority) ? PRIORITIES : [t.priority, ...PRIORITIES], t.priority)}</select>
+          <button class="btn" id="t-dispatch" title="Put a worker on this ticket now">Dispatch</button>
+          <button class="btn" id="t-plan" title="Read-only planning pass → status planned">Plan</button>
+          <button class="btn" id="t-grade" title="Read-only second pass: grade difficulty 1–5">Grade</button>
+          <button class="btn" id="t-edit">Edit…</button>
+          <button class="btn" id="t-link">Link…</button>
+          <button class="btn" id="t-attach">Attach…</button>
+          ${t.pr_url ? `<button class="btn" id="t-merge">Merge PR</button>` : ""}
+          ${t.external_system ? `<button class="btn" id="t-push-status" title="Push local status to ${esc(t.external_system)}">Push status</button>
+          <button class="btn" id="t-push-comment" title="Post a comment to ${esc(t.external_system)}">Push comment…</button>` : ""}
+          <span class="spacer"></span>
+          <button class="btn danger" id="t-delete">Delete</button>
+        </div>
+        <input type="file" id="t-file" multiple hidden></div>
+      <div class="td-body"><div class="timeline">
+        ${inbox.reviews.some((r) => r.ticket_id === t.id) ? `<div class="ask-block"><div class="who">Waiting to ship</div>
+          <div>This ticket has a review open — approve, request changes or dismiss it in the Inbox.</div>
+          <div class="actions"><button class="primary" id="t-goreview">Open in Inbox</button></div></div>` : ""}
+        ${t.summary ? `<div class="c-text" style="color:var(--muted)">${esc(t.summary)}</div>` : ""}
+        ${t.markdown ? `<div class="md">${mdHtml(t.markdown)}</div>` : ""}
+        ${events}${boardHtml}${askHtml}
+      </div>
+      <aside class="props">
+        <div class="prop"><div class="l">Status</div><div>${t.status.replace("_", " ")}${t.status_divergent ? ` · <span class="chip warn">tracker: ${esc(t.external_status)}</span>` : ""}</div></div>
+        ${t.assignee ? `<div class="prop"><div class="l">Assignee</div><div>${esc(t.assignee)}</div></div>` : ""}
+        ${t.pr_url ? `<div class="prop"><div class="l">Pull request</div><div><a href="${esc(t.pr_url)}" target="_blank">${esc(t.pr_state || "PR")}${t.ci_state ? " · CI " + esc(t.ci_state) : ""} ↗</a></div></div>` : ""}
+        ${t.external_url ? `<div class="prop"><div class="l">Tracker</div><div><a href="${esc(t.external_url)}" target="_blank">${esc(t.external_system)} ↗</a></div></div>` : ""}
+        ${(t.links || []).length ? `<div class="prop"><div class="l">Linked</div><div>${t.links.map((l) =>
+          `<div class="lnk"><span>${esc(l.type)} ${l.dir === "in" ? "←" : "→"} <span class="mono">${esc(l.ticket.key)}</span></span>
+            <button data-rmlink="${l.id}" title="Remove link" aria-label="Remove link">✕</button></div>`).join("")}</div></div>` : ""}
+        ${attHtml ? `<div class="prop"><div class="l">Attachments</div><div class="atts">${attHtml}</div></div>` : ""}
+        ${t.cost?.runs ? `<div class="prop"><div class="l">Spend</div><div class="mono">$${t.cost.cost_usd.toFixed(2)} · ${t.cost.runs} runs</div></div>` : ""}
+        ${t.goal ? `<div class="prop"><div class="l">Goal</div><div>${t.goal.done}/${t.goal.total} done</div></div>` : ""}
+        <div class="prop"><div class="l">Created</div><div>${fmtT(t.created_at)}</div></div>
+        <div class="prop"><div class="l">Updated</div><div>${fmtT(t.updated_at)}</div></div>
+      </aside></div>
+      <div class="composer"><textarea id="note-input" rows="1" placeholder="Comment on ${t.key}… (agents read this)" autocomplete="off"></textarea>
+        <button class="send" id="note-send" aria-label="Comment"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8L14 2L11 14L7.5 9.5L2 8Z" fill="currentColor"/></svg></button></div>`;
+    $("note-send").onclick = sendNote;
+    wireComposer($("note-input"), sendNote);
+    $("ticket-detail").querySelectorAll("[data-answer]").forEach((b) => b.onclick = () => answerAsk(b.dataset.answer, b));
+    wireTicketTools(t);
+  } catch (e) { toast("ticket: " + e.message); }
+}
+
+// Every mutation on the open ticket. The two that reach outside this machine — merging the PR and
+// deleting (which closes the tracker task upstream) — go through a confirm sheet; the rest are
+// local and reversible, so they fire on the click.
+function wireTicketTools(t) {
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  $("t-status").onchange = (e) => patchTicket({ status: e.target.value });
+  $("t-prio").onchange = (e) => patchTicket({ priority: e.target.value });
+  on("t-dispatch", (e) => submitting(e.target, () => ticketAction("/dispatch", "Dispatched — worker starting")));
+  on("t-plan", (e) => submitting(e.target, () => ticketAction("/dispatch-plan", "Planning run dispatched")));
+  on("t-grade", (e) => submitting(e.target, () => ticketAction("/dispatch-grade", "Grading run dispatched")));
+  on("t-edit", () => editTicketModal(t));
+  on("t-link", () => linkTicketModal(t));
+  on("t-attach", () => $("t-file").click());
+  on("t-delete", () => deleteTicketModal(t));
+  on("t-merge", () => confirmSheet({
+    title: "Merge the PR for " + t.key + "?",
+    body: "Merges " + (t.pr_url || "the open PR") + " on GitHub" + (t.ci_state ? " (CI " + t.ci_state + ")" : "") + " and closes the ticket. This is not undoable from here.",
+    confirm: "Merge PR",
+    run: () => ticketAction("/merge-pr", "Merged"),
+  }));
+  on("t-push-status", (e) => submitting(e.target, () => ticketAction("/push-status", "Status pushed to " + t.external_system)));
+  on("t-push-comment", () => pushCommentModal(t));
+  on("t-goreview", () => show("inbox"));
+  $("t-file").onchange = async () => {
+    const files = [...$("t-file").files]; $("t-file").value = "";
+    await uploadAttachments(t.id, files);
+  };
+  $("ticket-detail").querySelectorAll("[data-rmlink]").forEach((b) => b.onclick = async () => {
+    try { await api("/tickets/" + t.id + "/links/" + b.dataset.rmlink, { method: "DELETE" }); loadTicketDetail(); }
+    catch (e) { toast("unlink: " + e.message); }
+  });
+  $("ticket-detail").querySelectorAll("[data-rmatt]").forEach((b) => b.onclick = async () => {
+    try { await api("/attachments/" + b.dataset.rmatt, { method: "DELETE" }); loadTicketDetail(); }
+    catch (e) { toast("attachment: " + e.message); }
+  });
+}
+async function patchTicket(body) {
+  const id = curTicket;
+  try { await api("/tickets/" + id, { method: "PATCH", body }); toast("Saved"); loadTickets(); }
+  catch (e) { toast("save: " + e.message); }
+  if (curTicket === id) loadTicketDetail(); // re-read either way: a rejected select must snap back
+}
+async function ticketAction(path, okMsg) {
+  const id = curTicket;
+  const r = await api("/tickets/" + id + path, { method: "POST", body: {} });
+  toast(r?.external ? okMsg + " — " + r.external : okMsg);
+  await loadTickets();
+  if (curTicket === id) loadTicketDetail();
+}
+async function uploadAttachments(ticketId, files) {
+  for (const f of files) {
+    if (f.size > 15 * 1024 * 1024) { toast(`${f.name}: max 15MB`); continue; }
+    try {
+      // Raw upload, filename in the query string — a header can't carry non-ASCII names.
+      const headers = { "Content-Type": f.type || "application/octet-stream", ...(TOKEN ? { "x-mc-admin": TOKEN } : {}) };
+      const r = await fetch(`/api/tickets/${ticketId}/attachments/raw?filename=${encodeURIComponent(f.name)}`,
+        { method: "POST", headers, body: f });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+    } catch (e) { toast("attach: " + f.name + ": " + e.message); }
+  }
+  if (files.length && curTicket === ticketId) loadTicketDetail();
+}
+// Paste or drop a screenshot anywhere on the open ticket → attachment. Same gesture as chat.
+$("ticket-detail").addEventListener("dragover", (e) => e.preventDefault());
+$("ticket-detail").addEventListener("drop", (e) => {
+  const files = [...(e.dataTransfer?.files || [])];
+  if (!curTicket || !files.length) return;
+  e.preventDefault(); uploadAttachments(curTicket, files);
+});
+$("ticket-detail").addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (!curTicket || !files.length) return;
+  e.preventDefault(); uploadAttachments(curTicket, files);
+});
+
+// ── ticket sheets ───────────────────────────────────────────────────────────
+function confirmSheet({ title, body, confirm, danger, run }) {
+  openModal(`<h3>${esc(title)}</h3><p>${esc(body)}</p>
+    <div class="sheet-actions"><button class="btn" data-close autofocus>Cancel</button>
+      <button class="btn ${danger ? "danger" : "primary"}" id="c-go">${esc(confirm)}</button></div>`,
+  (m) => {
+    m.querySelector("#c-go").onclick = (e) => submitting(e.target, async () => { await run(); closeModal(); });
+  });
+}
+async function newTicketModal() {
+  let wss;
+  try { wss = await loadWorkspaces(); } catch (e) { return toast("workspaces: " + e.message); }
+  if (!wss.length) return toast("No workspaces yet");
+  const wsId = allTickets.find((t) => t.id === curTicket)?.workspace_id || wss[0].id;
+  openModal(`<h3>New ticket</h3>
+    <div class="grid2">
+      <div class="fld"><label for="n-ws">Workspace</label><select class="inp" id="n-ws">${wss.map((w) =>
+        `<option value="${esc(w.id)}"${w.id === wsId ? " selected" : ""}>${esc(w.name || w.slug)}</option>`).join("")}</select></div>
+      <div class="fld"><label for="n-repo">Repo</label><select class="inp" id="n-repo"></select></div>
+    </div>
+    <div class="fld"><label for="n-title">Title</label><input class="inp" id="n-title" autocomplete="off" autofocus></div>
+    <div class="grid2">
+      <div class="fld"><label for="n-status">Status</label><select class="inp" id="n-status">${opts(STATUSES, "backlog")}</select></div>
+      <div class="fld"><label for="n-prio">Priority</label><select class="inp" id="n-prio">${opts(PRIORITIES, "P2")}</select></div>
+    </div>
+    <div class="fld"><label for="n-context">Context</label>
+      <textarea class="inp" id="n-context" placeholder="What needs doing and why — this is the brief the agent reads."></textarea></div>
+    <div class="fld"><label for="n-acceptance">Acceptance</label>
+      <textarea class="inp" id="n-acceptance" style="min-height:56px" placeholder="Definition of done."></textarea></div>
+    <div class="sheet-actions"><button class="btn" data-close>Cancel</button><button class="btn primary" id="n-go">Create</button></div>`,
+  (m) => {
+    const q = (s) => m.querySelector(s);
+    const fillRepos = () => {
+      const w = wss.find((x) => x.id === q("#n-ws").value);
+      q("#n-repo").innerHTML = `<option value="">no repo</option>` + (w?.repos || []).map((r) =>
+        `<option value="${esc(r.id)}">${esc(r.name || r.slug || r.id.slice(0, 8))}</option>`).join("");
+    };
+    fillRepos();
+    q("#n-ws").onchange = fillRepos;
+    q("#n-go").onclick = (e) => submitting(e.target, async () => {
+      const title = q("#n-title").value.trim();
+      if (!title) throw new Error("A title is required");
+      const t = await api("/tickets", { method: "POST", body: {
+        workspace_id: q("#n-ws").value,
+        repo_id: q("#n-repo").value || null,
+        title,
+        status: q("#n-status").value,
+        priority: q("#n-prio").value,
+        context: q("#n-context").value.trim() || undefined,
+        acceptance: q("#n-acceptance").value.trim() || undefined,
+      } });
+      closeModal(); toast("Created " + t.key);
+      curTicket = t.id; await loadTickets(); loadTicketDetail();
+    });
+  });
+}
+async function editTicketModal(t) {
+  let wss = [];
+  try { wss = await loadWorkspaces(); } catch {}
+  const repos = wss.find((w) => w.id === t.workspace_id)?.repos || [];
+  const v = (x) => esc(x ?? "");
+  openModal(`<h3>Edit ${esc(t.key)}</h3>
+    <div class="fld"><label for="e-title">Title</label><input class="inp" id="e-title" value="${v(t.title)}" autocomplete="off" autofocus></div>
+    <div class="fld"><label for="e-summary">Summary</label><input class="inp" id="e-summary" value="${v(t.summary)}" autocomplete="off"
+      placeholder="One line — shown in the list"></div>
+    <div class="grid2">
+      <div class="fld"><label for="e-assignee">Assignee</label><input class="inp" id="e-assignee" value="${v(t.assignee)}" autocomplete="off"></div>
+      <div class="fld"><label for="e-repo">Repo</label><select class="inp" id="e-repo"><option value="">no repo</option>${repos.map((r) =>
+        `<option value="${esc(r.id)}"${r.id === t.repo_id ? " selected" : ""}>${esc(r.name || r.slug || r.id.slice(0, 8))}</option>`).join("")}</select></div>
+    </div>
+    <div class="grid2">
+      <div class="fld"><label for="e-backend">Backend</label><input class="inp" id="e-backend" value="${v(t.backend)}" autocomplete="off" placeholder="claude, codex…"></div>
+      <div class="fld"><label for="e-model">Model</label><input class="inp" id="e-model" value="${v(t.model)}" autocomplete="off" placeholder="inherit"></div>
+    </div>
+    <div class="grid2">
+      <div class="fld"><label for="e-complexity">Complexity</label><input class="inp" id="e-complexity" value="${v(t.complexity)}" autocomplete="off" placeholder="1–5"></div>
+      <div class="fld"><label for="e-tags">Tags</label><input class="inp" id="e-tags" value="${esc(ticketTags(t).join(", "))}" autocomplete="off" placeholder="comma, separated"></div>
+    </div>
+    <div class="fld"><label for="e-pr">PR URL</label><input class="inp" id="e-pr" value="${v(t.pr_url)}" autocomplete="off"></div>
+    <div class="sheet-actions"><button class="btn" data-close>Cancel</button><button class="btn primary" id="e-go">Save</button></div>`,
+  (m) => {
+    const q = (s) => m.querySelector(s).value.trim();
+    m.querySelector("#e-go").onclick = (e) => submitting(e.target, async () => {
+      const title = q("#e-title");
+      if (!title) throw new Error("A title is required");
+      const tags = q("#e-tags");
+      await api("/tickets/" + t.id, { method: "PATCH", body: {
+        title,
+        summary: q("#e-summary") || null,
+        assignee: q("#e-assignee"),
+        repo_id: m.querySelector("#e-repo").value || null,
+        backend: q("#e-backend") || null,
+        model: q("#e-model") || null,
+        complexity: q("#e-complexity") || null,
+        tags: tags ? tags.split(/\s*,\s*/).filter(Boolean) : null,
+        pr_url: q("#e-pr") || null,
+      } });
+      closeModal(); toast("Saved");
+      await loadTickets();
+      if (curTicket === t.id) loadTicketDetail();
+    });
+  });
+}
+function linkTicketModal(t) {
+  const others = allTickets.filter((x) => x.id !== t.id);
+  if (!others.length) return toast("No other tickets to link");
+  openModal(`<h3>Link ${esc(t.key)}</h3>
+    <div class="fld"><label for="l-type">Relationship</label><select class="inp" id="l-type">${opts(LINK_TYPES, "relates")}</select>
+      <span class="hint">Reads as “${esc(t.key)} <b>&lt;type&gt;</b> the ticket below”. <b>blocks</b> holds the other one back; <b>parent</b> makes it a child in the goal roll-up.</span></div>
+    <div class="fld"><label for="l-to">Ticket</label><select class="inp" id="l-to">${others.map((x) =>
+      `<option value="${esc(x.id)}">${esc(x.key)} — ${esc(x.title)}</option>`).join("")}</select></div>
+    <div class="sheet-actions"><button class="btn" data-close>Cancel</button><button class="btn primary" id="l-go">Link</button></div>`,
+  (m) => {
+    m.querySelector("#l-go").onclick = (e) => submitting(e.target, async () => {
+      await api("/tickets/" + t.id + "/links", { method: "POST", body: {
+        to_id: m.querySelector("#l-to").value, type: m.querySelector("#l-type").value } });
+      closeModal(); toast("Linked");
+      if (curTicket === t.id) loadTicketDetail();
+    });
+  });
+}
+function pushCommentModal(t) {
+  openModal(`<h3>Comment on ${esc(t.external_system)}</h3>
+    <p>Posts to ${esc(t.external_id || t.key)} in the tracker — visible to everyone on it.</p>
+    <div class="fld"><textarea class="inp" id="p-body" autofocus></textarea></div>
+    <div class="sheet-actions"><button class="btn" data-close>Cancel</button><button class="btn primary" id="p-go">Post</button></div>`,
+  (m) => {
+    m.querySelector("#p-go").onclick = (e) => submitting(e.target, async () => {
+      const body = m.querySelector("#p-body").value.trim();
+      if (!body) throw new Error("Nothing to post");
+      await api("/tickets/" + t.id + "/push-comment", { method: "POST", body: { body } });
+      closeModal(); toast("Comment pushed");
+    });
+  });
+}
+function deleteTicketModal(t) {
+  confirmSheet({
+    title: "Delete " + t.key + "?",
+    body: t.external_system
+      ? `Removes the ticket and its markdown file locally, and tries to close it upstream in ${t.external_system}. The local delete is tombstoned so a failed close can't respawn it on the next sync.`
+      : "Removes the ticket and its markdown file. Runs and history that reference it stay, but the ticket is gone for good.",
+    confirm: "Delete",
+    danger: true,
+    run: async () => {
+      const r = await api("/tickets/" + t.id, { method: "DELETE" });
+      toast(r?.external ? "Deleted — " + r.external : "Deleted " + t.key);
+      if (curTicket === t.id) { curTicket = null; $("ticket-detail").innerHTML = `<div class="empty">Select a ticket</div>`; }
+      loadTickets();
+    },
+  });
+}
+async function sendNote() {
+  const input = $("note-input"); const text = input.value.trim(); if (!text) return;
+  try { await api("/tickets/" + curTicket + "/note", { method: "POST", body: { text, by: "leo" } }); input.value = ""; toast("Noted — lands in the worker's mailbox"); loadTicketDetail(); }
+  catch (e) { toast("note: " + e.message); }
+}
+async function answerAsk(id, btn) {
+  const input = btn.closest(".ask-block").querySelector("input"); const answer = input.value.trim(); if (!answer) return;
+  try { await api("/asks/" + id + "/answer", { method: "POST", body: { answer, by: "leo" } }); toast("Answered — run resumes"); loadTickets(); loadTicketDetail(); }
+  catch (e) { toast("answer: " + e.message); }
+}
+
+// ── inbox ───────────────────────────────────────────────────────────────────
+// Everything blocked on a human decision: code waiting to ship, agents parked on a question,
+// stalled work, and the proposal queues. Queue on the left in blocked-first order, one decision at
+// a time on the right — the flat column this replaced made you scroll a 500-line diff to answer
+// "should this ship?", and gave a 0-line review the same weight as a 5-file one.
+let inbox = { reviews: [], asks: [], stalls: [], skills: [], ideas: [], issues: [] };
+let ibItems = [], ibCur = null, ibSkillBody = new Map();
+// Ideas are the only unbounded queue (67 of them here) and the only one that isn't blocking
+// anything — so it gets a page, not the whole scrollback.
+let ideasShown = 10;
+// Recovery, ideas and skills sit behind requireAdmin; reviews, asks and run control don't. Without
+// the native wrapper's token those buttons can only 403, so say so on the button instead of letting
+// The operator discover it by clicking.
+const ADMIN_ONLY = TOKEN ? "" : ` disabled title="Needs the native app — this action is admin-only and a plain browser has no token"`;
+const jsonList = (v) => {
+  if (Array.isArray(v)) return v;
+  if (typeof v === "string" && v.trim()) { try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; } }
+  return [];
+};
+const ago = (iso) => {
+  if (!iso) return "";
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s / 60) + "m";
+  if (s < 172800) return Math.round(s / 3600) + "h";
+  return Math.round(s / 86400) + "d";
+};
+async function fetchInbox() {
+  const wss = await loadWorkspaces().catch(() => []);
+  const per = (path) => Promise.all(wss.map((w) => api(`/workspaces/${w.id}/${path}`).catch(() => []))).then((r) => r.flat());
+  // These three default to the LIVE bucket server-side: an item the operator dated out to Thursday
+  // is not something he needs now. `bucket=dated` is fetched alongside so the deferral is still
+  // visible — with its date — rather than reading like a row that was closed.
+  const [reviews, asks, stalls, skills, ideas, tickets, operational, laterA, laterR, laterS] = await Promise.all([
+    api("/reviews?state=pending").catch(() => []),
+    api("/asks?status=open").catch(() => []),
+    api("/recovery").catch(() => []),
+    per("skills?status=pending"),
+    per("ideas?status=proposed"),
+    allTickets.length ? Promise.resolve(allTickets) : api("/tickets").catch(() => []),
+    api("/operational").catch(() => ({ issues: [] })),
+    api("/asks?status=open&bucket=dated").catch(() => []),
+    api("/reviews?state=pending&bucket=dated").catch(() => []),
+    api("/recovery?bucket=dated").catch(() => []),
+  ]);
+  allTickets = tickets;
+  openAsks = asks;
+  // System issues are informational (connector/deploy/guardrail) — they don't inflate "needs you"
+  // the way a parked agent does, but they do belong in the Inbox so a degraded desk is visible.
+  const issues = (operational.issues || []).filter((i) => i.severity !== "info");
+  inbox = { reviews, asks, stalls, skills, ideas, issues, later: [...laterA, ...laterR, ...laterS] };
+  // Ideas are a grooming backlog, not a blocker — they don't get to inflate "needs you".
+  const n = reviews.length + asks.length + stalls.length + skills.length;
+  $("pill-need-n").textContent = n + " need you"; $("pill-need").hidden = !n;
+  return inbox;
+}
+async function loadInbox() {
+  try { await fetchInbox(); } catch (e) { return toast("inbox: " + e.message); }
+  renderInbox();
+}
+
+// One flat, ordered list. Order is by who is actually blocked: an agent parked mid-task first, then
+// work that can't ship (red gates) ahead of work that can, then the dead and the merely proposed.
+const RISK_RANK = { high: 0, med: 1, low: 2 };
+function buildItems() {
+  const byId = new Map(allTickets.map((t) => [t.id, t]));
+  const items = [];
+  // System issues first — a dead credential or deploy drift is why the rest of the queue is lying.
+  for (const iss of inbox.issues || []) items.push({ kind: "issue", id: iss.id, at: null, o: iss, t: null });
+  for (const a of inbox.asks) items.push({ kind: "ask", id: a.id, at: a.created_at, o: a, t: a.ticket_id ? byId.get(a.ticket_id) : null });
+  const rv = inbox.reviews.map((r) => ({ kind: "review", id: r.id, at: r.reviewed_at || r.created_at, o: r, t: r.ticket_id ? byId.get(r.ticket_id) : null }));
+  rv.sort((a, b) => {
+    const red = (x) => jsonList(x.o.gate_json).some((g) => !g.ok) ? 0 : 1;
+    return red(a) - red(b) || (RISK_RANK[a.o.risk] ?? 3) - (RISK_RANK[b.o.risk] ?? 3) || String(a.at).localeCompare(String(b.at));
+  });
+  items.push(...rv);
+  for (const s of inbox.stalls) items.push({ kind: "stall", id: s.id, at: null, o: s, t: null });
+  for (const s of inbox.skills) items.push({ kind: "skill", id: s.id, at: s.updated_at || s.created_at, o: s, t: null });
+  for (const i of inbox.ideas.slice(0, ideasShown)) items.push({ kind: "idea", id: i.id, at: i.created_at, o: i, t: null });
+  return items;
+}
+const SECTION = { issue: "System issues", ask: "Agents parked on a question", review: "Waiting to ship", stall: "Stalled", skill: "Skills to approve", idea: "Ideas to triage" };
+function renderInbox() {
+  ibItems = buildItems();
+  if (!ibItems.some((i) => i.id === ibCur)) ibCur = ibItems[0]?.id ?? null;
+  const counts = ibItems.reduce((m, i) => ((m[i.kind] = (m[i.kind] || 0) + 1), m), {});
+  const blocking = (counts.ask || 0) + (counts.review || 0) + (counts.stall || 0) + (counts.skill || 0);
+  $("ib-count").textContent = blocking ? "Needs you · " + blocking : "Inbox";
+  let last = null;
+  $("ib-list").innerHTML = ibItems.map((i) => {
+    const head = i.kind === last ? "" : `<div class="isec"><span>${SECTION[i.kind]}</span><span class="n">${counts[i.kind]}</span></div>`;
+    last = i.kind;
+    return head + `<button class="i-row${i.id === ibCur ? " active" : ""}" data-ib="${esc(i.id)}">
+      <span class="top">${rowChips(i)}<time>${ago(i.at)}</time></span>
+      <span class="ttl">${esc(rowTitle(i))}</span>
+      ${rowSub(i) ? `<span class="sub">${esc(rowSub(i))}</span>` : ""}</button>`;
+  }).join("") || `<div class="empty">Nothing is waiting on you.</div>`;
+  // Deferred items: a footer line, not rows. They are not waiting on him today — the date is — and
+  // nothing here decides anything; the item comes back on its own with the same card.
+  const later = inbox.later || [];
+  if (later.length) {
+    const soonest = later.map((x) => x.hold_until).filter(Boolean).sort()[0];
+    $("ib-list").insertAdjacentHTML("beforeend",
+      `<div class="isec"><span>⏰ later</span><span class="n">${later.length}</span></div>` +
+      `<div class="empty">Back on its date${soonest ? ` — next ${esc(soonest.slice(0, 16).replace("T", " "))}` : ""}. Nothing was decided.</div>`);
+  }
+  const restIdeas = inbox.ideas.length - Math.min(ideasShown, inbox.ideas.length);
+  if (restIdeas > 0) {
+    $("ib-list").insertAdjacentHTML("beforeend", `<button class="i-more" id="ib-more">show ${restIdeas} more idea${restIdeas > 1 ? "s" : ""}</button>`);
+    $("ib-more").onclick = () => { ideasShown += 25; renderInbox(); };
+  }
+  $("ib-list").querySelectorAll("[data-ib]").forEach((b) => b.onclick = () => selectInbox(b.dataset.ib));
+  renderInboxDetail();
+}
+function rowChips(i) {
+  if (i.kind === "issue") {
+    const sev = i.o.severity === "critical" ? "danger" : i.o.severity === "warn" ? "warn" : "muted";
+    return `<span class="k">${esc(i.o.kind || "system")}</span><span class="chip ${sev}">${esc(i.o.severity || "info")}</span>` +
+      (i.o.workspace ? `<span class="chip muted">${esc(i.o.workspace)}</span>` : "");
+  }
+  if (i.kind === "review") {
+    const gates = jsonList(i.o.gate_json), red = gates.some((g) => !g.ok);
+    const d = diffStat(i.o.diff_ref);
+    return `${red ? '<span class="dot-red"></span>' : ""}<span class="k">${i.t ? esc(i.t.key) : "review"}</span>` +
+      (d.files.length ? `<span class="chip muted">${d.files.length}f</span>` : "") +
+      (i.o.risk === "high" ? '<span class="chip danger">high</span>' : "");
+  }
+  if (i.kind === "ask") return `<span class="k">${esc(i.o.ticket_key || "no ticket")}</span>`;
+  if (i.kind === "stall") return `<span class="k">${esc(i.o.kind || "stall")}</span>${i.o.ws ? `<span class="chip muted">${esc(i.o.ws)}</span>` : ""}`;
+  if (i.kind === "skill") return `<span class="k">skill</span>${i.o.category ? `<span class="chip muted">${esc(i.o.category)}</span>` : ""}`;
+  return `<span class="k">idea</span><span class="chip muted">${esc(i.o.kind || "idea")}</span>`;
+}
+function rowTitle(i) {
+  if (i.kind === "issue") return i.o.title;
+  if (i.kind === "review") return i.t ? i.t.title : "Review";
+  if (i.kind === "ask") return i.o.question;
+  if (i.kind === "stall") return (i.o.line || "").split("\n")[0].replace(/^\S+\s/, "");
+  if (i.kind === "skill") return i.o.name || i.o.slug;
+  return i.o.title;
+}
+function rowSub(i) {
+  if (i.kind === "issue") return i.o.fix || i.o.detail || "";
+  if (i.kind === "review") {
+    const d = diffStat(i.o.diff_ref);
+    return d.files.length ? `+${d.add} −${d.del} · ${d.files.map((f) => f.path.split("/").pop()).slice(0, 3).join(", ")}` : "no diff captured";
+  }
+  if (i.kind === "skill") return i.o.description || "";
+  if (i.kind === "idea") return i.o.pitch || "";
+  return "";
+}
+function selectInbox(id) {
+  ibCur = id;
+  for (const r of $("ib-list").querySelectorAll("[data-ib]")) r.classList.toggle("active", r.dataset.ib === ibCur);
+  const row = $("ib-list").querySelector(".i-row.active");
+  row?.scrollIntoView({ block: "nearest" });
+  renderInboxDetail();
+}
+// Move to the next item after deciding, so a queue of seven is seven decisions, not seven
+// round-trips back to a list.
+function advance() {
+  const idx = ibItems.findIndex((i) => i.id === ibCur);
+  ibCur = ibItems[idx + 1]?.id ?? ibItems[idx - 1]?.id ?? null;
+}
+function diffStat(diff) {
+  const files = [];
+  let cur = null, add = 0, del = 0;
+  for (const line of String(diff || "").split("\n")) {
+    if (line.startsWith("diff --git")) { cur = { path: line.split(" b/").pop(), add: 0, del: 0 }; files.push(cur); }
+    else if (!cur) continue;
+    else if (line.startsWith("+") && !line.startsWith("+++")) { cur.add++; add++; }
+    else if (line.startsWith("-") && !line.startsWith("---")) { cur.del++; del++; }
+  }
+  return { files, add, del };
+}
+const diffHtml = (d) => String(d || "").split("\n").slice(0, 1200).map((l) => {
+  const cls = l.startsWith("+++") || l.startsWith("---") || l.startsWith("diff ") ? "file"
+    : l.startsWith("@@") ? "hunk" : l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : "";
+  return `<div class="${cls}">${esc(l) || "&nbsp;"}</div>`;
+}).join("");
+const blk = (label, html) => html ? `<div class="blk"><div class="l">${label}</div>${html}</div>` : "";
+
+function renderInboxDetail() {
+  const i = ibItems.find((x) => x.id === ibCur);
+  if (!i) { $("ib-detail").innerHTML = `<div class="empty">Nothing is waiting on you.</div>`; return; }
+  const keys = `<span class="keys"><kbd>j</kbd>/<kbd>k</kbd> move</span>`;
+  if (i.kind === "issue") {
+    const iss = i.o;
+    $("ib-detail").innerHTML =
+      `<div class="d-head"><div class="key-line">
+         <span class="key mono">${esc(iss.kind)}</span>
+         <span class="chip ${iss.severity === "critical" ? "danger" : iss.severity === "warn" ? "warn" : "muted"}">${esc(iss.severity)}</span>
+         ${iss.workspace ? `<span class="chip muted">${esc(iss.workspace)}</span>` : ""}
+       </div><h1>${esc(iss.title)}</h1></div>
+      <div class="d-body">
+        ${blk("What's wrong", `<div class="qbox">${esc(iss.detail)}</div>`)}
+        ${blk("What to do", `<div class="qbox">${esc(iss.fix)}</div>`)}
+      </div>
+      <div class="d-acts"><span class="spacer"></span>${keys}</div>`;
+    return;
+  }
+  if (i.kind === "review") {
+    const r = i.o, gates = jsonList(r.gate_json), d = diffStat(r.diff_ref);
+    const failed = gates.filter((g) => !g.ok);
+    // The AI's own sign-off line repeats the gate chips verbatim; keep the reasoning, drop the echo.
+    const notes = String(r.notes || "").replace(/\[AI recommend-approve[^\]]*\]/g, "").trim();
+    $("ib-detail").innerHTML =
+      `<div class="d-head"><div class="key-line">
+         <span class="key mono">${i.t ? esc(i.t.key) : "review"}</span>
+         ${r.risk ? `<span class="chip ${r.risk === "high" ? "danger" : r.risk === "med" ? "warn" : ""}">risk ${esc(r.risk)}</span>` : ""}
+         ${gates.length ? `<span class="chip ${failed.length ? "danger" : ""}">${failed.length ? failed.length + " gate failed" : "gates green"}</span>` : '<span class="chip warn">no gates</span>'}
+         ${r.actor ? `<span class="chip muted">${esc(r.actor)}</span>` : ""}
+         ${i.t?.pr_url ? `<a class="chip" href="${esc(i.t.pr_url)}" target="_blank" rel="noopener">PR ↗</a>` : ""}
+       </div><h1>${esc(i.t ? i.t.title : "Review")}</h1></div>
+      <div class="d-body">
+        ${blk("What the agent says it did", i.t?.report ? `<div class="md">${mdHtml(i.t.report)}</div>`
+          : i.t?.summary ? `<div class="qbox">${esc(i.t.summary)}</div>`
+          : `<div class="nothing">No report — the run didn't write one.</div>`)}
+        ${blk("Reviewer", notes ? `<div class="qbox">${esc(notes)}</div>` : "")}
+        ${blk("Evidence", gates.length
+          ? `<div class="gates">${gates.map((g) => `<span class="chip ${g.ok ? "" : "danger"}">${g.ok ? "✓" : "✗"} ${esc(g.name)}${g.ms ? ` · ${(g.ms / 1000).toFixed(1)}s` : ""}</span>`).join("")}</div>` +
+            failed.map((g) => `<div class="gate-out"><details class="diff"><summary>${esc(g.name)} output</summary><div class="diff-body">${diffHtml(g.output || "(no output captured)")}</div></details></div>`).join("")
+          : `<div class="nothing">No gates configured for this repo — nothing was run against this change.</div>`)}
+        ${blk("Changes", d.files.length
+          ? `<div class="files">${d.files.map((f) => `<div class="f"><span class="p">${esc(f.path)}</span><span class="n"><span class="a">+${f.add}</span> <span class="d">−${f.del}</span></span></div>`).join("")}
+             <div class="f" style="margin-top:4px;color:var(--faint)"><span class="p">${d.files.length} file${d.files.length > 1 ? "s" : ""}</span><span class="n"><span class="a">+${d.add}</span> <span class="d">−${d.del}</span></span></div></div>
+             <details class="diff" style="margin-top:10px"><summary>full diff</summary><div class="diff-body">${diffHtml(r.diff_ref)}</div></details>`
+          : `<div class="nothing">No diff was captured — there is nothing here to read. Approving ships whatever the run left behind.</div>`)}
+      </div>
+      <div class="d-acts">
+        <button class="btn primary" id="ib-approve" title="Ships it: commit, or push + open the PR">Approve &amp; ship</button>
+        <button class="btn" id="ib-changes">Request changes…</button>
+        <button class="btn" id="ib-ai">AI review</button>
+        <span class="spacer"></span>
+        ${keys}<span class="keys"><kbd>a</kbd> approve <kbd>c</kbd> changes</span>
+        <button class="btn danger" id="ib-dismiss">Dismiss…</button>
+      </div>`;
+    armed($("ib-approve"), "Ship it?", async () => {
+      const out = await api("/reviews/" + r.id + "/approve", { method: "POST", body: {} });
+      await decided(out?.pr_url ? "Shipped — " + out.pr_url : "Shipped");
+    });
+    $("ib-changes").onclick = () => notesSheet({
+      title: "Request changes", label: "What needs to change", confirm: "Request changes",
+      hint: "Reopens the ticket and hands these notes to the next rework round.",
+      run: async (notes) => { await api("/reviews/" + r.id + "/changes", { method: "POST", body: { notes } }); await decided("Changes requested"); },
+    });
+    $("ib-dismiss").onclick = () => notesSheet({
+      title: "Dismiss review", label: "Why (optional)", confirm: "Dismiss", danger: true, optional: true,
+      hint: "Closes the review without shipping and without reopening the ticket.",
+      run: async (notes) => { await api("/reviews/" + r.id + "/dismiss", { method: "POST", body: { notes: notes || null } }); await decided("Dismissed"); },
+    });
+    $("ib-ai").onclick = (e) => submitting(e.target, async () => {
+      await api("/reviews/" + r.id + "/dispatch-review", { method: "POST", body: {} });
+      await decided("AI reviewer dispatched");
+    });
+    return;
+  }
+
+  if (i.kind === "ask") {
+    const a = i.o, options = jsonList(a.options);
+    $("ib-detail").innerHTML =
+      `<div class="d-head"><div class="key-line"><span class="key mono">${esc(a.ticket_key || "no ticket")}</span>
+        ${i.t ? `<span class="chip muted">${esc(i.t.status.replace("_", " "))}</span>` : ""}
+        <span class="chip warn">agent parked ${ago(a.created_at)}</span></div>
+        <h1>${esc(i.t ? i.t.title : "A worker needs an answer")}</h1></div>
+      <div class="d-body">
+        ${blk("The question", `<div class="qbox">${esc(a.question)}</div>`)}
+        ${options.length ? blk("Its options", `<div class="crow">${options.map((o, n) =>
+          `<button class="btn" data-opt="${esc(o)}">${n + 1}. ${esc(o)}</button>`).join("")}</div>`) : ""}
+        ${blk("Ticket", i.t ? `<div class="qbox">${esc(i.t.summary || i.t.title)}</div>` : "")}
+        ${blk("What it was doing", `<div class="term" id="ib-tail"><div class="dim">loading…</div></div>`)}
+      </div>
+      <div class="d-acts">
+        <input class="inp grow" id="ib-answer" placeholder="Answer…" autocomplete="off">
+        <button class="btn primary" id="ib-send">Answer</button>
+        <span class="keys">${keys}</span>
+      </div>`;
+    $("ib-detail").querySelectorAll("[data-opt]").forEach((b) => b.onclick = () => { $("ib-answer").value = b.dataset.opt; $("ib-answer").focus(); });
+    const send = (e) => submitting(e?.target?.tagName === "BUTTON" ? e.target : $("ib-send"), async () => {
+      const answer = $("ib-answer").value.trim();
+      if (!answer) throw new Error("Nothing to send");
+      await api("/asks/" + a.id + "/answer", { method: "POST", body: { answer, by: "leo" } });
+      await decided("Answered — the run resumes");
+    });
+    $("ib-send").onclick = send;
+    $("ib-answer").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); send(); } });
+    api("/runs/" + a.run_id + "/tail").then((t) => {
+      const el = $("ib-tail"); if (!el) return;
+      el.innerHTML = (t.lines || []).map((l) => `<div>${esc(l)}</div>`).join("") || `<div class="dim">no output captured</div>`;
+    }).catch(() => { const el = $("ib-tail"); if (el) el.innerHTML = `<div class="dim">tail unavailable</div>`; });
+    return;
+  }
+
+  if (i.kind === "stall") {
+    const s = i.o;
+    $("ib-detail").innerHTML =
+      `<div class="d-head"><div class="key-line"><span class="key mono">${esc(s.kind || "stall")}</span>
+        ${s.ws ? `<span class="chip muted">${esc(s.ws)}</span>` : ""}</div>
+        <h1>${esc(rowTitle(i))}</h1></div>
+      <div class="d-body">
+        ${blk("What Chronos saw", `<div class="qbox">${esc(s.line)}</div>`)}
+        ${blk("Resume would", `<div class="qbox">${esc(s.action || "re-dispatch it")}</div>`)}
+      </div>
+      <div class="d-acts">
+        <button class="btn primary" id="ib-resume"${ADMIN_ONLY}>Resume</button>
+        <span class="spacer"></span>${keys}
+        <button class="btn danger" id="ib-drop"${ADMIN_ONLY}>Drop</button>
+      </div>`;
+    armed($("ib-resume"), "Re-dispatch?", async () => {
+      const r = await api("/recovery/decide", { method: "POST", body: { id: s.id, approve: true } });
+      await decided(r?.message || "Resumed");
+    });
+    $("ib-drop").onclick = (e) => submitting(e.target, async () => {
+      const r = await api("/recovery/decide", { method: "POST", body: { id: s.id, approve: false } });
+      await decided(r?.message || "Dropped");
+    });
+    return;
+  }
+
+  if (i.kind === "skill") {
+    const s = i.o;
+    $("ib-detail").innerHTML =
+      `<div class="d-head"><div class="key-line"><span class="key mono">skill</span>
+        ${s.category ? `<span class="chip muted">${esc(s.category)}</span>` : ""}
+        ${s.source ? `<span class="chip muted">${esc(s.source)}</span>` : ""}
+        ${s.usage_count ? `<span class="chip">used ${esc(s.usage_count)}×</span>` : ""}</div>
+        <h1>${esc(s.name || s.slug)}</h1></div>
+      <div class="d-body">
+        ${blk("What it claims to do", s.description ? `<div class="qbox">${esc(s.description)}</div>` : "")}
+        ${blk("The skill", `<div class="md" id="ib-skill">loading…</div>`)}
+      </div>
+      <div class="d-acts">
+        <button class="btn primary" id="ib-sk-ok"${ADMIN_ONLY}>Approve</button>
+        <button class="btn" id="ib-sk-no"${ADMIN_ONLY}>Reject</button>
+        <span class="spacer"></span>${keys}
+        <button class="btn danger" id="ib-sk-del"${ADMIN_ONLY}>Delete</button>
+      </div>`;
+    const body = ibSkillBody.get(s.id);
+    if (body != null) { const el = $("ib-skill"); if (el) el.innerHTML = mdHtml(body); }
+    else api("/skills/" + s.id).then((full) => {
+      ibSkillBody.set(s.id, full.body || "");
+      const el = $("ib-skill");
+      if (el) el.innerHTML = full.body ? mdHtml(full.body) : `<div class="nothing">No body on file.</div>`;
+    }).catch(() => { const el = $("ib-skill"); if (el) el.innerHTML = `<div class="nothing">Could not load the skill body.</div>`; });
+    $("ib-sk-ok").onclick = (e) => submitting(e.target, async () => { await api("/skills/" + s.id + "/approve", { method: "POST", body: {} }); await decided("Skill approved"); });
+    $("ib-sk-no").onclick = (e) => submitting(e.target, async () => { await api("/skills/" + s.id + "/reject", { method: "POST", body: {} }); await decided("Skill rejected"); });
+    armed($("ib-sk-del"), "Delete it?", async () => { await api("/skills/" + s.id, { method: "DELETE" }); await decided("Skill deleted"); });
+    return;
+  }
+
+  const idea = i.o;
+  $("ib-detail").innerHTML =
+    `<div class="d-head"><div class="key-line"><span class="key mono">idea</span>
+      <span class="chip muted">${esc(idea.kind || "idea")}</span>
+      ${idea.source ? `<span class="chip muted">${esc(idea.source)}</span>` : ""}</div>
+      <h1>${esc(idea.title)}</h1></div>
+    <div class="d-body">
+      ${blk("The pitch", idea.pitch ? `<div class="qbox">${esc(idea.pitch)}</div>` : "")}
+      ${blk("Acceptance", idea.acceptance ? `<div class="qbox">${esc(idea.acceptance)}</div>` : "")}
+    </div>
+    <div class="d-acts">
+      <button class="btn primary" id="ib-promote"${ADMIN_ONLY}>Promote to ticket</button>
+      <span class="spacer"></span>${keys}
+      <button class="btn danger" id="ib-kill"${ADMIN_ONLY}>Kill</button>
+    </div>`;
+  $("ib-promote").onclick = (e) => submitting(e.target, async () => {
+    const r = await api("/ideas/" + idea.id + "/promote", { method: "POST", body: {} });
+    await decided(r?.ticket?.key ? "Promoted → " + r.ticket.key : "Promoted");
+  });
+  $("ib-kill").onclick = (e) => submitting(e.target, async () => { await api("/ideas/" + idea.id + "/kill", { method: "POST" }); await decided("Killed"); });
+}
+
+// Two clicks, no modal: the second click on the same button commits. Cheaper than a sheet for
+// something you just spent a minute reading, and still impossible to fire by accident.
+function armed(btn, armLabel, run) {
+  if (!btn || btn.disabled) return;
+  const label = btn.textContent;
+  let timer;
+  btn.onclick = () => {
+    if (!btn.classList.contains("arm")) {
+      btn.classList.add("arm"); btn.textContent = armLabel;
+      clearTimeout(timer);
+      timer = setTimeout(() => { btn.classList.remove("arm"); btn.textContent = label; }, 4000);
+      return;
+    }
+    clearTimeout(timer);
+    submitting(btn, run);
+  };
+}
+async function decided(msg) {
+  toast(msg);
+  advance();
+  await fetchInbox();
+  renderInbox();
+  loadTickets().catch(() => {});
+}
+
+// Keyboard: j/k (and arrows) move, a/c/d act on what's focused. Never while typing, and never
+// while a sheet is open — the sheet owns Escape and Enter.
+document.addEventListener("keydown", (e) => {
+  if (!$("view-inbox").classList.contains("active")) return;
+  if (!$("modal").hidden || e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  const idx = ibItems.findIndex((x) => x.id === ibCur);
+  if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); if (ibItems[idx + 1]) selectInbox(ibItems[idx + 1].id); }
+  else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); if (ibItems[idx - 1]) selectInbox(ibItems[idx - 1].id); }
+  // `a` is "the affirmative action on whatever is focused" — approve a review, a skill, or promote
+  // an idea. `?.click() ?? …` would not fall through: click() returns undefined, not nullish-absent.
+  else if (e.key === "a") ($("ib-approve") || $("ib-sk-ok") || $("ib-promote"))?.click();
+  else if (e.key === "c") $("ib-changes")?.click();
+  else if (e.key === "d") ($("ib-dismiss") || $("ib-kill"))?.click();
+});
+
+// Sheet for the actions whose whole point is the note that rides along.
+function notesSheet({ title, label, confirm, hint, danger, optional, run }) {
+  openModal(`<h3>${esc(title)}</h3>${hint ? `<p>${esc(hint)}</p>` : ""}
+    <div class="fld"><label for="ns-text">${esc(label)}</label><textarea class="inp" id="ns-text" autofocus></textarea></div>
+    <div class="sheet-actions"><button class="btn" data-close>Cancel</button>
+      <button class="btn ${danger ? "danger" : "primary"}" id="ns-go">${esc(confirm)}</button></div>`,
+  (m) => {
+    m.querySelector("#ns-go").onclick = (e) => submitting(e.target, async () => {
+      const text = m.querySelector("#ns-text").value.trim();
+      if (!text && !optional) throw new Error("Say what needs to change");
+      await run(text);
+      closeModal();
+    });
+  });
+}
+// ── board ───────────────────────────────────────────────────────────────────
+// Fold state is explicit per post and survives the full re-render every board.posted triggers —
+// otherwise a peer's reply would silently re-open everything you had just folded away.
+// Heartbeats start folded (they are noise you scan, not read); everything else starts open.
+const FOLD_KEY = "mc.board.fold";
+const fold = { shut:new Set(), open:new Set() };
+try { const s = JSON.parse(localStorage.getItem(FOLD_KEY) || "{}");
+  (s.shut || []).forEach((id) => fold.shut.add(id)); (s.open || []).forEach((id) => fold.open.add(id)); } catch {}
+function saveFold(feedIds) { // forget posts that fell off the feed so the key can't grow forever
+  const keep = (set) => [...set].filter((id) => feedIds.has(id));
+  try { localStorage.setItem(FOLD_KEY, JSON.stringify({ shut:keep(fold.shut), open:keep(fold.open) })); } catch {}
+}
+const isOpen = (p) => fold.open.has(p.id) ? true : fold.shut.has(p.id) ? false : p.kind !== "heartbeat";
+const CARET = '<svg class="caret" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const peek = (s) => { const one = String(s || "").replace(/\s+/g, " ").trim(); return esc(one.length > 140 ? one.slice(0, 140) + "…" : one); };
+const repOpen = new Set(); // long threads fold their own replies; in-memory is enough
+let boardFeed = [];
+function setFold(id, open) {
+  if (open) { fold.open.add(id); fold.shut.delete(id); } else { fold.shut.add(id); fold.open.delete(id); }
+}
+
+async function loadBoard() {
+  try {
+    const feed = await api("/board");
+    const threads = await Promise.all(feed.map((p) => p.reply_count ? api("/board/" + p.id).catch(() => [p]) : Promise.resolve([p])));
+    $("board-feed").innerHTML = feed.map((p, i) => {
+      const replies = threads[i].filter((r) => r.id !== p.id);
+      const open = isOpen(p);
+      const repsOpen = replies.length <= 2 || repOpen.has(p.id);
+      return `<article class="post${open ? " open" : ""}" data-id="${p.id}">
+        <button class="post-head" data-fold="${p.id}" aria-expanded="${open}">
+          <span class="avatar${p.author === "operator" ? "" : " av-accent"}">${(p.author || "?")[0].toUpperCase()}</span>
+          <span class="who">${esc(p.author === "operator" ? "the operator" : p.author)}</span>
+          ${p.kind === "heartbeat" ? '<span class="chip muted">heartbeat</span>' : ""}
+          ${p.ticket_id ? '<span class="chip">ticket</span>' : ""}
+          ${replies.length ? `<span class="chip muted">${replies.length} ${replies.length === 1 ? "reply" : "replies"}</span>` : ""}
+          ${open ? '<span class="spacer"></span>' : `<span class="post-peek">${peek(p.body)}</span>`}
+          <time>${fmtT(p.created_at)}</time>${CARET}</button>
+        <div class="post-main">
+        <div class="post-body md md-chat">${replyHtml(p.body)}</div>
+        ${replies.length ? `${replies.length > 2 ? `<button class="linklike" data-reps="${p.id}">${repsOpen ? "Hide" : "Show"} ${replies.length} replies</button>` : ""}
+        <div class="replies" data-reps-box="${p.id}"${repsOpen ? "" : " hidden"}>${replies.map((r) =>
+          `<div class="reply"><span class="avatar">${(r.author || "?")[0].toUpperCase()}</span>
+            <div class="reply-body"><div class="reply-head"><span class="who">${esc(r.author === "operator" ? "the operator" : r.author)}</span><time>${fmtT(r.created_at)}</time></div>
+            <div>${rich(r.body)}</div></div></div>`).join("")}</div>` : ""}
+        <button class="linklike" data-reply="${p.id}">Reply</button>
+        <div class="composer" data-composer="${p.id}" hidden style="border:0;padding:8px 0 0">
+          <textarea rows="1" placeholder="Reply…" autocomplete="off"></textarea>
+          <button class="send" aria-label="Reply"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8L14 2L11 14L7.5 9.5L2 8Z" fill="currentColor"/></svg></button>
+        </div></div></article>`;
+    }).join("") || `<div class="empty">Nothing on the board yet</div>`;
+    boardFeed = feed;
+    $("board-count").textContent = feed.length ? `${feed.length} ${feed.length === 1 ? "post" : "posts"}` : "";
+    $("board-fold").hidden = !feed.length;
+    $("board-fold").textContent = feed.some(isOpen) ? "Collapse all" : "Expand all";
+    saveFold(new Set(feed.map((p) => p.id)));
+    $("board-feed").querySelectorAll("[data-fold]").forEach((b) => b.onclick = () => {
+      const art = b.closest(".post"), id = b.dataset.fold, open = !art.classList.contains("open");
+      setFold(id, open); art.classList.toggle("open", open); b.setAttribute("aria-expanded", String(open));
+      const p = boardFeed.find((x) => x.id === id);
+      b.querySelector(".spacer, .post-peek").outerHTML = open ? '<span class="spacer"></span>' : `<span class="post-peek">${peek(p && p.body)}</span>`;
+      $("board-fold").textContent = boardFeed.some(isOpen) ? "Collapse all" : "Expand all";
+      saveFold(new Set(boardFeed.map((x) => x.id)));
+    });
+    $("board-feed").querySelectorAll("[data-reps]").forEach((b) => b.onclick = () => {
+      const id = b.dataset.reps, box = $("board-feed").querySelector(`[data-reps-box="${id}"]`);
+      box.hidden = !box.hidden; box.hidden ? repOpen.delete(id) : repOpen.add(id);
+      b.textContent = b.textContent.replace(box.hidden ? "Hide" : "Show", box.hidden ? "Show" : "Hide");
+    });
+    $("board-feed").querySelectorAll("[data-reply]").forEach((b) => b.onclick = () => {
+      const c = $("board-feed").querySelector(`[data-composer="${b.dataset.reply}"]`); c.hidden = !c.hidden; c.querySelector("textarea").focus();
+    });
+    $("board-feed").querySelectorAll("[data-composer]").forEach((c) => {
+      const post = () => postBoard(c.querySelector("textarea"), c.dataset.composer);
+      c.querySelector(".send").onclick = post;
+      wireComposer(c.querySelector("textarea"), post);
+    });
+  } catch (e) { toast("board: " + e.message); }
+}
+async function postBoard(input, rootId) {
+  const body = input.value.trim(); if (!body) return;
+  try { await api("/board", { method: "POST", body: { body, ...(rootId ? { thread_root_id: rootId } : {}) } }); input.value = ""; input.style.height = "auto"; loadBoard(); }
+  catch (e) { toast("board: " + e.message); }
+}
+$("board-fold").onclick = () => {
+  const collapse = boardFeed.some(isOpen); // one button, whichever direction is useful right now
+  boardFeed.forEach((p) => setFold(p.id, !collapse));
+  saveFold(new Set(boardFeed.map((p) => p.id)));
+  loadBoard();
+};
+$("board-send").onclick = () => postBoard($("board-input"));
+wireComposer($("board-input"), () => postBoard($("board-input")));
+
+// ── fleet ───────────────────────────────────────────────────────────────────
+async function loadFleet() {
+  try {
+    const [fleet, agents, stats, operational] = await Promise.all([
+      api("/fleet"),
+      api("/agents").catch(() => []),
+      api("/stats").catch(() => null),
+      api("/operational").catch(() => null),
+    ]);
+    const g = fleet.global;
+    $("pill-run-n").textContent = g.live + " running"; $("pill-run").hidden = !g.live;
+    // /stats carries the numbers the fleet strip only hinted at: the week and month next to today's
+    // spend, and how often runs actually succeed.
+    const sp = stats?.spend;
+    const opIssues = (operational?.issues || []).filter((i) => i.severity === "critical" || i.severity === "warn");
+    const opLine = opIssues.length
+      ? `<div class="stat"><div class="n mono" style="color:var(--warn)">${opIssues.length}</div><div class="l">${operational.status === "degraded" ? "degraded" : "issues"}</div></div>`
+      : "";
+    const spendSub = sp
+      ? `<div style="font-size:11px;color:var(--faint);margin-top:2px">headless $${(sp.runs?.today ?? 0).toFixed(2)} · Desk $${(sp.sessions?.today ?? 0).toFixed(2)}</div>`
+      : "";
+    const cov7 = sp?.coverage?.last7;
+    const covLine = cov7
+      ? `<div class="stat"><div class="n mono" style="font-size:14px">$${(cov7.priced_usd ?? 0).toFixed(0)}<span style="color:var(--faint);font-size:11px"> / $${((cov7.priced_usd ?? 0) + (cov7.estimated_usd ?? 0)).toFixed(0)}</span></div><div class="l">priced / total 7d</div></div>`
+      : "";
+    $("fleet-summary").innerHTML =
+      `<div class="stat"><div class="n mono">${g.live}</div><div class="l">running</div></div>
+       <div class="stat"><div class="n mono">${g.queued}</div><div class="l">queued</div></div>
+       <div class="stat"><div class="n mono">${g.blocked}</div><div class="l">blocked</div></div>
+       ${opLine}
+       <div class="stat"><div class="n mono">$${(g.spendToday ?? 0).toFixed(2)}${g.budget ? `<span style="color:var(--faint);font-size:13px"> / $${g.budget}</span>` : ""}</div><div class="l">spend today (all)</div>${spendSub}</div>
+       ${sp ? `<div class="stat"><div class="n mono">$${(sp.last7 ?? 0).toFixed(2)}</div><div class="l">last 7d total</div>
+         <div style="font-size:11px;color:var(--faint);margin-top:2px">headless $${(sp.runs?.last7 ?? 0).toFixed(2)} · Desk $${(sp.sessions?.last7 ?? 0).toFixed(2)}</div></div>
+       <div class="stat"><div class="n mono">$${(sp.last30 ?? 0).toFixed(2)}</div><div class="l">last 30d</div></div>` : ""}
+       ${covLine}
+       ${stats?.success_rate != null ? `<div class="stat"><div class="n mono">${stats.success_rate}%</div><div class="l">success 30d</div></div>` : ""}
+       ${stats?.cache_7d ? `<div class="stat"><div class="n mono">${Math.round((stats.cache_7d.hit_share ?? 0) * 100)}%</div><div class="l">cache hit 7d</div></div>` : ""}
+       <div class="since">refreshed ${fmtT(new Date().toISOString())}</div>` +
+      (opIssues.length
+        ? `<div style="grid-column:1/-1;margin-top:8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:12.5px;line-height:1.45">
+             <b>System issues</b>
+             <ul style="margin:6px 0 0;padding-left:18px">${opIssues.slice(0, 5).map((iss) =>
+               `<li><b>${esc(iss.title)}</b> — ${esc(iss.fix)}</li>`).join("")}</ul>
+           </div>`
+        : "");
+    const live = (agents || []).filter((a) => !["done", "failed", "gone", "settled"].includes(a.state));
+    $("fleet-cards").innerHTML = live.map((a) => {
+      const blocked = a.state === "blocked" || a.blocked_reason;
+      return `<div class="wcard${blocked ? " idle" : ""}" data-run="${a.kind === "run" ? a.id : ""}">
+        <div class="wc-head"><span class="key mono">${esc(a.name || a.label || (a.id || "").slice(0, 8))}</span>
+          <span class="chip ${blocked ? "warn" : ""}">${esc(a.state || "live")}</span>
+          <time class="mono">${a.started_at ? elapsed((Date.now() - new Date(a.started_at)) / 1000) : ""}</time></div>
+        ${a.label && a.name ? `<div class="wc-step">${esc(a.label)}</div>` : ""}
+        <div class="wc-meta">${a.workspace ? `<span class="chip muted">${esc(a.workspace)}</span>` : ""}<span class="chip muted">${a.kind}</span>${a.progress ? `<span class="chip">${esc(a.progress)}</span>` : ""}</div>
+        ${blocked && a.blocked_reason ? `<div class="wc-step">blocked: <b>${esc(a.blocked_reason)}</b></div>` : ""}
+        ${a.kind === "run" ? `<div class="term" data-tail="${a.id}"><div class="dim">loading tail…</div></div>
+        <div class="wc-actions"><button data-steer="${a.id}">Steer…</button>
+          <button data-kill="${a.id}">Kill</button></div>` : ""}
+      </div>`;
+    }).join("") || `<div class="empty">Nobody is working right now</div>`;
+    for (const el of $("fleet-cards").querySelectorAll("[data-tail]")) {
+      api("/runs/" + el.dataset.tail + "/tail").then((t) => {
+        el.innerHTML = (t.lines || []).map((l) => `<div>${esc(l)}</div>`).join("") || `<div class="dim">no output yet</div>`;
+      }).catch(() => { el.innerHTML = `<div class="dim">tail unavailable</div>`; });
+    }
+    // Take the wheel on a live run: say something to it, or stop it. Both were API-only until now —
+    // a runaway agent could not be stopped from this window.
+    $("fleet-cards").querySelectorAll("[data-steer]").forEach((b) => b.onclick = () => steerRunSheet(b.dataset.steer));
+    $("fleet-cards").querySelectorAll("[data-kill]").forEach((b) => b.onclick = () => confirmSheet({
+      title: "Kill this run?", danger: true, confirm: "Kill",
+      body: "Stops the agent process now. Work already committed in its worktree stays; anything in flight is lost.",
+      // stopRun returns false when there was no live process to signal (already exited, or the
+      // daemon restarted out from under it) — don't report that as a kill.
+      run: async () => {
+        const r = await api("/runs/" + b.dataset.kill + "/kill", { method: "POST", body: {} });
+        toast(r?.ok ? "Killed" : "Nothing to kill — the process was already gone");
+        loadFleet();
+      },
+    }));
+  } catch (e) { toast("fleet: " + e.message); }
+}
+// Steer only lands on a live steer-mode run; the daemon answers ok:false otherwise, and the durable
+// mailbox (`mc tell`) is the fallback — so say which one happened instead of a bare "sent".
+function steerRunSheet(runId) {
+  notesSheet({
+    title: "Steer this run", label: "Message to the agent", confirm: "Send",
+    hint: "Injected into the live run. Only works on a steer-mode run — otherwise nothing is delivered and you'll want `mc tell` instead.",
+    run: async (text) => {
+      const r = await api("/runs/" + runId + "/steer", { method: "POST", body: { text, from: "leo" } });
+      toast(r?.ok ? "Sent to the run" : "Not steerable — nothing delivered (use mc tell)");
+    },
+  });
+}
+
+// ── live updates over the existing /ws bus relay ────────────────────────────
+let ws, wsTimer;
+function connect() {
+  // /ws is admin-gated (?token= — browsers can't set WS handshake headers). Without the token the
+  // handshake 401s forever, so don't pretend: the footer says why live updates are off.
+  if (!TOKEN) { $("conn").textContent = "static (no admin token — live updates off)"; return; }
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws?token=" + encodeURIComponent(TOKEN));
+  ws.onopen = () => { $("conn").textContent = "live"; };
+  ws.onclose = () => { $("conn").textContent = "reconnecting…"; clearTimeout(wsTimer); wsTimer = setTimeout(connect, 2000); };
+  ws.onmessage = (m) => {
+    let ev; try { ev = JSON.parse(m.data); } catch { return; }
+    if (ev.topic === "agent.delta") onDelta(ev);
+    if (ev.topic === "agent.push") {
+      // Our own turn completing (finalizes even when the fetch timed out) — or another surface
+      // (Telegram, heartbeat) writing into this thread. The in-flight turn is matched on the agent
+      // that OWNS it, not on the room you happen to be in: switch rooms mid-turn and curAgent no
+      // longer matches, which used to leave `sending` stuck true — and now would strand the outbox.
+      // On "all workspaces" the daemon routes the turn to a project's own Robert, so the push comes
+      // back stamped with THAT workspace — still our turn. A picked room only matches itself.
+      const forTurn =
+        awaitingPush && inflight &&
+        ((ev.ws ?? null) === (inflight.thread ?? null) ||
+          (inflight.thread == null && !String(ev.ws ?? "").startsWith("agent:")));
+      if (forTurn) finalizePending(ev.reply || ""); // renders only if #pending is still on screen
+      else if (!sending && (ev.ws ?? null) === curAgent.thread && $("view-chat").classList.contains("active")) loadThread();
+    }
+    if (ev.topic === "board.posted" && $("view-board").classList.contains("active")) loadBoard();
+    if ((ev.topic === "run.started" || ev.topic === "run.ended" || ev.topic === "run.step" || ev.topic === "agent.state") && $("view-fleet").classList.contains("active")) queueFleet();
+    if ((ev.topic === "ask.created" || ev.topic === "ask.answered" || ev.topic?.startsWith("ticket.")) && $("view-tickets").classList.contains("active")) loadTickets();
+    if (INBOX_TOPICS.some((p) => ev.topic?.startsWith(p))) {
+      if ($("view-inbox").classList.contains("active")) queueInbox(); else loadCounts();
+    }
+  };
+}
+let fleetTimer; // run.step can fire fast — refresh at most every 2s
+function queueFleet() { clearTimeout(fleetTimer); fleetTimer = setTimeout(loadFleet, 2000); }
+// Anything that can add to (or clear) a queue in the Inbox. Same debounce as the fleet: a review
+// landing publishes several events in a row. Stalls have no topic of their own — they're derived
+// on read by /recovery — so they refresh when the view opens or any of these fires.
+const INBOX_TOPICS = ["ask.", "review.", "skill.", "idea.", "run.ended"];
+let inboxTimer;
+function queueInbox() { clearTimeout(inboxTimer); inboxTimer = setTimeout(loadInbox, 1500); }
+async function loadCounts() {
+  try {
+    const fleet = await api("/fleet");
+    $("pill-run-n").textContent = fleet.global.live + " running"; $("pill-run").hidden = !fleet.global.live;
+  } catch {}
+  // fetchInbox owns the "needs you" number — it counts reviews and stalls too, not just asks.
+  try { await fetchInbox(); } catch {}
+}
+
+// ── boot ────────────────────────────────────────────────────────────────────
+renderRoster(); loadThread(); loadCounts(); connect();
+</script>
+</body>
+</html>

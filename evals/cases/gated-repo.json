@@ -1,0 +1,27 @@
+{
+  "name": "gated-repo — synthetic: a repo that actually declares its Definition of Done",
+  "_why": "No repo in the live DB has done_criteria or gate_cmds set, so the real corpus cannot prove that either one reaches the builder. This case is hand-authored to cover that path until a real repo is configured; export a real one over it when that happens.",
+  "workspace": {
+    "name": "Gated",
+    "default_backend": "claude-code",
+    "default_model": null,
+    "sandbox_mode": "guard",
+    "route_config": null
+  },
+  "repo": {
+    "name": "gated-service",
+    "default_branch": "main",
+    "delivery": "pr",
+    "human_gate": "med",
+    "done_criteria": "- [ ] New behavior is covered by a test that fails without the change\n- [ ] No new lint or type errors\n- [ ] Public API changes are reflected in README.md",
+    "gate_cmds": "[{\"name\":\"typecheck\",\"cmd\":\"npm run typecheck\"},{\"name\":\"test\",\"cmd\":\"npm test\"}]"
+  },
+  "ticket": {
+    "title": "Return 429 with Retry-After when the rate limiter trips",
+    "priority": "P1",
+    "complexity": "3",
+    "tags": null,
+    "body": "---\nkey: GAT-1\ntitle: Return 429 with Retry-After when the rate limiter trips\nstatus: ready\npriority: P1\n---\n\n## Context\n\nThe limiter currently drops over-quota requests with a bare 503 and no hint of when to retry, so\nclients back off blindly and retry storms build up behind it.\n\n## Acceptance criteria\n\n- Over-quota requests get `429 Too Many Requests`\n- The response carries `Retry-After` in seconds, matching the window the limiter is actually using\n- Under-quota traffic is unaffected\n\n## Work log\n"
+  },
+  "reviews": []
+}

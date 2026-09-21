@@ -1,0 +1,20 @@
+{
+ "name": "no-repo — project-scoped work with no repo attached",
+ "_why": "Not everything an agent does is a code change. A ticket with repo_id NULL must still be scoped to something, or the agent is told to work on nothing at all — the build goal has to name the workspace instead of a repo.",
+ "workspace": {
+  "name": "Analytics",
+  "default_backend": "claude-code",
+  "default_model": null,
+  "sandbox_mode": "guard",
+  "route_config": null
+ },
+ "repo": null,
+ "ticket": {
+  "title": "Audit which scheduled reports nobody has opened in 90 days",
+  "priority": "P3",
+  "complexity": "2",
+  "tags": null,
+  "body": "---\nkey: EX-9\ntitle: Audit which scheduled reports nobody has opened in 90 days\nstatus: ready\npriority: P3\ncomplexity: 2\nassignee: agent\n---\n\n## Context\n\nScheduled reports accumulate. Each one costs a warehouse query on every run and nobody ever\nretires them, so the bill grows without anyone deciding it should.\n\nThere is no repo to change here — the answer is a list, and then a conversation about it.\n\n## Acceptance criteria\n\n- [ ] A list of every scheduled report, with its schedule, last-opened date, and owner.\n- [ ] Anything not opened in 90 days is flagged, not deleted.\n- [ ] The findings land as a note on this ticket; the decision to retire is the operator's.\n\n## Out of scope\n\n- Actually deleting anything.\n\n## Work log\n<!-- agent appends timestamped entries; never rewrites history -->\n\n## Review notes\n\n## Plan\n"
+ },
+ "reviews": []
+}

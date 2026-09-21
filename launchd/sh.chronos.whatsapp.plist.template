@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.chronos.whatsapp</string>
+
+  <!-- Keeps WhatsApp up for wapp (desktop/wapp.swift). A scheduled send drives the real client, so the
+       app has to be running AND have a window: with the window closed the AX tree is just the menu bar,
+       no composer, and the send fails. Launching it at login is the cheapest way to guarantee both.
+       RunAtLoad with no KeepAlive, same as the overlay — quitting it stays quit until next login. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/open</string>
+    <string>-a</string>
+    <string>/Applications/WhatsApp.app</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>

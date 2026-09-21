@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.chronos.app</string>
+
+  <!-- The bundle's executable, not the ~/.mc/bin symlink: launchd execs the path it is given, and
+       the Dock reads the icon and the name off the bundle that path sits inside. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.mc/mc-app.app/Contents/MacOS/mc-app</string>
+    <string>/desk</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- KeepAlive ONLY on an unsuccessful exit, which is the whole point: ⌘Q goes through
+       NSApplication.terminate and exits 0, so quitting still stays quit until next login. What this
+       catches is the Desk dying without being asked to — and at login that is not hypothetical: a
+       bundle rebuilt while the old executable was still mapped gets its next launch killed by the
+       kernel with OS_REASON_CODESIGNING, and with no KeepAlive at all that was the day's Desk gone
+       before the operator ever saw a window. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/app.err.log</string>
+</dict>
+</plist>

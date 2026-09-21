@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  daemon:
+    # macOS is the platform the sandbox actually exists on (Seatbelt), so it is the one that must
+    # stay green. Linux runs too because it is what most contributors have and the daemon is
+    # expected to boot there unsandboxed — a Linux-only break should be a red check, not a surprise.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc -p tsconfig.json --noEmit
+      - name: Test
+        run: npm test

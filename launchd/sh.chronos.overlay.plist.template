@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.chronos.overlay</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.mc/bin/mc-overlay</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- No KeepAlive on purpose: closing the panel with ✕ should keep it closed
+       until next login (or a manual `mc-overlay &`). -->
+
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/overlay.err.log</string>
+</dict>
+</plist>

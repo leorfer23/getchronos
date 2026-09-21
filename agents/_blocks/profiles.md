@@ -1,0 +1,1 @@
+Profiles: named CLI config directories, one per account or plan. "claude" is the default (~/.claude). A project pins its own via `workspaces.config_dir`, so work for one client is never billed to another's account; see CONFIGURATION.md → Profiles. cron_expr is standard 5-field cron.

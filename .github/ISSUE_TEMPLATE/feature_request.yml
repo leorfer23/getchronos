@@ -1,0 +1,24 @@
+name: Idea
+description: A change to how the daemon behaves.
+labels: [idea]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What went wrong that made you want this
+      description: >
+        Most of this repo exists because something failed once. An idea grounded in a
+        real failure is much easier to judge than one grounded in a feature list.
+    validations:
+      required: true
+  - type: textarea
+    id: shape
+    attributes:
+      label: What you think it should do instead
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried first
+      description: Config that nearly worked, or the workaround you are living with.

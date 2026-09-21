@@ -1,0 +1,484 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Tickets</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font: 12px/1.45 -apple-system, "SF Pro Text", sans-serif;
+    background: rgba(24, 24, 28, 0.92);
+    color: #ddd;
+    border-radius: 12px;
+    overflow-y: auto;
+    height: 100vh;
+    padding: 10px 12px 14px;
+    user-select: none;
+  }
+  header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  header h1 { font-size: 13px; font-weight: 600; color: #fff; flex: 1; }
+  header label { font-size: 11px; color: #888; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .ws { margin-bottom: 10px; }
+  .ws-name { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #8ab4f8; display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; cursor: pointer; }
+  .ws-name button { margin-left: auto; }
+  .ws-name .caret { color: #666; font-size: 9px; width: 8px; }
+  .ws-name .count {
+    font-size: 9px; font-weight: 600; background: #333; color: #999;
+    border-radius: 8px; padding: 0 6px;
+  }
+  .repo-name { font-size: 10px; color: #777; margin: 4px 0 1px 2px; }
+  /* Ideas section reuses .ws-name's exact layout (caret + label + count), just recolored to the
+     same amber already used for the "planning" status chip — no new design system. */
+  .ws-name.idea-name { color: #e6c46a; margin-top: 8px; }
+  .t {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 4px; border-radius: 6px;
+  }
+  .t:hover { background: rgba(255,255,255,0.06); }
+  .t .key { font-family: ui-monospace, monospace; font-size: 10px; color: #999; flex-shrink: 0; }
+  .t .title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: text; }
+  .t .title:focus { white-space: normal; outline: 1px solid #8ab4f8; border-radius: 3px; padding: 0 2px; }
+  .t.closed .title { color: #666; text-decoration: line-through; }
+  select.status {
+    -webkit-appearance: none; appearance: none;
+    border: none; border-radius: 9px; padding: 1px 7px;
+    font-size: 10px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+    background: #333; color: #ccc; text-align: center;
+  }
+  .s-backlog { background:#333 !important; color:#aaa !important; }
+  .s-spec, .s-ready { background:#1d3a5f !important; color:#8ab4f8 !important; }
+  .s-planning, .s-planned { background:#4a3a10 !important; color:#e6c46a !important; }
+  .s-in_progress, .s-shipping { background:#173d2a !important; color:#6fd394 !important; }
+  .s-review { background:#3d2a55 !important; color:#c39bf5 !important; }
+  .s-blocked { background:#552222 !important; color:#f28b82 !important; }
+  .s-done { background:#173d2a !important; color:#4f9d6f !important; }
+  .s-dismissed { background:#2a2a2a !important; color:#666 !important; }
+  button {
+    border: none; background: none; color: #888; cursor: pointer;
+    font-size: 11px; padding: 1px 4px; border-radius: 4px;
+  }
+  button:hover { background: rgba(255,255,255,0.1); color: #fff; }
+  .del.arm { color: #f28b82; }
+  .detail {
+    margin: 2px 4px 6px 4px; padding: 6px 8px;
+    background: rgba(255,255,255,0.04); border-left: 2px solid #8ab4f8; border-radius: 4px;
+    user-select: text;
+  }
+  .detail .meta { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+  .detail .chip {
+    font-size: 9px; font-weight: 600; padding: 1px 7px; border-radius: 9px;
+    background: #333; color: #bbb;
+  }
+  .chip.p0 { background: #552222; color: #f28b82; }
+  .chip.p1 { background: #4a3a10; color: #e6c46a; }
+  .chip.blocked { background: #552222; color: #f28b82; }
+  .chip.cost { background: #1d3a5f; color: #8ab4f8; }
+  .detail .summary { color: #ddd; font-size: 12px; margin-bottom: 6px; }
+  .detail a { color: #8ab4f8; }
+  .detail .lnk { font-size: 10px; color: #999; }
+  .md { max-height: 300px; overflow-y: auto; color: #bbb; }
+  .md h1, .md h2 {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+    color: #8ab4f8; margin: 8px 0 3px;
+  }
+  .md h3, .md h4 { font-size: 10px; font-weight: 700; color: #999; margin: 6px 0 2px; }
+  .md p { margin: 0 0 4px; }
+  .md ul, .md ol { margin: 0 0 4px; padding-left: 16px; }
+  .md li { margin: 1px 0; }
+  .md li input[type=checkbox] { width: 10px; height: 10px; margin: 0 3px 0 0; accent-color: #6fd394; vertical-align: -1px; }
+  .md code { background: #333; border-radius: 3px; padding: 0 3px; font-size: 10px; }
+  .md pre {
+    background: #222; border-radius: 5px; padding: 5px 7px; margin: 0 0 5px;
+    font: 10px/1.5 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word;
+  }
+  .md pre code { background: none; padding: 0; }
+  .md strong, .md b { color: #eee; }
+  .md blockquote { margin: 0 0 4px; padding: 2px 8px; border-left: 2px solid #555; color: #999; }
+  .md hr { border: none; border-top: 1px solid #3a3a3e; margin: 6px 0; }
+  .md table { border-collapse: collapse; margin: 0 0 5px; font-size: 10px; }
+  .md th, .md td { border: 1px solid #3a3a3e; padding: 2px 6px; text-align: left; }
+  .md th { color: #8ab4f8; background: rgba(255,255,255,0.04); }
+  .md img { max-width: 100%; border-radius: 4px; }
+  .timeline { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; margin-bottom: 6px; }
+  .timeline .step { display: flex; flex-direction: column; align-items: center; }
+  .timeline .step .when { font-size: 8px; color: #777; margin-top: 1px; }
+  .timeline .arrow { color: #666; font-size: 10px; padding: 0 1px; align-self: flex-start; margin-top: 2px; }
+  .timeline .chip { cursor: default; }
+  .new-row { display: none; gap: 6px; padding: 3px 4px; }
+  .new-row.open { display: flex; }
+  .new-row input, .new-row select {
+    background: #2a2a2e; border: 1px solid #444; border-radius: 5px;
+    color: #ddd; font-size: 11px; padding: 2px 6px;
+  }
+  .new-row input { flex: 1; }
+  #err { color: #f28b82; font-size: 10px; margin-top: 6px; white-space: pre-wrap; }
+  .empty { color: #555; font-size: 11px; padding: 2px 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tickets</h1>
+  <label><input type="checkbox" id="closed"> closed</label>
+  <button id="reload" title="Refresh">↻</button>
+</header>
+<div id="app"></div>
+<div id="err"></div>
+<script src="/vendor/marked.min.js"></script>
+<script src="/vendor/purify.min.js"></script>
+<script>
+const STATUSES = ["backlog","spec","ready","planning","planned","in_progress","review","shipping","blocked","done","dismissed"];
+const CLOSED = new Set(["done","dismissed"]);
+const $ = (s, el=document) => el.querySelector(s);
+let workspaces = [], tickets = [], ideas = [];
+
+// marked (GFM: tables, task lists, autolinks) + DOMPurify — ticket bodies can carry
+// ClickUp/Jira-synced HTML, so everything is sanitized before hitting innerHTML.
+function mdHtml(src) {
+  src = src.replace(/^---\n[\s\S]*?\n---\n*/, ""); // frontmatter dup of the chips
+  src = src.replace(/<!--[\s\S]*?-->/g, ""); // template comments are agent-facing noise
+  return DOMPurify.sanitize(marked.parse(src, { gfm: true, breaks: true }));
+}
+
+// All http(s) links → default browser via the Swift createWebViewWith hook (window.open);
+// plain in-page navigation would replace the panel with the external site.
+document.addEventListener("click", (e) => {
+  const a = e.target.closest('a[href^="http"]');
+  if (a) { e.preventDefault(); window.open(a.href); }
+});
+
+const api = async (path, opts) => {
+  const headers = { "content-type": "application/json" };
+  // Ideas promote/kill are requireAdmin server-side. The token is injected by the NATIVE overlay
+  // (desktop/overlay.swift reads ~/chronos/.admin-token and adds a WKUserScript) — never by the
+  // daemon over HTTP, which would hand it to any sandboxed agent that curls this page (PER-4), and
+  // never persisted here. Open this page in a plain browser and there is no token: read-only.
+  if (window.__MC_TOKEN__) headers["x-mc-admin"] = window.__MC_TOKEN__;
+  const r = await fetch("/api" + path, {
+    method: opts?.method,
+    headers,
+    body: opts?.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+  return r.json();
+};
+
+async function load() {
+  try {
+    [workspaces, tickets] = await Promise.all([api("/workspaces"), api("/tickets")]);
+    // Idea pool is per-workspace (no aggregate /api/ideas route) — fetch the proposed queue for
+    // every live workspace, same as ui/src/views/IdeasView.tsx.
+    const ideaLists = await Promise.all(
+      workspaces.filter((w) => !w.archived)
+        .map((w) => api("/workspaces/" + w.id + "/ideas?status=proposed").catch(() => [])),
+    );
+    ideas = ideaLists.flat();
+    $("#err").textContent = "";
+    render();
+  } catch (e) { $("#err").textContent = String(e); }
+}
+
+function statusSelect(t) {
+  const sel = document.createElement("select");
+  sel.className = "status s-" + t.status;
+  for (const s of STATUSES) {
+    const o = document.createElement("option");
+    o.value = s; o.textContent = s.replace("_", " "); o.selected = s === t.status;
+    sel.appendChild(o);
+  }
+  sel.onchange = () => mutate(() => api("/tickets/" + t.id, { method: "PATCH", body: { status: sel.value } }));
+  return sel;
+}
+
+function row(t) {
+  const div = document.createElement("div");
+  div.className = "t" + (CLOSED.has(t.status) ? " closed" : "");
+  const key = document.createElement("span");
+  key.className = "key"; key.textContent = t.key;
+  const title = document.createElement("span");
+  title.className = "title"; title.textContent = t.title; title.title = t.summary || t.title;
+  title.ondblclick = () => { title.contentEditable = "plaintext-only"; title.focus(); };
+  title.onblur = () => {
+    title.contentEditable = "false";
+    const v = title.textContent.trim();
+    if (v && v !== t.title) mutate(() => api("/tickets/" + t.id, { method: "PATCH", body: { title: v } }));
+    else title.textContent = t.title;
+  };
+  title.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); title.blur(); }
+    if (e.key === "Escape") { title.textContent = t.title; title.blur(); }
+  };
+  const del = document.createElement("button");
+  del.className = "del"; del.textContent = "✕"; del.title = "Delete";
+  del.onclick = () => {
+    if (!del.classList.contains("arm")) {
+      del.classList.add("arm"); del.textContent = "sure?";
+      setTimeout(() => { del.classList.remove("arm"); del.textContent = "✕"; }, 2500);
+    } else mutate(() => api("/tickets/" + t.id, { method: "DELETE" }));
+  };
+  div.append(key, title, statusSelect(t), del);
+  const wrap = document.createElement("div");
+  wrap.appendChild(div);
+  let detail = null;
+  div.onclick = async (e) => {
+    if (e.target.closest("select,button") || title.isContentEditable) return;
+    if (detail) { detail.remove(); detail = null; return; }
+    detail = document.createElement("div");
+    detail.className = "detail";
+    detail.textContent = "…";
+    wrap.appendChild(detail);
+    try {
+      const [full, acts] = await Promise.all([
+        api("/tickets/" + t.id),
+        api("/activity?entity=" + t.id + "&limit=1000").catch(() => []),
+      ]);
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      const chip = (text, cls = "") => {
+        const c = document.createElement("span");
+        c.className = "chip " + cls; c.textContent = text;
+        meta.appendChild(c);
+      };
+      if (full.priority) chip(full.priority, full.priority.toLowerCase());
+      if (full.assignee) chip(full.assignee);
+      if (full.complexity) chip("cx " + full.complexity);
+      if (full.cost?.runs) chip("$" + full.cost.cost_usd.toFixed(2) + " · " + full.cost.runs + " runs", "cost");
+      if (full.blocked) chip("BLOCKED", "blocked");
+      if (full.goal) chip(`goal ${full.goal.done}/${full.goal.total}`);
+      let tags = full.tags;
+      if (typeof tags === "string") { try { tags = JSON.parse(tags); } catch { tags = []; } }
+      for (const tag of tags || []) chip("#" + tag);
+      chip((full.created_at || "").slice(0, 10));
+      detail.replaceChildren(meta);
+      // Status timeline from the activity trail (oldest → newest, consecutive dupes collapsed).
+      // Activity is capped/pruned, so very old transitions may be missing — show what's there.
+      const steps = [];
+      for (const a of [...acts].reverse()) {
+        if (a.entity !== t.id) continue;
+        if (a.topic !== "ticket.created" && a.topic !== "ticket.updated") continue;
+        let st;
+        try { st = JSON.parse(a.detail || "{}").status; } catch {}
+        if (a.topic === "ticket.created") st = st || "backlog";
+        if (st && st !== steps[steps.length - 1]?.st) steps.push({ st, ts: a.ts });
+      }
+      if (!steps.length) steps.push({ st: t.status, ts: full.updated_at });
+      const tl = document.createElement("div");
+      tl.className = "timeline";
+      steps.forEach((s, i) => {
+        if (i) {
+          const ar = document.createElement("span");
+          ar.className = "arrow"; ar.textContent = "→";
+          tl.appendChild(ar);
+        }
+        const step = document.createElement("span");
+        step.className = "step";
+        const c = document.createElement("span");
+        c.className = "chip s-" + s.st; c.textContent = s.st.replace("_", " ");
+        const w = document.createElement("span");
+        w.className = "when";
+        w.textContent = new Date(s.ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        step.append(c, w);
+        tl.appendChild(step);
+      });
+      detail.appendChild(tl);
+      if (full.summary) {
+        const s = document.createElement("div");
+        s.className = "summary"; s.textContent = full.summary;
+        detail.appendChild(s);
+      }
+      const linkLabel = { pr: "PR", clickup: "ClickUp", jira: "Jira" };
+      for (const [label, url] of [["PR", full.pr_url], [linkLabel[full.external_system] || "↗", full.external_url]]) {
+        if (!url) continue;
+        const a = document.createElement("a");
+        a.href = url; a.textContent = label + " ↗ " + url.replace(/^https?:\/\//, ""); a.target = "_blank";
+        const d = document.createElement("div");
+        d.appendChild(a); detail.appendChild(d);
+      }
+      for (const l of full.links || []) {
+        const d = document.createElement("div");
+        d.className = "lnk";
+        d.textContent = `${l.type} ${l.dir === "out" ? "→" : "←"} ${l.ticket.key} ${l.ticket.title} [${l.ticket.status}]`;
+        detail.appendChild(d);
+      }
+      if (full.markdown) {
+        const md = document.createElement("div");
+        md.className = "md";
+        md.innerHTML = mdHtml(full.markdown);
+        detail.appendChild(md);
+      }
+    } catch (err) { detail.textContent = String(err); }
+  };
+  return wrap;
+}
+
+function newRow(ws) {
+  const div = document.createElement("div");
+  div.className = "new-row";
+  const input = document.createElement("input");
+  input.placeholder = "New ticket title…";
+  const repoSel = document.createElement("select");
+  const none = document.createElement("option");
+  none.value = ""; none.textContent = "no repo";
+  repoSel.appendChild(none);
+  for (const r of ws.repos || []) {
+    const o = document.createElement("option");
+    o.value = r.id; o.textContent = r.name || r.slug || r.path?.split("/").pop() || r.id.slice(0, 8);
+    repoSel.appendChild(o);
+  }
+  input.onkeydown = (e) => {
+    if (e.key === "Escape") div.classList.remove("open");
+    if (e.key !== "Enter" || !input.value.trim()) return;
+    mutate(() => api("/tickets", { method: "POST", body: {
+      workspace_id: ws.id, title: input.value.trim(),
+      repo_id: repoSel.value || null,
+    }}));
+  };
+  div.append(input, repoSel);
+  return div;
+}
+
+// Idea pool row: title only (no key/status select — ideas aren't tickets yet). Click expands the
+// pitch (+ acceptance, if any) through the same marked+DOMPurify pipeline as ticket bodies —
+// pitches come from intake/miner agents, same trust level as synced ticket markdown.
+function ideaRow(idea) {
+  const div = document.createElement("div");
+  div.className = "t idea";
+  const kind = document.createElement("span");
+  kind.className = "key"; kind.textContent = idea.kind;
+  const title = document.createElement("span");
+  title.className = "title"; title.textContent = idea.title; title.title = idea.title;
+  const promote = document.createElement("button");
+  promote.textContent = "↑"; promote.title = "Promote to ticket";
+  promote.onclick = () => mutate(() => api("/ideas/" + idea.id + "/promote", { method: "POST", body: {} }));
+  const kill = document.createElement("button");
+  kill.className = "del"; kill.textContent = "✕"; kill.title = "Kill";
+  kill.onclick = () => {
+    if (!kill.classList.contains("arm")) {
+      kill.classList.add("arm"); kill.textContent = "sure?";
+      setTimeout(() => { kill.classList.remove("arm"); kill.textContent = "✕"; }, 2500);
+    } else mutate(() => api("/ideas/" + idea.id + "/kill", { method: "POST" }));
+  };
+  div.append(kind, title, promote, kill);
+  const wrap = document.createElement("div");
+  wrap.appendChild(div);
+  let detail = null;
+  div.onclick = (e) => {
+    if (e.target.closest("button")) return;
+    if (detail) { detail.remove(); detail = null; return; }
+    detail = document.createElement("div");
+    detail.className = "detail";
+    const md = document.createElement("div");
+    md.className = "md";
+    let src = idea.pitch || "";
+    if (idea.acceptance) src += "\n\n**Acceptance**\n\n" + idea.acceptance;
+    md.innerHTML = mdHtml(src);
+    detail.appendChild(md);
+    wrap.appendChild(detail);
+  };
+  return wrap;
+}
+
+// Same collapse/expand pattern as the workspace header (caret + localStorage-persisted Set), kept
+// in a separate Set so collapsing the idea pool doesn't affect the ticket list's collapse state.
+const collapsedIdeas = new Set(JSON.parse(localStorage.getItem("mc-collapsed-ideas") || "[]"));
+
+function ideaSection(ws, wsIdeas) {
+  const sec = document.createElement("div");
+  const isCollapsed = collapsedIdeas.has(ws.id);
+  const h = document.createElement("div");
+  h.className = "ws-name idea-name";
+  const caret = document.createElement("span");
+  caret.className = "caret"; caret.textContent = isCollapsed ? "▸" : "▾";
+  const name = document.createElement("span");
+  name.textContent = "💡 Ideas (" + wsIdeas.length + ")";
+  h.append(caret, name);
+  h.onclick = () => {
+    collapsedIdeas.has(ws.id) ? collapsedIdeas.delete(ws.id) : collapsedIdeas.add(ws.id);
+    localStorage.setItem("mc-collapsed-ideas", JSON.stringify([...collapsedIdeas]));
+    render();
+  };
+  sec.appendChild(h);
+  if (!isCollapsed) {
+    for (const idea of wsIdeas) sec.appendChild(ideaRow(idea));
+  }
+  return sec;
+}
+
+async function mutate(fn) {
+  try { await fn(); await load(); }
+  catch (e) { $("#err").textContent = String(e); }
+}
+
+const collapsed = new Set(JSON.parse(localStorage.getItem("mc-collapsed") || "[]"));
+
+function render() {
+  const app = $("#app");
+  app.replaceChildren();
+  const showClosed = $("#closed").checked;
+  for (const ws of workspaces.filter((w) => !w.archived)) {
+    const wsTickets = tickets.filter((t) => t.workspace_id === ws.id && (showClosed || !CLOSED.has(t.status)));
+    const isCollapsed = collapsed.has(ws.id);
+    const sec = document.createElement("div");
+    sec.className = "ws";
+    const h = document.createElement("div");
+    h.className = "ws-name";
+    const caret = document.createElement("span");
+    caret.className = "caret"; caret.textContent = isCollapsed ? "▸" : "▾";
+    const name = document.createElement("span");
+    name.textContent = ws.name || ws.slug;
+    h.append(caret, name);
+    if (isCollapsed && wsTickets.length) {
+      const n = document.createElement("span");
+      n.className = "count"; n.textContent = wsTickets.length;
+      h.appendChild(n);
+    }
+    h.onclick = (e) => {
+      if (e.target.closest("button")) return;
+      collapsed.has(ws.id) ? collapsed.delete(ws.id) : collapsed.add(ws.id);
+      localStorage.setItem("mc-collapsed", JSON.stringify([...collapsed]));
+      render();
+    };
+    const add = document.createElement("button");
+    add.textContent = "＋"; add.title = "New ticket";
+    const nr = newRow(ws);
+    add.onclick = () => { nr.classList.toggle("open"); nr.querySelector("input").focus(); };
+    h.appendChild(add);
+    sec.append(h, nr);
+    // Idea pool section — independent of the ticket list's own collapse state (below), so an
+    // operator can eyeball proposed ideas even with the ticket list collapsed.
+    const wsIdeas = ideas.filter((i) => i.workspace_id === ws.id);
+    if (wsIdeas.length) sec.appendChild(ideaSection(ws, wsIdeas));
+    if (isCollapsed) { app.appendChild(sec); continue; }
+    if (!wsTickets.length) {
+      const e = document.createElement("div");
+      e.className = "empty"; e.textContent = "—";
+      sec.appendChild(e);
+    } else {
+      const repoName = (id) => (ws.repos || []).find((r) => r.id === id)?.name
+        || (ws.repos || []).find((r) => r.id === id)?.slug || null;
+      const byRepo = new Map();
+      for (const t of wsTickets) {
+        const k = t.repo_id || "";
+        if (!byRepo.has(k)) byRepo.set(k, []);
+        byRepo.get(k).push(t);
+      }
+      for (const [repoId, list] of byRepo) {
+        if (byRepo.size > 1 || repoId) {
+          const rn = document.createElement("div");
+          rn.className = "repo-name"; rn.textContent = repoId ? (repoName(repoId) || "repo") : "no repo";
+          sec.appendChild(rn);
+        }
+        for (const t of list) sec.appendChild(row(t));
+      }
+    }
+    app.appendChild(sec);
+  }
+}
+
+$("#closed").onchange = render;
+$("#reload").onclick = load;
+load();
+setInterval(load, 30_000);
+</script>
+</body>
+</html>
