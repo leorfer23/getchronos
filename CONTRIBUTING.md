@@ -58,6 +58,14 @@ is for. If you add something an agent must always be told, add the assertion too
   `src/repo-root.ts`.
 - A new default that requires configuration to be safe.
 
+## Public remote
+
+Day-to-day work targets **https://github.com/leorfer23/getchronos** (`origin`). PRs land there.
+
+If client or operator names ever reappear on HEAD, do **not** rewrite this remote in place. Scrub,
+then run `scripts/oss-export-public.sh` and push the orphan tip to getchronos (the same pattern as
+the initial public release). The private development remote, if you have one, stays private.
+
 ## Reporting bugs
 
 Include what you expected, what happened, and the smallest repro. `chronos.err.log` at the repo root
