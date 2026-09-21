@@ -12,12 +12,19 @@
 
 import { chromium } from "playwright";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 const CFT = "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
 const BASE = (process.env.CHRONOS_BASE_URL ?? "http://127.0.0.1:7799").replace(/\/$/, "");
 const ADMIN_TOKEN = process.env.CHRONOS_ADMIN_TOKEN;
 const OUT = process.argv[2];
+// Written by demo-seed.mjs: the Lead session's id, so the Desk's own (client-only, localStorage)
+// fold state can start with the Lead's worker group open — otherwise the hero shows just the Lead
+// card with its workers collapsed out of view.
+const IDS_PATH = process.env.CHRONOS_DEMO_IDS_FILE ?? path.join(os.tmpdir(), "chronos-demo-ids.json");
+const IDS = fs.existsSync(IDS_PATH) ? JSON.parse(fs.readFileSync(IDS_PATH, "utf8")) : {};
 if (!ADMIN_TOKEN) {
   console.error("CHRONOS_ADMIN_TOKEN is required.");
   process.exit(1);
@@ -41,30 +48,50 @@ async function stubUsage(page) {
   );
 }
 
+// Every UI (desk.html, app.html, phone.html) reads the SCRATCH daemon's own admin token from
+// browser state set before the page's own scripts run — desk/phone from localStorage("mc-token"),
+// app from window.__MC_TOKEN__ (normally injected by the native desktop wrapper) — never from a
+// pasted-into-a-dialog flow or a URL, so the token never appears in a screenshot or a URL bar.
+// NEVER the live daemon's token — only ever this scratch instance's own.
+async function authedContext(browser, viewport, deviceScaleFactor, { leadOpen } = {}) {
+  const ctx = await browser.newContext({ viewport, deviceScaleFactor, colorScheme: "dark" });
+  await ctx.addInitScript(({ token, leadOpen }) => {
+    try {
+      window.localStorage.setItem("mc-token", token);
+      if (leadOpen) window.localStorage.setItem("desk-lead-open", JSON.stringify([leadOpen]));
+    } catch {}
+    window.__MC_TOKEN__ = token;
+  }, { token: ADMIN_TOKEN, leadOpen });
+  return ctx;
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: CFT, headless: true });
 
-  // desk-hero: /app's Fleet tab — spend/success metrics + the blocked cart-drawer run card. This
-  // scratch demo never opens a real Desk terminal (that would mean spawning a real agent CLI — see
-  // site/assets/README.md), so /desk's own Fleet tab (built around live terminal widgets) stays
-  // empty; /app's Fleet tab reads the same ticket/run/ask data the rest of this demo seeds and is
-  // what actually looks alive.
+  // desk-hero: /desk itself — the wall of live terminal cards (Lead + workers, grouped, in varied
+  // states). scripts/demo-seed.mjs opens these as real (harmless, mock-backend) Desk sessions.
   {
-    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, colorScheme: "dark" });
+    const ctx = await authedContext(browser, { width: 1440, height: 900 }, 2, { leadOpen: IDS.leadId });
     const page = await ctx.newPage();
     await stubUsage(page);
-    await page.goto(`${BASE}/app`, { waitUntil: "networkidle" });
-    await page.waitForTimeout(400);
-    await page.locator("button[data-view=fleet]").click();
-    await page.waitForTimeout(800);
+    await page.goto(`${BASE}/desk`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(1200);
+    // Focus the blocked pricing worker so the main panel shows an actual open question, not just
+    // the Lead's goal text.
+    const blockedRow = page.getByText("Migrate checkout to new pricing API", { exact: false });
+    if (await blockedRow.isVisible().catch(() => false)) {
+      await blockedRow.click();
+      await page.waitForTimeout(500);
+    }
     await page.screenshot({ path: `${OUT}/desk-hero.png` });
     await ctx.close();
     console.log("wrote desk-hero.png");
   }
 
-  // ticket-run: /app Tickets, the acme-api idempotency ticket (a reviewed mock run).
+  // ticket-run: /app Tickets, the acme-api idempotency ticket (a reviewed mock run, with real
+  // Work log entries — see demo-seed.mjs).
   {
-    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, colorScheme: "dark" });
+    const ctx = await authedContext(browser, { width: 1440, height: 900 }, 2);
     const page = await ctx.newPage();
     await stubUsage(page);
     await page.goto(`${BASE}/app`, { waitUntil: "networkidle" });
@@ -79,7 +106,7 @@ async function main() {
 
   // ask: /app Tickets, the cart-drawer ticket (open ask, answer box visible).
   {
-    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, colorScheme: "dark" });
+    const ctx = await authedContext(browser, { width: 1440, height: 900 }, 2);
     const page = await ctx.newPage();
     await stubUsage(page);
     await page.goto(`${BASE}/app`, { waitUntil: "networkidle" });
@@ -92,19 +119,16 @@ async function main() {
     console.log("wrote ask.png");
   }
 
-  // phone: /app's Tickets view at mobile width. /phone.html is wired to live terminal SESSIONS
-  // (Working/Needs you/Finished), which this scratch demo never creates (no real agent spawned —
-  // see desk-hero above), so it renders an honest but empty "nothing open" screen. /app is the
-  // same ticket data as the rest of this demo and is responsive down to phone width, so it's what
-  // actually shows "an ask reaching you on your phone".
+  // phone: the actual phone PWA (static/phone.html) at phone size — the default dashboard, which
+  // already shows real, alive counts and an inline "1 asking" badge on the blocked Lead group
+  // (drilling further just switches tabs within the Lead's own multi-ticket session view, not to
+  // the individual worker's question, so the dashboard itself is the clearer shot).
   {
-    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, colorScheme: "dark" });
+    const ctx = await authedContext(browser, { width: 390, height: 844 }, 3);
     const page = await ctx.newPage();
     await stubUsage(page);
-    await page.goto(`${BASE}/app`, { waitUntil: "networkidle" });
-    await page.waitForTimeout(400);
-    await page.locator("button[data-view=tickets]").click();
-    await page.waitForTimeout(500);
+    await page.goto(`${BASE}/phone`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(900);
     await page.screenshot({ path: `${OUT}/phone.png` });
     await ctx.close();
     console.log("wrote phone.png");
