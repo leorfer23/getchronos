@@ -7,7 +7,7 @@
 //
 // Usage:
 //   npm run install:launchd            # daemon only
-//   npm run install:launchd -- --all   # daemon + whisper + overlay (skips ones not set up)
+//   npm run install:launchd -- --all   # daemon + whisper + overlay + cloudflared (skips ones not set up)
 //   npm run install:launchd -- --print # render to stdout, install nothing
 
 import fs from "node:fs";
@@ -74,6 +74,19 @@ const AGENTS = [
     label: "sh.chronos.whatsapp",
     precondition: () =>
       fs.existsSync(path.join(home, ".mc", "wapp.app")) ? null : "~/.mc/wapp.app not installed (scripts/build-wapp.sh)",
+  },
+  {
+    // Cloudflare Tunnel for Desk/Phone. Token is created in Zero Trust and saved locally — see
+    // CONFIGURATION.md §4. Skipped until both the binary and the token file exist.
+    label: "sh.chronos.cloudflared",
+    precondition: () => {
+      const bin = ["/opt/homebrew/bin/cloudflared", "/usr/local/bin/cloudflared"].find((p) => fs.existsSync(p));
+      if (!bin) return "cloudflared not installed (brew install cloudflared)";
+      const token = path.join(home, ".cloudflared", "chronos-desk.token");
+      if (!fs.existsSync(token)) return "no ~/.cloudflared/chronos-desk.token (CONFIGURATION.md §4)";
+      subs.__CLOUDFLARED_BIN__ = bin;
+      return null;
+    },
   },
 ];
 
