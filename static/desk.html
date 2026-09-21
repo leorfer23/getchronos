@@ -838,6 +838,9 @@
     <div class="rows" id="rows"></div>
     <div class="empty" id="rail-empty" hidden>no open terminals</div>
     <section id="sec-parked" class="fold"><h3><span>Parked</span><span class="n" id="parked-n"></span><span class="rule"></span><button class="add" id="btn-note" title="Park a thought">+ note</button></h3><div class="rows" id="parked"></div></section>
+    <!-- The terminals that have ended, newest first. Not triage — the rail stays live-only — but the
+         20 you most likely want to reread or reopen, folded away until you ask for them. -->
+    <section id="sec-recent" class="fold"><h3><span>Recent</span><span class="n" id="recent-n"></span><span class="rule"></span></h3><div class="rows" id="recent"></div></section>
   </aside>
 
   <section class="stage" id="stage">
@@ -1203,13 +1206,17 @@ const S = {
   focus: new Map(),                   // session id → last plain-English line from the Focus feed
   panes: new Map(),                   // at most one: the stage's xterm
   font: Number(localStorage.getItem("desk-font")) || 15,
-  fold: readJson("desk-fold", { parked: true }),
+  fold: readJson("desk-fold", { parked: true, recent: true }),
   armDone: 0,                         // "close all done" asks once; the second click within 3s does it
+  ended: [],                          // the newest ended terminals, for the rail's Recent section
   stickEnded: false,                  // you chose an ended terminal (Recent, the log, a link): keep it on the stage
 };
 // The story on the stage: events of the active terminal, what is unfolded, the armed close.
 const F = { id: null, events: [], seen: new Set(), loaded: false, all: false, open: new Set(), arm: 0, req: 0 };
-const byId = (id) => S.sessions.find((s) => s.id === id);
+// Live first, then the ended rows Recent holds: selecting one of those has to resolve to a session
+// or the stage, the story and ↻ Reopen have nothing to work with.
+const byId = (id) => S.sessions.find((s) => s.id === id) || S.ended.find((s) => s.id === id);
+const leadLive = (id) => !!id && S.sessions.some((x) => x.id === id && x.live);
 const REASON = { hitl: "needs you", approval: "approve?", question: "asked you", budget: "budget", gate: "gate", stall: "stalled", recovery: "recover?", review: "review", auth: "login" };
 const KIND_TIP = {
   pr: "PR — done when a pull request is open with green tests",
@@ -1320,7 +1327,9 @@ const needsList = () => railOrder().filter((s) => ["blocked", "decide", "your_tu
 async function load() {
   const d = await api("/desk");
   S.workspaces = d.workspaces; S.backends = d.backends; S.sessions = d.sessions; S.jots = d.jots || []; S.launches = d.launches || [];
-  const known = new Set(d.sessions.map((x) => x.id));
+  // A row you removed from Recent must stay removed: prune ✕ against what the Desk still knows,
+  // live rows AND the ended ones Recent is holding, or the next load hands every dismissal back.
+  const known = new Set([...d.sessions, ...S.ended].map((x) => x.id));
   const live = [...S.dismissed].filter((id) => known.has(id));
   if (live.length !== S.dismissed.size) { S.dismissed = new Set(live); localStorage.setItem("desk-dismissed", JSON.stringify(live)); }
   const open = [...S.leadOpen].filter((id) => d.sessions.some((x) => x.id === id && x.live));
@@ -1333,6 +1342,8 @@ function render() {
   renderCounts();
   renderRail();
   renderParked();
+  renderRecent();
+  loadRecent();
   ensureActive();
   renderStage();
   syncBadge();
@@ -2880,6 +2891,45 @@ function renderParked() {
 qs("#sec-parked h3").onclick = (e) => {
   if (e.target.closest("button")) return;
   S.fold.parked = !S.fold.parked; localStorage.setItem("desk-fold", JSON.stringify(S.fold)); render();
+};
+// ── recent ───────────────────────────────────────────────────────────────────────────────────
+// The rail is the triage queue and stays live-only (PR #313). Recent is the other thing you do with
+// a terminal: reread what it did, or reopen it. Same rows, same ⋯ menu, folded until you ask.
+//
+// History still sleeps in SQLite and is never bootstrapped with the Desk — that made every refresh
+// do O(all history) work. Recent asks for ONE bounded page, and only while it is unfolded: folded,
+// it costs exactly nothing, and the day's numbers stay behind ⋯ → 🗒 Log.
+const RECENT_MAX = 20;
+let recentT = 0;
+async function loadRecent() {
+  if (S.fold.recent || recentT) return;
+  recentT = setTimeout(() => (recentT = 0), 2500); // the Desk repaints on every bus event; this is one query
+  let rows;
+  try { rows = await api("/sessions?status=ended&limit=100"); }
+  catch { return; }
+  const liveIds = new Set(S.sessions.filter((x) => x.live).map((x) => x.id));
+  S.ended = (Array.isArray(rows) ? rows : rows.sessions || [])
+    .filter((x) => !liveIds.has(x.id) && x.ended_at)
+    .map((x) => ({ ...x, state: "ended", live: false }))
+    .sort((a, b) => Date.parse(b.ended_at) - Date.parse(a.ended_at))
+    .slice(0, RECENT_MAX);
+  renderRecent();
+}
+// A worker whose Lead is still live is its Lead's business, exactly as on the rail and the phone.
+function renderRecent() {
+  const rows = S.fold.recent ? [] : S.ended.filter((s) => !S.dismissed.has(s.id) && !leadLive(s.lead_id)).slice(0, RECENT_MAX);
+  const sec = qs("#sec-recent");
+  // The heading stays put even with nothing loaded — folded is the default, and a section you cannot
+  // see is a section you cannot open.
+  sec.classList.toggle("fold", !!S.fold.recent);
+  qs("#recent-n").textContent = rows.length ? String(rows.length) : "";
+  reconcile(qs("#recent"), rows, rowEl, paintRow);
+}
+qs("#sec-recent h3").onclick = (e) => {
+  if (e.target.closest("button")) return;
+  S.fold.recent = !S.fold.recent; localStorage.setItem("desk-fold", JSON.stringify(S.fold));
+  clearTimeout(recentT); recentT = 0; // unfolding asks now, not in two seconds
+  render();
 };
 qs("#btn-note").onclick = () => {
   const sel = qs("#n-ws");

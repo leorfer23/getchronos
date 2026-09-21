@@ -570,11 +570,12 @@ async function load() {
     api("/sessions?status=ended&limit=100").catch(() => []),
   ]);
   S.workspaces = d.workspaces; S.backends = d.backends; S.sessions = d.sessions;
-  const cut = Date.now() - 24 * 3600 * 1000;
+  // No time window: Recent is "the last N terminals that ended", however long ago that was. A 24h cut
+  // meant a quiet morning showed an empty list next to a count of terminals you had just closed.
   const liveIds = new Set(S.sessions.filter((s) => s.live).map((s) => s.id));
   const rows = Array.isArray(ended) ? ended : ended.sessions || [];
   S.ended = rows
-    .filter((s) => !liveIds.has(s.id) && s.ended_at && Date.parse(s.ended_at) > cut)
+    .filter((s) => !liveIds.has(s.id) && s.ended_at)
     .map((s) => ({ ...s, state: "ended", live: false }))
     .sort((a, b) => Date.parse(b.ended_at) - Date.parse(a.ended_at));
   const first = !S.loaded;
@@ -646,7 +647,7 @@ function renderHome() {
   fill("#g-finished", fin, "nothing to close");
   qs('[data-k="close-done"]').hidden = !fin.some((s) => phaseOf(s) === "review");
   fill("#g-working", working, "nothing running");
-  const e = qs("#g-recent"), recent = S.ended.filter((s) => !isWorker(s)).slice(0, 5);
+  const e = qs("#g-recent"), recent = S.ended.filter((s) => !isWorker(s)).slice(0, 20);
   e.querySelector(".n").textContent = recent.length || "";
   e.querySelector("button").textContent = S.showEnded ? "hide" : "show";
   e.querySelector(".cards").hidden = !S.showEnded;

@@ -82,8 +82,12 @@ test("nothing open = Robert on the stage; ended terminals stay behind the on-dem
   // …everywhere but the Fleet board: an empty Desk with widgets registered has something to look at,
   // so the stage keeps the window and Robert stays the column you open with ⌘K (src/desk-widgets.test.ts).
   assert.match(css, /body\.no-terms:not\(\.mode-fleet\) \.stage \{ display:none; \}/);
-  assert.doesNotMatch(html, /sec-recent|renderRecent/, "completed sessions are not resident on the rail");
-  assert.match(html, /api\("\/desk\/log\?since=" \+ since\)/, "history is fetched only when the log opens");
+  // Recent (src/desk-recent.test.ts) is the one exception, and it keeps the rule it was carved out
+  // of: the triage queue is live-only, and no history is bootstrapped with the Desk. Recent is its
+  // own folded section, and folded — the default — it asks for nothing at all.
+  assert.match(html, /async function loadRecent\(\) \{\n  if \(S\.fold\.recent \|\| recentT\) return;/, "folded Recent costs no query");
+  assert.doesNotMatch(html, /renderRail\(\);\n  const rows = S\.ended/, "completed sessions are not resident on the rail itself");
+  assert.match(html, /api\("\/desk\/log\?since=" \+ since\)/, "the day's numbers are fetched only when the log opens");
   assert.match(html, /if \(!t\.live\) await restart\(t\.id\)/, "a historical row is revived on demand");
   assert.match(html, /if \(s\) select\(id\); else await restart\(id\);/, "a dormant direct link revives without preloading history");
   // Closing the last one lands on Robert, not on the corpse of the terminal you just closed.
