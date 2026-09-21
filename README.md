@@ -1,6 +1,46 @@
-# Chronos
+<p align="center">
+  <img src="site/assets/logo.svg" alt="Chronos" width="120">
+</p>
 
-A local daemon that runs AI coding agents unattended, and supervises them like a team.
+<h1 align="center">Chronos</h1>
+
+<p align="center"><strong>A local daemon that runs AI coding agents unattended, and supervises them like a team.</strong></p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Licence: Apache 2.0"></a>
+  <a href="https://github.com/leorfer23/getchronos/actions/workflows/ci.yml"><img src="https://github.com/leorfer23/getchronos/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg" alt="Node >=22">
+  <img src="https://img.shields.io/badge/sandbox-macOS%20only-lightgrey.svg" alt="Sandbox: macOS only">
+</p>
+
+<p align="center">
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#documentation">Docs</a>
+</p>
+<!-- TODO(domain): add landing link to nav once one is picked -->
+
+<p align="center">
+  <img src="site/assets/desk-hero.png" alt="The Desk: live agent terminals as a wall of cards" width="880">
+</p>
+
+<p align="center">
+  <sub>
+    <a href="#quickstart">Quickstart</a> ·
+    <a href="#your-first-project">Your first project</a> ·
+    <a href="#the-shape-of-it">The shape of it</a> ·
+    <a href="#how-it-works">How it works</a> ·
+    <a href="#is-this-for-you">Is this for you?</a> ·
+    <a href="#what-is-actually-interesting-here">What's interesting</a> ·
+    <a href="#surfaces">Surfaces</a> ·
+    <a href="#backends">Backends</a> ·
+    <a href="#guardrails-honestly">Guardrails</a> ·
+    <a href="#faq">FAQ</a> ·
+    <a href="#documentation">Documentation</a>
+  </sub>
+</p>
+
+---
 
 You give it a project, a repo, and a ticket. It picks a model, opens a git worktree, spawns an agent
 CLI headless, watches the transcript for signs it has stalled, lets it stop and ask you a question,
@@ -76,7 +116,8 @@ Same thing via Robert (Desk chat composer, bottom of `/desk`):
 
 Blank terminal (no seed): empty ⏎. Full spawn dialog (cwd, brief, kind): ⇧N.
 
-To run it for real, on boot and across crashes:
+<details>
+<summary>Run it for real: on boot and across crashes (launchd)</summary>
 
 ```bash
 npm run install:launchd          # renders launchd/*.plist.template for this machine and loads it
@@ -88,6 +129,8 @@ home directory, checkout path and node binary. The installer records the **absol
 that ran it**, so the daemon always uses the runtime `node_modules` was built against —
 `better-sqlite3` is native and aborts on a major-version mismatch. Re-run it after changing node
 version or moving the checkout.
+
+</details>
 
 ---
 
@@ -110,6 +153,67 @@ may write anything at all.
 **A terminal** is the other half. Not everything should be headless — a live PTY on the Desk is the
 same agent with you watching, and a headless run can be interrupted into one mid-flight
 (`POST /api/runs/:id/continue`) without losing its context.
+
+---
+
+## How it works
+
+Sixty seconds, start to finish:
+
+1. You file a ticket (`mc ticket new`, or the Desk composer) — a title, a body, a repo.
+2. **plan** grades its difficulty 1–5; that grade routes the build to a model tier
+   (`CHRONOS_ROUTE_MODELS`).
+3. **build** opens its own git worktree and does the work on a `mc/<key>` branch — it does not push
+   or open anything yet.
+4. **review** reads the diff. Not satisfied → back to **build** with every unresolved point fed in
+   full, oldest first, so a fix round can't re-break what an earlier one demanded. Approved →
+   `shipPR()` commits, pushes the branch and runs `gh pr create`.
+5. On a project with the merge gate on, it re-checks CI itself and writes `MERGE-GATE: APPROVE` or
+   `MERGE-GATE: HOLD` against the PR — `APPROVE` merges it, `HOLD` sends it back to **build**. Without
+   the gate, green CI merges on its own (`CHRONOS_AUTO_MERGE`, on by default).
+
+```mermaid
+flowchart LR
+    T[ticket filed] --> P[plan]
+    P --> B[build]
+    B --> R[review]
+    R -- rework --> B
+    R -- clean --> PR[PR opened]
+    PR --> G[merge gate]
+    G -- APPROVE --> M[merged]
+    G -- HOLD --> B
+```
+
+<p align="center">
+  <img src="site/assets/ticket-run.png" alt="A ticket's runs on the Desk: plan, build, review, merge gate" width="880">
+</p>
+
+`src/tickets.ts`, `src/dispatcher.ts`, `src/reviews.ts`, `src/merge-gate.ts`, `src/delivery.ts`
+
+---
+
+## Is this for you?
+
+**Yes, if:**
+- You already pay for at least one agent CLI (Claude Code, Codex, Cursor, Grok, or opencode) and
+  want it running unattended instead of babysat.
+- You run on one always-on Mac and are fine with a kernel-enforced (Seatbelt) sandbox, not a
+  container or VM.
+- You're comfortable being the on-call human — approving asks, reading SQLite directly, tuning
+  budgets and protected directories yourself.
+- You want tickets to ship as real PRs (or direct commits) with a review gate in front of merge, not
+  a black box that pushes to `main` on its own.
+- You're fine with no configuration UI yet — the admin API and the Desk chat (Robert) are the
+  interface.
+
+**No, if:**
+- You want a hosted service, a support contract, or a team product with roles and seats — none of
+  that exists here (see "What this is not" above).
+- You need sandboxing on Windows or Linux — the sandbox is macOS/Seatbelt only; other platforms run
+  the daemon unsandboxed, and it logs a warning for every job that hits that path (`src/sandbox.ts`).
+- You want spend capped by default — `CHRONOS_DAILY_BUDGET` is opt-in, not a starting guardrail.
+- You want a polished onboarding wizard — there's no Spaces form yet; the first project is created
+  with `curl` or a copy-pasted Robert command (see [Your first project](#your-first-project)).
 
 ---
 
@@ -151,6 +255,10 @@ expensive, and you find out in the morning.
 `mc ask` parks a run on a human question instead of guessing. The question goes to the coordinator
 first, who answers it if it is derivable from the project's own memos and escalates to your phone if
 it is not. Read-only runs never park — a planner that waits is a slot held for nothing.
+
+<p align="center">
+  <img src="site/assets/ask.png" alt="An agent's question parked on the Desk, waiting on an answer" width="720">
+</p>
 
 `src/asks.ts`, `src/ask-robert.ts`
 
@@ -201,6 +309,10 @@ offered under that name.
 | **Telegram** | control + notifications with no inbound port, via long-polling |
 | **`mc` CLI** | what agents themselves use: `mc steps`, `mc ask`, `mc review`, `mc learn` |
 | **REST + WebSocket** | everything above is a client of this |
+
+<p align="center">
+  <img src="site/assets/phone.png" alt="The Phone PWA: triaging an agent's question from bed" width="360">
+</p>
 
 The Telegram bot is off until `CHRONOS_TG_TOKEN` is set. `relay/` is an optional Cloudflare Worker
 that gives you remote triggers without opening a port — the daemon dials **out** to it.
@@ -262,8 +374,9 @@ See [SECURITY.md](./SECURITY.md) for the threat model and how to report a proble
 
 | | |
 |---|---|
-| [CONFIGURATION.md](./CONFIGURATION.md) | every environment variable, grouped, with defaults |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | the design: execution model, data model, API, relay |
+| [CONFIGURATION.md](./CONFIGURATION.md) | every environment variable, grouped, with defaults |
+| [LEADS.md](./LEADS.md) | Leads — a Robert for one goal, driving its own worker terminals |
 | [MISSION-CONTROL.md](./MISSION-CONTROL.md) | tickets, reviews, the board, worker visibility and HITL |
 | [CLAUDE.md](./CLAUDE.md) | the gotchas — read before changing code |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | how to work on it |
@@ -271,6 +384,37 @@ See [SECURITY.md](./SECURITY.md) for the threat model and how to report a proble
 | `agents/README.md` | how an executive is defined |
 | `notes/example/README.md` | the three memos and what belongs in each |
 | `relay/README.md`, `desktop/README.md` | the optional pieces |
+
+---
+
+## FAQ
+
+**What does it cost to run?**
+Whatever your own CLI subscriptions or API usage already cost you — Chronos adds no fee of its own.
+It tracks spend per run (`mc cost`), but the cap is opt-in: `CHRONOS_DAILY_BUDGET` defaults to `0`
+(uncapped). See [CONFIGURATION.md](./CONFIGURATION.md).
+
+**Does it run on Linux?**
+CI runs on `ubuntu-latest` as well as `macos-latest` (`.github/workflows/ci.yml`), so the daemon
+itself works there — the SBPL-profile assertions skip off macOS since they read a sandbox profile
+that only exists there (commit `cc0d386`); everything else, including the credential-boundary
+tests, runs on both. What doesn't run at all on Linux: the sandbox (`guard`/`strict`) is Seatbelt, a
+macOS-only mechanism — on any other platform jobs run **unsandboxed**, and the daemon logs a warning
+for each job that hits that path (`src/sandbox.ts`).
+
+**Which agent CLIs does it drive?**
+`claude-code`, `codex`, `cursor-agent`, `grok`, `opencode`, plus `openai-api` directly with no CLI —
+see [Backends](#backends). You bring your own auth for each.
+
+**Where does my data live?**
+On your machine: SQLite for state, `notes/<project>/*.md` for memory, git worktrees for the actual
+work. There is no Chronos-operated server for any of it to go to.
+
+**How do I stop it?**
+Kill the daemon process — it's a single Node process and every agent is its child — or
+`POST /api/runs/:id/kill` for one run. There is no `/stop` endpoint.
+
+---
 
 ## Licence
 
