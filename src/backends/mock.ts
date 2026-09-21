@@ -165,11 +165,51 @@ rl.on("line", (line) => {
 });
 `;
 
+// Interactive PTY child (Desk terminal, not a headless run): a real terminal a human can watch
+// live in xterm.js, so — unlike every script above — this one prints PLAIN colored text, not
+// stream-json. Only used for scratch/demo Desk sessions (site/assets/README.md) that need a
+// live, harmless process backing a terminal card without spawning a real agent CLI or touching
+// real credentials. Waits for the seed (the ticket brief, typed in once the "CLI" has "booted")
+// then prints a short plausible-looking transcript and goes idle — the actual state a screenshot
+// shows (working / blocked / done) comes from the session's `mc state`/ask data, set over the API
+// by the seed script, not from anything this prints.
+const INTERACTIVE_SCRIPT = `
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+const g = (s) => "\\x1b[32m" + s + "\\x1b[0m";
+const d = (s) => "\\x1b[2m" + s + "\\x1b[0m";
+let responded = false;
+rl.on("line", () => {
+  if (responded) return;
+  responded = true;
+  const lines = [
+    "reading the ticket + repo context...",
+    "found the relevant files.",
+    "editing...",
+    "running tests...",
+    d("  ok — tests green"),
+    "writing a summary.",
+  ];
+  let i = 0;
+  const tick = () => {
+    if (i >= lines.length) return;
+    process.stdout.write(g("\\u2022 ") + lines[i] + "\\r\\n");
+    i++;
+    setTimeout(tick, 350);
+  };
+  setTimeout(tick, 300);
+});
+`;
+
 export const mockBackend: AgentBackend = {
   name: "mock",
   supportsResume: true,
   appendsSystem: true,
   bin: () => process.execPath,
+
+  interactiveArgs(): string[] {
+    return ["-e", INTERACTIVE_SCRIPT];
+  },
 
   buildArgs(job: Job, sessionId: string, context: string | null, resumeSessionId?: string | null): string[] {
     // A resume really continues the old session id (mirrors claude --resume) — otherwise a future
