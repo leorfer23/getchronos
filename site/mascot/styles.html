@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tock — style picker</title>
+<link rel="icon" href="favicon.svg">
+<style>
+:root{--night:#0B1020;--panel:#151B2E;--panel2:#101728;--line:#2A3350;--ink:#E6E9F2;--mute:#8892AB;--amber:#FFB020;--bone:#EDE7DA;
+--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--sans:system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
+*{box-sizing:border-box}html,body{margin:0;background:var(--night);color:var(--ink);font-family:var(--sans)}
+body{background:radial-gradient(1000px 500px at 50% -10%,#1A2340 0%,transparent 60%),var(--night);padding:0 0 70px}
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px}
+.kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--amber);margin:48px 0 12px}
+h1{font-size:clamp(26px,4.6vw,40px);letter-spacing:-.025em;margin:0 0 12px;font-weight:800;line-height:1.06}
+.lede{max-width:64ch;color:var(--mute);font-size:15.5px;line-height:1.6;margin:0 0 30px}
+.lede b{color:var(--ink);font-weight:600}
+.split{display:grid;gap:22px;grid-template-columns:260px 1fr;align-items:start}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+h3.sec{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--mute);margin:0 0 10px;font-weight:600}
+.card img{width:100%;display:block;border-radius:9px;background:var(--panel2)}
+.gridwrap{position:relative}
+.q{position:absolute;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--night);background:var(--amber);border-radius:4px;padding:3px 8px;letter-spacing:.06em}
+.q1{top:14px;left:14px}.q2{top:14px;right:14px}.q3{bottom:14px;left:14px}.q4{bottom:14px;right:14px}
+table{border-collapse:collapse;width:100%;margin-top:18px;font-size:13.5px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);font-weight:600}
+td b{color:var(--amber);font-family:var(--mono);font-size:12.5px}
+td .n{color:var(--ink);font-weight:600}
+td .d{color:var(--mute);line-height:1.5}
+.pick{background:var(--panel);border:1px solid var(--amber);border-radius:12px;padding:18px;margin-top:26px}
+.pick h3{margin:0 0 8px;font-size:15px;color:var(--amber)}
+.pick p{margin:0;color:var(--mute);font-size:14px;line-height:1.6}
+.pick code{background:var(--night);border:1px solid var(--line);border-radius:4px;padding:1px 6px;color:var(--bone);font-family:var(--mono);font-size:12.5px}
+.meta{margin-top:24px;color:var(--mute);font-size:12.5px;font-family:var(--mono);line-height:1.8}
+@media(max-width:760px){.split{grid-template-columns:1fr}.wrap{padding:0 16px}}
+</style></head><body><div class="wrap">
+<p class="kicker">Chronos · mascot · Tock · style picker</p>
+<h1>Same character, four finishes.</h1>
+<p class="lede">The character is locked — this is <b>take B, the toy hourglass</b>. Every panel below is the <b>same hand-built SVG</b> passed to fal.ai as a reference image, so the silhouette, proportions and palette are held and only the <b>rendering style</b> changes. Tell me a quadrant and I'll push that direction further.</p>
+
+<div class="split">
+  <div class="card">
+    <h3 class="sec">The reference (hand-built SVG)</h3>
+    <img src="gen/reference-rest.png" alt="Tock, the hand-built SVG reference pose">
+    <p style="color:#8892AB;font-size:12.5px;line-height:1.55;margin:12px 0 0">This is the real asset. Whatever style you pick, the shipped <code style="font-family:ui-monospace,monospace;font-size:11.5px">logo.svg</code> / <code style="font-family:ui-monospace,monospace;font-size:11.5px">favicon.svg</code> stay clean vector like this — generated art is for the landing hero and the OG card.</p>
+  </div>
+  <div class="card gridwrap">
+    <h3 class="sec">Generated alternatives · 1 call · USD 0.0398</h3>
+    <div style="position:relative">
+      <img src="gen/style-grid-01.png" alt="Four style treatments of Tock in a 2 by 2 grid">
+      <span class="q q1">1</span><span class="q q2">2</span><span class="q q3">3</span><span class="q q4">4</span>
+    </div>
+  </div>
+</div>
+
+<table>
+  <tr><th>#</th><th>Style</th><th>What it buys you</th><th>What it costs you</th></tr>
+  <tr><td><b>1</b></td><td class="n">Flat vector<br><span style="color:#8892AB;font-weight:400">top-left</span></td>
+    <td class="d">Identical to the shipped SVG. One asset for everything — nav, favicon, OG card, 404 — and it animates in CSS.</td>
+    <td class="d">Least "special". It is the thing you already have.</td></tr>
+  <tr><td><b>2</b></td><td class="n">Matte 3D toy<br><span style="color:#8892AB;font-weight:400">top-right</span></td>
+    <td class="d">Warmest and most characterful. Reads as a physical object you could hold. Strongest hero image.</td>
+    <td class="d">Cannot be the favicon — you keep two assets in sync, vector mark + rendered hero.</td></tr>
+  <tr><td><b>3</b></td><td class="n">Risograph print<br><span style="color:#8892AB;font-weight:400">bottom-left</span></td>
+    <td class="d">The most "own stamp" of the four — grain and misregistration read as a made thing, not a SaaS template. Sits on the dawn/paper ground.</td>
+    <td class="d">Texture fights the dark night ground; really wants the paper half of the page.</td></tr>
+  <tr><td><b>4</b></td><td class="n">Glossy glass<br><span style="color:#8892AB;font-weight:400">bottom-right</span></td>
+    <td class="d">Most literal — actual glass, actual glowing sand. The amber genuinely emits light, which suits the night shift.</td>
+    <td class="d">Least mascot, most product-render. The limbs nearly disappear and the face gets lost at small sizes.</td></tr>
+</table>
+
+<div class="pick">
+  <h3>What I need from you</h3>
+  <p>One number, <code>1</code>–<code>4</code> — or "2 but on the paper ground", that kind of thing. Then I generate the finals in that style: the hero pose, the 03:07 asking pose, and a landing / OG illustration, and hand-build the final <code>mascot.svg</code>, <code>logo.svg</code> and <code>favicon.svg</code> to match.</p>
+</div>
+
+<p class="meta">spend so far: USD 0.0398 of 5.00 · cap 5.00 · stop line 4.00 · ledger: SPEND.md<br>
+model: fal-ai/nano-banana/edit @ USD 0.0398/image · reference-conditioned, not prompted from scratch</p>
+</div></body></html>

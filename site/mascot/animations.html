@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tock — animations</title>
+<link rel="icon" href="favicon.svg">
+<style>
+:root{--ground:#1E2430;--paper:#EFE6D4;--slate:#8D97AC;--amber:#E8A33D;--white:#F2EDE3;
+--line:#2E3648;--mute:#8892AB;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+--sans:system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
+*{box-sizing:border-box}html,body{margin:0;background:#161B26;color:#E6E9F2;font-family:var(--sans)}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px 80px}
+.kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--amber);margin:48px 0 12px}
+h1{font-size:clamp(26px,4.6vw,40px);letter-spacing:-.025em;margin:0 0 12px;font-weight:800;line-height:1.06}
+.lede{max-width:64ch;color:var(--mute);font-size:15.5px;line-height:1.62;margin:0 0 28px}
+.lede b{color:#E6E9F2;font-weight:600}
+.stage{display:grid;grid-template-columns:340px 1fr;gap:24px;align-items:start}
+.panel{background:var(--ground);border:1px solid var(--line);border-radius:14px;padding:18px}
+#tock{width:100%;height:auto;display:block;border-radius:9px}
+.controls{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px}
+button{font-family:var(--mono);font-size:12px;letter-spacing:.04em;color:#E6E9F2;background:#222A3A;
+border:1px solid var(--line);border-radius:7px;padding:8px 12px;cursor:pointer}
+button:hover{border-color:var(--amber)}
+button[aria-pressed="true"]{background:var(--amber);border-color:var(--amber);color:#1a1005;font-weight:700}
+h3.sec{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--mute);margin:0 0 12px;font-weight:600}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);font-weight:600}
+td code{font-family:var(--mono);font-size:12px;color:var(--amber);background:#12161f;border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+td .d{color:var(--mute);line-height:1.5}
+.note{margin-top:26px;background:var(--ground);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:10px;padding:16px}
+.note p{margin:0;color:var(--mute);font-size:13.5px;line-height:1.62}
+.note b{color:#E6E9F2}
+@media(max-width:800px){.stage{grid-template-columns:1fr}.wrap{padding:0 16px 60px}}
+
+/* ---------------- the animation layer ----------------
+   every rule below drives a NAMED GROUP in the SVG. nothing here touches the art. */
+#tock #lid,#tock #bags{opacity:0}
+#tock #body{transform-box:fill-box;transform-origin:center;animation:bob 3.4s ease-in-out infinite}
+#tock #eye{transform-box:fill-box;transform-origin:center;animation:blink 5.4s infinite}
+#tock #stream{animation:fall .55s linear infinite}
+#tock #sand-top{transform-box:fill-box;transform-origin:center;animation:drain 14s linear infinite}
+#tock #sand-bottom{transform-box:fill-box;transform-origin:center;animation:heap 14s linear infinite}
+
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+@keyframes blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.08)}}
+/* the dot screen pitch is 3 user units, so a 3-unit loop scrolls seamlessly */
+@keyframes fall{from{transform:translateY(0)}to{transform:translateY(3px)}}
+@keyframes drain{from{transform:translateY(0)}to{transform:translateY(44px)}}
+@keyframes heap{from{transform:translateY(0)}to{transform:translateY(-22px)}}
+@keyframes flip{from{transform:rotate(0)}to{transform:rotate(180deg)}}
+@keyframes sway{0%,100%{transform:translateY(0) rotate(-1.2deg)}50%{transform:translateY(1.5px) rotate(1.2deg)}}
+
+/* 03:07 — it has been up too long */
+.s-asking #tock #lid{opacity:1}
+.s-asking #tock #bags{opacity:1}
+.s-asking #tock #eye{animation:blink 2.1s infinite}
+.s-asking #tock #body{animation:sway 4.2s ease-in-out infinite}
+.s-asking #tock #sand-top{animation:none;transform:translateY(40px)}
+.s-asking #tock #sand-bottom{animation:none;transform:translateY(-20px)}
+
+/* a rework round: it turns over */
+.s-rework #tock #body{transform-box:fill-box;transform-origin:center;animation:flip 1.4s ease-in-out infinite alternate}
+
+/* dawn: done, and the sand has all landed */
+.s-done #tock #ground{fill:var(--paper)}
+.s-done #tock #pupil-l,.s-done #tock #pupil-r{fill:#3A4152}
+.s-done #tock #stream{opacity:0}
+.s-done #tock #sand-top{animation:none;transform:translateY(48px)}
+.s-done #tock #sand-bottom{animation:none;transform:translateY(-24px)}
+.s-done #tock #paper-grain{opacity:.09}
+
+/* nothing moves until there is something to move about */
+.s-quiet #tock #stream{opacity:0}
+.s-quiet #tock #sand-top,.s-quiet #tock #sand-bottom{animation:none}
+.s-quiet #tock #eye{animation:blink 9s infinite}
+
+@media (prefers-reduced-motion: reduce){
+  #tock *,#tock{animation:none!important;transition:none!important}
+  #tock #sand-top{transform:translateY(18px)}
+  #tock #sand-bottom{transform:translateY(-9px)}
+}
+</style></head>
+<body class="s-idle"><div class="wrap">
+<p class="kicker">Chronos · mascot · Tock · motion</p>
+<h1>Tock moves.</h1>
+<p class="lede">One SVG, <b>halftone built natively from <code style="font-family:var(--mono);font-size:13px">&lt;pattern&gt;</code> fills</b>, animated entirely in CSS against <b>named groups</b>. No JS drives the art — the buttons only swap a class on <code style="font-family:var(--mono);font-size:13px">&lt;body&gt;</code>. Every state below maps to something the daemon actually does.</p>
+
+<div class="stage">
+  <div class="panel">
+    <svg id="tock" viewBox="0 0 150 182" role="img" aria-label="Tock, the Chronos hourglass mascot, animated">
+  <defs>
+    <pattern id="ink-slate" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(15)"><circle cx="1.5" cy="1.5" r="1.5" fill="#8D97AC"/></pattern>
+    <pattern id="ink-slate-lt" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(15)"><circle cx="1.5" cy="1.5" r="1.02" fill="#8D97AC"/></pattern>
+    <pattern id="ink-amber" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><circle cx="1.5" cy="1.5" r="1.5" fill="#E8A33D"/></pattern>
+    <pattern id="ink-white" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(75)"><circle cx="1.5" cy="1.5" r="1.56" fill="#F2EDE3"/></pattern>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/></filter>
+    <clipPath id="clip-top"><path d="M28 30 C 26 52, 58 62, 69 74 L81 74 C 92 62, 124 52, 122 30 Z"/></clipPath>
+    <clipPath id="clip-bot"><path d="M69 76 C 58 88, 26 96, 28 118 L122 118 C 124 96, 92 88, 81 76 Z"/></clipPath>
+  </defs>
+  <rect id="ground" width="150" height="182" fill="#1E2430"/>
+  <g id="body">
+    <g id="plate-slate" transform="translate(-0.6 0.5)">
+      <g id="limbs">
+        <path id="arm-l" d="M34 108 q -19 6 -20 22" fill="none" stroke="url(#ink-slate)" stroke-width="9" stroke-linecap="round"/>
+        <path id="arm-r" d="M116 108 q 19 6 20 22" fill="none" stroke="url(#ink-slate)" stroke-width="9" stroke-linecap="round"/>
+        <g id="legs"><path d="M57 134 V152 M93 134 V152" stroke="url(#ink-slate)" stroke-width="11" stroke-linecap="round"/>
+        <path d="M51 159 h15 M99 159 h-15" stroke="url(#ink-slate)" stroke-width="11" stroke-linecap="round"/></g>
+      </g>
+      <g id="frame"><path id="cap-top" d="M16 22 a8 8 0 0 1 8 -8 h102 a8 8 0 0 1 0 16 h-102 a8 8 0 0 1 -8 -8 Z" fill="url(#ink-slate)"/><path id="cap-bottom" d="M16 126 a8 8 0 0 1 8 -8 h102 a8 8 0 0 1 0 16 h-102 a8 8 0 0 1 -8 -8 Z" fill="url(#ink-slate)"/></g>
+      <g id="glass"><path id="bulb-top" d="M28 30 C 26 52, 58 62, 69 74 L81 74 C 92 62, 124 52, 122 30 Z" fill="none" stroke="url(#ink-slate)" stroke-width="2.6"/>
+      <path id="bulb-bottom" d="M69 76 C 58 88, 26 96, 28 118 L122 118 C 124 96, 92 88, 81 76 Z" fill="none" stroke="url(#ink-slate)" stroke-width="2.6"/></g>
+    </g>
+    <g id="plate-amber" transform="translate(1.2 -0.8)">
+      <g id="sand-top-wrap" clip-path="url(#clip-top)">
+        <path id="sand-top" d="M-20 27 Q 75 39 170 27 L 170 80 L -20 80 Z" fill="url(#ink-amber)"/></g>
+      <rect id="stream" x="73.3" y="74" width="3.4" height="38" fill="url(#ink-amber)"/>
+      <g id="sand-bot-wrap" clip-path="url(#clip-bot)">
+        <path id="sand-bottom" d="M-20 124 Q 75 109 170 124 L 170 130 L -20 130 Z" fill="url(#ink-amber)"/></g>
+    </g>
+    <g id="plate-white">
+      <g id="eye">
+        <circle id="ball-l" cx="58" cy="100" r="10" fill="url(#ink-white)"/>
+        <circle id="ball-r" cx="92" cy="100" r="10" fill="url(#ink-white)"/>
+        <circle id="pupil-l" cx="58" cy="100" r="4.4" fill="#1E2430"/>
+        <circle id="pupil-r" cx="92" cy="100" r="4.4" fill="#1E2430"/>
+      </g>
+      <g id="lid"><path d="M49.2 95.2 A 10 10 0 0 1 66.8 95.2 Z" fill="url(#ink-slate)"/><path d="M83.2 95.2 A 10 10 0 0 1 100.8 95.2 Z" fill="url(#ink-slate)"/></g>
+      <g id="brow"><path d="M48.5 84.7 Q 58 80.1 67.5 82.3" fill="none" stroke="url(#ink-slate)" stroke-width="3.2" stroke-linecap="round"/><path d="M82.5 82.3 Q 92 80.1 101.5 84.7" fill="none" stroke="url(#ink-slate)" stroke-width="3.2" stroke-linecap="round"/></g>
+      <g id="bags"><path d="M51.0 112.5 q 7.0 4.5 14.0 0" fill="none" stroke="url(#ink-slate-lt)" stroke-width="2.2" stroke-linecap="round"/><path d="M85.0 112.5 q 7.0 4.5 14.0 0" fill="none" stroke="url(#ink-slate-lt)" stroke-width="2.2" stroke-linecap="round"/></g>
+    </g>
+  </g>
+  <g id="flecks"><circle cx="97.9" cy="69.5" r="1.42" fill="#8D97AC" opacity="0.52"/><circle cx="121.3" cy="128.1" r="0.59" fill="#E8A33D" opacity="0.39"/><circle cx="122.1" cy="16.9" r="1.32" fill="#8D97AC" opacity="0.63"/><circle cx="66.1" cy="165.4" r="1.36" fill="#8D97AC" opacity="0.48"/><circle cx="93.3" cy="98.8" r="1.08" fill="#8D97AC" opacity="0.55"/><circle cx="68.4" cy="30.4" r="0.52" fill="#E8A33D" opacity="0.59"/><circle cx="39.3" cy="14.3" r="0.52" fill="#E8A33D" opacity="0.36"/><circle cx="42.2" cy="10.0" r="0.97" fill="#8D97AC" opacity="0.32"/><circle cx="90.9" cy="58.7" r="1.49" fill="#E8A33D" opacity="0.61"/><circle cx="77.2" cy="5.0" r="0.81" fill="#8D97AC" opacity="0.27"/><circle cx="58.0" cy="21.3" r="1.49" fill="#E8A33D" opacity="0.50"/><circle cx="50.0" cy="1.6" r="0.54" fill="#8D97AC" opacity="0.52"/><circle cx="6.0" cy="164.2" r="0.85" fill="#E8A33D" opacity="0.62"/><circle cx="46.7" cy="153.4" r="1.58" fill="#C0506A" opacity="0.63"/></g>
+  <rect id="paper-grain" width="150" height="182" filter="url(#grain)" opacity="0.055" style="mix-blend-mode:overlay"/>
+</svg>
+    <div class="controls">
+      <button data-s="s-idle" aria-pressed="true">idle</button>
+      <button data-s="s-quiet" aria-pressed="false">all quiet</button>
+      <button data-s="s-rework" aria-pressed="false">rework · flip</button>
+      <button data-s="s-asking" aria-pressed="false">03:07 · asking</button>
+      <button data-s="s-done" aria-pressed="false">dawn · done</button>
+    </div>
+  </div>
+  <div class="panel">
+    <h3 class="sec">What each animation is, and what it maps to</h3>
+    <table>
+      <tr><th>Group</th><th>Motion</th><th>Why</th></tr>
+      <tr><td><code>#stream</code></td><td class="d">dots scroll down on a 3-unit loop</td><td class="d">A run is live. The loop length equals the halftone pitch, so it is seamless and never tears.</td></tr>
+      <tr><td><code>#sand-top</code><br><code>#sand-bottom</code></td><td class="d">translate inside a <code>clip-path</code></td><td class="d">How far along the run is. The clip is the real glass wall, so the level always follows the bulb.</td></tr>
+      <tr><td><code>#eye</code></td><td class="d"><code>scaleY</code> blink</td><td class="d">It is awake. Blinks faster at 03:07, slower when all is quiet.</td></tr>
+      <tr><td><code>#lid</code> <code>#bags</code></td><td class="d">faded in at 03:07 only</td><td class="d">A run has stopped to ask you something and it has been up too long.</td></tr>
+      <tr><td><code>#body</code></td><td class="d">bob, sway, or 180° flip</td><td class="d">The flip is a rework round — every round turns it over, oldest first.</td></tr>
+      <tr><td><code>#ground</code></td><td class="d">navy → cream</td><td class="d">Dawn. The night shift ends on paper stock, same three inks.</td></tr>
+    </table>
+    <div class="note"><p><b>Reduced motion.</b> Under <code style="font-family:var(--mono);font-size:12px">prefers-reduced-motion: reduce</code> every animation is switched off and the sand is parked mid-run, so the mascot is a correct static illustration rather than a frozen first frame. Toggle it in your OS to check.</p></div>
+  </div>
+</div>
+</div>
+<script>
+const btns=[...document.querySelectorAll('button[data-s]')]
+const states=btns.map(b=>b.dataset.s)
+btns.forEach(b=>b.addEventListener('click',()=>{
+  document.body.classList.remove(...states)
+  document.body.classList.add(b.dataset.s)
+  btns.forEach(o=>o.setAttribute('aria-pressed',String(o===b)))
+}))
+</script>
+</body></html>
