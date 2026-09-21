@@ -11,7 +11,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildProfile, workspaceSandboxAllow } from "./sandbox.js";
+import { buildProfile, sandboxAvailable, workspaceSandboxAllow } from "./sandbox.js";
+
+// SBPL is macOS. `buildProfile` returns null everywhere else by design, so the blocks that read a
+// profile assert nothing on Linux CI — they throw on the null. `workspaceSandboxAllow` is plain path
+// validation and keeps running on every platform: it is the boundary, and it is what must not rot.
+const noProfile = sandboxAvailable() ? false : "sandbox-exec is macOS-only — no profile to read";
 
 const home = fs.realpathSync(os.homedir());
 
@@ -70,7 +75,7 @@ describe("workspaceSandboxAllow", () => {
   });
 });
 
-describe("the profile the grant produces", () => {
+describe("the profile the grant produces", { skip: noProfile }, () => {
   const gcloud = `${home}/.config/gcloud`;
 
   test("guard: the allow comes AFTER the secrets deny, or it does nothing", () => {
