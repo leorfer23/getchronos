@@ -8,10 +8,15 @@ scratch.
 
 | File | What it shows |
 | --- | --- |
-| `desk-hero.webp` / `.png` | The Desk's Fleet wall (`/desk`): fleet pulse, an open ask waiting on the operator, Robert's supervision panel. |
+| `desk-hero.webp` / `.png` | `/app`'s Fleet tab: spend/success metrics and a blocked run card, waiting on a human answer. |
 | `ticket-run.webp` / `.png` | A ticket detail page (`/app`) mid-review, with its dispatched mock run's cost and one-line summary. |
 | `ask.webp` / `.png` | A ticket blocked on a human-in-the-loop ask, with the answer box open ("Waiting on you"). |
-| `phone.webp` / `.png` | The phone view (`/phone`) at mobile width. |
+| `phone.webp` / `.png` | `/app`'s ticket list at mobile width — the same "Needs you" ask, on a phone. |
+
+`/desk` and `/phone.html` are wired to live terminal *sessions*, not tickets — this scratch demo
+never opens a real Desk terminal (that would mean spawning a real agent CLI), so both stay in their
+honest "nothing open" empty state. `/app` reads the same ticket/run/ask data this demo seeds and is
+what actually looks alive, so the hero and phone shots use it instead.
 
 `logo.svg`, `favicon.svg`, `og-cover.jpg` and `mascot.svg` are owned by a separate mascot-design
 slice of this work and are not in this directory yet.

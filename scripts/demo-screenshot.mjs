@@ -44,21 +44,18 @@ async function stubUsage(page) {
 async function main() {
   const browser = await chromium.launch({ executablePath: CFT, headless: true });
 
-  // desk-hero: the Fleet wall on /desk — needs the admin token pasted into its own dialog first.
+  // desk-hero: /app's Fleet tab — spend/success metrics + the blocked cart-drawer run card. This
+  // scratch demo never opens a real Desk terminal (that would mean spawning a real agent CLI — see
+  // site/assets/README.md), so /desk's own Fleet tab (built around live terminal widgets) stays
+  // empty; /app's Fleet tab reads the same ticket/run/ask data the rest of this demo seeds and is
+  // what actually looks alive.
   {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, colorScheme: "dark" });
     const page = await ctx.newPage();
     await stubUsage(page);
-    await page.goto(`${BASE}/desk`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/app`, { waitUntil: "networkidle" });
     await page.waitForTimeout(400);
-    await page.locator("dialog[open] input").first().fill(ADMIN_TOKEN);
-    await page.locator("dialog[open] >> text=Save").click();
-    await page.waitForTimeout(1000);
-    await page.locator("button[data-m=fleet]").click();
-    await page.waitForTimeout(600);
-    for (let i = 0; i < 10 && !(await page.getByText("FLEET PULSE").isVisible().catch(() => false)); i++) {
-      await page.waitForTimeout(700);
-    }
+    await page.locator("button[data-view=fleet]").click();
     await page.waitForTimeout(800);
     await page.screenshot({ path: `${OUT}/desk-hero.png` });
     await ctx.close();
@@ -95,19 +92,19 @@ async function main() {
     console.log("wrote ask.png");
   }
 
-  // phone: /phone at mobile size.
+  // phone: /app's Tickets view at mobile width. /phone.html is wired to live terminal SESSIONS
+  // (Working/Needs you/Finished), which this scratch demo never creates (no real agent spawned —
+  // see desk-hero above), so it renders an honest but empty "nothing open" screen. /app is the
+  // same ticket data as the rest of this demo and is responsive down to phone width, so it's what
+  // actually shows "an ask reaching you on your phone".
   {
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, colorScheme: "dark" });
     const page = await ctx.newPage();
     await stubUsage(page);
-    await page.goto(`${BASE}/phone`, { waitUntil: "networkidle" });
-    await page.waitForTimeout(600);
-    const tokenInput = page.getByPlaceholder("paste token");
-    if (await tokenInput.isVisible().catch(() => false)) {
-      await tokenInput.fill(ADMIN_TOKEN);
-      await page.getByText("Connect", { exact: true }).click();
-      await page.waitForTimeout(1200);
-    }
+    await page.goto(`${BASE}/app`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(400);
+    await page.locator("button[data-view=tickets]").click();
+    await page.waitForTimeout(500);
     await page.screenshot({ path: `${OUT}/phone.png` });
     await ctx.close();
     console.log("wrote phone.png");
