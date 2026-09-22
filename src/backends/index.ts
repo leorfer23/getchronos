@@ -49,8 +49,11 @@ const RETIRED_MODELS = new Set([
  * Unknown backend names used to silently fall through to claude-code via getBackend().
  *
  * `repo` is optional so every existing call site (dispatcher.ts, ideas.ts, quota-gate.ts, tickets.ts)
- * keeps working unchanged — the cursor-cloud repo gate only fires when a caller actually passes repo
- * info. Phase 1 is GitHub-repos-with-delivery=pr only (see docs/plans/2026-09-22-cursor-cloud-backend.md).
+ * keeps working unchanged for every OTHER backend — passing no repo info is a no-op for them, exactly
+ * as before. cursor-cloud is the one exception: it fails CLOSED on a missing repo (no ticket, or a
+ * ticket with no repo_id) rather than silently skipping the check — an unresolved repo is not evidence
+ * the repo is fine, and Phase 1 is GitHub-repos-with-delivery=pr only
+ * (see docs/plans/2026-09-22-cursor-cloud-backend.md).
  */
 export function validateSpawnTarget(
   backend: string | null | undefined,
@@ -59,7 +62,10 @@ export function validateSpawnTarget(
 ): string | null {
   if (backend && !hasBackend(backend)) return `unknown backend: ${backend}`;
   if (model && RETIRED_MODELS.has(model)) return `modelo desconocido (retirado): ${model}`;
-  if (backend === "cursor-cloud" && repo) {
+  if (backend === "cursor-cloud") {
+    if (!repo) {
+      return `cursor-cloud refused: needs a GitHub repo and none was resolvable for this job — Phase 1 is GitHub-only`;
+    }
     const label = repo.name ? `repo '${repo.name}'` : "this repo";
     if (!isGitHubRemote(repo.git_remote)) {
       return `cursor-cloud refused: ${label} has no GitHub remote — Phase 1 is GitHub-only`;

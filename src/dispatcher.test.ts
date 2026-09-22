@@ -100,6 +100,29 @@ function ticketedJob(over: { git_remote: string | null; delivery: "commit" | "pr
   return mkJob({ backend: "cursor-cloud", ticket_id: t.id, cwd: repo.path });
 }
 
+test("dispatch refuses cursor-cloud with no ticket at all — fails closed, not a silent pass", () => {
+  const j = mkJob({ backend: "cursor-cloud" }); // no ticket_id → no repo resolvable
+  const r = dispatch(j.id, "manual");
+  assert.ok("error" in r);
+  assert.match((r as { error: string }).error, /cursor-cloud refused/);
+  assert.match((r as { error: string }).error, /GitHub/);
+  assert.equal(runs.list(j.id).length, 0);
+});
+
+test("dispatch refuses cursor-cloud when the ticket has no repo_id — fails closed, not a silent pass", () => {
+  const ws = workspaces.create({ slug: `cc-gate-norepo-${randomUUID().slice(0, 8)}`, name: "CC Gate no-repo", config_dir: "/tmp/cc-gate-norepo" } as any);
+  const t = tickets.create({
+    id: randomUUID(), workspace_id: ws.id, repo_id: null, key: "CC-2", slug: "cc-2", title: "t",
+    status: "backlog", priority: "P2", complexity: null, backend: null, model: null, assignee: "agent",
+    file_path: "/tmp/cc-2.md", external_system: null, external_id: null, external_url: null, tags: null,
+  } as any);
+  const j = mkJob({ backend: "cursor-cloud", ticket_id: t.id });
+  const r = dispatch(j.id, "manual");
+  assert.ok("error" in r);
+  assert.match((r as { error: string }).error, /cursor-cloud refused/);
+  assert.equal(runs.list(j.id).length, 0);
+});
+
 test("dispatch refuses cursor-cloud against a non-GitHub repo, naming the repo, before creating a run", () => {
   const j = ticketedJob({ git_remote: "https://gitlab.com/acme/widgets", delivery: "pr" });
   const r = dispatch(j.id, "manual");
