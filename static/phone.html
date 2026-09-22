@@ -532,6 +532,10 @@ const byId = (id) => S.sessions.find((s) => s.id === id) || S.ended.find((s) => 
 const leadLive = (id) => !!id && S.sessions.some((x) => x.id === id && x.live);
 const isWorker = (s) => leadLive(s.lead_id);
 const workersOf = (lead) => S.sessions.filter((w) => w.live && w.lead_id === lead.id);
+// What "close done" may sweep. A Lead that ticked its own goal while its workers are still running
+// is NOT closable: killing it orphans every terminal reporting to it (their stops type into a dead
+// pty). It stays in Finished, and the sweep takes it once the last worker ends.
+const bulkClosable = (s) => s.live && phaseOf(s) === "review" && !(s.role === "lead" && workersOf(s).length > 0);
 const sTitle = (s) => s.title || s.goal || (s.backend ? s.backend + " terminal" : "terminal");
 const ORDER = { blocked: 0, waiting: 1, done: 2, working: 3, ended: 4 };
 // One word per terminal, the same on every screen. A finished turn is not "waiting for you" in the
@@ -647,7 +651,7 @@ function renderHome() {
   };
   fill("#g-needs", needs, "nothing waiting on you");
   fill("#g-finished", fin, "nothing to close");
-  qs('[data-k="close-done"]').hidden = !fin.some((s) => phaseOf(s) === "review");
+  qs('[data-k="close-done"]').hidden = !fin.some(bulkClosable);
   fill("#g-working", working, "nothing running");
   const e = qs("#g-recent"), recent = S.ended.filter((s) => !isWorker(s)).slice(0, 20);
   e.querySelector(".n").textContent = recent.length || "";
@@ -681,7 +685,7 @@ qs("#home").addEventListener("click", async (e) => {
     return;
   }
   if (t.dataset.open) { fx.tap(); return openFocus(t.dataset.open); }
-  if (t.dataset.k === "close-done") { fx.tap(); return confirmSheet("Close every finished terminal?", "Close all", async () => { for (const s of S.sessions.filter((x) => x.live && phaseOf(x) === "review")) { try { await api("/sessions/" + s.id + "/kill", { method: "POST" }); } catch {} } fx.success(); await load(); }); }
+  if (t.dataset.k === "close-done") { fx.tap(); return confirmSheet("Close every finished terminal?", "Close all", async () => { for (const s of S.sessions.filter(bulkClosable)) { try { await api("/sessions/" + s.id + "/kill", { method: "POST" }); } catch {} } fx.success(); await load(); }); }
   if (t.dataset.k === "toggle-ended") { S.showEnded = !S.showEnded; return renderHome(); }
 });
 // Pull to refresh at the top of the list; long-press a card for its menu without opening it.

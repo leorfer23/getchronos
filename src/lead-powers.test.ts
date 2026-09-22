@@ -174,6 +174,45 @@ describe("closeDoneSessions — Lead scope", () => {
     assert.equal(sessions.get(theirs.id)!.status, "live");
     assert.equal(sessions.get(bystander.id)!.status, "live");
   });
+
+  test("a done Lead with a live worker is NOT closed; the worker is never orphaned", () => {
+    const lead = mkLead();
+    const worker = mkWorker(lead.id, { goal: "still building" });
+    sessions.setGoal(lead.id, { goal_done: true });
+    const closed = closeDoneSessions();
+    assert.deepEqual(closed, []);
+    assert.equal(sessions.get(lead.id)!.status, "live");
+    assert.equal(sessions.get(worker.id)!.status, "live");
+  });
+
+  test("once the last worker is done, the same sweep closes worker then Lead", () => {
+    const lead = mkLead();
+    const worker = mkWorker(lead.id, { goal: "done too" });
+    sessions.setGoal(lead.id, { goal_done: true });
+    sessions.setGoal(worker.id, { goal_done: true });
+    const closed = closeDoneSessions();
+    assert.deepEqual(closed, [worker.id, lead.id], "workers must be killed before their Lead");
+    assert.equal(sessions.get(lead.id)!.status, "ended");
+    assert.equal(sessions.get(worker.id)!.status, "ended");
+  });
+
+  test("an ENDED worker does not hold its done Lead open", () => {
+    const lead = mkLead();
+    const worker = mkWorker(lead.id);
+    sessions.end(worker.id);
+    sessions.setGoal(lead.id, { goal_done: true });
+    assert.deepEqual(closeDoneSessions(), [lead.id]);
+    assert.equal(sessions.get(lead.id)!.status, "ended");
+  });
+
+  test("another Lead's live worker does not hold THIS done Lead open", () => {
+    const lead = mkLead();
+    const other = mkLead();
+    mkWorker(other.id, { goal: "theirs" });
+    sessions.setGoal(lead.id, { goal_done: true });
+    assert.deepEqual(closeDoneSessions(), [lead.id]);
+    assert.equal(sessions.get(other.id)!.status, "live");
+  });
 });
 
 describe("reopen ownership", () => {

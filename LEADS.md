@@ -270,6 +270,9 @@ and a Lead may never invent an override the operator has not said yes to.
    `mc worktree rm` sends `x-mc-lead` when `MC_LEAD_TOKEN` is set.
 2. **Close-done** — `POST /api/leads/me/close-done` (`leadGate`) closes only its live workers whose
    goal is ticked, reusing `closeDoneSessions` (the same function `/desk/close-done` uses).
+   A Lead whose own goal is ticked is **never** swept while it still has a live worker the same
+   sweep is not closing — killing it orphans every terminal reporting to it. Workers are killed
+   before their Lead, so an all-done fleet closes in one call.
    `mc lead close-done [--rm-worktrees]` never force-removes; it prints every worktree refusal.
 3. **Reopen** — a Lead may reopen only its own workers; `lead_id` is kept through `revive`; the
    reopened pty gets `leadWorkerBlock` + `MC_LEAD_ID` again. Another Lead → 404.
