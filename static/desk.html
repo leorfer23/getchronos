@@ -359,6 +359,79 @@
   .fl.say ul, .fl.say ol { margin:0 0 6px; padding-left:20px; }
   .fempty { color:var(--faint); font-size:14px; }
   .skel { background:linear-gradient(90deg, var(--surface-2), var(--line), var(--surface-2)); border-radius:6px; height:18px; margin:8px 0; opacity:.7; }
+
+  /* ── Focus: the board ───────────────────────────────────────────────────────────────────────
+     Focus is not a transcript reader — it is the CONTROL BOARD of one terminal. It borrows the
+     companion rail's pieces (a titled card, a row of time · glyph · text, a pin that carries its
+     own state) and gives them the width of the stage, in triage order:
+       what it needs from you → what it is doing now → what it produced → how it got here.
+     Tool calls are deliberately not on it: "ran 12 commands" is not what the operator is here to
+     read (Leo, 2026-09-22). The raw terminal is one key away and has every byte. */
+  .bhead { display:flex; align-items:center; gap:9px; flex-wrap:wrap; background:var(--surface); border:1px solid var(--line);
+    border-radius:12px; padding:9px 14px; margin-bottom:10px; font-size:13.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .bhead b { color:var(--ink); font-weight:650; }
+  .bhead .sep { color:var(--line); }
+  .bhead .ph { font-size:11px; }
+  .bprog { display:inline-flex; align-items:center; gap:7px; }
+  .bprog .track { width:72px; height:5px; border-radius:3px; background:var(--surface-2); overflow:hidden; }
+  .bprog .track i { display:block; height:100%; background:var(--accent); }
+  /* Two columns on a desktop stage, one on anything narrower — the side cards are the reference
+     (goal, links, files) and the main column is the story, so stacked they still read in order. */
+  .bcols { display:flex; gap:10px; align-items:flex-start; }
+  .bmain { flex:1 1 58%; min-width:0; display:flex; flex-direction:column; gap:10px; }
+  .bside { flex:0 0 322px; min-width:0; display:flex; flex-direction:column; gap:10px; }
+  @media (max-width:860px) { .bcols { flex-direction:column; } .bside { flex:none; width:100%; } }
+  .bcard { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:11px 14px 12px; }
+  .bcard > h4 { display:flex; align-items:center; gap:8px; margin:0 0 8px; font-size:11px; font-weight:750;
+    letter-spacing:.09em; text-transform:uppercase; color:var(--muted); }
+  .bcard > h4 time, .bcard > h4 .n { margin-left:auto; font:11.5px ui-monospace,Menlo,monospace; font-weight:600;
+    letter-spacing:0; text-transform:none; color:var(--faint); }
+  .bcard > h4 button { border:0; background:none; color:var(--accent); font:inherit; font-size:11.5px; font-weight:650;
+    letter-spacing:0; text-transform:none; padding:0 0 0 8px; }
+  .bcard > h4 .n + button { margin-left:0; }
+  .bcard .none { color:var(--faint); font-size:13.5px; }
+  /* Now: the one line that answers "what is it doing", in the phase's own colour. */
+  .bnow { border-left:3px solid var(--nc,var(--line)); }
+  .bnow > h4 { color:var(--nc,var(--muted)); }
+  .bnow .line { font-size:16.5px; line-height:1.45; overflow-wrap:anywhere; }
+  .bnow .line.none { color:var(--faint); font-size:15px; }
+  .bnow .tool { margin-top:7px; font:12.5px ui-monospace,"SF Mono",Menlo,monospace; color:var(--p-work);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .bnow .sub { margin-top:7px; font-size:13px; color:var(--muted); }
+  .bgoal .t { font-size:16px; font-weight:620; line-height:1.4; overflow-wrap:anywhere; }
+  .bgoal .t.none { color:var(--faint); font-weight:500; }
+  .bgoal .sub { margin-top:7px; font-size:12.5px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere; }
+  /* Deliverables: the same pin as the rail, one size up — what outlives the scrollback. */
+  .bships { display:flex; flex-direction:column; gap:2px; }
+  .bships .pin { font-size:13.5px; padding:4px 5px; grid-template-columns:16px 1fr auto; }
+  .bships .pin .s { font-size:11px; }
+  .bships .drow { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:6px; }
+  .btouch .fs { display:flex; flex-wrap:wrap; gap:5px; }
+  .btouch .f { font:12px ui-monospace,Menlo,monospace; color:var(--accent); background:var(--accent-soft);
+    border-radius:6px; padding:2px 7px; cursor:pointer; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .btouch .n { color:var(--faint); font-size:12px; align-self:center; }
+  /* The timeline: one row per moment, oldest first. Never a tool call. */
+  .btl { display:flex; flex-direction:column; }
+  .btl .r { display:grid; grid-template-columns:42px 14px 1fr; column-gap:9px; align-items:baseline; padding:4px 3px; border-radius:6px; }
+  .btl .r:hover { background:var(--surface-2); }
+  .btl .tm { font:11.5px ui-monospace,Menlo,monospace; color:var(--faint); font-variant-numeric:tabular-nums; }
+  .btl .g { font-size:11px; line-height:1.6; text-align:center; color:var(--faint); }
+  .btl .tx { font-size:14.5px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere;
+    display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  .btl .r.say .tx, .btl .r.understanding .tx, .btl .r.memory .tx { color:var(--ink); }
+  .btl .r.understanding .g { color:var(--p-wait); }
+  .btl .r.user .tx { color:var(--accent); }
+  .btl .r.result .tx { color:var(--ink); font-weight:620; }
+  .btl .r.result .g { color:var(--accent); }
+  /* A failed tool call — the one thing in here the agent did not choose to tell you. */
+  .btl .r.error .tx, .btl .r.error .g { color:var(--danger); }
+  .btl .r.error .tx { font:13px ui-monospace,"SF Mono",Menlo,monospace; -webkit-line-clamp:2; }
+  .btl .r.link .tx { color:var(--accent); text-decoration:none; -webkit-line-clamp:1; }
+  .btl .r.link .g { color:var(--accent); }
+  .btl .ch { display:flex; align-items:center; gap:8px; padding:10px 3px 4px; font-size:10.5px; font-weight:750;
+    letter-spacing:.06em; text-transform:uppercase; color:var(--cc,var(--faint)); }
+  .btl .ch .rule { flex:1; height:1px; background:var(--cc,var(--line)); opacity:.35; }
+  .btl .ch time { font:11px ui-monospace,Menlo,monospace; font-weight:600; letter-spacing:0; color:var(--faint); }
   /* The bar under the stage: what the terminal wants answered, then the three moves. */
   .sbar { display:flex; align-items:center; gap:6px; padding:8px 14px; background:var(--surface); border-top:1px solid var(--line); flex:none; min-height:48px; flex-wrap:wrap; }
   .sbar:empty { display:none; }
@@ -471,6 +544,8 @@
   .ctl.reads.open .tx { display:block; white-space:pre-wrap; }
   .ctl.say .tx, .ctl.understanding .tx { color:var(--ink); -webkit-line-clamp:2; }
   .ctl.user .tx { color:var(--accent); -webkit-line-clamp:2; }
+  .ctl.error .tx, .ctl.error .g { color:var(--danger); }
+  .ctl.link .tx, .ctl.link .g { color:var(--accent); }
   /* The Summary is the one row worth reading twice, so it is the only one that gets weight. */
   .ctl.result .tx { color:var(--ink); font-weight:600; -webkit-line-clamp:3; }
   .ctl.result .g { color:var(--accent); }
@@ -1212,7 +1287,7 @@ const S = {
   stickEnded: false,                  // you chose an ended terminal (Recent, the log, a link): keep it on the stage
 };
 // The story on the stage: events of the active terminal, what is unfolded, the armed close.
-const F = { id: null, events: [], seen: new Set(), loaded: false, all: false, open: new Set(), arm: 0, req: 0 };
+const F = { id: null, events: [], seen: new Set(), loaded: false, all: false, open: new Set(), arm: 0, req: 0, headline: "" };
 // Live first, then the ended rows Recent holds: selecting one of those has to resolve to a session
 // or the stage, the story and ↻ Reopen have nothing to work with.
 const byId = (id) => S.sessions.find((s) => s.id === id) || S.ended.find((s) => s.id === id);
@@ -1692,6 +1767,128 @@ function tidyLinks(root) {
     a.target = "_blank"; a.rel = "noopener";
   }
 }
+// ── the board ────────────────────────────────────────────────────────────────────────────────
+// Focus is the CONTROL BOARD of one terminal, not a transcript reader. It reuses the companion
+// rail's pieces at stage width — a titled card, a row of time · glyph · text, a pin carrying its
+// own state — laid out in triage order: what it needs from you, what it is doing right now, what
+// it has produced, and how it got here.
+//
+// What is NOT on it: the commands it ran. "12 commands · 3 edits" told the operator nothing they
+// could act on (Leo, 2026-09-22) — the raw terminal is one key away and has every byte. The one
+// exception is the call it is INSIDE right now, in the Now card, because that is the honest answer
+// to "what is happening" when the agent is between sentences.
+const BTL_GLYPH = { user: "›", understanding: "◆", say: "·", result: "✓", memory: "🧠", error: "✕", link: "↗" };
+const BTL_LAST = 40;               // rows kept before "show all" — a day-long terminal is thousands
+const runSince = (s) => Date.parse(s.created_at) || 0;
+const elapsedOf = (at) => (at ? TermCompanion.elapsed(Date.now() - at) : "");
+
+// The strip: the numbers the operator triages by, in one line, above everything.
+// Cost, context and model stay in the stage header — one number, one home.
+function boardHead(s) {
+  const ph = phaseOf(s);
+  const st = (s.live && s.status) || {};
+  const out = [`<span class="ph ${ph}"><i>${esc(PH[ph]?.icon || "·")}</i>${esc(PH_WORD[ph] || ph)}</span>`];
+  out.push(`<span>running <b data-clock="run">${esc(elapsedOf(runSince(s)))}</b></span>`);
+  out.push(`<span class="sep">·</span>`);
+  out.push(s.live
+    ? `<span data-clock="phase" data-at="${phaseSince(s)}">${esc(PH_WORD[ph] || ph)} for ${esc(elapsedOf(phaseSince(s)))}</span>`
+    : `<span>ended ${esc(age(s.ended_at || s.created_at))} ago</span>`);
+  // The agent's own step count (`mc progress 2/5`) — the only progress number that is not a guess.
+  if (st.progress && st.progress.of > 0) {
+    const pct = Math.max(0, Math.min(100, Math.round((st.progress.n / st.progress.of) * 100)));
+    out.push(`<span class="sep">·</span><span class="bprog" title="the agent's own step count (mc progress)"><span class="track"><i style="width:${pct}%"></i></span><b>${esc(st.progress.n)}/${esc(st.progress.of)}</b></span>`);
+  }
+  if (st.subagents) out.push(`<span class="sep">·</span><span>⧗ ${st.subagents} subagent${st.subagents === 1 ? "" : "s"}</span>`);
+  if (st.on) out.push(`<span class="sep">·</span><span>on ${esc(st.on)}${st.eta_at ? " · eta " + esc(inMin(new Date(st.eta_at).toISOString())) : ""}</span>`);
+  return `<div class="bhead">${out.join("")}</div>`;
+}
+
+// Now: the one line that answers "what is it doing". Its own words when it has any (status.line is
+// already resolved from mc state / hooks / the pty — term-status.ts), the call it is inside under it.
+function boardNow(s) {
+  const ph = phaseOf(s);
+  if (!s.live) {
+    const why = s.end_reason ? "↪ " + s.end_reason : "closed — ↻ Reopen continues the same conversation";
+    return `<section class="bcard bnow idle" style="--nc:var(--faint)"><h4>Ended<time>${esc(age(s.ended_at || s.created_at))} ago</time></h4><div class="line none">${esc(why)}</div></section>`;
+  }
+  const line = oneLiner(s).text || "";
+  const act = ph === "working" && F.id === s.id ? TermCompanion.currentAct(F.events) : null;
+  const sub = [];
+  if (s.status?.on) sub.push("waiting on " + s.status.on);
+  if (s.role === "lead" && s.workers) sub.push(s.workers + " worker" + (s.workers === 1 ? "" : "s"));
+  return `<section class="bcard bnow ${ph}" style="--nc:${COMP_PH_COLOR[ph] || "var(--line)"}">`
+    + `<h4>Now<time data-clock="phase" data-at="${phaseSince(s)}">${esc(elapsedOf(phaseSince(s)))}</time></h4>`
+    + `<div class="line${line ? "" : " none"}">${esc(line || "nothing said yet")}</div>`
+    + (act ? `<div class="tool">${esc(TermCompanion.actPhrase(act.text))}<span data-clock="act" data-at="${act.at || 0}">${act.at ? " · " + esc(elapsedOf(act.at)) : ""}</span></div>` : "")
+    + (sub.length ? `<div class="sub">${esc(sub.join(" · "))}</div>` : "")
+    + `</section>`;
+}
+
+function boardGoal(s) {
+  const started = s.spawn_goal || s.first_prompt || "";
+  const goal = s.goal || started;
+  const drift = started && s.goal && norm(started) !== norm(s.goal);
+  return `<section class="bcard bgoal"><h4>Goal${s.goal_kind ? `<span class="n" title="${esc(KIND_TIP[s.goal_kind] || "")}">${esc(s.goal_kind === "investigation" ? "dig" : s.goal_kind)}</span>` : ""}</h4>`
+    + `<div class="t${goal ? "" : " none"}">${esc(goal ? clip(goal, 400) : "what is this terminal for?")}</div>`
+    + (drift ? `<div class="sub">started as: ${esc(clip(started, 200))}</div>` : "")
+    + `</section>`;
+}
+
+// Deliverables: what outlives the scrollback. PRs (with whether they landed) and documents come
+// from the daemon (src/session-artifacts.ts) — the same pins the rail shows — plus this terminal's
+// diff and any other link its Summary named.
+function boardShips(s) {
+  if (s.id === C.id) compPinsLoad(s.id);
+  const prs = C.id === s.id ? C.pins.prs : [];
+  const docs = C.id === s.id ? C.pins.docs : [];
+  const u = s.usage || {};
+  const la = s.lines_added || u.lines_added, lr = s.lines_removed || u.lines_removed;
+  const chips = (la || lr ? `<span class="vchip diff"><b>+${la || 0}</b> <i>−${lr || 0}</i></span>` : "") + linkChips(F.headline || "");
+  const rows = prs.map(pinPrHtml).concat(docs.map(pinDocHtml));
+  if (!rows.length && !chips) return "";
+  return `<section class="bcard bships"><h4>Deliverables${prs.length ? `<span class="n">${prs.length} PR${prs.length === 1 ? "" : "s"}</span>` : ""}</h4>`
+    + rows.join("")
+    + (chips ? `<div class="drow">${chips}</div>` : "")
+    + `</section>`;
+}
+
+// Files this turn wrote to — the blast radius, since the last thing you said. Click copies the path.
+function boardTouched(s) {
+  const files = F.id === s.id ? TermCompanion.touchedFiles(F.events) : [];
+  if (!files.length) return "";
+  const shown = files.slice(0, 10);
+  return `<section class="bcard btouch"><h4>Touched this turn<span class="n">${files.length}</span></h4><div class="fs">`
+    + shown.map((f) => `<span class="f" data-file="${esc(f)}" title="${esc(f)} — click to copy">${esc(TermCompanion.shortPath(f))}</span>`).join("")
+    + (files.length > shown.length ? `<span class="n">+${files.length - shown.length}</span>` : "")
+    + `</div></section>`;
+}
+
+// The timeline: one row per moment, oldest first, phase changes as chapters — the rail's rows, at
+// stage width. companionRows() is what decides a row IS a row (desk-companion.js), so the rail and
+// the board can never tell two different stories.
+function boardRow(r) {
+  if (r.kind === "chapter")
+    return `<div class="ch" style="--cc:${COMP_PH_COLOR[r.phase] || "var(--faint)"}"><span>${esc(PH_WORD[r.phase] || r.phase)}</span><time>${esc(TermCompanion.hhmm(r.at))}</time><span class="rule"></span></div>`;
+  const tx = r.kind === "link"
+    ? `<a class="tx" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.text)}</a>`
+    : `<span class="tx">${esc(r.text)}</span>`;
+  return `<div class="r ${esc(r.kind)}"><span class="tm">${esc(r.at ? TermCompanion.hhmm(r.at) : "")}</span>`
+    + `<span class="g">${BTL_GLYPH[r.kind] || "·"}</span>${tx}</div>`;
+}
+function boardTimeline(s) {
+  if (!F.loaded) return `<section class="bcard"><h4>Timeline</h4><div class="skel"></div><div class="skel" style="width:70%"></div></section>`;
+  const rows = TermCompanion.companionRows(F.events, C.id === s.id ? C.chapters : []);
+  const moments = rows.filter((r) => r.kind !== "chapter").length;
+  const steps = F.events.filter((e) => e.kind === "act").length;
+  const shown = !F.all && rows.length > BTL_LAST ? rows.slice(-BTL_LAST) : rows;
+  const more = rows.length > shown.length || F.all;
+  return `<section class="bcard"><h4>Timeline<span class="n">${moments} moment${moments === 1 ? "" : "s"}${steps ? " · " + steps + " steps" : ""}</span>`
+    + (more ? `<button data-fa="all">${F.all ? "recent" : "all " + rows.length}</button>` : "")
+    + `</h4><div class="btl">`
+    + (shown.length ? shown.map(boardRow).join("") : `<div class="fempty">${s.live ? "nothing reported yet" : "no transcript found"}</div>`)
+    + `</div></section>`;
+}
+
 function renderStory() {
   const s = S.active && byId(S.active); if (!s || F.id !== s.id) return;
   const p = s.prompt && typeof s.prompt === "object" ? s.prompt : null;
@@ -1707,11 +1904,10 @@ function renderStory() {
     : latest ? { key: "res", cls: "latest", lbl: "Latest", text: stripLead(stripLead(latest.text, "understanding"), "result") }
     : res ? { key: "res", cls: "prev", lbl: "Previous result", text: stripLead(res.text, "result") }
     : s.summary ? { key: "res", cls: "prev", lbl: "Summary", text: s.summary } : null;
-  let out = "";
-  const u = s.usage || {};
-  const la = s.lines_added || u.lines_added, lr = s.lines_removed || u.lines_removed;
-  const vchips = (la || lr ? `<span class="vchip diff"><b>+${la || 0}</b> <i>−${lr || 0}</i></span>` : "") + linkChips(headline?.text);
-  if (vchips) out += `<div class="vchips">${vchips}</div>`;
+  F.headline = headline?.text || "";
+  let out = boardHead(s);
+  // Anything it needs from you comes before anything it has to say. Full width: it is the one block
+  // on this board that is an action, not a reading.
   if (s.live && (s.state === "waiting" || s.state === "blocked")) {
     const q = p?.question && p.kind !== "turn" ? p.question : "";
     if (q || s.state === "blocked") {
@@ -1729,23 +1925,28 @@ function renderStory() {
     const open = F.open.has(key);
     return `<section class="fblock clamp${open ? " open" : ""} ${cls}" data-clamp="${key}"><span class="lbl">${lbl}<button data-clamp-btn="${key}">${open ? "less" : "more"}</button></span><div class="t">${md(open ? text : headTail(text))}</div></section>`;
   };
-  if (F.loaded && headline) out += clampBlock(headline.key, headline.cls, headline.lbl, headline.text);
-  const started = s.spawn_goal || s.first_prompt || "";
-  const goal = s.goal || started;
-  if (goal) out += `<section class="fblock goal"><span class="lbl">Goal</span><div class="t">${esc(clip(goal, 400))}</div>${started && s.goal && norm(started) !== norm(s.goal) ? `<div class="sub">started as: ${esc(clip(started, 200))}</div>` : ""}</section>`;
-  if (!F.loaded) out += `<section class="fblock"><span class="lbl">Latest</span><div class="skel"></div><div class="skel" style="width:70%"></div></section>`;
-  else {
-    if (und && after(und) && !freshRes && !latest) out += clampBlock("und", "und", "Understood", stripLead(und.text, "understanding"));
-    const items = storyItems(evs, s);
-    const N = 3; let shown = items;
-    if (!F.all) { let n = 0, i = items.length; while (i > 0 && n < N) { i--; if (items[i].kind !== "acts") n++; } shown = items.slice(i); }
-    const line = (it) => storyLine(it, F.all);
-    const said = items.filter((x) => x.kind !== "acts").length;
-    out += `<section class="fblock"><span class="lbl">Progress · ${said} message${said === 1 ? "" : "s"}${items.length > shown.length || F.all ? `<button data-fa="all">${F.all ? "last " + N : "show all"}</button>` : ""}</span>`
-      + (shown.length ? shown.map(line).join("") : `<div class="fempty">${s.live ? "nothing reported yet" : "no transcript found"}</div>`) + `</section>`;
-  }
+  let main = boardNow(s);
+  if (F.loaded && headline) main += clampBlock(headline.key, headline.cls, headline.lbl, headline.text);
+  if (F.loaded && und && after(und) && !freshRes && !latest) main += clampBlock("und", "und", "Understood", stripLead(und.text, "understanding"));
+  main += boardTimeline(s);
+  const side = boardGoal(s) + boardShips(s) + boardTouched(s);
+  out += `<div class="bcols"><div class="bmain">${main}</div><aside class="bside">${side}</aside></div>`;
   const body = qs("#story"); body.innerHTML = out; tidyLinks(body);
   for (const c of qsa(".fblock.clamp:not(.open)", body)) { const t = qs(".t", c); c.classList.toggle("over", t.scrollHeight > t.clientHeight + 2); }
+}
+// The board's clocks tick off the page's one clock (body.blink, 1Hz) instead of a repaint: a board
+// that rebuilds itself every second to move one digit is the animation this page does not have.
+function boardTick() {
+  if (S.mode !== "focus") return;
+  const s = S.active && byId(S.active); if (!s || F.id !== s.id) return;
+  const ph = phaseOf(s);
+  for (const el of qsa("#story [data-clock]")) {
+    const at = Number(el.dataset.at || 0);
+    if (el.dataset.clock === "run") el.textContent = elapsedOf(runSince(s));
+    else if (el.dataset.clock === "phase") el.textContent = (el.tagName === "TIME" ? "" : (PH_WORD[ph] || ph) + " for ") + elapsedOf(at);
+    else if (el.dataset.clock === "act" && at) el.textContent = " · " + elapsedOf(at);
+  }
+  if (s.id === C.id) compPinsLoad(s.id);
 }
 // The bar: what this turn touched on a muted line of its own, then the open question's answers OR
 // the quick-action chips on the left, then at most three moves. Continue nudges a finished turn;
@@ -1973,7 +2174,7 @@ const COMP_PH_COLOR = {
   blocked: "var(--danger)", decide: "var(--p-decide)", review: "var(--accent)", your_turn: "var(--warn)",
   stalled: "var(--muted)", waiting: "var(--p-wait)", working: "var(--p-work)", ended: "var(--faint)",
 };
-const COMP_GLYPH = { user: "›", understanding: "◆", say: "·", act: "▸", reads: "▸", result: "✓", memory: "🧠" };
+const COMP_GLYPH = { user: "›", understanding: "◆", say: "·", act: "▸", reads: "▸", result: "✓", memory: "🧠", error: "✕", link: "↗" };
 const COMP_LOUD = new Set(["decide", "blocked"]);
 const COMP_ASK_PHASES = new Set(["decide", "your_turn", "blocked"]);
 const C = {
@@ -2139,30 +2340,33 @@ async function compPinsLoad(id, force) {
   } finally {
     C.pinBusy = false;
     C.pinAt = Date.now();
-    compSoon();
+    // The pins live on two surfaces now: the rail in Terminal mode, the Deliverables card in Focus.
+    if (S.mode === "focus") renderStorySoon(); else compSoon();
   }
 }
 const PIN_MARK = { merged: "✓", open: "⧗", closed: "✕" };
 const PIN_WORD = { merged: "merged", open: "to merge", closed: "closed" };
+// One pin, drawn once. The rail (280px) and the Focus board (a card on the stage) share it so a PR
+// never looks like two different things depending on which surface you are reading.
+function pinPrHtml(p) {
+  const st = p.state || "open"; // gh could not answer: still something you have to merge
+  return `<a class="pin ${esc(st)}" href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(p.title || p.url)}">`
+    + `<span class="i">${PIN_MARK[st] || "⧗"}</span>`
+    + `<span class="t"><b>#${esc(p.num)}</b> <span>${esc(p.repo.split("/").pop() || p.repo)}</span></span>`
+    + `<span class="s">${esc(PIN_WORD[st] || st)}</span></a>`;
+}
+function pinDocHtml(d) {
+  return d.url
+    ? `<a class="pin doc" href="${esc(d.url)}" target="_blank" rel="noopener" title="${esc(d.url)}"><span class="i">▤</span><span class="t">${esc(d.label)}</span><span class="s">doc</span></a>`
+    : `<button type="button" class="pin doc" data-pin-path="${esc(d.path)}" title="${esc(d.path)} — click to copy the path"><span class="i">▤</span><span class="t">${esc(d.label)}</span><span class="s">doc</span></button>`;
+}
 function compPins(s) {
   const box = qs("#comp-pins");
   // Refreshed off the 1s tick rather than its own timer: the rail is only ever this session's.
   if (s.id === C.id) compPinsLoad(s.id);
   const prs = C.id === s.id ? C.pins.prs : [];
   const docs = C.id === s.id ? C.pins.docs : [];
-  const out = [];
-  for (const p of prs) {
-    const st = p.state || "open"; // gh could not answer: still something you have to merge
-    out.push(`<a class="pin ${esc(st)}" href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(p.title || p.url)}">`
-      + `<span class="i">${PIN_MARK[st] || "⧗"}</span>`
-      + `<span class="t"><b>#${esc(p.num)}</b> <span>${esc(p.repo.split("/").pop() || p.repo)}</span></span>`
-      + `<span class="s">${esc(PIN_WORD[st] || st)}</span></a>`);
-  }
-  for (const d of docs) {
-    out.push(d.url
-      ? `<a class="pin doc" href="${esc(d.url)}" target="_blank" rel="noopener" title="${esc(d.url)}"><span class="i">▤</span><span class="t">${esc(d.label)}</span><span class="s">doc</span></a>`
-      : `<button type="button" class="pin doc" data-pin-path="${esc(d.path)}" title="${esc(d.path)} — click to copy the path"><span class="i">▤</span><span class="t">${esc(d.label)}</span><span class="s">doc</span></button>`);
-  }
+  const out = prs.map(pinPrHtml).concat(docs.map(pinDocHtml));
   const html = out.join("");
   if (html !== C.pinSig) { C.pinSig = html; setHtml(box, html); }
   box.hidden = !out.length;
@@ -2732,6 +2936,9 @@ function watchBlock(s) {
   return out + `</section>`;
 }
 qs("#story").addEventListener("click", async (e) => {
+  // The board's file chips and doc pins are the rail's, so they behave like the rail's: copy the path.
+  const f = e.target.closest("[data-file], [data-pin-path]");
+  if (f) return compCopy(f.dataset.file || f.dataset.pinPath);
   const b = e.target.closest("[data-w]"); if (!b) return;
   const s = S.active && byId(S.active); if (!s) return;
   if (b.dataset.w === "edit") return openWatch(s.id);
@@ -5124,7 +5331,7 @@ setInterval(() => { for (const s of railOrder()) repaintRow(s.id); if (S.active)
 // The one clock every indicator blinks to (see .dot.working) — two repaints a second, no animation.
 // The companion's elapsed times ride it: a text compare per field, and the timeline diff is skipped
 // outright when no event has landed since the last paint (compRows' signature).
-setInterval(() => { document.body.classList.toggle("blink"); if (compLive()) compSoon(); }, 1000);
+setInterval(() => { document.body.classList.toggle("blink"); if (compLive()) compSoon(); boardTick(); }, 1000);
 
 // ── usage: one chip per CLI (its worst window), a banner at 80%+, every profile behind the chip ──
 const U = { snap: null };

@@ -8,9 +8,10 @@
  *
  * Two shapes of the feed are worth remembering before changing anything here:
  *   · `result` is NOT a tool result. FocusKind "result" is the agent's own "Summary:"/"Result:"
- *     block (focus.ts phased()). The feed carries no tool exit codes or outputs at all — claudeLine
- *     drops `toolUseResult` records — so nothing in the timeline can "attach a result to its act",
- *     and the diff ticker cannot show a command's exit status.
+ *     block (focus.ts phased()). A tool result reaches the feed only in the two shapes worth a row:
+ *     an "error" event when the call FAILED, and an act of the form "printed <url>" for a link its
+ *     output emitted (`gh pr create`). Everything else a command printed stays out of the feed, so
+ *     the ticker still cannot show a command's exit status.
  *   · `ts` is optional. Only the claude and codex adapters stamp events; grok and cursor do not. A
  *     row with no stamp of its own inherits the last one seen, and a feed with no stamps at all
  *     sorts every chapter to the end rather than guessing.
@@ -26,6 +27,9 @@
 
   // An agent writing to workspace memory, read back from its command: `mc remember "…"`, `mc learn "…"`,
   // `mc memo append|new|edit <slug>`. Anywhere in the command, so `cd x && mc remember …` counts.
+  // describeTool's phrasing for a link a command printed (focus.ts toolResultEvents).
+  var LINK_RE = /^printed\s+(\S+)$/;
+
   var MEM_RE = /(?:^|[\s;&|(])mc\s+(remember|learn|memo\s+(?:append|new|edit))\b\s*([\s\S]*)$/;
 
   var oneLine = function (t) { return String(t == null ? "" : t).replace(/\s+/g, " ").trim(); };
@@ -132,9 +136,18 @@
       // `think` is the model talking to itself. The Focus story never shows it and neither does this:
       // "everything that happened" means everything the operator could have acted on.
       if (e.kind === "act") {
-        // The one tool call that IS a row: the agent saving to workspace memory.
+        // Two tool calls ARE rows: the agent saving to workspace memory, and one that printed a
+        // link — a PR appearing is a moment, and this is the only record of it the feed has.
         var mw = memoryWrite(e.text);
-        if (mw) rows.push({ kind: "memory", at: at, seq: e.seq, text: memoryPhrase(mw), slug: mw.slug });
+        if (mw) { rows.push({ kind: "memory", at: at, seq: e.seq, text: memoryPhrase(mw), slug: mw.slug }); continue; }
+        var link = LINK_RE.exec(oneLine(e.text));
+        if (link) rows.push({ kind: "link", at: at, seq: e.seq, text: link[1], url: link[1] });
+        continue;
+      }
+      // A failed call: the one row in here the agent did not choose to write.
+      if (e.kind === "error") {
+        var et = oneLine(e.text);
+        if (et) rows.push({ kind: "error", at: at, seq: e.seq, text: et });
         continue;
       }
       if (e.kind === "think") continue;
