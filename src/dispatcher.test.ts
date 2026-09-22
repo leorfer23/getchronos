@@ -2,8 +2,9 @@ import { test, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { db, jobs, repos, runs, tickets, workspaces } from "./store.js";
-import { dispatch, status, setExecutor } from "./dispatcher.js";
+import { dispatch, status, setExecutor, setStopBackendResolver, stopRun } from "./dispatcher.js";
 import { CONFIG } from "./config.js";
+import type { CloudBackend } from "./backends/types.js";
 import type { Job, RunStatus } from "./types.js";
 
 // Drive the dispatcher with a scripted executor instead of spawning Claude. The fake mirrors what
@@ -477,4 +478,78 @@ test("a queued run can be killed: it leaves the queue and never starts", async (
   release();
   await settle();
   assert.deepEqual(started, [runs.list(a.id)[0].id], "the killed run never took the slot");
+});
+
+// ── stopping a cloud run: cancel() decides, not the HTTP response ──────────
+
+function fakeCloudBackend(over: Partial<CloudBackend> = {}): CloudBackend {
+  return {
+    name: "test-cloud",
+    kind: "cloud",
+    supportsResume: true,
+    bin: () => { throw new Error("cloud backend has no local process"); },
+    buildArgs: () => { throw new Error("cloud backend has no local process"); },
+    oneShot: () => { throw new Error("cloud backend has no local process"); },
+    env: () => ({}),
+    parseLine: (line) => ({ type: "raw", payload: { text: line } }),
+    extractResult: () => null,
+    detectRateLimit: () => null,
+    launch: async () => ({ agentId: "bc-x", runId: "run-x", url: null, status: "running" }),
+    stream: async function* () {},
+    getRun: async () => ({ status: "running", result: null, durationMs: null, branches: [], error: null }),
+    usage: async () => ({ tokens_in: null, tokens_out: null, tokens_cache_read: null, tokens_cache_write: null, cost_usd: null }),
+    followup: async () => ({ agentId: "bc-x", runId: "run-y", url: null, status: "running" }),
+    cancel: async () => {},
+    ...over,
+  };
+}
+
+function mkCloudRun(): { job: Job; runId: string } {
+  const job = mkJob({ backend: "test-cloud" });
+  const r = runs.create(job.id, "manual");
+  runs.patch(r.id, { status: "running", started_at: new Date().toISOString(), cloud_agent_id: "bc-1", cloud_run_id: "run-1" });
+  return { job, runId: r.id };
+}
+
+test("stopRun on a cloud run: cancel() succeeds → the row is marked killed only after it confirms", async (t) => {
+  t.after(() => setStopBackendResolver(null));
+  let cancelled = false;
+  let resolveCancel!: () => void;
+  const gate = new Promise<void>((r) => (resolveCancel = r));
+  setStopBackendResolver(() => fakeCloudBackend({ cancel: async () => { cancelled = true; await gate; } }));
+
+  const { runId } = mkCloudRun();
+  assert.equal(stopRun(runId), true, "the stop request is accepted synchronously");
+  // Not yet — cancel() hasn't resolved, so the row must not lie about being killed.
+  assert.equal(runs.get(runId)!.status, "running");
+  assert.equal(cancelled, true, "cancel() was actually called");
+
+  resolveCancel();
+  await flushMicro();
+  assert.equal(runs.get(runId)!.status, "killed");
+});
+
+test("stopRun on a cloud run: cancel() fails → NOT marked killed, the failure is recorded loudly", async (t) => {
+  t.after(() => setStopBackendResolver(null));
+  setStopBackendResolver(() => fakeCloudBackend({ cancel: async () => { throw new Error("provider unreachable"); } }));
+
+  const { runId } = mkCloudRun();
+  assert.equal(stopRun(runId), true);
+  await flushMicro();
+
+  const row = runs.get(runId)!;
+  assert.equal(row.status, "running", "still running — a stop that silently 'succeeds' while billing continues is worse than one that errors");
+  assert.match(row.error ?? "", /cloud cancel failed/);
+  assert.match(row.error ?? "", /provider unreachable/);
+});
+
+test("stopRun on a finished cloud run is a no-op (nothing left to cancel)", async (t) => {
+  t.after(() => setStopBackendResolver(null));
+  let cancelCalls = 0;
+  setStopBackendResolver(() => fakeCloudBackend({ cancel: async () => { cancelCalls++; } }));
+
+  const { runId } = mkCloudRun();
+  runs.patch(runId, { status: "success", ended_at: new Date().toISOString() });
+  assert.equal(stopRun(runId), false);
+  assert.equal(cancelCalls, 0);
 });
