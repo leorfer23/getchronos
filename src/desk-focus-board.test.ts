@@ -91,3 +91,10 @@ test("Now says what it is doing, and an ended terminal says what became of it", 
   assert.match(html, /class="bcard bnow idle"/);
   assert.match(html, /s\.end_reason \? "↪ " \+ s\.end_reason/);
 });
+
+test("the phone shows the two things worth knowing without opening a terminal", () => {
+  const phone = fs.readFileSync(path.join(process.cwd(), "static/phone.html"), "utf8");
+  assert.match(phone, /if \(e\.kind === "error"\) \{ flush\(\); items\.push\(\{ kind: "err"/, "a failed call is its own line");
+  assert.match(phone, /const link = \/\^printed\\s\+\(\\S\+\)\$\/\.exec/, "a printed link is a link, not a folded tool call");
+  assert.match(phone, /\.fl\.err \{ color:var\(--danger\); font-size:13\.5px; \}/);
+});
