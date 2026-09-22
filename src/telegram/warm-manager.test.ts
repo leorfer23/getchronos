@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 process.env.CHRONOS_CLAUDE_BIN = path.join(HERE, "fake-claude.mjs");
 
-const { WarmManager } = await import("./agent.js");
+const { WarmManager, profileMcpTools } = await import("./agent.js");
 const { _resetProviderLimitState, isProviderLimited, modelLimitKey, withProviderFallback } = await import("../manager-fallback.js");
 
 const mk = () =>
@@ -61,6 +61,39 @@ test("a declared mcp bundle reaches argv; without one, strict still stands alone
   } finally {
     delete process.env.CHRONOS_FAKE_ARGV;
     fs.rmSync(dump, { force: true });
+  }
+});
+
+// Robert's exception. His Slack/Jira/ClickUp logins are OAuth tokens stored INSIDE the profile dir,
+// so a repo bundle could only ever carry the spec, never the session — the servers have to load from
+// the dir itself, which is exactly what --strict-mcp-config forbids. Dropping strict is only half of
+// it: a tool missing from --allowed-tools is silently absent, so the dir's servers must also be
+// named there as mcp__<server>.
+test("Robert inherits the profile dir's MCP servers: no strict, and each one allowed by name", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chronos-profile-"));
+  fs.writeFileSync(
+    path.join(dir, ".claude.json"),
+    JSON.stringify({ mcpServers: { "slack-galley": { type: "http", url: "https://x" }, atlassian: { type: "http", url: "https://y" } } }),
+  );
+  assert.deepEqual(profileMcpTools(dir), ["mcp__slack-galley", "mcp__atlassian"]);
+  assert.deepEqual(profileMcpTools(path.join(dir, "nope")), [], "an unreadable dir is no servers, not a crash");
+
+  const dump = path.join(os.tmpdir(), `chronos-fake-argv-inherit-${process.pid}`);
+  process.env.CHRONOS_FAKE_ARGV = dump;
+  try {
+    const m = new WarmManager({
+      system: "t", model: "sonnet", turnTimeoutMs: 5_000, maxTurns: 30,
+      profileDir: dir, allowedTools: "Bash,Read", inheritProfileMcp: true,
+    });
+    await m.turn("hi");
+    m.kill();
+    const argv = JSON.parse(fs.readFileSync(dump, "utf8")) as string[];
+    assert.ok(!argv.includes("--strict-mcp-config"), "strict would hide the dir's own servers");
+    assert.equal(argv[argv.indexOf("--allowed-tools") + 1], "Bash,Read,mcp__slack-galley,mcp__atlassian");
+  } finally {
+    delete process.env.CHRONOS_FAKE_ARGV;
+    fs.rmSync(dump, { force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
