@@ -15,6 +15,14 @@ const pub = <T>(r: T): T => {
 };
 const pubAll = <T>(rows: T[]): T[] => rows.map(pub);
 
+// Every session read carries the size of its goal list beside the row. Two counting subqueries on an
+// indexed column, so the Desk can render "2/3" without a second round trip — and so a terminal with
+// no list (the common one) is plainly `goals_total: 0` rather than an absence to guess at.
+const SESSION_COLS =
+  "s.*, t.key AS ticket_key, t.title AS ticket_title, " +
+  "(SELECT COUNT(*) FROM session_goals g WHERE g.session_id = s.id) AS goals_total, " +
+  "(SELECT COUNT(*) FROM session_goals g WHERE g.session_id = s.id AND g.done_at IS NOT NULL) AS goals_done";
+
 export const sessions = {
   list(filter: { ticket_id?: string; status?: string; workspace_id?: string; limit?: number } = {}): Session[] {
     const where: string[] = [];
@@ -24,14 +32,14 @@ export const sessions = {
     if (filter.workspace_id) { where.push("workspace_id = ?"); params.push(filter.workspace_id); }
     const w = where.map((c) => "s." + c);
     let sql =
-      "SELECT s.*, t.key AS ticket_key, t.title AS ticket_title FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id" +
+      "SELECT " + SESSION_COLS + " FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id" +
       (w.length ? " WHERE " + w.join(" AND ") : "") + " ORDER BY s.created_at DESC";
     if (filter.limit) { sql += " LIMIT ?"; params.push(filter.limit); }
     return pubAll(db.prepare(sql).all(...params) as Session[]);
   },
   get(id: string): Session | undefined {
     return pub(db.prepare(
-      "SELECT s.*, t.key AS ticket_key, t.title AS ticket_title FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id WHERE s.id = ?"
+      "SELECT " + SESSION_COLS + " FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id WHERE s.id = ?"
     ).get(id) as Session | undefined);
   },
   // Latest session's AI metadata for a ticket (Flow shipped enrichment). Cols null if unset.
@@ -86,7 +94,7 @@ export const sessions = {
     const params: any[] = [leadId];
     if (filter.status) { where.push("s.status = ?"); params.push(filter.status); }
     return pubAll(db.prepare(
-      "SELECT s.*, t.key AS ticket_key, t.title AS ticket_title FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id " +
+      "SELECT " + SESSION_COLS + " FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id " +
         `WHERE ${where.join(" AND ")} ORDER BY s.created_at DESC`,
     ).all(...params) as Session[]);
   },
@@ -103,7 +111,7 @@ export const sessions = {
   getByLeadToken(tok: string): Session | undefined {
     if (!tok) return undefined;
     return pub(db.prepare(
-      "SELECT s.*, t.key AS ticket_key, t.title AS ticket_title FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id WHERE s.lead_token = ? LIMIT 1"
+      "SELECT " + SESSION_COLS + " FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id WHERE s.lead_token = ? LIMIT 1"
     ).get(tok) as Session | undefined);
   },
   /** The only way the credential leaves the store — for the Lead's own env at spawn (openSession). */
@@ -125,7 +133,7 @@ export const sessions = {
     const n = name.trim().toLowerCase();
     if (!n) return undefined;
     return pub(db.prepare(
-      "SELECT s.*, t.key AS ticket_key, t.title AS ticket_title FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id WHERE s.agent_name = ? AND s.status = 'live' LIMIT 1"
+      "SELECT " + SESSION_COLS + " FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id WHERE s.agent_name = ? AND s.status = 'live' LIMIT 1"
     ).get(n) as Session | undefined);
   },
   // Patch the AI-generated metadata (title / summary / tags / first_prompt) used for search + display.
@@ -133,12 +141,21 @@ export const sessions = {
    *  intent, not AI-derived display metadata, and `goal_done` must be settable back to null. */
   setGoal(
     id: string,
-    g: { goal?: string | null; goal_done?: boolean; goal_kind?: GoalKind | null; goal_source?: GoalSource | null },
+    g: {
+      goal?: string | null;
+      goal_done?: boolean;
+      goal_kind?: GoalKind | null;
+      goal_source?: GoalSource | null;
+      /** The exact tick to record, when it is not "now" — the goal-list mirror replays the moment the
+       *  LAST item was ticked, and a re-stamped `now()` would move the day's log every refresh. */
+      goal_done_at?: string | null;
+    },
   ) {
     const sets: string[] = [];
     const params: any[] = [];
     if (g.goal !== undefined) { sets.push("goal=?"); params.push(g.goal); }
-    if (g.goal_done !== undefined) { sets.push("goal_done_at=?"); params.push(g.goal_done ? now() : null); }
+    if (g.goal_done_at !== undefined) { sets.push("goal_done_at=?"); params.push(g.goal_done_at); }
+    else if (g.goal_done !== undefined) { sets.push("goal_done_at=?"); params.push(g.goal_done ? now() : null); }
     if (g.goal_kind !== undefined) { sets.push("goal_kind=?"); params.push(g.goal_kind); }
     // Who named it decides whether the deriver may rename it later. A goal write with no stated
     // source is the operator's (the card's own inline edit is the only unlabelled writer).
@@ -274,7 +291,7 @@ export const sessions = {
   /** Every terminal under a standing watch, live or not (an ended one gets one last report). */
   watched(): Session[] {
     return pubAll(db.prepare(
-      "SELECT s.*, t.key AS ticket_key, t.title AS ticket_title FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id " +
+      "SELECT " + SESSION_COLS + " FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id " +
         "WHERE s.watch_every_min IS NOT NULL ORDER BY s.created_at DESC",
     ).all() as Session[]);
   },

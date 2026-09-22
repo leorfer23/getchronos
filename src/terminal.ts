@@ -10,7 +10,7 @@ import { detectPrompt, renderScreen, type DeskPrompt } from "./desk-prompt.js";
 import { FLUSH_MS, clampRate, fanOut, type TermClient } from "./term-fanout.js";
 import { ScreenMirror, type Screen } from "./term-screen.js";
 import { ModeTracker } from "./term-modes.js";
-import { sessions, workspaces, repos, tickets, runs, jobs, notes as notesStore, kv } from "./store.js";
+import { sessions, sessionGoals, workspaces, repos, tickets, runs, jobs, notes as notesStore, kv } from "./store.js";
 import { backendAllowed, getBackend, workspaceBackends } from "./backends/index.js";
 import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow } from "./sandbox.js";
 import { ensureDropDir } from "./drops.js";
@@ -37,7 +37,8 @@ import { resolveGrokResumeId } from "./grok-resume.js";
 import { snapshotUsage } from "./session-usage.js";
 import { installClaudeHooks, installCursorHooks, installGrokHooks } from "./term-hooks.js";
 import { agentBlock, agentPrompt } from "./agent-defs.js";
-import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, type Workspace } from "./types.js";
+import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, type SessionGoal, type Workspace } from "./types.js";
+import { goalLines, setGoals } from "./goals.js";
 
 // Standing instruction folded into every session (via system prompt where the CLI supports it, else the
 // seed): the operator watches a plain-English "Focus" feed (Understanding → narration → Summary), not the
@@ -115,12 +116,29 @@ const KIND_CONTRACT: Record<GoalKind, string> = {
 // A goal is optional (the Desk's Blank terminal has none). With one, the seed opens with it and the
 // card contract explains that the title is a guess to sharpen; without one, the brief IS the task and
 // the card has no title yet — so the same paragraph asks for the name instead of a correction.
-export function deskSeed(goal: string, kind: GoalKind | null, description?: string | null): string {
+export function deskSeed(
+  goal: string,
+  kind: GoalKind | null,
+  description?: string | null,
+  /** The rest of the queue, when this terminal was given more than one finish line (src/goals.ts).
+   *  The agent is told all of them so it can plan the work, and told to tick them off ONE at a
+   *  time — the card only ever shows the one it is on. */
+  goals?: SessionGoal[] | null,
+): string {
   const brief = (description ?? "").trim();
   const g = (goal ?? "").trim();
+  const list = (goals ?? []).length > 1 ? goals! : null;
   return [
     g ? `Goal: ${g}` : null,
     kind ? KIND_CONTRACT[kind] : null,
+    list
+      ? `Your operator gave this terminal ${list.length} goals, in this order:\n` +
+        goalLines(list).join("\n") +
+        "\n\nWork them in order. `mc goal done` ticks off the ONE you are on and moves your card to the " +
+        "next — it does not end the terminal until the last one is ticked. `mc goal list` shows where you " +
+        "are. If one of them turns out to be wrong or already true, say so and run `mc goal done` rather " +
+        "than inventing work to fill it."
+      : null,
     brief ? (g ? `Brief from your operator:\n${brief}` : brief) : null,
     g
       ? "You are one card on your operator's Desk wall, and the goal above is the card's title — the label he " +
@@ -338,9 +356,18 @@ export async function openSession(
     resumeAgent?: boolean;
     /** A live terminal this one is about to replace (failover) — not counted against the cap. */
     replaces?: string | null;
+    /** More than one finish line, in the order they should be worked (src/goals.ts). The first one
+     *  becomes the card's goal; `mc goal done` walks the rest. */
+    goals?: Array<string | { text: string; kind?: GoalKind | null }> | null;
   },
 ): Promise<Session> {
   ensurePtyHelper();
+  // A terminal opened with a list is still opened with a goal: the first one is what the card, the
+  // day's log and `spawn_goal` carry. The rest are queued onto the row right after it is created.
+  if (opts.goals?.length && !opts.goal) {
+    const first = opts.goals[0];
+    opts = { ...opts, goal: typeof first === "string" ? first : first.text };
+  }
   // Machine governor (src/machine.ts): an AGENT may not open a terminal onto a Mac that is already
   // thrashing — another claude CLI on a load-38 box with full swap makes every existing terminal
   // slower and finishes nothing. Checked BEFORE the per-workspace seat count, because seats are
@@ -434,6 +461,24 @@ export async function openSession(
   } else {
     cwd = opts.cwd || (await resolveSessionCwd(opts));
     row = sessions.create({ ...opts, cwd });
+  }
+  // Several finish lines, queued at spawn (src/goals.ts). The row keeps mirroring the FIRST one, so
+  // everything downstream — the card, the title, the phase — sees a terminal with one goal; the list
+  // only shows itself in the seed below and when the agent ticks one off.
+  if (!opts.resumeId && opts.goals?.length) {
+    setGoals(
+      row.id,
+      // The shape of work typed in the spawn dialog belongs to the FIRST goal — it is the one that
+      // was on the card when the operator picked it. Without this the mirror would write a null kind
+      // straight back over it and the card would lose its chip.
+      opts.goals.map((g, i) =>
+        typeof g === "string"
+          ? { text: g, kind: i === 0 ? opts.goal_kind ?? null : null }
+          : { ...g, kind: g.kind ?? (i === 0 ? opts.goal_kind ?? null : null) },
+      ),
+      "seed",
+    );
+    row = sessions.get(row.id)!;
   }
   const backend = getBackend(opts.backend);
   const ws = wsEarly;
@@ -673,8 +718,8 @@ export async function openSession(
       : (row.goal || opts.description?.trim()) && !opts.resumeId
         ? (row.role === "lead"
             ? `You are the LEAD for this goal in ${ws?.name ?? "this workspace"}. Read your instructions above, then start.\n\n` +
-              deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description)
-            : deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description))
+              deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id))
+            : deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id)))
         : null);
   // Backends without a system-prompt channel (cursor) get the standing notes + Focus contract folded
   // into the seed instead — but only when there's an actual task/context to run (never paste the

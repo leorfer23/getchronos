@@ -24,6 +24,7 @@ export type { LinkType } from "./store/tickets.js";
 export { calendars, calEvents } from "./store/calendars.js";
 export { reviews } from "./store/reviews.js";
 export { sessions } from "./store/sessions.js";
+export { sessionGoals } from "./store/session-goals.js";
 export { notes } from "./store/notes.js";
 export { jots } from "./store/jots.js";
 export type { Jot, NewJot } from "./store/jots.js";

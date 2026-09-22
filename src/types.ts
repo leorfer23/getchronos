@@ -663,6 +663,22 @@ export type SessionStatus = "live" | "ended";
 export type GoalKind = "pr" | "investigation" | "qa";
 /** Who last wrote a session's goal. The Desk title deriver only overwrites 'seed' and 'auto'. */
 export type GoalSource = "seed" | "auto" | "agent" | "human";
+/**
+ * One finish line out of the several a terminal may be given (src/store/session-goals.ts). The list
+ * is worked in `seq` order; the first row with no `done_at` is the one on the card.
+ */
+export interface SessionGoal {
+  id: string;
+  session_id: string;
+  /** 1-based position — what `mc goal done 2` means. Kept dense when a goal is dropped. */
+  seq: number;
+  text: string;
+  kind: GoalKind | null;
+  source: GoalSource | null;
+  /** ISO of the tick, or null while it is still ahead. */
+  done_at: string | null;
+  created_at: string;
+}
 export interface Session {
   id: string;
   ticket_id: string | null;
@@ -687,6 +703,10 @@ export interface Session {
   lead_id: string | null;
   /** The goal as TYPED at spawn, kept beside the one the agent sharpened. */
   spawn_goal: string | null;
+  /** How many goals this terminal was given, and how many are ticked. Both 0 = the single-goal
+   *  terminal every surface already knows: `goal` is the whole story. Joined on read, not stored. */
+  goals_total?: number;
+  goals_done?: number;
   // The day's ledger — refreshed while live, frozen when the pty dies (snapshotUsage).
   turns: number | null;
   tokens_in: number | null;

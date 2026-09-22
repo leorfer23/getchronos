@@ -370,6 +370,36 @@ being silent between "started" and "done".
 
 ---
 
+## 5d. One terminal, several goals (`src/goals.ts`, `src/store/session-goals.ts`)
+
+A terminal is opened with a **goal** — the line on its Desk card, the reason it exists. It may be
+opened with **several**, worked in order:
+
+```bash
+mc session new --goal "open the rollback PR" --goal "update the runbook" --goal "tell #eng"
+mc goal add "update the runbook"      # queue one more behind whatever you are on
+mc goal list                          # 1. ✓ open the rollback PR / 2. · update the runbook
+mc goal done                          # ticks the ONE you are on, moves the card to the next
+mc goal drop 3 | mc goal reopen       # remove item 3 / untick the last tick
+```
+
+**The card still shows one thing.** `sessions.goal`, `goal_kind` and `goal_done_at` keep holding the
+*current* goal — the first one not ticked — rewritten from the list after every change
+(`syncGoalMirror`). Everything that reads a terminal's goal (the Desk card, the fleet line, Robert's
+wake, `term-status.ts`'s phase machine, the day's log) is unchanged and needs no knowledge of the
+list. `goals_total` / `goals_done` ride out on every session row for the `2/4` chip.
+
+**A tick is a step, not the end.** `mc goal done` with goals still queued advances the card and
+prints what is next; the terminal is only closed out (ledger frozen, day's log written) when the
+last one is ticked. The operator closing a card from the Desk sends `goal_done_all` — done is done,
+whatever is still queued.
+
+**Nothing was migrated.** A terminal with one goal has no rows in `session_goals` at all and behaves
+exactly as it did before the table existed; the first `goal add` folds the goal already on the row
+in as item #1, keeping its kind, its source and its tick.
+
+---
+
 ## 5c. Robert threads — one visible thread, N isolated conversations (`src/thread-router.ts`)
 
 The operator types into ONE thread (the Desk chat, or Telegram) and never picks a project first.
@@ -650,6 +680,8 @@ POST /reviews/:id/{approve,changes,merge,dispatch-review,verdict}
 
 # sessions / notes / skills / calendar / search
 GET/POST /sessions?workspace=   GET /sessions/:id   POST /sessions/:id/kill
+PATCH /sessions/:id {goal, goal_done, goal_done_all, goal_kind, title}     (the card: §5d)
+GET/POST /sessions/:id/goals   PATCH/DELETE /sessions/:id/goals/:goalId    (the goal queue, §5d)
 GET/POST /notes?workspace=   GET /notes/:id   PATCH/DELETE /notes/:id
 GET/PUT*/POST* /workspaces/:id/brief          (Robert's standing page per workspace, §10)
 GET/POST /workspaces/:id/worklog?limit=      POST* /workspaces/:id/worklog/backfill
@@ -687,6 +719,7 @@ search   ws list|create         repo list       session list|new|kill
 reviews list|approve|changes|merge   verdict <reviewId> approve|changes
 run list|get   activity   cost   cal   status
 steps declare|start|done|skip                   (worker progress checklist, §5b)
+goal set|done|clear   goal add|list|drop|reopen  (this terminal's finish line, or several — §5d)
 ask "question" [--options a,b]   asks            (mc ask; asks = open asks list)
 answer <id8> "text"                              (operator/Robert side of mc ask)
 tell <TICKET> "directive"   inbox                (operator/Robert → worker mailbox, §5b)

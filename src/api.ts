@@ -9,7 +9,7 @@ import { WebSocketServer } from "ws";
 import { CONFIG } from "./config.js";
 import { serveHtml } from "./static-html.js";
 import { bus } from "./bus.js";
-import { activity, agentChat, asks, board, calEvents, calendars, chat, connectorSyncs, egressLog, events, ideas, jobs, jots, launches, lessons, repos, reviews, runs, searchIndex, sessions, skills, steps, tickets, ticketLinks, triggers, watches, workspaces, workspaceVars, repoAccelerators, isAcceleratorTool, accelTelemetry } from "./store.js";
+import { activity, agentChat, asks, board, calEvents, calendars, chat, connectorSyncs, egressLog, events, ideas, jobs, jots, launches, lessons, repos, reviews, runs, searchIndex, sessions, sessionGoals, skills, steps, tickets, ticketLinks, triggers, watches, workspaces, workspaceVars, repoAccelerators, isAcceleratorTool, accelTelemetry } from "./store.js";
 import { accelStatus } from "./accel/status.js";
 import { buildGraphify, queryGraphify, GraphifyError } from "./accel/graphify.js";
 import { postToBoard } from "./board.js";
@@ -105,6 +105,7 @@ import { speak, voiceFor, listVoices } from "./speak.js";
 import { askManagerWeb, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurn, setSticky } from "./thread-router.js";
 import { robertWakes, leadEvents, leadSlices, memoryRelations, type RobertWake, type LeadEvent } from "./store.js";
+import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
 import { leadEventPayload, waitForLeadEvents } from "./robert-drive.js";
 import { fileReport, leadEventLines } from "./lead-report.js";
 import { leadMayAnswer, mayRouteToLead } from "./lead-asks.js";
@@ -116,13 +117,13 @@ import { recordLesson } from "./lessons.js";
 import { listWidgets, readWidget } from "./widgets/index.js";
 import { ensureIntakeJob } from "./intake.js";
 import { RepoGitError, resolveRepoGitFields } from "./repo-git.js";
-import type { LessonState, Session } from "./types.js";
+import type { GoalKind, LessonState, Session } from "./types.js";
 import { redactConnectorConfig, publicTrigger } from "./redact.js";
 import { tokenOk, callerScope, checkScope, leadMayType, leadScope, type LeadScope } from "./authz.js";
 import { invalidateWatchCache, prepareWatch } from "./watches.js";
 import {
   validate,
-  OpenSessionSchema, ResizeSchema, SessionPatchSchema, SessionInputSchema, SessionStatusSchema, SessionProgressSchema, SessionHookSchema, UsageReportSchema,
+  OpenSessionSchema, ResizeSchema, SessionPatchSchema, SessionGoalsSchema, SessionGoalPatchSchema, SessionInputSchema, SessionStatusSchema, SessionProgressSchema, SessionHookSchema, UsageReportSchema,
   AgentNameSchema, AgentReportSchema, AgentWaitSchema,
   NewNoteSchema, PatchNoteSchema, LearnSchema, RememberSchema, AgentMemoryAppendSchema, BriefAppendSchema, BriefRewriteSchema, AgentMemoryRewriteSchema, StowSchema,
   WorklogEntrySchema, WorklogBackfillSchema,
@@ -486,20 +487,102 @@ export function startServer() {
   // Desk wall: retitle a terminal or set/clear/tick its goal. The goal is the terminal's reason to
   // exist ("open the flyway rollback PR") — the operator sets it here, the agent refines it with
   // `mc goal set`, and either can tick it off.
+  //
+  // A terminal may have been given SEVERAL goals (src/goals.ts). When it has, this endpoint speaks
+  // for the current one: a `goal` rewrites the item on the card, and `goal_done` ticks it and moves
+  // the card to the next — the terminal is only closed out when that tick was the last one.
   api.patch("/sessions/:id", validate(SessionPatchSchema), (req, res) => {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
-    const { goal, goal_done, goal_kind, goal_source, title } = req.body ?? {};
-    if (goal !== undefined || goal_done !== undefined || goal_kind !== undefined)
-      sessions.setGoal(s.id, { goal, goal_done, goal_kind, goal_source });
+    const { goal, goal_done, goal_done_all, goal_kind, goal_source, title } = req.body ?? {};
+    const current = sessionGoals.current(s.id);
+    if (goal !== undefined || goal_kind !== undefined) {
+      if (current && goal !== null) {
+        // Retitling the card retitles the goal it is showing, not some fourth copy of the words.
+        sessionGoals.patch(current.id, {
+          ...(goal !== undefined ? { text: goal } : {}),
+          ...(goal_kind !== undefined ? { kind: goal_kind } : {}),
+          // Same rule as the single-goal column write: a rename with no stated source is the
+          // operator's, and that is what stops the title deriver renaming it again (desk-title.ts).
+          ...(goal !== undefined || goal_source !== undefined ? { source: goal_source ?? "human" } : {}),
+        });
+        syncGoalMirror(s.id);
+      } else {
+        // `goal: null` on a list means "drop the list" — the operator clearing the card clears it.
+        if (current && goal === null) sessionGoals.clear(s.id);
+        sessions.setGoal(s.id, { goal, goal_kind, goal_source });
+      }
+    }
     // "Done" is the moment worth recording: freeze what this terminal spent and write what it did,
     // while the transcript is warm. Waiting for the pty to die means the row is written whenever the
     // window happens to be closed — often days later, sometimes never.
-    if (goal_done === true && !s.goal_done_at) closeOutSession(s.id, { cwd: s.cwd });
+    if (goal_done === true) {
+      const t = goal_done_all ? tickAllGoals(s.id) : tickCurrentGoal(s.id);
+      if (t.finished && !s.goal_done_at) closeOutSession(s.id, { cwd: s.cwd });
+    } else if (goal_done === false) {
+      reopenGoal(s.id);
+    }
     if (title !== undefined) sessions.setMeta(s.id, { title });
     bus.publish({ topic: "session.updated", session_id: s.id });
     res.json(sessions.get(s.id));
+  });
+  // The terminal's goal LIST. One terminal, several finish lines, worked in order — `mc goal add`,
+  // the spawn dialog's extra lines, a Lead handing its worker the three things it needs done.
+  api.get("/sessions/:id/goals", (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, s.workspace_id)) return;
+    res.json({ goals: sessionGoals.list(s.id), current: sessionGoals.current(s.id) ?? null });
+  });
+  // Append one or more (`goals: [...]`), or replace the list outright (`replace: true`).
+  api.post("/sessions/:id/goals", validate(SessionGoalsSchema), (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, s.workspace_id)) return;
+    const body = req.body ?? {};
+    const items: Array<{ text: string; kind?: GoalKind | null }> = (body.goals ?? []).map(
+      (g: string | { text: string; kind?: GoalKind | null }) => (typeof g === "string" ? { text: g } : g),
+    );
+    try {
+      const out = body.replace
+        ? setGoals(s.id, items, body.source ?? "human")
+        : addGoals(s.id, items, body.source ?? "human");
+      bus.publish({ topic: "session.updated", session_id: s.id });
+      res.status(201).json({ goals: out.goals, session: out.session });
+    } catch (e: any) {
+      res.status(400).json({ error: String(e?.message ?? e) });
+    }
+  });
+  // Edit one item: retitle it, reshape it, tick or untick it. Ticking the LAST open one closes the
+  // terminal out exactly as `mc goal done` on a single-goal terminal does.
+  api.patch("/sessions/:id/goals/:goalId", validate(SessionGoalPatchSchema), (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, s.workspace_id)) return;
+    const g = sessionGoals.get(req.params.goalId);
+    if (!g || g.session_id !== s.id) return res.status(404).json({ error: "no such goal" });
+    try {
+      sessionGoals.patch(g.id, req.body ?? {});
+      syncGoalMirror(s.id);
+      if (req.body?.done === true && sessionGoals.allDone(s.id) && !s.goal_done_at)
+        closeOutSession(s.id, { cwd: s.cwd });
+      bus.publish({ topic: "session.updated", session_id: s.id });
+      res.json({ goals: sessionGoals.list(s.id), session: sessions.get(s.id) });
+    } catch (e: any) {
+      res.status(400).json({ error: String(e?.message ?? e) });
+    }
+  });
+  api.delete("/sessions/:id/goals/:goalId", (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, s.workspace_id)) return;
+    const g = sessionGoals.get(req.params.goalId);
+    if (!g || g.session_id !== s.id) return res.status(404).json({ error: "no such goal" });
+    sessionGoals.remove(g.id);
+    syncGoalMirror(s.id);
+    bus.publish({ topic: "session.updated", session_id: s.id });
+    res.json({ goals: sessionGoals.list(s.id), session: sessions.get(s.id) });
   });
   // What a terminal says about itself (term-status.ts): `mc state`, `mc progress`, and the lifecycle
   // hooks its CLI fires (`mc hook`). Workspace-scoped like the goal: an agent speaks only for its own card.
