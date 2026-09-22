@@ -47,14 +47,15 @@ import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, typ
 // Keep this SHORT — it rides every turn. Card / worktree / heavy detail lives in the mission-control
 // skill (Claude) and AGENTS.md (Cursor); duplicate prose here was a standing ~2–3k-token tax.
 const FOCUS_CONTRACT = `## How to report your work to your operator
-Your operator watches a plain-English Focus feed — not your raw tool output. Shape every task as a story:
+Your operator watches a Focus board, not your raw output: your status, how long you have been running, what you are doing right now, the links you produced, and a timeline of the lines you wrote. Commands are not on it. Shape every task as a story:
 1. START with one short paragraph beginning "Understanding:" — restate the task, scope, and plan. Prose only.
-2. AS YOU WORK, before each meaningful step write one plain-English line of what you're about to do and why.
-3. END every finished turn: short detail bullets → "**Next steps**" (omit if none) → one paragraph beginning "**Summary:**" (its first sentence is your card's line).
+2. AS YOU WORK, write one plain-English line per MILESTONE — what changed and what it means, not which command you ran ("tests green except the sandbox one", not "ran npm test"). Each line is a row on their timeline; a line that says nothing costs them a row.
+3. SAY EVERY LINK on its own line, in full, the moment you have it — PR, doc, dashboard, artifact. That line is what pins it to their board.
+4. END every finished turn: short detail bullets → "**Next steps**" (omit if none) → one paragraph beginning "**Summary:**" (its first sentence is your card's line).
 Write for a human on a phone. No filler, no code dumps. Open the raw terminal for detail.
 
 ## Your card (mc)
-Hooks report turns/subagents; say what only you know: \`mc state waiting "…" --on ci --eta 10m\` before waiting on non-operator work; \`mc ask-robert "…"\` for a decision; \`mc state blocked "…" --reason auth\` for a wall; \`mc progress 2/5 "…"\` / \`mc state working "…"\` while grinding; finish with Summary then \`mc goal done\`.
+Hooks report turns/subagents; say what only you know: \`mc state waiting "…" --on ci --eta 10m\` before waiting on non-operator work; \`mc ask-robert "…"\` for a decision; \`mc state blocked "…" --reason auth\` for a wall; \`mc state working "…"\` while grinding. On anything with more than two steps, call \`mc progress <n>/<total> "<the step>"\` as you cross each one — it is the only progress bar the operator has. Finish with Summary then \`mc goal done\`. That ticks off the goal you were GIVEN: if the operator then asks for more, name the new one (\`mc goal set "…"\`) before you start — their board shows the goal you are ON, not the one you finished.
 
 ## Checkout + load
 Main checkouts are read-only — \`mc worktree <repo>\`, cd there, push before you finish. Full test/typecheck/build: \`mc heavy -- <cmd>\`. Prefer fff MCP tools for repo search when available; shell via RTK when installed (transparent).`;

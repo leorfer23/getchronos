@@ -104,7 +104,7 @@ test("the answer route checks that ownership before anything else, and records t
 
 test("an open lead ask reads as waiting on its Lead, not on Robert — and counts as stopped", () => {
   const base = {
-    live: true, goalDone: false, goal: "g", signals: {}, quiet: true, lastOut: 1, lastIn: null,
+    live: true, goalDoneAt: null, goal: "g", signals: {}, quiet: true, lastOut: 1, lastIn: null,
     prompt: null, daemonBlock: null, demandInspection: false, narration: null, result: null, now: Date.now(),
   } as any;
   const lead = resolve({ ...base, ask: { question: "rebaseline?", options: [], escalated: false, route: "lead" } });

@@ -63,7 +63,7 @@ import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
 import { openSession, resumeOpts, promoteToLead, leadPromotionError, attach, refreshClient, writeTo, resize, killSession, closeOutSession, focusEvents, isLive, sendInput, sessionActivity, sessionPrompt, sessionScreen, setClientRate, continueFromRun } from "./terminal.js";
 import { sessionUsage, snapshotUsage } from "./session-usage.js";
-import { applyHook, declare as declareStatus, setProgress, statusOf } from "./term-status.js";
+import { applyHook, declare as declareStatus, sessionGoalReached, setProgress, statusOf } from "./term-status.js";
 import { parseEvery, watchView } from "./desk-watch.js";
 import { clipboardEnabled, readClipboard, writeClipboard } from "./clipboard.js";
 import { ensureSessionWorktree, listAllWorktrees, removeWorktreeAs } from "./worktrees.js";
@@ -1030,8 +1030,9 @@ export function startServer() {
         const act = sessionActivity(s.id);
         const agent = getAgent(s.id);
         // Precedence: an agent that reported `blocked` (mc state) outranks byte-level silence, and a
-        // ticked goal outranks both — a done terminal is done even if it keeps printing.
-        const state = s.goal_done_at
+        // ticked goal outranks both — for as long as the tick still describes it (goalReachedStands:
+        // a terminal you gave more work to is not done, whatever it said ten minutes ago).
+        const state = sessionGoalReached(s, act)
           ? "done"
           : !act.live
             ? "ended"
@@ -1117,7 +1118,7 @@ export function startServer() {
       .map((s) => {
         const act = sessionActivity(s.id);
         const agent = getAgent(s.id);
-        const state = s.goal_done_at ? "done" : agent?.state === "blocked" ? "blocked" : act.quiet ? "waiting" : "working";
+        const state = sessionGoalReached(s, act) ? "done" : agent?.state === "blocked" ? "blocked" : act.quiet ? "waiting" : "working";
         const feed = focusEvents(s.id);
         return {
           id: s.id,

@@ -7,12 +7,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { db, sessions, workspaces } from "./store.js";
-import { applyHook, declare, resolve, signalsOf, HOOK_WORKING_SILENCE_MS, type ResolveInput, type Signals } from "./term-status.js";
+import { applyHook, declare, resolve, sessionGoalReached, signalsOf, HOOK_WORKING_SILENCE_MS, REACHED_GRACE_MS, type ResolveInput, type Signals } from "./term-status.js";
 import { claudeStyleHooks, grokHooksToml, installClaudeHooks, installCursorHooks, installGrokHooks, mergeHooks } from "./term-hooks.js";
 
 const NOW = 1_800_000_000_000;
 const base = (over: Partial<ResolveInput> = {}, signals: Signals = {}): ResolveInput => ({
-  live: true, goalDone: false, goal: "fix the DAG", signals, quiet: false, lastOut: NOW - 1000, lastIn: null,
+  live: true, goalDoneAt: null, goal: "fix the DAG", signals, quiet: false, lastOut: NOW - 1000, lastIn: null,
   prompt: null, ask: null, daemonBlock: null, demandInspection: false, narration: "Now checking the auth middleware.", result: null,
   now: NOW, ...over,
 });
@@ -48,12 +48,12 @@ test("hooks own the turn: working until Stop, and a missed Stop does not stay gr
 
 test("precedence: blocked > decide > review > waiting > working", () => {
   const blocked: Signals = { declared: { state: "blocked", label: "need prod bucket write", reason: "auth", at: NOW - 1000 } };
-  assert.equal(resolve(base({ goalDone: true, ask: { question: "drop it?", options: [], escalated: true } }, blocked)).phase, "blocked");
-  const r = resolve(base({ goalDone: true, ask: { question: "drop the view?", options: ["drop", "keep"], escalated: true } }));
+  assert.equal(resolve(base({ goalDoneAt: NOW - 5000, ask: { question: "drop it?", options: [], escalated: true } }, blocked)).phase, "blocked");
+  const r = resolve(base({ goalDoneAt: NOW - 5000, ask: { question: "drop the view?", options: ["drop", "keep"], escalated: true } }));
   assert.equal(r.phase, "decide");
   assert.equal(r.line, "drop the view? (drop / keep)");
   assert.equal(r.needs_you, true);
-  assert.equal(resolve(base({ goalDone: true, result: "Result: PR #214 is open and CI is green. More text." })).line, "PR #214 is open and CI is green.");
+  assert.equal(resolve(base({ goalDoneAt: NOW - 5000, result: "Result: PR #214 is open and CI is green. More text." })).line, "PR #214 is open and CI is green.");
   const waiting: Signals = { declared: { state: "waiting", label: "CI on PR #214", on: "ci", eta_at: NOW + 10 * 60000, at: NOW - 1000 } };
   const w = resolve(base({}, waiting));
   assert.equal(w.phase, "waiting");
@@ -80,11 +80,11 @@ test("working line: progress, then the agent's label, then narration — never a
 });
 
 test("the line comes from the closing **Summary:** paragraph", () => {
-  assert.equal(resolve(base({ goalDone: true, result: "**Summary:** Rollback PR is open and green. Waiting on you." })).line, "Rollback PR is open and green.");
+  assert.equal(resolve(base({ goalDoneAt: NOW - 5000, result: "**Summary:** Rollback PR is open and green. Waiting on you." })).line, "Rollback PR is open and green.");
 });
 
 test("the line is plain text: no markdown, no Result:/Verdict: label", () => {
-  const r = resolve(base({ narration: null, goalDone: true, result: "**Verdict:** Posted — [PR 3094](https://github.com/x/pull/3094). **Receipts:** more" }));
+  const r = resolve(base({ narration: null, goalDoneAt: NOW - 5000, result: "**Verdict:** Posted — [PR 3094](https://github.com/x/pull/3094). **Receipts:** more" }));
   assert.equal(r.line, "Posted — PR 3094.");
 });
 
@@ -219,4 +219,52 @@ test("grok: one marked block appended to config.toml, replaced in place, skipped
   assert.match(grokHooksToml(), /\[\[hooks\.PreToolUse\]\]\nmatcher = "AskUserQuestion\|ExitPlanMode\|ask_user_question\|ask_user"/);
   fs.writeFileSync(file, 'hooks = { }\n');
   assert.equal(installGrokHooks(home), "skipped");
+});
+
+// ── "done" is a tick, not a state ─────────────────────────────────────────────────────────────
+// The agent ticks the goal off, the operator says "one more thing", and the terminal is working
+// again — but `goal_done_at` is sticky, so every surface went on reading "done" (Leo, 2026-09-22).
+test("a ticked goal reads as review while nothing has happened since", () => {
+  const r = resolve(base({ goalDoneAt: NOW - 5 * 60_000, quiet: true, result: "**Summary:** PR #7 is open." }));
+  assert.equal(r.phase, "review");
+  assert.equal(r.line, "PR #7 is open.");
+});
+
+test("the Summary it writes right after the tick is not new work", () => {
+  // Ticking the goal and then printing the Summary is one moment, not two: inside the grace window
+  // a terminal that is still printing still reads as review.
+  const r = resolve(base({ goalDoneAt: NOW - 5_000, quiet: false }));
+  assert.equal(r.phase, "review");
+});
+
+test("you asked for one more thing: the tick stops standing the moment you type", () => {
+  const r = resolve(base({ goalDoneAt: NOW - 10 * 60_000, lastIn: NOW - 30_000, quiet: false }));
+  assert.equal(r.phase, "working", "it is working on what you just asked for, not waiting to be read");
+  const idle = resolve(base({ goalDoneAt: NOW - 10 * 60_000, lastIn: NOW - 30_000, quiet: true, narration: "on it" }));
+  assert.equal(idle.phase, "your_turn", "and once it stops, it is your turn again — never 'done' again by itself");
+});
+
+test("a terminal still grinding long after its own tick is not done", () => {
+  const r = resolve(base({ goalDoneAt: NOW - REACHED_GRACE_MS - 1, quiet: false, lastIn: null }));
+  assert.equal(r.phase, "working");
+});
+
+test("the tick outranks nothing it used to outrank", () => {
+  // Still below blocked and decide — the order of precedence is unchanged, only its lifetime is.
+  const blocked: Signals = { declared: { state: "blocked", label: "needs a login", reason: "auth", at: NOW - 1000 } };
+  assert.equal(resolve(base({ goalDoneAt: NOW - 5_000, quiet: true }, blocked)).phase, "blocked");
+});
+
+test("the same rule for a surface that has only the row and its activity", () => {
+  const iso = (ms: number) => new Date(ms).toISOString();
+  assert.equal(sessionGoalReached({ goal_done_at: null }, { last_in: null, quiet: true }, NOW), false);
+  assert.equal(sessionGoalReached({ goal_done_at: iso(NOW - 5_000) }, { last_in: null, quiet: true }, NOW), true);
+  assert.equal(
+    sessionGoalReached({ goal_done_at: iso(NOW - 5_000) }, { last_in: NOW - 1_000, quiet: true }, NOW), false,
+    "typed to after the tick: not done, even while it is quiet",
+  );
+  assert.equal(
+    sessionGoalReached({ goal_done_at: iso(NOW - 10 * 60_000) }, { last_in: null, quiet: false }, NOW), false,
+    "printing long after the tick: not done either",
+  );
 });

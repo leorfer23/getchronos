@@ -233,6 +233,8 @@
   .fl.act { color:var(--muted); opacity:.8; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .fl.acts { color:var(--faint); font-size:13px; }
   .fl.you { color:var(--accent); }
+  .fl.err { color:var(--danger); font-size:13.5px; }
+  .fl.link a { color:var(--accent); font-weight:600; overflow-wrap:anywhere; }
   .fl.you::before { content:"you · "; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
   .fl.say p { margin:0 0 6px; } .fl.say p:last-child { margin:0; }
   .fl.say ul, .fl.say ol { margin:0 0 6px; padding-left:20px; }
@@ -1419,7 +1421,13 @@ function storyItems(evs, s) {
   const flush = () => { if (acts.length) { items.push({ kind: "acts", acts }); acts = []; } };
   const firstUser = evs.find((e) => e.kind === "user");
   for (const e of evs) {
-    if (e.kind === "act") { const a = cleanAct(e.text); if (a) acts.push(a); continue; }
+    if (e.kind === "act") {
+      const link = /^printed\s+(\S+)$/.exec(String(e.text || "").trim());
+      if (link) { flush(); items.push({ kind: "link", text: link[1], seq: e.seq }); continue; }
+      const a = cleanAct(e.text); if (a) acts.push(a); continue;
+    }
+    // A failed tool call (focus.ts): the one line here the agent did not choose to write.
+    if (e.kind === "error") { flush(); items.push({ kind: "err", text: e.text, seq: e.seq }); continue; }
     if (e.kind === "user") {
       if (e === firstUser && s.spawn_goal) continue;
       if (SYS_LINE.test(e.text)) continue;
@@ -1532,6 +1540,8 @@ function renderFocus() {
     const line = (it) => it.kind === "acts"
       ? (F.all ? it.acts.filter((a) => !isNoiseAct(a)).map((a) => `<div class="fl act mono">${esc(a)}</div>`).join("") : `<div class="fl acts">${esc(foldActs(it.acts))}</div>`)
       : it.kind === "you" ? `<div class="fl you">${esc(clip(it.text, 240))}</div>`
+      : it.kind === "err" ? `<div class="fl err mono">${esc(clip(it.text, 240))}</div>`
+      : it.kind === "link" ? `<div class="fl link"><a href="${esc(it.text)}" target="_blank" rel="noopener">${esc(it.text)} ↗</a></div>`
       : `<div class="fl say">${md(stripLead(stripLead(it.text, "understanding"), "result"))}</div>`;
     const said = items.filter((x) => x.kind !== "acts").length;
     out += `<section class="fblock"><span class="lbl">Progress · ${said} message${said === 1 ? "" : "s"}${items.length > shown.length || F.all ? `<button data-fa="all">${F.all ? "last " + N : "show all"}</button>` : ""}</span>`

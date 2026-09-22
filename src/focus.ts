@@ -8,8 +8,13 @@ import { bus } from "./bus.js";
 // derived from each CLI's own on-disk transcript (not by parsing the raw TUI byte stream). Every backend
 // works via a per-backend adapter (locate the session's transcript + parse it to FocusEvents). The agent
 // is shaped by FOCUS_CONTRACT (terminal.ts) to lead with "Understanding:" and close with "Result:".
+//
+// The feed also carries what the agent itself never says: a tool call that FAILED ("error"), and the
+// links its tool output printed (`gh pr create` writes the PR URL to stdout, and nothing in the
+// narration is guaranteed to repeat it). Both come from the tool RESULT records, which this parser
+// used to drop — see toolResultEvents.
 
-export type FocusKind = "understanding" | "think" | "say" | "act" | "result" | "user";
+export type FocusKind = "understanding" | "think" | "say" | "act" | "result" | "user" | "error";
 export interface FocusEvent {
   seq: number; // deterministic (recordIndex*1000 + blockIdx) so REST backfill + live poll dedupe cleanly
   kind: FocusKind;
@@ -167,6 +172,81 @@ function chunkLines(buf: string, chunk: string): { complete: string; rest: strin
   return { complete, rest: combined.slice(nl + 1), count: complete.split("\n").length };
 }
 
+// ──────────────────────── tool results: failures and links ────────────────────────
+// A tool RESULT is a separate record from the call that produced it, and it carries no tool name —
+// only the `tool_use_id` of the call. Remember the one-line description of each call so a failure can
+// say WHAT failed ("run npm test failed (exit 1): …") instead of "a tool call failed". Bounded: a
+// result lands within a few records of its call, so anything older than the cap is already reported.
+const toolLabels = new Map<string, string>();
+const MAX_TOOL_LABELS = 500;
+function rememberTool(id: unknown, label: string) {
+  if (typeof id !== "string" || !id || !label) return;
+  toolLabels.set(id, label);
+  if (toolLabels.size > MAX_TOOL_LABELS) {
+    for (const k of toolLabels.keys()) {
+      toolLabels.delete(k);
+      if (toolLabels.size <= MAX_TOOL_LABELS) break;
+    }
+  }
+}
+
+// A CLI reports a failure as prose, not a status code: "Error: Exit code 1\n<stderr>", a
+// <tool_use_error> wrapper, or a bare message. Keep the exit code when there is one and the first two
+// non-empty lines of the reason — enough for the operator to know whether to look, short enough for a row.
+const ERR_WRAP = /<\/?tool_use_error>/g;
+const EXIT_RE = /(?:^|\n)\s*(?:Error:\s*)?Exit code (\d+)/;
+export function failureText(label: string | null, raw: string): string {
+  const t = String(raw ?? "").replace(ERR_WRAP, "").trim();
+  const exit = EXIT_RE.exec(t);
+  const body = t
+    .replace(/^Error:\s*/, "")
+    .replace(/^Exit code \d+\s*/, "")
+    .split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 2).join(" — ");
+  return `${label || "a tool call"} failed${exit ? ` (exit ${exit[1]})` : ""}${body ? `: ${one(body, 200)}` : ""}`;
+}
+
+// The operator stopping the agent is not a failure, and an empty-file read is not news.
+const NOT_FAILURE = /^(request interrupted|\[request interrupted|the user doesn't want to take this action|operation cancelled)/i;
+
+// Links a tool PRINTED. `gh pr create` writes the PR URL to stdout and the agent may never repeat it,
+// so without this the one artifact the operator actually needs exists nowhere but the scrollback.
+// Only the shapes the artifact pins understand (session-artifacts.ts), deduped per result, capped.
+const PRINTED_URL = /https:\/\/(?:github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+|(?:[\w.-]*\.)?(?:claude\.ai\/(?:artifact|public\/artifacts)|html-docs\.com|docs\.google\.com|notion\.so|notion\.site)\/\S+)/g;
+const SCAN_MAX = 20_000; // a result can be a megabyte of log; the link is printed near the top or the end
+const MAX_LINKS = 3;
+export function printedLinks(text: string): string[] {
+  const t = String(text ?? "");
+  const head = t.length > SCAN_MAX ? t.slice(0, SCAN_MAX / 2) + "\n" + t.slice(-SCAN_MAX / 2) : t;
+  const out: string[] = [];
+  for (const m of head.matchAll(PRINTED_URL)) {
+    const u = m[0].replace(/[.,;:)\]}'"]+$/, "");
+    if (!out.includes(u)) out.push(u);
+    if (out.length === MAX_LINKS) break;
+  }
+  return out;
+}
+
+/**
+ * The events a tool-result record is worth: one "error" when the call failed, one "act" per link its
+ * output printed. Everything else about a result stays out of the feed on purpose — the operator
+ * reads what the agent did, not what a command printed.
+ */
+export function toolResultEvents(o: any, lineNo: number): FocusEvent[] {
+  const blocks = Array.isArray(o?.message?.content) ? o.message.content : [];
+  const out: FocusEvent[] = [];
+  const ts = Date.parse(o?.timestamp) || undefined;
+  blocks.forEach((b: any, i: number) => {
+    if (b?.type !== "tool_result") return;
+    const label = typeof b.tool_use_id === "string" ? toolLabels.get(b.tool_use_id) ?? null : null;
+    const body = typeof b.content === "string" ? b.content : textOf(b.content);
+    const detail = body || (typeof o.toolUseResult === "string" ? o.toolUseResult : "");
+    const seq = lineNo * 1000 + i;
+    if (b.is_error && !NOT_FAILURE.test(detail.trim())) out.push(...mkEvents("error", failureText(label, detail), seq, ts));
+    for (const [j, url] of printedLinks(detail).entries()) out.push(...mkEvents("act", `printed ${url}`, seq + 100 + j, ts));
+  });
+  return out;
+}
+
 // claude: <configDir>/projects/<slug(cwd)>/<sessionId>.jsonl — pinned by --session-id, so located by name.
 export const claudeLine = (o: any, lineNo: number): FocusEvent[] => {
   // human-typed input: user record whose content is a plain string (tool results are arrays carrying
@@ -178,6 +258,8 @@ export const claudeLine = (o: any, lineNo: number): FocusEvent[] => {
     if (text.startsWith("<command-")) return []; // slash-command plumbing, not a typed message
     return mkEvents("user", text, lineNo * 1000, ts);
   }
+  // a tool RESULT: not narration, but the only record of a failure or of a link a command printed.
+  if (o?.type === "user" && Array.isArray(o?.message?.content) && !o.isSidechain) return toolResultEvents(o, lineNo);
   if (o?.type !== "assistant" || !Array.isArray(o?.message?.content)) return [];
   const ts = Date.parse(o.timestamp) || undefined;
   const out: FocusEvent[] = [];
@@ -185,7 +267,11 @@ export const claudeLine = (o: any, lineNo: number): FocusEvent[] => {
     const seq = lineNo * 1000 + i;
     if (b?.type === "thinking") out.push(...mkEvents("think", b.thinking, seq, ts));
     else if (b?.type === "text") out.push(...phased(b.text, seq, ts));
-    else if (b?.type === "tool_use") out.push(...mkEvents("act", describeTool(b.name, b.input), seq, ts));
+    else if (b?.type === "tool_use") {
+      const act = describeTool(b.name, b.input);
+      rememberTool(b.id, act);
+      out.push(...mkEvents("act", act, seq, ts));
+    }
   });
   return out;
 };
@@ -217,7 +303,26 @@ const codexLine = (o: any, lineNo: number): FocusEvent[] => {
   if (p.type === "reasoning") return mkEvents("think", textOf(p.summary), lineNo * 1000, ts);
   if (p.type === "function_call" || p.type === "custom_tool_call") {
     let args: any = {}; try { args = JSON.parse(p.arguments ?? "{}"); } catch {}
-    return mkEvents("act", describeTool(p.name ?? "tool", args), lineNo * 1000, ts);
+    const act = describeTool(p.name ?? "tool", args);
+    rememberTool(p.call_id, act);
+    return mkEvents("act", act, lineNo * 1000, ts);
+  }
+  if (p.type === "function_call_output" || p.type === "custom_tool_call_output") {
+    // codex hands the result back as JSON in `output`: { output, metadata: { exit_code } }.
+    let body = typeof p.output === "string" ? p.output : "";
+    let failed = false;
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed && typeof parsed === "object") {
+        body = typeof parsed.output === "string" ? parsed.output : body;
+        failed = Number(parsed.metadata?.exit_code ?? 0) !== 0;
+      }
+    } catch {}
+    const label = typeof p.call_id === "string" ? toolLabels.get(p.call_id) ?? null : null;
+    const out: FocusEvent[] = [];
+    if (failed && !NOT_FAILURE.test(body.trim())) out.push(...mkEvents("error", failureText(label, body), lineNo * 1000, ts));
+    for (const [j, url] of printedLinks(body).entries()) out.push(...mkEvents("act", `printed ${url}`, lineNo * 1000 + 100 + j, ts));
+    return out;
   }
   if (p.type === "web_search_call") return mkEvents("act", "web search", lineNo * 1000, ts);
   return [];
@@ -389,6 +494,10 @@ export function startFocus(ctx: FocusCtx) {
     for (const ev of evs) {
       if (t.seen.has(ev.seq)) continue;
       t.seen.add(ev.seq);
+      // Only claude and codex stamp their records. For the others this poll IS the clock: the event
+      // was written since the last tick, so "now" is right to within POLL_MS — and a Focus timeline
+      // with no clock cannot say how long anything took, which is half of what it is for.
+      if (!ev.ts) ev.ts = Date.now();
       t.events.push(ev);
       bus.publish({ topic: "focus.event", session_id: ctx.sessionId, event: ev });
     }
@@ -484,8 +593,17 @@ export function demo() {
     ] } },
   ]);
   console.assert(cl[0].kind === "user" && cl[0].text === "please fix the login bug", "claude user text (reminder stripped)");
-  console.assert(cl[1].kind === "understanding" && cl[2].kind === "act" && cl[2].text.includes("auth.ts") && cl[3].kind === "result", "claude parse (tool_result user skipped)");
+  console.assert(cl[1].kind === "understanding" && cl[2].kind === "act" && cl[2].text.includes("auth.ts") && cl[3].kind === "result", "claude parse (a clean tool_result adds nothing)");
   console.assert(cl[1].seq === 2000 && cl[2].seq === 2001, "seq = lineNo*1000+blockIdx");
+  // claude tool results: a failure names the call that failed, a printed link becomes an act
+  const fail = parseShim(claudeAdapter, [
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_1", name: "Bash", input: { command: "npm test" } }] } },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_1", is_error: true, content: "Exit code 1\n3 tests failed" }] } },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_1", content: "https://github.com/o/r/pull/12\n" }] } },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_1", is_error: true, content: "Request interrupted by user" }] } },
+  ]);
+  console.assert(fail.length === 3 && fail[1].kind === "error" && fail[1].text === "run npm test failed (exit 1): 3 tests failed", "tool failure names the call, keeps the exit code");
+  console.assert(fail[2].kind === "act" && fail[2].text === "printed https://github.com/o/r/pull/12", "a printed PR link becomes an act, so the artifact pins find it");
   // codex
   const cx = parseShim(codexAdapter, [
     { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Understanding: map the SDK" }] } },

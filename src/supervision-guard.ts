@@ -12,7 +12,8 @@
  */
 import { kv, runs, sessions, watches } from "./store.js";
 import { getAgent } from "./agent-lifecycle.js";
-import { isLive } from "./terminal.js";
+import { isLive, sessionActivity } from "./terminal.js";
+import { sessionGoalReached } from "./term-status.js";
 import { esc, notify, notifyInfo } from "./telegram/api.js";
 import { wakeBeaconAgeMs, wakeBeaconFresh, wakeBeaconGraceMs, wakeBusArmed } from "./wake-queue.js";
 
@@ -33,7 +34,9 @@ export function setSupervisionNotifier(fn: Notifier): void { notifier = fn; }
 export function countInFlight(): number {
   let n = runs.runningCount();
   for (const s of sessions.list({ status: "live" })) {
-    if (s.goal_done_at) continue;
+    // A ticked goal is not in flight — unless the operator asked for more since, which puts the
+    // terminal back to work and back under supervision (goalReachedStands).
+    if (sessionGoalReached(s, sessionActivity(s.id))) continue;
     if (!(s.goal ?? s.spawn_goal)) continue;
     if (!isLive(s.id)) continue;
     const state = getAgent(s.id)?.state;
