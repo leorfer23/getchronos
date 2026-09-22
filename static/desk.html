@@ -400,6 +400,7 @@
   .bnow .sub { margin-top:7px; font-size:13px; color:var(--muted); }
   .bgoal .t { font-size:16px; font-weight:620; line-height:1.4; overflow-wrap:anywhere; }
   .bgoal .t.none { color:var(--faint); font-weight:500; }
+  .bgoal > h4 .reached { color:var(--accent); }
   .bgoal .sub { margin-top:7px; font-size:12.5px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere; }
   /* Deliverables: the same pin as the rail, one size up — what outlives the scrollback. */
   .bships { display:flex; flex-direction:column; gap:2px; }
@@ -1828,7 +1829,15 @@ function boardGoal(s) {
   const started = s.spawn_goal || s.first_prompt || "";
   const goal = s.goal || started;
   const drift = started && s.goal && norm(started) !== norm(s.goal);
-  return `<section class="bcard bgoal"><h4>Goal${s.goal_kind ? `<span class="n" title="${esc(KIND_TIP[s.goal_kind] || "")}">${esc(s.goal_kind === "investigation" ? "dig" : s.goal_kind)}</span>` : ""}</h4>`
+  // A ticked goal keeps its ✓ and the time it was reached. The tick is a record, not a state: the
+  // phase says whether it is STILL done (src/term-status.ts goalReachedStands), and a terminal you
+  // gave more work to reads as working here while the ✓ still says that goal was reached at 14:02.
+  const done = s.goal_done_at ? Date.parse(s.goal_done_at) || 0 : 0;
+  const tag = [
+    s.goal_kind ? `<span class="n" title="${esc(KIND_TIP[s.goal_kind] || "")}">${esc(s.goal_kind === "investigation" ? "dig" : s.goal_kind)}</span>` : "",
+    done ? `<span class="n reached" title="the agent ticked this goal off">✓ ${esc(TermCompanion.hhmm(done))}</span>` : "",
+  ].join("");
+  return `<section class="bcard bgoal${done ? " done" : ""}"><h4>Goal${tag}</h4>`
     + `<div class="t${goal ? "" : " none"}">${esc(goal ? clip(goal, 400) : "what is this terminal for?")}</div>`
     + (drift ? `<div class="sub">started as: ${esc(clip(started, 200))}</div>` : "")
     + `</section>`;

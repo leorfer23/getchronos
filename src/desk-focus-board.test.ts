@@ -98,3 +98,9 @@ test("the phone shows the two things worth knowing without opening a terminal", 
   assert.match(phone, /const link = \/\^printed\\s\+\(\\S\+\)\$\/\.exec/, "a printed link is a link, not a folded tool call");
   assert.match(phone, /\.fl\.err \{ color:var\(--danger\); font-size:13\.5px; \}/);
 });
+
+test("a reached goal keeps its ✓ and the time, while the phase says whether it is still done", () => {
+  assert.match(html, /const done = s\.goal_done_at \? Date\.parse\(s\.goal_done_at\) \|\| 0 : 0;/);
+  assert.match(html, /✓ \$\{esc\(TermCompanion\.hhmm\(done\)\)\}/);
+  assert.match(css, /\.bgoal > h4 \.reached \{ color:var\(--accent\); \}/);
+});

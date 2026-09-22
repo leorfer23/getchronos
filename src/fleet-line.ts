@@ -6,7 +6,7 @@
 import { sessions, workspaces } from "./store.js";
 import { sessionActivity } from "./terminal.js";
 import { getAgent } from "./agent-lifecycle.js";
-import { statusOf } from "./term-status.js";
+import { sessionGoalReached, statusOf } from "./term-status.js";
 
 const MAX_ROWS = 30;
 /** Same order as the Desk rail: needs you → to review → your turn → stalled → waiting on others → working. */
@@ -19,7 +19,7 @@ export function fleetLine(workspace_id?: string | null): string {
   const items = rows.map((s) => {
     const act = sessionActivity(s.id);
     const st = statusOf(s.id);
-    const phase = st?.phase ?? (s.goal_done_at ? "review" : getAgent(s.id)?.state === "blocked" ? "blocked" : act.quiet ? "your_turn" : "working");
+    const phase = st?.phase ?? (sessionGoalReached(s, act) ? "review" : getAgent(s.id)?.state === "blocked" ? "blocked" : act.quiet ? "your_turn" : "working");
     const quiet = act.quiet && act.last_out ? Math.round((Date.now() - act.last_out) / 60000) : 0;
     const rank = RANK[phase] ?? 9;
     const ws = s.workspace_id ? workspaces.get(s.workspace_id)?.name ?? "—" : "—";

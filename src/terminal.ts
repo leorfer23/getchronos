@@ -55,7 +55,7 @@ Your operator watches a Focus board, not your raw output: your status, how long 
 Write for a human on a phone. No filler, no code dumps. Open the raw terminal for detail.
 
 ## Your card (mc)
-Hooks report turns/subagents; say what only you know: \`mc state waiting "…" --on ci --eta 10m\` before waiting on non-operator work; \`mc ask-robert "…"\` for a decision; \`mc state blocked "…" --reason auth\` for a wall; \`mc state working "…"\` while grinding. On anything with more than two steps, call \`mc progress <n>/<total> "<the step>"\` as you cross each one — it is the only progress bar the operator has. Finish with Summary then \`mc goal done\`.
+Hooks report turns/subagents; say what only you know: \`mc state waiting "…" --on ci --eta 10m\` before waiting on non-operator work; \`mc ask-robert "…"\` for a decision; \`mc state blocked "…" --reason auth\` for a wall; \`mc state working "…"\` while grinding. On anything with more than two steps, call \`mc progress <n>/<total> "<the step>"\` as you cross each one — it is the only progress bar the operator has. Finish with Summary then \`mc goal done\`. That ticks off the goal you were GIVEN: if the operator then asks for more, name the new one (\`mc goal set "…"\`) before you start — their board shows the goal you are ON, not the one you finished.
 
 ## Checkout + load
 Main checkouts are read-only — \`mc worktree <repo>\`, cd there, push before you finish. Full test/typecheck/build: \`mc heavy -- <cmd>\`. Prefer fff MCP tools for repo search when available; shell via RTK when installed (transparent).`;

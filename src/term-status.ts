@@ -70,6 +70,41 @@ export const WORD: Record<Phase, string> = {
   waiting: "waiting", working: "working", stalled: "stalled", ended: "ended",
 };
 const NEEDS_YOU = new Set<Phase>(["blocked", "decide"]);
+/**
+ * How long after "goal reached" the terminal may still be printing and still read as review: the
+ * agent ticks the goal off and then writes its Summary, which is output, not new work.
+ */
+export const REACHED_GRACE_MS = 60_000;
+
+/**
+ * Does "goal reached" still describe this terminal?
+ *
+ * `goal_done_at` is a TICK, not a state: at that moment the agent said it had finished. Then the
+ * operator says "one more thing" and it is working again — but the tick is sticky, so every surface
+ * went on reading "done" (Leo, 2026-09-22): the card and the board, the rail's done count and
+ * therefore "close all done" (which would have killed live work), Robert's in-flight count, and the
+ * watch that lifts itself once a goal is reached.
+ *
+ * The tick stands only while nothing has happened since — nothing typed to it after the tick, and
+ * it is not still working a minute later. Either one means the goal moved, whether or not anybody
+ * renamed it. It is never cleared: `goal_done_at` stays as the record that the goal WAS reached
+ * (analytics counts it), and the agent is asked to name the new goal (`mc goal set`).
+ */
+export function goalReachedStands(goalDoneAt: number | null, lastIn: number | null, working: boolean, now: number): boolean {
+  if (!goalDoneAt) return false;
+  if (lastIn && lastIn > goalDoneAt) return false;                   // you asked for one more thing
+  if (working && now - goalDoneAt > REACHED_GRACE_MS) return false;  // still at it, long after it said it had finished
+  return true;
+}
+
+/** The same question for a surface that has only the row and its activity (no hooks to read). */
+export function sessionGoalReached(
+  s: { goal_done_at?: string | null },
+  act: { last_in: number | null; quiet: boolean },
+  now = Date.now(),
+): boolean {
+  return goalReachedStands(Date.parse(s.goal_done_at ?? "") || null, act.last_in, !act.quiet, now);
+}
 /** Hooks said "working" but the pty has been silent this long: whatever it is doing, it is not working. */
 export const HOOK_WORKING_SILENCE_MS = 45_000;
 /** A subagent that never reported back stops counting after this. */
@@ -81,7 +116,8 @@ const REASON: Record<string, string> = {
 
 export type ResolveInput = {
   live: boolean;
-  goalDone: boolean;
+  /** When the agent ticked the goal off (`mc goal done`), or null. A tick, not a state — see goalReachedStands. */
+  goalDoneAt: number | null;
   goal: string | null;
   signals: Signals;
   quiet: boolean;
@@ -148,6 +184,13 @@ export function resolve(inp: ResolveInput): Omit<TermStatus, "since"> {
   if (inp.daemonBlock && inp.daemonBlock.reason !== "question")
     return out("blocked", inp.daemonBlock.label || REASON[inp.daemonBlock.reason ?? ""] || "blocked");
 
+  // Whether it is working is computed here rather than further down, because "goal reached" is only
+  // still true while it is NOT: hooks own the turn boundary when they fire, pty bytes decide
+  // otherwise, and hooks that say "working" over a long-dead pty are a missed Stop.
+  const silentFor = inp.lastOut ? inp.now - inp.lastOut : Infinity;
+  const working = hooked ? sig.turn!.state === "working" && silentFor < HOOK_WORKING_SILENCE_MS : !inp.quiet;
+  const stopped = hooked ? !working : inp.quiet;
+
   const opts = (o: string[]) => (o.length ? ` (${o.slice(0, 4).join(" / ")})` : "");
   if (inp.ask?.escalated) return out("decide", inp.ask.question + opts(inp.ask.options));
   if (sig.asking) return out("decide", sig.asking.question + opts(sig.asking.options));
@@ -155,7 +198,7 @@ export function resolve(inp: ResolveInput): Omit<TermStatus, "since"> {
   if (inp.quiet && inp.prompt && inp.prompt.kind !== "turn" && !(hooked && sig.turn!.state === "working"))
     return out("decide", inp.prompt.question || "asked you");
 
-  if (inp.goalDone || d?.state === "review")
+  if (goalReachedStands(inp.goalDoneAt, inp.lastIn, working, inp.now) || d?.state === "review")
     return out("review", d?.state === "review" && d.label ? d.label : inp.result ? firstSentence(inp.result) : "goal reached — no Summary written");
 
   const eta = (at: number | null | undefined) => (at && at > inp.now ? ` · ~${mins(at - inp.now)}` : "");
@@ -168,11 +211,6 @@ export function resolve(inp: ResolveInput): Omit<TermStatus, "since"> {
   if (inp.ask) return out("waiting", "Robert is deciding: " + inp.ask.question, { on: "robert" });
   if (d?.state === "waiting") return out("waiting", (d.label || `waiting on ${d.on ?? "something"}`) + eta(d.eta_at), { on: d.on ?? null, eta_at: d.eta_at ?? null });
 
-  // Working: hooks own the turn boundary when they fire; pty bytes decide otherwise. A terminal whose
-  // hooks say "working" but whose pty has been dead silent for a while is not working (a missed Stop).
-  const silentFor = inp.lastOut ? inp.now - inp.lastOut : Infinity;
-  const working = hooked ? sig.turn!.state === "working" && silentFor < HOOK_WORKING_SILENCE_MS : !inp.quiet;
-  const stopped = hooked ? !working : inp.quiet;
   if (stopped && subs.length) {
     const tally = new Map<string, number>();
     for (const s of subs) if (s.label) tally.set(s.label, (tally.get(s.label) ?? 0) + 1);
@@ -286,7 +324,7 @@ export function statusOf(id: string, now = Date.now()): TermStatus | null {
   const n = narrationOf(id);
   const r = resolve({
     live,
-    goalDone: !!s.goal_done_at,
+    goalDoneAt: Date.parse(s.goal_done_at ?? "") || null,
     goal: s.goal ?? null,
     signals: load(id),
     quiet: act.quiet,

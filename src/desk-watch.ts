@@ -17,6 +17,7 @@ import { getAgent } from "./agent-lifecycle.js";
 import { OP_PREFIX } from "./operational-prefix.js";
 import { sessionUsage } from "./session-usage.js";
 import { focusEvents, isLive, sessionActivity } from "./terminal.js";
+import { sessionGoalReached } from "./term-status.js";
 import { sessions, workspaces } from "./store.js";
 import type { Session } from "./types.js";
 import { sweepTriageDeadline } from "./ask-robert.js";
@@ -110,7 +111,7 @@ export function watchDigest(s: Session): {
 } {
   const act = sessionActivity(s.id);
   const agent = getAgent(s.id);
-  const state = s.goal_done_at
+  const state = sessionGoalReached(s, act)
     ? "done"
     : !act.live
       ? "ended"
@@ -289,7 +290,9 @@ export async function sweepWatches(nowMs = Date.now()): Promise<void> {
     for (const s of sessions.watched()) {
       // A terminal that died or was ticked off gets ONE closing report, then the watch lifts itself.
       // Leaving it armed would report on a corpse every ten minutes until someone noticed.
-      const over = s.status !== "live" || !isLive(s.id) || !!s.goal_done_at;
+      // "Ticked off" only counts while the tick still stands: a terminal the operator gave more
+      // work to after its goal is exactly the one the watch should keep watching.
+      const over = s.status !== "live" || !isLive(s.id) || sessionGoalReached(s, sessionActivity(s.id));
       if (!over && !watchDue(s, nowMs)) continue;
       try {
         await runWatch(s, over);
