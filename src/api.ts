@@ -268,15 +268,26 @@ export function leadGate(req: express.Request, res: express.Response): LeadScope
  * `/leads/me/close-done` (one Lead's workers only) so the two doors cannot drift.
  */
 export function closeDoneSessions(filter?: (s: { id: string; lead_id: string | null }) => boolean): string[] {
-  const done = sessions
-    .list({ status: "live", limit: 200 })
-    .filter((s) => !!s.goal_done_at && (!filter || filter(s)));
-  for (const s of done) {
+  const live = sessions.list({ status: "live", limit: 200 });
+  const done = live.filter((s) => !!s.goal_done_at && (!filter || filter(s)));
+  const closingIds = new Set(done.map((s) => s.id));
+  // A Lead ticking its own goal does NOT mean its workers are finished: kill it and every worker it
+  // opened is orphaned — their stops type into a dead pty, their asks route nowhere, and nobody
+  // closes their worktrees. Hold back any Lead that still has a live worker this sweep is not also
+  // closing; it stays on the wall and the next sweep takes it once the last worker ends.
+  const busyLeads = new Set(
+    live.filter((w) => w.lead_id && !closingIds.has(w.id)).map((w) => w.lead_id as string),
+  );
+  const closing = done.filter((s) => !(s.role === "lead" && busyLeads.has(s.id)));
+  // Workers before Leads, so an all-done fleet never loses its Lead while its own workers are still
+  // being killed underneath it.
+  closing.sort((a, b) => Number(a.role === "lead") - Number(b.role === "lead"));
+  for (const s of closing) {
     try {
       killSession(s.id);
     } catch {}
   }
-  return done.map((s) => s.id);
+  return closing.map((s) => s.id);
 }
 
 /**
