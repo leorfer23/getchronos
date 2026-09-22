@@ -87,11 +87,18 @@ test("the request body can never carry lead_id: the schema drops it, and the rou
   const parsed = OpenSessionSchema.parse({ cwd: "/tmp", role: "worker", lead_id: "some-other-lead", goal: "sneak in" } as any);
   assert.equal("lead_id" in parsed, false, "zod strips it before it can reach openSession");
   assert.equal((parsed as any).goal, "sneak in", "…while the rest of the body is untouched");
-  // The order matters as much as the schema: spawnLeadFields LAST, after ...req.body.
+  // The order matters as much as the schema: spawnLeadFields LAST, after ...body. Both the local
+  // (openSession) and cloud (openCloudSession, src/desk-cloud.ts) spawn paths build the same
+  // `openOpts` object below POST /sessions, so this one ordering check covers both.
   const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  const call = api.slice(api.indexOf("const s = await openSession({"));
+  const call = api.slice(api.indexOf("const openOpts = {"));
   assert.ok(
-    call.indexOf("...(req.body || {})") < call.indexOf("...spawnLeadFields(lead)"),
+    call.indexOf("...body") < call.indexOf("...spawnLeadFields(lead)"),
     "spawnLeadFields must be spread after the body, or a body value would win",
+  );
+  assert.match(
+    call,
+    /await openCloudSession\(openOpts\)\s*:\s*await openSession\(openOpts\)/,
+    "both spawn paths must build the session from the same, safely-ordered opts object",
   );
 });

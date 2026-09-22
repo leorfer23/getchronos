@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { CONFIG } from "./config.js";
 import { bus } from "./bus.js";
 import { backendAllowed, getBackend, validateSpawnTarget, workspaceBackends } from "./backends/index.js";
@@ -75,8 +76,27 @@ export function dispatch(
   // used to spawn, die in ~1s with zero events, and surface as "Unexpected server error" (PER-22).
   // Jobs carry no repo_id directly — derive it via the ticket (same two-step as runner.ts) so the
   // cursor-cloud GitHub/delivery=pr gate actually sees the repo instead of silently no-op'ing.
+  // A ticketless job (a Desk cloud terminal opened straight from the repo picker, src/desk-cloud.ts —
+  // no ticket at all) has no ticket to derive from, so fall back to matching job.cwd against a
+  // registered repo's root: exact, or a worktree living under it. Still fails closed when neither
+  // resolves anything — this only stops a repo that plainly IS there from reading as "none".
+  //
+  // job.cwd was realpath'd by sanitizeCwd() at job creation (spawn-guard.ts checkCwd); a repo's own
+  // `path` column usually was NOT (it is whatever the operator typed when the repo was registered).
+  // A comparison without realpath'ing both sides misses every repo living behind a symlinked parent
+  // (macOS's /tmp -> /private/tmp, /var -> /private/var) — resolve each candidate the same way
+  // allowedRoots() does, and skip one that no longer exists on disk rather than throw.
+  const realpath = (p: string): string | null => { try { return fs.realpathSync(p); } catch { return null; } };
   const dispatchTicket = job.ticket_id ? tickets.get(job.ticket_id) : undefined;
-  const dispatchRepo = dispatchTicket?.repo_id ? repos.get(dispatchTicket.repo_id) : undefined;
+  const dispatchRepo =
+    (dispatchTicket?.repo_id ? repos.get(dispatchTicket.repo_id) : undefined) ??
+    (job.cwd
+      ? repos
+          .list(job.workspace_id ?? undefined)
+          .map((r) => ({ r, real: r.path ? realpath(r.path) : null }))
+          .filter((x): x is { r: typeof x.r; real: string } => x.real !== null && (job.cwd === x.real || job.cwd.startsWith(x.real + "/")))
+          .sort((a, b) => b.real.length - a.real.length)[0]?.r
+      : undefined);
   const spawnErr = validateSpawnTarget(job.backend, job.model, dispatchRepo);
   if (spawnErr) return { error: spawnErr };
   // Same client boundary the Desk enforces, on the headless path: cursor/grok/opencode share one

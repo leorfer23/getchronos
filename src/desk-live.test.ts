@@ -20,7 +20,8 @@ test("no infinite CSS animation anywhere on the page", () => {
 
 test("one pane: the stage's terminal, in Terminal mode, and nothing else holds a socket", () => {
   assert.match(html, /const s = S\.mode === "term" && S\.active && byId\(S\.active\);/);
-  assert.match(html, /const id = s\?\.live && !s\.focus_only \? S\.active : null;/);
+  // A cloud session has no pty either (cursor-cloud rollout) — same "no pane to mount" rule.
+  assert.match(html, /const id = s\?\.live && !s\.focus_only && !s\.cloud_agent_id \? S\.active : null;/);
   assert.match(html, /for \(const k of \[\.\.\.S\.panes\.keys\(\)\]\) if \(k !== id\) unmountPane\(k\);/);
   assert.doesNotMatch(html, /\/desk\/screens/, "no text cards to poll — the rail shows one line per terminal, not a screen");
   assert.doesNotMatch(html, /liveMode/);
@@ -72,8 +73,9 @@ test("Focus-only is optional at spawn and never mounts that session's live termi
   assert.match(html, /id="q-focus"/);
   assert.match(html, /id="f-focus"/);
   assert.match(html, /\.\.\.\(focus \? \{ focus_only: true \} : \{\}\)/);
-  assert.match(html, /if \(m === "term" && byId\(S\.active\)\?\.focus_only\) m = "focus";/);
-  assert.match(html, /if \(s\.focus_only && S\.mode === "term"\) setMode\("focus"\);/);
+  // Cloud sessions get the identical treatment (no pty to show in Terminal mode).
+  assert.match(html, /if \(m === "term" && \(byId\(S\.active\)\?\.focus_only \|\| byId\(S\.active\)\?\.cloud_agent_id\)\) m = "focus";/);
+  assert.match(html, /if \(\(s\.focus_only \|\| s\.cloud_agent_id\) && S\.mode === "term"\) setMode\("focus"\);/);
   assert.match(css, /body\.focus-only #mode \[data-m="term"\]/);
 });
 

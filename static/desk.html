@@ -1578,8 +1578,9 @@ function select(id, opts = {}) {
   const s = byId(id); if (!s) return;
   const prev = S.active;
   S.active = id; S.stickEnded = !s.live;
-  // A Focus-only session has no live terminal to show — leave Terminal mode before the pane would mount.
-  if (s.focus_only && S.mode === "term") setMode("focus");
+  // A Focus-only (or cloud) session has no live terminal to show — leave Terminal mode before the
+  // pane would mount.
+  if ((s.focus_only || s.cloud_agent_id) && S.mode === "term") setMode("focus");
   // Reaching a folded worker (⌘J to its wall, a link, the board) unfolds its Lead so the row is there.
   if (s.live && folded(s)) toggleLead(s.lead_id, true);
   // Putting a terminal on the stage IS leaving the board — one active thing, always. Focus and not
@@ -1617,7 +1618,7 @@ function step(dir, needsOnly = false) {
 // ── the stage ────────────────────────────────────────────────────────────────────────────────
 function setMode(m) {
   const prev = S.mode;
-  if (m === "term" && byId(S.active)?.focus_only) m = "focus";
+  if (m === "term" && (byId(S.active)?.focus_only || byId(S.active)?.cloud_agent_id)) m = "focus";
   S.mode = m === "term" ? "term" : m === "fleet" ? "fleet" : "focus";
   if (prev !== "fleet") S.preFleet = prev;
   localStorage.setItem("desk-mode", S.mode);
@@ -1648,7 +1649,9 @@ function renderStage() {
     return;
   }
   document.body.classList.remove("no-terms");
-  document.body.classList.toggle("focus-only", !!s.focus_only);
+  // A cloud terminal has no pty either — same "no Terminal mode, write in Focus" treatment as
+  // focus_only, for the same reason: there is nothing a raw terminal view could show.
+  document.body.classList.toggle("focus-only", !!s.focus_only || !!s.cloud_agent_id);
   DW.auto = false;
   stage.style.setProperty("--ws", wsColor(s.workspace_id));
   qs("#h-ws").textContent = wsName(s.workspace_id);
@@ -1671,7 +1674,8 @@ function renderStage() {
   bits.push(esc([s.backend.replace("-code", ""), s.model].filter(Boolean).join(" ")));
   if (s.goals_total > 1) bits.push(`<span title="this terminal was given ${s.goals_total} goals — it is on number ${Math.min(s.goals_done + 1, s.goals_total)}">🎯 ${s.goals_done}/${s.goals_total}</span>`);
   if (s.goal_kind) bits.push(`<span title="${esc(KIND_TIP[s.goal_kind] || "")}">${esc(s.goal_kind === "investigation" ? "dig" : s.goal_kind)}</span>`);
-  if (s.focus_only) bits.push(`<span title="Opened without a live terminal — write in Focus">focus</span>`);
+  if (s.cloud_agent_id) bits.push(s.cloud_url ? `<a href="${esc(s.cloud_url)}" target="_blank" rel="noopener" title="Open this run on Cursor">☁ cloud</a>` : `<span title="Running on Cursor's cloud — no live terminal">☁ cloud</span>`);
+  else if (s.focus_only) bits.push(`<span title="Opened without a live terminal — write in Focus">focus</span>`);
   if (u.turns) bits.push(`${u.turns} turn${u.turns === 1 ? "" : "s"}`);
   if (u.context_tokens) bits.push(`<span class="${u.context_tokens > CTX_WARN ? "full" : ""}" title="context now ${u.context_tokens.toLocaleString()} tokens">${kTok(u.context_tokens)} ctx</span>`);
   if (u.cost_usd != null) bits.push((u.cost_estimated ? "~" : "") + money(u.cost_usd));
@@ -2818,7 +2822,7 @@ document.addEventListener("paste", (e) => {
 // WebGL renderer for the one pane; the pty gets a resize only when cols×rows actually changed.
 function syncPane() {
   const s = S.mode === "term" && S.active && byId(S.active);
-  const id = s?.live && !s.focus_only ? S.active : null;
+  const id = s?.live && !s.focus_only && !s.cloud_agent_id ? S.active : null;
   for (const k of [...S.panes.keys()]) if (k !== id) unmountPane(k);
   if (id && !S.panes.has(id)) mountPane(byId(id), qs("#term"));
 }
@@ -3397,8 +3401,11 @@ function jotActions(id) {
 // ── new terminal ─────────────────────────────────────────────────────────────────────────────
 const dlg = qs("#dlg-new");
 // Short labels on the picker — the spawn still sends the registry name (claude-code, cursor-agent…).
-const BACKEND_LABEL = { "claude-code": "Claude", "cursor-agent": "Cursor", grok: "Grok", codex: "Codex", opencode: "OpenCode", "openai-api": "OpenAI" };
-function backendLabel(name) { return BACKEND_LABEL[name] || String(name || "").replace(/-code$/, "").replace(/-agent$/, ""); }
+const BACKEND_LABEL = { "claude-code": "Claude", "cursor-agent": "Cursor", grok: "Grok", codex: "Codex", opencode: "OpenCode", "openai-api": "OpenAI", "cursor-cloud": "Cursor Cloud" };
+// kind rides on listBackends() (src/backends/index.ts) so the picker badges a cloud backend without
+// re-deriving it from the name — the ☁ is the only visual cue that this option has no live terminal.
+function backendKind(name) { return S.backends.find((b) => b.name === name)?.kind || "local"; }
+function backendLabel(name) { const lbl = BACKEND_LABEL[name] || String(name || "").replace(/-code$/, "").replace(/-agent$/, ""); return backendKind(name) === "cloud" ? "☁ " + lbl : lbl; }
 function backendsFor(wsId) {
   const w = S.workspaces.find((x) => x.id === wsId);
   const allowed = w?.backends || S.backends.map((b) => b.name);
@@ -3410,6 +3417,49 @@ function fillBackendSelect(sel, wsId, prefer) {
   const want = prefer || localStorage.getItem("desk-backend:" + (wsId || "")) || w?.default_backend || list[0]?.name || "";
   sel.innerHTML = list.map((b) => '<option value="' + esc(b.name) + '"' + (b.name === want ? " selected" : "") + ">" + esc(backendLabel(b.name)) + "</option>").join("");
   if (want && ![...sel.options].some((o) => o.value === want) && list[0]) sel.value = list[0].name;
+  syncCloudGate(sel, wsId);
+}
+// Cursor's GET /v1/repositories allows 1 req/min — mirrors the server's own 10-min cache (see
+// src/desk-cloud.ts) so reopening the dialog repeatedly does not even re-hit our own endpoint.
+const CLOUD_REPO_CACHE = new Map();
+const CLOUD_REPO_CACHE_MS = 10 * 60_000;
+function normRepoRemote(u) { return String(u || "").replace(/^https?:\/\/github\.com\//i, "").replace(/\.git$/i, "").toLowerCase(); }
+async function cloudReposFor(wsId) {
+  const hit = CLOUD_REPO_CACHE.get(wsId);
+  if (hit && Date.now() - hit.at < CLOUD_REPO_CACHE_MS) return hit.repos;
+  let repos = null;
+  try {
+    const r = await api("/backends/cursor-cloud/repos?workspace_id=" + encodeURIComponent(wsId));
+    repos = new Set((r.repos || []).map(normRepoRemote));
+  } catch { repos = null; }
+  CLOUD_REPO_CACHE.set(wsId, { at: Date.now(), repos });
+  return repos;
+}
+// Disables the cursor-cloud OPTION (not the whole select) with a tooltip explaining why, when the
+// currently-picked repo has no GitHub remote or the Cursor GitHub App can't see it yet.
+let cloudGateGen = 0;
+async function syncCloudGate(sel, wsId) {
+  const opt = [...sel.options].find((o) => o.value === "cursor-cloud");
+  if (!opt) return;
+  const gen = ++cloudGateGen;
+  const w = S.workspaces.find((x) => x.id === wsId);
+  const cwd = qs("#f-cwd")?.value || "";
+  const repo = (w?.repos || []).find((r) => r.path === cwd);
+  const fallback = () => { if (sel.value === "cursor-cloud") { const alt = [...sel.options].find((o) => !o.disabled); if (alt) sel.value = alt.value; } };
+  if (!repo || !repo.git_remote) {
+    opt.disabled = true;
+    opt.title = "pick a repo with a GitHub remote in Where first";
+    fallback();
+    return;
+  }
+  opt.disabled = true;
+  opt.title = "checking whether the Cursor GitHub App can see " + repo.name + "…";
+  const repos = await cloudReposFor(wsId);
+  if (gen !== cloudGateGen) return; // the picker moved on while this was in flight
+  const visible = !!repos && repos.has(normRepoRemote(repo.git_remote));
+  opt.disabled = !visible;
+  opt.title = visible ? "" : "the Cursor GitHub App can't see " + repo.name + " yet";
+  if (!visible) fallback();
 }
 function fillModelSelect(sel, backend, prefer) {
   const b = S.backends.find((x) => x.name === backend);
@@ -3438,9 +3488,13 @@ function syncWs() {
   const saved = localStorage.getItem("desk-model:" + (backend || ""));
   fillModelSelect(qs("#f-model"), backend, saved != null ? saved : (w?.default_model || undefined));
   qs("#f-cwd").innerHTML = '<option value="">default</option>' + (w?.repos || []).map((r) => '<option value="' + esc(r.path) + '">' + esc(r.name) + "</option>").join("");
+  // The cloud gate needs the repo picker filled in to know which repo it is checking — re-run now
+  // that #f-cwd has its options (the earlier call inside fillBackendSelect saw it still empty).
+  syncCloudGate(qs("#f-backend"), w?.id);
   renderLaunches(w?.id);
 }
 qs("#f-backend").onchange = () => fillModelSelect(qs("#f-model"), qs("#f-backend").value);
+qs("#f-cwd").onchange = () => syncCloudGate(qs("#f-backend"), qs("#f-ws").value);
 // Saved launches: this dialog under a name. Tap = open; ✕ twice = forget.
 function renderLaunches(wsId) {
   const host = qs("#launches");
