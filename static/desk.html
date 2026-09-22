@@ -403,13 +403,13 @@
   .bgoal > h4 .reached { color:var(--accent); }
   .bgoal .sub { margin-top:7px; font-size:12.5px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere; }
   .bgoal .gqueue { list-style:none; margin:9px 0 0; padding:0; display:flex; flex-direction:column; gap:4px; }
-  .bgoal .gqueue li { font-size:13px; line-height:1.4; color:var(--muted); overflow-wrap:anywhere; }
+  .bgoal .gqueue li { font-size:13px; line-height:1.4; color:var(--muted); overflow-wrap:anywhere;
+    cursor:pointer; border-radius:5px; padding:1px 4px; margin-left:-4px; }
+  .bgoal .gqueue li:hover { background:var(--surface-2); color:var(--text); }
   .bgoal .gqueue li.done { text-decoration:line-through; opacity:.55; }
   .bgoal .gqueue li.now { color:var(--text); font-weight:600; }
   /* The dialog's goal box is one line until a second goal is typed into it. */
   #f-goal { resize:vertical; min-height:34px; line-height:1.45; }
-  .bgoal .gqueue li { cursor:pointer; border-radius:5px; padding:1px 4px; margin-left:-4px; }
-  .bgoal .gqueue li:hover { background:var(--surface-2); color:var(--text); }
   .bgoal .gadd { margin-top:9px; background:none; border:none; padding:2px 4px 2px 0; color:var(--faint);
     font:inherit; font-size:12.5px; cursor:pointer; border-radius:5px; }
   .bgoal .gadd:hover { color:var(--accent); }
