@@ -1,25 +1,29 @@
 /**
  * Hand a LIVE local Desk terminal off to Cursor Cloud, with all its context, so the work continues
  * on a Cursor-hosted VM instead of this Mac. Cursor can only start an agent from a GitHub ref, so a
- * handoff is: get the terminal's work onto a branch on GitHub, then launch a cloud agent from it
+ * handoff is: get the terminal's work onto a branch on GitHub, then dispatch a cloud run from it
  * with enough context to carry on (Leo's own idea — see docs/plans/2026-09-22-cursor-cloud-backend.md
  * for the wider rollout this is PR 4 of).
  *
  * Two entry points, deliberately separate: `prepareHandoff` is pure inspection for the confirm card
  * (zero side effects, safe to call repeatedly); `executeHandoff` is the one-shot action, only ever
  * called after the operator has seen the plan and approved it.
+ *
+ * This module does NOT launch a cloud agent itself. It persists a job and calls the real `dispatch()`
+ * — the same choke point every other run goes through — so the run lands in `runs` where the
+ * reconciler (PR2's `executeCloud`) can find it and finish it even if this Mac is off when the cloud
+ * agent completes. A second, private launch path here would drift from PR2's and leave the handoff
+ * path unreconciled: a run that exists only as a `sessions` row with no `runs` row is invisible to
+ * the reconciler, which scans `runs`, not `sessions`.
  */
 import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import { execFileTimed } from "./exec.js";
 import { bus } from "./bus.js";
-import { CONFIG } from "./config.js";
-import { db, repos, sessions, tickets } from "./store.js";
+import { db, jobs, repos, runs, sessions, tickets } from "./store.js";
+import { dispatch } from "./dispatcher.js";
 import { getBody } from "./tickets.js";
 import { digestText, killSession } from "./terminal.js";
-import { getBackend } from "./backends/index.js";
-import { isCloudBackend, type AgentBackend } from "./backends/types.js";
-import type { Job, Repo, Session, Ticket } from "./types.js";
+import type { Repo, Session, Ticket } from "./types.js";
 
 async function git(cwd: string, args: string[], timeoutMs = 20_000): Promise<string> {
   const { stdout } = await execFileTimed("git", ["-C", cwd, ...args], { timeout: timeoutMs });
@@ -156,8 +160,8 @@ export async function prepareHandoff(sessionId: string): Promise<HandoffPlan> {
 export interface HandoffOpts {
   /** Required (must be true) when prepareHandoff's plan.requiresConfirm is true — Leo's explicit yes for a non-Chronos remote. */
   confirmNonOwnRemote?: boolean;
-  /** Test seam: defaults to getBackend("cursor-cloud"). Production callers should never set this. */
-  backend?: AgentBackend;
+  /** Test seam: the registered backend name to dispatch under. Defaults to "cursor-cloud"; production callers should never set this. */
+  backendName?: string;
 }
 
 export interface HandoffResult {
@@ -165,9 +169,8 @@ export interface HandoffResult {
   error?: string;
   branch?: string;
   pushedSha?: string;
-  cloudAgentId?: string;
-  cloudRunId?: string;
-  cloudUrl?: string | null;
+  jobId?: string;
+  runId?: string;
   /** The new live cloud session row replacing the ended local one. */
   newSessionId?: string;
 }
@@ -194,59 +197,31 @@ function buildPrompt(session: Session, ticket: Ticket | undefined, digest: strin
   return parts.join("\n\n");
 }
 
-function syntheticJob(session: Session, goal: string, cwd: string): Job {
-  const ts = new Date().toISOString();
-  return {
-    id: randomUUID(),
-    name: `handoff:${session.id.slice(0, 8)}`,
-    description: "Cursor Cloud handoff of a live Desk terminal",
-    goal,
-    append_system: null,
-    profile: CONFIG.defaultProfile,
-    workspace_id: session.workspace_id,
-    ticket_id: session.ticket_id,
-    backend: "cursor-cloud",
-    cwd,
-    add_dirs: null,
-    model: session.model,
-    allowed_tools: null,
-    disallowed_tools: null,
-    trigger_type: "manual",
-    cron_expr: null,
-    run_at: null,
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-    max_budget_usd: null,
-    timeout_sec: CONFIG.defaultTimeoutSec,
-    retry_max: 0,
-    retry_backoff_sec: 0,
-    verify: 0,
-    sandbox: "off",
-    on_success: null,
-    on_failure: null,
-    notify: null,
-    enabled: 1,
-    created_at: ts,
-    updated_at: ts,
-  };
-}
-
-// Temporary — replaced by sessions.setCloud (PR3) at merge; the lead owns that swap.
-function setCloudIds(id: string, c: { cloud_agent_id: string; cloud_run_id: string; cloud_url: string | null }) {
-  db.prepare("UPDATE sessions SET cloud_agent_id=?, cloud_run_id=?, cloud_url=? WHERE id=?").run(c.cloud_agent_id, c.cloud_run_id, c.cloud_url, id);
-}
-
 /**
  * Only ever called after the operator confirmed the plan from `prepareHandoff`.
  *
- * Order matters throughout: commit -> push (the one outward-facing, must-not-fail-silently step) ->
- * build the cloud prompt -> launch (guarded, fails closed) -> persist the new cloud session BEFORE
- * ending the old one, so the Desk never has a moment with neither row live -> end the local terminal
- * -> keep the worktree.
+ * Order, and why it is NOT the order in the plan's numbered list:
  *
- * The new session keeps the old one's `ticket_id` on purpose, and not only for continuity: ending a
- * terminal fires terminal.ts's own worktree cleanup when NO live session remains on that ticket —
- * carrying `ticket_id` forward means the new cloud row keeps that check false, so the worktree this
- * handoff just pushed is never swept out from under it. See CLAUDE.md workflow rules.
+ * 1. Create the new (placeholder) live cloud session FIRST. Two reasons, not one: it is what makes
+ *    "a live card on the Desk replacing the ended one" true (the new row exists before the old one
+ *    ends), and — less obviously — it is what stops terminal.ts's own onExit handler from reclaiming
+ *    the worktree out from under us. That handler removes a ticket's worktree once NO live session
+ *    remains on that ticket; the new row keeps that check false for as long as it stays live. See
+ *    CLAUDE.md's worktree-worktree discipline.
+ * 2. End the local terminal SECOND, before any git write. A CLI mid-write gives a torn snapshot —
+ *    committing and pushing a live agent's half-written tree would ship broken work to a VM. A dead
+ *    terminal with intact work beats a live one whose half-written files just shipped out.
+ * 3. Commit -> push (plain, never --force: this is an automated path, and the local branch is
+ *    always the remote's descendant on a legitimate retry, so a plain push already fast-forwards).
+ *    A failed push stops here — never dispatch from a ref that was never actually pushed.
+ * 4. Persist a job and go through the real `dispatch()` — the same choke point every other run
+ *    uses — instead of launching a cloud agent directly. The reconciler (PR2) scans `runs`, not
+ *    `sessions`; a run that only exists as a `sessions` row with cloud ids is invisible to it and
+ *    never gets finalised if this Mac is off when the cloud agent finishes.
+ *
+ * On any failure after step 1, the placeholder session is ended too (with a reason) rather than
+ * left "live" pointing at nothing — the Desk must never show a card for a cloud agent that was
+ * never actually launched.
  */
 export async function executeHandoff(sessionId: string, opts: HandoffOpts = {}): Promise<HandoffResult> {
   const plan = await prepareHandoff(sessionId);
@@ -256,62 +231,8 @@ export async function executeHandoff(sessionId: string, opts: HandoffOpts = {}):
 
   const session = sessions.get(sessionId)!;
   const wt = session.worktree_path!;
+  const backendName = opts.backendName ?? "cursor-cloud";
 
-  try {
-    await git(wt, ["checkout", "-B", plan.branch]);
-    const dirty = await git(wt, ["status", "--porcelain"]);
-    if (dirty) {
-      await git(wt, ["add", "-A"]);
-      const msg = `chronos: handoff snapshot — session ${sessionId.slice(0, 8)}\n\nHanding off to Cursor Cloud. Goal: ${session.goal || session.spawn_goal || "(none recorded)"}`;
-      await git(wt, ["commit", "-m", msg]);
-    }
-  } catch (e: any) {
-    return { ok: false, error: `commit failed: ${String(e?.message ?? e).slice(0, 300)}` };
-  }
-
-  let pushedSha: string;
-  try {
-    pushedSha = await git(wt, ["rev-parse", "HEAD"]);
-    // Force: this branch is exclusively owned by the handoff mechanism (fresh per session, never
-    // shared history) — a retried handoff after a failed launch must be able to re-push it.
-    await git(wt, ["push", "--force", "origin", plan.branch], 30_000);
-  } catch (e: any) {
-    return { ok: false, error: `push failed — refusing to launch from a stale ref: ${String(e?.message ?? e).slice(0, 300)}` };
-  }
-  // The worktree now lives on the handoff branch — keep the session row's own record in sync so a
-  // later worktree lookup (removeWorktreeAs, listAllWorktrees) still recognises it as claimed.
-  try { sessions.setWorktree(sessionId, { path: wt, branch: plan.branch }); } catch {}
-
-  const ticket = session.ticket_id ? tickets.get(session.ticket_id) : undefined;
-  const digest = digestText(sessionId, "");
-  const promptText = buildPrompt(session, ticket, digest);
-  const job = syntheticJob(session, promptText, wt);
-
-  const backend = opts.backend ?? getBackend("cursor-cloud");
-  if (!isCloudBackend(backend))
-    return {
-      ok: false,
-      error: `cursor-cloud backend is not available — branch ${plan.branch} was pushed but no cloud agent was launched`,
-      branch: plan.branch,
-      pushedSha,
-    };
-
-  let launch;
-  try {
-    launch = await backend.launch({
-      job,
-      runId: randomUUID(),
-      context: null,
-      idempotencyKey: `handoff:${sessionId}`,
-      repos: [{ url: plan.remoteUrl!, startingRef: plan.branch }],
-      autoCreatePr: true,
-      name: ticket?.key || session.title || `chronos-handoff-${sessionId.slice(0, 8)}`,
-    });
-  } catch (e: any) {
-    return { ok: false, error: `cloud launch failed: ${String(e?.message ?? e).slice(0, 300)}`, branch: plan.branch, pushedSha };
-  }
-
-  // The new live cloud row must exist before the old one ends — never a moment with neither on the Desk.
   const newSession = sessions.create({
     ticket_id: session.ticket_id,
     workspace_id: session.workspace_id,
@@ -322,25 +243,74 @@ export async function executeHandoff(sessionId: string, opts: HandoffOpts = {}):
     goal_source: "agent",
     created_by: "handoff",
     role: session.role,
-    backend: "cursor-cloud",
+    backend: backendName,
     cwd: wt,
   });
-  setCloudIds(newSession.id, { cloud_agent_id: launch.agentId, cloud_run_id: launch.runId, cloud_url: launch.url });
   bus.publish({ topic: "session.started", session_id: newSession.id });
+
+  const fail = (error: string, extra: Partial<HandoffResult> = {}): HandoffResult => {
+    try { sessions.end(newSession.id, `handoff did not complete: ${error}`); } catch {}
+    try { bus.publish({ topic: "session.ended", session_id: newSession.id }); } catch {}
+    return { ok: false, error, newSessionId: newSession.id, ...extra };
+  };
 
   killSession(
     sessionId,
-    `handed off to Cursor Cloud — continues as session ${newSession.id.slice(0, 8)}${launch.url ? ` (${launch.url})` : ""}`,
+    `handed off to Cursor Cloud — see session ${newSession.id.slice(0, 8)} for the outcome`,
   );
   bus.publish({ topic: "session.ended", session_id: sessionId });
 
-  return {
-    ok: true,
-    branch: plan.branch,
-    pushedSha,
-    cloudAgentId: launch.agentId,
-    cloudRunId: launch.runId,
-    cloudUrl: launch.url,
-    newSessionId: newSession.id,
-  };
+  try {
+    await git(wt, ["checkout", "-B", plan.branch]);
+    const dirty = await git(wt, ["status", "--porcelain"]);
+    if (dirty) {
+      await git(wt, ["add", "-A"]);
+      const msg = `chronos: handoff snapshot — session ${sessionId.slice(0, 8)}\n\nHanding off to Cursor Cloud. Goal: ${session.goal || session.spawn_goal || "(none recorded)"}`;
+      await git(wt, ["commit", "-m", msg]);
+    }
+  } catch (e: any) {
+    return fail(`commit failed: ${String(e?.message ?? e).slice(0, 300)}`, { branch: plan.branch });
+  }
+
+  let pushedSha: string;
+  try {
+    pushedSha = await git(wt, ["rev-parse", "HEAD"]);
+    // Plain push, deliberately no --force: this is an automated path, and a legitimate retry's
+    // local branch is always a descendant of what is already on the remote, so a plain push
+    // fast-forwards on its own. A genuine non-fast-forward here means something else touched this
+    // branch — that is the operator's call, not the mechanism's.
+    await git(wt, ["push", "origin", plan.branch], 30_000);
+  } catch (e: any) {
+    return fail(`push of branch "${plan.branch}" failed — refusing to dispatch from a stale ref: ${String(e?.message ?? e).slice(0, 300)}`, { branch: plan.branch });
+  }
+  // The worktree now lives on the handoff branch — keep the old session's own record in sync so a
+  // later worktree lookup (removeWorktreeAs, listAllWorktrees) still recognises it as claimed.
+  try { sessions.setWorktree(sessionId, { path: wt, branch: plan.branch }); } catch {}
+
+  const ticket = session.ticket_id ? tickets.get(session.ticket_id) : undefined;
+  const digest = digestText(sessionId, "");
+  const promptText = buildPrompt(session, ticket, digest);
+
+  const job = jobs.create({
+    name: `handoff:${sessionId.slice(0, 8)}`,
+    description: "Cursor Cloud handoff of a live Desk terminal",
+    goal: promptText,
+    workspace_id: session.workspace_id,
+    ticket_id: session.ticket_id,
+    backend: backendName,
+    cwd: wt,
+    model: session.model,
+    trigger_type: "manual",
+    retry_max: 0,
+  });
+
+  const res = dispatch(job.id, `handoff:${sessionId.slice(0, 8)}`);
+  if ("error" in res) return fail(res.error, { branch: plan.branch, pushedSha, jobId: job.id });
+
+  // `runs.session_id` is normally the local CLI's own transcript id (see runner.ts); a cloud run has
+  // no local transcript, so this field is repurposed to link the run back to the Desk session that
+  // displays it — the reconciler and the Desk card both key off it once PR2/3 land.
+  try { runs.patch(res.run_id, { session_id: newSession.id }); } catch {}
+
+  return { ok: true, branch: plan.branch, pushedSha, jobId: job.id, runId: res.run_id, newSessionId: newSession.id };
 }
