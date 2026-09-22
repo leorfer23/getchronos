@@ -40,6 +40,7 @@ import { startTerminalPrompts } from "./terminal-prompts.js";
 import { startRobertDrive } from "./robert-drive.js";
 import { startTerminalFailover } from "./terminal-failover.js";
 import { startWorklog } from "./worklog.js";
+import { startCloudReconcile } from "./cloud-reconcile.js";
 import { searchIndex } from "./store.js";
 
 // Defense-in-depth: every route handler and background async path is expected to catch its own
@@ -96,6 +97,10 @@ startConnectorSync();
 startRepoScan();
 startMonitor();
 startBurnGuard();
+// A cloud run's process lives on the provider's VM, not here — this is the other half of
+// "launch, sleep, reconcile" (runner.ts executeCloud/finalizeCloudRun): pick back up whatever was
+// still 'running' when this daemon last stopped.
+startCloudReconcile();
 startAutoPlan();
 startIdeas();
 startWriteback();

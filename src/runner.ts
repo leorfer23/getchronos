@@ -7,12 +7,22 @@ import readline from "node:readline";
 import { noteClaudeStreamEvent } from "./usage-meter.js";
 import { CONFIG } from "./config.js";
 import { bus } from "./bus.js";
-import { asks, events, messages, repos, runs, sessions, tickets, workspaces } from "./store.js";
+import { asks, events, jobs, messages, repos, runs, sessions, tickets, workspaces } from "./store.js";
 import { resolveVerifyMode, verdictBlocks, verify } from "./verifier.js";
-import { createForRun } from "./reviews.js";
+import { createForRun, prDeliveryPatch } from "./reviews.js";
 import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow } from "./sandbox.js";
 import { niceWrap } from "./machine.js";
 import { getBackend } from "./backends/index.js";
+import { isCloudBackend } from "./backends/types.js";
+import type {
+  CloudBackend,
+  CloudLaunch,
+  CloudLaunchOpts,
+  CloudRef,
+  CloudRunState,
+  CloudStatus,
+  CloudUsage,
+} from "./backends/types.js";
 import { gitTrackedSync, mcEnv, mcSystemText, openSession, syncAgentsMd } from "./terminal.js";
 import { agentContext } from "./skills.js";
 import { baseJobName } from "./job-name.js";
@@ -23,7 +33,7 @@ import { gatesPassed, parseGates, runGates } from "./gates.js";
 import { renderReplay } from "./replay.js";
 import { isStablePrefixMiss } from "./cache-health.js";
 import { parseResetClock } from "./manager-fallback.js";
-import type { GateResult, Job, RunStatus } from "./types.js";
+import type { GateResult, Job, Repo, RunStatus } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -139,6 +149,7 @@ const liveSteer = new Map<
 // Returns false when the run isn't steerable (not steer mode, draining, or ended) — callers fall
 // back to the mailbox.
 export function steerRun(runId: string, text: string, from: string, messageId?: number): boolean {
+  if (tryCloudSteer(runId, text, from, messageId)) return true;
   const entry = liveSteer.get(runId);
   if (!entry) return false;
   // Backstop for a registry entry orphaned by a throw between registration and the close handler:
@@ -208,6 +219,10 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
   // session_id to reopen instead of starting a fresh transcript. See backend.buildArgs below.
   const resumeSessionId = runs.get(runId)?.resume_session ?? null;
   const backend = getBackend(job.backend);
+  // A cloud run is not a child process: launch, sleep, reconcile. Branch BEFORE any of the local
+  // spawn prologue below (buildArgs/oneShot/interactiveArgs on a CloudBackend are required to throw —
+  // see backends/types.ts CloudBackend — so this must run before anything reaches them).
+  if (isCloudBackend(backend)) return executeCloud(job, runId, backend);
   // A backend whose headless args can't reopen the prior transcript (--resume is claude-only; codex
   // resumes in oneShot but not buildArgs) used to degrade silently to a fresh session that had never
   // heard of the question it was resumed to act on. Instead: replay the prior run's event log into
@@ -548,102 +563,11 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
         if (resetIso) err = `rate limited; resets ${resetIso}${resultText ? ` — ${resultText}` : ""}`;
       }
 
-      // Park: the worker filed an `mc ask` and exited (committed WIP, per the CLI's deadline
-      // instructions) before an answer arrived — or answered late, mid-shutdown. This is not a
-      // finished build: skip verifier/gates/review below entirely so nothing judges half-done work
-      // against the ticket's acceptance criteria. The ticket stays in_progress; answerAsk (src/asks.ts)
-      // re-dispatches this same job once the operator answers. A failed/timed-out/killed run is left
-      // alone even with an open ask — a crash is a crash, not a park.
-      // Read-only runs (plan:/review:/…) are excluded: planners fire `mc ask --wait 0` and move on, and
-      // a reviewer that falls back to `changes` after a short `mc ask` wait still has an open ask when
-      // it exits — parking either one would stall the plan/review pipeline waiting on an answer nobody
-      // needs to unblock a park (the ticket already got the fire-and-forget question or the "changes"
-      // verdict noting it).
-      if (!isReadOnlyRun(job.name) && shouldPark(status, asks.openForRun(runId).length > 0)) status = "paused";
-
-      // Verifier pass: confirm the goal was actually met before declaring success. The stored
-      // verdict always carries the mode it ran under, so shadow-mode history shows what strict
-      // WOULD have blocked (the evidence for flipping a workspace to fail-closed).
-      if (status === "success" && job.verify) {
-        const run = runs.get(runId);
-        const mode = resolveVerifyMode(ws);
-        const verdict = await verify(job, run?.summary ?? "");
-        runs.patch(runId, { verify_verdict: JSON.stringify({ ...verdict, mode }) });
-        if (verdictBlocks(mode, verdict)) {
-          status = "failed";
-          err = `verifier: ${verdict.reason}`;
-        } else if (!verdict.met && mode === "shadow") {
-          console.warn(`[verify] ${job.name}: shadow verdict would have failed the run — ${verdict.reason}`);
-        }
-      }
-
-      // Per-repo evidence gates: the repo's own typecheck/lint/test/build commands, run in the
-      // build worktree. A red gate no longer fails the RUN (which parked the ticket in `blocked`
-      // and needed a human to notice) — the results are handed to createForRun, which files them as
-      // a changes-requested review so the build agent reworks against the real failure output.
-      let gateResults: GateResult[] | null = null;
-      if (status === "success" && job.ticket_id && shouldFileReviewOnEnd(job.name)) {
-        const t = tickets.get(job.ticket_id);
-        const repo = t?.repo_id ? repos.get(t.repo_id) : undefined;
-        const gates = parseGates(repo);
-        if (gates.length) {
-          gateResults = await runGates(gates, job.cwd, childEnv(ws));
-          if (!gatesPassed(gateResults)) {
-            const failed = gateResults.filter((g) => !g.ok).map((g) => g.name).join(", ");
-            // Keep the verifier's verdict (nested) instead of clobbering it — shadow-mode history
-            // is the evidence for flipping a workspace to strict, and a gate failure erasing it
-            // would punch holes in exactly that record.
-            let verifier: unknown;
-            try {
-              verifier = JSON.parse(runs.get(runId)?.verify_verdict ?? "");
-            } catch {}
-            runs.patch(runId, {
-              verify_verdict: JSON.stringify({ met: false, reason: `gates failed: ${failed}`, gates: gateResults, verifier }),
-            });
-          }
-        }
-      }
-
-      runs.patch(runId, {
-        status,
-        exit_code: code ?? null,
-        ended_at: new Date().toISOString(),
-        error: err,
-      });
-      // Cache-health telemetry: a run that wrote far more prompt-cache than it read back churned
-      // its prefix — usually a volatile block (dated memo, reordered skills index) re-invalidating
-      // the cached system prompt on every API call. Surfaced in /api/stats; warn per run here.
-      if (isStablePrefixMiss({ cache_read: crAcc, cache_write: cwAcc, num_turns: turnsAcc })) {
-        console.warn(
-          `[cache] ${job.name}: stable-prefix miss — wrote ${cwAcc} cache tokens but read ${crAcc ?? 0}; ` +
-            `something volatile is churning the prompt prefix`,
-        );
-      }
-
-      // Ticket-bound BUILD run finished → queue a review (success) or block the ticket (otherwise).
-      // Planning + reviewer runs (read-only) and post-build gates (merge-gate:/ci-fix:) are excluded —
-      // they are not "build finished" events (see shouldFileReviewOnEnd).
-      // Paused (parked on an open ask) is excluded too — it isn't finished, so no review yet.
-      if (job.ticket_id && status !== "rate_limited" && status !== "paused" && shouldFileReviewOnEnd(job.name)) {
-        try {
-          await createForRun(job, runId, status, gateResults);
-        } catch (e) {
-          console.error("[review] createForRun failed", e);
-        }
-      }
-      // Auth wall (logged-out profile): open an in-app login terminal + alert, instead of a bare fail.
-      if (status === "failed" && err && AUTH_ERR_RE.test(err)) await promptLogin(job, runId);
-      const tk = job.ticket_id ? tickets.get(job.ticket_id) : undefined;
-      bus.publish({
-        topic: "run.ended",
-        run_id: runId,
-        status,
-        job_name: job.name ?? undefined,
-        ticket_id: job.ticket_id ?? null,
-        ticket_key: tk?.key ?? null,
-        workspace_id: job.workspace_id ?? null,
-      });
-      resolve(status);
+      // Everything from here on (park check → verifier → gates → the terminal runs.patch → review
+      // queueing → run.ended) is the SAME post-run path a cloud run takes at finalize — see
+      // finalizeRun below. Two finalize paths that drift is the bug that design exists to avoid.
+      const final = await finalizeRun(job, runId, status, err, { exitCode: code ?? null });
+      resolve(final);
     });
     child.on("error", (e) => {
       clearTimeout(watchdog);
@@ -657,4 +581,478 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
       resolve("failed");
     });
   });
+}
+
+// ───────────────────────────── shared finalize (local + cloud) ─────────────────────────────
+
+/**
+ * The one post-run path, whoever the caller is: a local run's `close` handler above, a cloud run
+ * finishing inline in executeCloud, or the reconciler picking a cloud run back up hours later.
+ * `status`/`err` are the caller's read of what happened (child exit code, or the cloud provider's
+ * own terminal status); everything from here on — park, verifier, gates, the terminal `runs.patch`,
+ * review queueing, `run.ended` — is identical either way, which is the whole point: merge-gate,
+ * review and the verifier must never be able to tell a run was cloud.
+ */
+export async function finalizeRun(
+  job: Job,
+  runId: string,
+  status: RunStatus,
+  err: string | null,
+  opts: { exitCode?: number | null } = {},
+): Promise<RunStatus> {
+  const ws = job.workspace_id ? workspaces.get(job.workspace_id) : undefined;
+
+  // Park: the worker filed an `mc ask` and exited (committed WIP, per the CLI's deadline
+  // instructions) before an answer arrived — or answered late, mid-shutdown. This is not a
+  // finished build: skip verifier/gates/review below entirely so nothing judges half-done work
+  // against the ticket's acceptance criteria. The ticket stays in_progress; answerAsk (src/asks.ts)
+  // re-dispatches this same job once the operator answers. A failed/timed-out/killed run is left
+  // alone even with an open ask — a crash is a crash, not a park.
+  // Read-only runs (plan:/review:/…) are excluded: planners fire `mc ask --wait 0` and move on, and
+  // a reviewer that falls back to `changes` after a short `mc ask` wait still has an open ask when
+  // it exits — parking either one would stall the plan/review pipeline waiting on an answer nobody
+  // needs to unblock a park (the ticket already got the fire-and-forget question or the "changes"
+  // verdict noting it).
+  if (!isReadOnlyRun(job.name) && shouldPark(status, asks.openForRun(runId).length > 0)) status = "paused";
+
+  // Verifier pass: confirm the goal was actually met before declaring success. The stored
+  // verdict always carries the mode it ran under, so shadow-mode history shows what strict
+  // WOULD have blocked (the evidence for flipping a workspace to fail-closed).
+  if (status === "success" && job.verify) {
+    const run = runs.get(runId);
+    const mode = resolveVerifyMode(ws);
+    const verdict = await verify(job, run?.summary ?? "");
+    runs.patch(runId, { verify_verdict: JSON.stringify({ ...verdict, mode }) });
+    if (verdictBlocks(mode, verdict)) {
+      status = "failed";
+      err = `verifier: ${verdict.reason}`;
+    } else if (!verdict.met && mode === "shadow") {
+      console.warn(`[verify] ${job.name}: shadow verdict would have failed the run — ${verdict.reason}`);
+    }
+  }
+
+  // Per-repo evidence gates: the repo's own typecheck/lint/test/build commands, run in the
+  // build worktree. A red gate no longer fails the RUN (which parked the ticket in `blocked`
+  // and needed a human to notice) — the results are handed to createForRun, which files them as
+  // a changes-requested review so the build agent reworks against the real failure output.
+  // A cloud run's caller (executeCloud/finalizeCloudRun) has already fetched the cloud branch into
+  // job.cwd before calling here, so this runs against the agent's actual produced code either way.
+  let gateResults: GateResult[] | null = null;
+  if (status === "success" && job.ticket_id && shouldFileReviewOnEnd(job.name)) {
+    const t = tickets.get(job.ticket_id);
+    const repo = t?.repo_id ? repos.get(t.repo_id) : undefined;
+    const gates = parseGates(repo);
+    if (gates.length) {
+      gateResults = await runGates(gates, job.cwd, childEnv(ws));
+      if (!gatesPassed(gateResults)) {
+        const failed = gateResults.filter((g) => !g.ok).map((g) => g.name).join(", ");
+        // Keep the verifier's verdict (nested) instead of clobbering it — shadow-mode history
+        // is the evidence for flipping a workspace to strict, and a gate failure erasing it
+        // would punch holes in exactly that record.
+        let verifier: unknown;
+        try {
+          verifier = JSON.parse(runs.get(runId)?.verify_verdict ?? "");
+        } catch {}
+        runs.patch(runId, {
+          verify_verdict: JSON.stringify({ met: false, reason: `gates failed: ${failed}`, gates: gateResults, verifier }),
+        });
+      }
+    }
+  }
+
+  runs.patch(runId, {
+    status,
+    exit_code: opts.exitCode ?? null,
+    ended_at: new Date().toISOString(),
+    error: err,
+  });
+  // Cache-health telemetry: a run that wrote far more prompt-cache than it read back churned
+  // its prefix — usually a volatile block (dated memo, reordered skills index) re-invalidating
+  // the cached system prompt on every API call. Surfaced in /api/stats; warn per run here. Read off
+  // the row (not a local accumulator) so this reads the same for a local run's per-line totals and
+  // a cloud run's one-shot usage() figures.
+  const row = runs.get(runId);
+  if (isStablePrefixMiss({ cache_read: row?.cache_read ?? null, cache_write: row?.cache_write ?? null, num_turns: row?.num_turns ?? null })) {
+    console.warn(
+      `[cache] ${job.name}: stable-prefix miss — wrote ${row?.cache_write} cache tokens but read ${row?.cache_read ?? 0}; ` +
+        `something volatile is churning the prompt prefix`,
+    );
+  }
+
+  // Ticket-bound BUILD run finished → queue a review (success) or block the ticket (otherwise).
+  // Planning + reviewer runs (read-only) and post-build gates (merge-gate:/ci-fix:) are excluded —
+  // they are not "build finished" events (see shouldFileReviewOnEnd).
+  // Paused (parked on an open ask) is excluded too — it isn't finished, so no review yet.
+  if (job.ticket_id && status !== "rate_limited" && status !== "paused" && shouldFileReviewOnEnd(job.name)) {
+    try {
+      await createForRun(job, runId, status, gateResults);
+    } catch (e) {
+      console.error("[review] createForRun failed", e);
+    }
+  }
+  // Auth wall (logged-out profile): open an in-app login terminal + alert, instead of a bare fail.
+  if (status === "failed" && err && AUTH_ERR_RE.test(err)) await promptLogin(job, runId);
+  const tk = job.ticket_id ? tickets.get(job.ticket_id) : undefined;
+  bus.publish({
+    topic: "run.ended",
+    run_id: runId,
+    status,
+    job_name: job.name ?? undefined,
+    ticket_id: job.ticket_id ?? null,
+    ticket_key: tk?.key ?? null,
+    workspace_id: job.workspace_id ?? null,
+  });
+  return status;
+}
+
+// ───────────────────────────── cloud runs ─────────────────────────────
+//
+// A cloud run is not a child process: launch, sleep, reconcile. Chronos launches it on the
+// provider's VM, persists the ids, and either tails the live event stream (this process) or picks
+// the run back up later (cloud-reconcile.ts) — the provider keeps the run state and a replayable
+// event stream, so nothing is lost whether the Mac slept for a minute or the daemon was off for a
+// day. See docs/plans/2026-09-22-cursor-cloud-backend.md.
+
+// Runs currently being tailed BY THIS PROCESS, keyed by run id — guards against executeCloud's own
+// attach and the reconciler's re-attach racing each other onto the same stream (which would double-
+// store every event). Checked inside streamCloudRun itself, not just by callers, so it holds no
+// matter who calls it first.
+const cloudStreaming = new Set<string>();
+// Whether THIS process already has ref's stream open — cloud-reconcile.ts checks this before
+// spending a getRun() call on a run it would otherwise redundantly (and racily) re-poll.
+export function isCloudStreaming(runId: string): boolean {
+  return cloudStreaming.has(runId);
+}
+// Runs currently inside finalizeCloudRun, keyed by run id — the reconciler's poll and an
+// executeCloud that just saw its own terminal frame can both decide "this run is done" in the same
+// tick; without this a run could be finalized twice (double review, double run.ended).
+const cloudFinalizing = new Set<string>();
+
+const CLOUD_LAUNCH_MAX_RETRIES = 3;
+const CLOUD_LAUNCH_RETRY_SEC = 60;
+
+function isCloudRateLimited(e: any): boolean {
+  return e?.status === 429 || e?.code === 429 || /\b429\b|resource[_ ]exhausted|rate[- ]?limit/i.test(String(e?.message ?? e ?? ""));
+}
+function cloudRetryAfterSec(e: any): number {
+  const v = Number(e?.retryAfter ?? e?.retry_after);
+  return Number.isFinite(v) && v > 0 ? v : CLOUD_LAUNCH_RETRY_SEC;
+}
+
+// Launch with retry on 429 (`retryAfter` honoured when the backend supplies one), capped at 3 tries
+// 60s apart per the spec — a retried dispatch must not launch (and bill) the same work twice, which
+// is exactly what `opts.idempotencyKey` (the run id) is for.
+export async function launchCloudWithRetry(backend: CloudBackend, opts: CloudLaunchOpts): Promise<CloudLaunch> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= CLOUD_LAUNCH_MAX_RETRIES; attempt++) {
+    try {
+      return await backend.launch(opts);
+    } catch (e: any) {
+      lastErr = e;
+      if (!isCloudRateLimited(e) || attempt === CLOUD_LAUNCH_MAX_RETRIES) throw e;
+      const wait = cloudRetryAfterSec(e);
+      console.warn(`[cloud] ${opts.runId.slice(0, 8)}: launch 429 (attempt ${attempt}/${CLOUD_LAUNCH_MAX_RETRIES}) — retrying in ${wait}s`);
+      await new Promise((r) => setTimeout(r, wait * 1000));
+    }
+  }
+  throw lastErr;
+}
+
+// git@host:owner/repo.git | ssh://git@host/owner/repo.git | https://host/owner/repo(.git)? → https URL.
+// Exported for tests. Returns null for anything that doesn't parse as a normal remote.
+export function githubHttpsUrl(remote: string | null | undefined): string | null {
+  if (!remote) return null;
+  const trimmed = remote.trim();
+  let m = trimmed.match(/^git@([^:]+):(.+?)(?:\.git)?\/?$/);
+  if (!m) m = trimmed.match(/^ssh:\/\/git@([^/]+)\/(.+?)(?:\.git)?\/?$/);
+  if (!m) m = trimmed.match(/^https?:\/\/([^/]+)\/(.+?)(?:\.git)?\/?$/);
+  if (!m) return null;
+  return `https://${m[1]}/${m[2]}`;
+}
+
+// CloudLaunchOpts.repos: the work repo first (with its default branch as startingRef), then any
+// add_dirs that resolved to a sibling repo with its own GitHub remote (read-only add_dirs on the
+// provider side too) — capped at 20 per the API limit. Repos with no recognisable GitHub remote are
+// dropped rather than sent malformed. Exported (pure) for tests.
+export function buildCloudRepos(
+  buildRepo: Repo | undefined,
+  extraRepos: Repo[],
+): CloudLaunchOpts["repos"] {
+  const out: CloudLaunchOpts["repos"] = [];
+  const seen = new Set<string>();
+  const add = (r: Repo | undefined) => {
+    if (!r) return;
+    const url = githubHttpsUrl(r.git_remote);
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    out.push({ url, startingRef: r.default_branch ?? null });
+  };
+  add(buildRepo);
+  for (const r of extraRepos) add(r);
+  return out.slice(0, 20);
+}
+
+const CLOUD_STATUS_MAP: Record<Exclude<CloudStatus, "running">, RunStatus> = {
+  finished: "success",
+  error: "failed",
+  cancelled: "killed",
+  expired: "timeout",
+};
+
+// Best-effort: pull the cloud branch into the ticket's LOCAL worktree so the shared gates step
+// (finalizeRun → runGates, which runs in job.cwd) sees the agent's actual produced code, and so
+// createForRun's own `git add -A`/commit — if it has anything left to do — lands on top of it. Never
+// throws: a repo gates run against stale content is a worse review, not a crashed daemon.
+async function syncWorktreeToCloudBranch(cwd: string, branch: string): Promise<void> {
+  try {
+    await execFileAsync("git", ["-C", cwd, "fetch", "origin", branch], { timeout: 30_000 });
+    await execFileAsync("git", ["-C", cwd, "reset", "--hard", "FETCH_HEAD"], { timeout: 15_000 });
+  } catch (e: any) {
+    console.warn(`[cloud] sync ${branch} into ${cwd} failed — gates run against whatever is already checked out (${e?.message ?? e})`);
+  }
+}
+
+/**
+ * Tail a cloud run's SSE stream, storing every frame through the EXISTING run_events path (Focus and
+ * the Desk render it unchanged — no second event pipeline) and batching `cloud_last_event_id` so a
+ * daemon that slept mid-run resumes from there instead of replaying the whole run.
+ *
+ * Resolves `{terminal:true}` on a result/done/error frame — the caller finalizes. Resolves
+ * `{terminal:false}` on anything else ending the stream (Mac slept, wifi dropped, the daemon
+ * restarted mid-iteration): that is NOT a failure. Mark nothing; the reconciler picks the run back
+ * up on its own clock, resuming from the cursor this function just persisted.
+ */
+export async function streamCloudRun(
+  backend: CloudBackend,
+  ref: CloudRef,
+  runId: string,
+  lastEventId: string | null,
+): Promise<{ terminal: boolean }> {
+  if (cloudStreaming.has(runId)) return { terminal: false }; // already tailed elsewhere in this process
+  cloudStreaming.add(runId);
+  let cursor = lastEventId;
+  let pending = 0;
+  let lastFlush = Date.now();
+  const flush = () => {
+    if (cursor) runs.patch(runId, { cloud_last_event_id: cursor });
+    pending = 0;
+    lastFlush = Date.now();
+  };
+  try {
+    for await (const frame of backend.stream(ref, lastEventId)) {
+      if (frame.eventId) cursor = frame.eventId;
+      if (frame.event) {
+        events.add(runId, frame.event.type, frame.event.payload);
+        bus.publish({ topic: "run.event", run_id: runId, event: frame.event.payload });
+      }
+      // Batched (every ~2s or 20 frames), never once per frame — this is the resume cursor, not a log.
+      pending++;
+      if (pending >= 20 || Date.now() - lastFlush >= 2000) flush();
+      if (frame.terminal) {
+        flush();
+        return { terminal: true };
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[cloud] ${runId.slice(0, 8)}: stream disconnected (${e?.message ?? e}) — the reconciler will pick it up`);
+  } finally {
+    cloudStreaming.delete(runId);
+  }
+  flush();
+  return { terminal: false };
+}
+
+/**
+ * Finalize = one `getRun` + one `usage`, then the SAME post-run path a local run takes
+ * (finalizeRun) — so merge-gate/review/verifier never learn this run was cloud. Called from
+ * executeCloud (this process, right after the stream), and from cloud-reconcile.ts (this process or
+ * a fresh one, any time later) — both go through this one function so there is exactly one place
+ * that maps provider state onto a Chronos run.
+ *
+ * `forceStatus` is set only by the reconciler's timeout path: the provider may not have caught up to
+ * a `cancel()` yet, and a timed-out run is `timeout` regardless of what `getRun` still reports.
+ */
+export async function finalizeCloudRun(
+  job: Job,
+  runId: string,
+  backend: CloudBackend,
+  ref: CloudRef,
+  forceStatus?: RunStatus,
+): Promise<RunStatus> {
+  const cur = runs.get(runId);
+  if (!cur || cur.status !== "running") return cur?.status ?? "failed";
+  if (cloudFinalizing.has(runId)) return "running";
+  cloudFinalizing.add(runId);
+  try {
+    let state: CloudRunState;
+    try {
+      state = await backend.getRun(ref);
+    } catch (e: any) {
+      console.warn(`[cloud] ${runId.slice(0, 8)}: getRun failed at finalize — left running for the next reconcile pass (${e?.message ?? e})`);
+      return "running";
+    }
+    if (!forceStatus && state.status === "running") return "running"; // not actually terminal yet
+
+    let usage: CloudUsage | null = null;
+    try {
+      usage = await backend.usage(ref);
+    } catch (e: any) {
+      console.warn(`[cloud] ${runId.slice(0, 8)}: usage() failed at finalize — cost/tokens stay unset (${e?.message ?? e})`);
+    }
+
+    const prUrl = state.branches.find((b) => b.prUrl)?.prUrl ?? null;
+    if (job.ticket_id && prUrl) {
+      const t = tickets.get(job.ticket_id);
+      if (t) tickets.update(t.id, prDeliveryPatch(t, prUrl));
+    }
+
+    const status: RunStatus = forceStatus ?? (state.status === "running" ? "failed" : CLOUD_STATUS_MAP[state.status]);
+
+    runs.patch(runId, {
+      summary: state.result,
+      ...(usage
+        ? {
+            tokens_in: usage.tokens_in,
+            tokens_out: usage.tokens_out,
+            cache_read: usage.tokens_cache_read,
+            cache_write: usage.tokens_cache_write,
+            cost_usd: usage.cost_usd,
+            cost_estimated: 0,
+          }
+        : {}),
+    });
+
+    // Gates need the agent's actual code in job.cwd — sync it in before finalizeRun runs them.
+    if (status === "success" && job.ticket_id) {
+      const branch = state.branches.find((b) => b.prUrl === prUrl)?.branch ?? state.branches[0]?.branch ?? null;
+      if (branch) await syncWorktreeToCloudBranch(job.cwd, branch);
+    }
+
+    return await finalizeRun(job, runId, status, state.error, { exitCode: null });
+  } finally {
+    cloudFinalizing.delete(runId);
+  }
+}
+
+// Steer a LIVE cloud run (`mc tell` / POST /runs/:id/steer): a new turn on the same provider agent
+// (`backend.followup`), which mints a NEW provider run id — the old one stays in run_events, the new
+// one becomes cloud_run_id, and the stream keeps tailing under it. Fire-and-forget from steerRun's
+// point of view (that function's contract is a synchronous boolean); failures — including the
+// documented `409 agent_busy` while a turn is in flight — are surfaced as a run event instead of
+// silently dropping the message.
+async function steerCloudRun(
+  backend: CloudBackend,
+  ref: CloudRef,
+  runId: string,
+  text: string,
+  from: string,
+  messageId?: number,
+): Promise<void> {
+  events.add(runId, "steer", { text, from });
+  bus.publish({ topic: "run.event", run_id: runId, event: { type: "steer", text, from } });
+  try {
+    const launch = await backend.followup(ref, text);
+    events.add(runId, "cloud_followup", { prior_run_id: ref.runId, new_run_id: launch.runId });
+    runs.patch(runId, { cloud_run_id: launch.runId });
+    if (messageId != null) messages.markDelivered([messageId], runId);
+  } catch (e: any) {
+    const busy = /409|agent_busy/i.test(String(e?.message ?? e));
+    const msg = busy
+      ? "cloud agent is busy with another turn — try again once it responds"
+      : `cloud follow-up failed: ${e?.message ?? e}`;
+    console.warn(`[cloud] ${runId.slice(0, 8)}: steer failed — ${msg}`);
+    events.add(runId, "steer_failed", { text, from, error: msg });
+    bus.publish({ topic: "run.event", run_id: runId, event: { type: "steer_failed", text, from, error: msg } });
+  }
+}
+
+/**
+ * Launch a cloud run, tail its stream until a terminal frame (or a disconnect), then finalize.
+ *
+ * Mirrors execute()'s contract (same Job/runId in, same RunStatus out) so dispatch()/pump() need no
+ * changes at all — a "running" return on disconnect is a legitimate, inert RunStatus as far as the
+ * dispatcher's retry/chain/fallback logic is concerned (it only acts on success/failed/timeout/
+ * rate_limited), so the run simply stays `running` in the DB until the reconciler finishes it.
+ */
+export async function executeCloud(job: Job, runId: string, backend: CloudBackend): Promise<RunStatus> {
+  // Synchronous prologue (gotcha #1's sibling): dispatch() returns while this call is still running,
+  // so everything read off `runs`/`repos` here happens before the first await.
+  const priorRun = runs.get(runId);
+  const context = priorRun?.context ?? null;
+  const ws = job.workspace_id ? workspaces.get(job.workspace_id) : undefined;
+  const ctxRepoId = job.ticket_id ? tickets.get(job.ticket_id)?.repo_id ?? null : null;
+  const buildRepo = ctxRepoId ? repos.get(ctxRepoId) : undefined;
+  let addDirs: string[] = [];
+  try {
+    if (job.add_dirs) addDirs = JSON.parse(job.add_dirs);
+  } catch {}
+  const extraRepos = addDirs.length
+    ? repos.list(ws?.id).filter((r) => r.id !== buildRepo?.id && addDirs.includes(r.path))
+    : [];
+  const cloudRepos = buildCloudRepos(buildRepo, extraRepos);
+
+  const fail = (msg: string): RunStatus => {
+    runs.patch(runId, { status: "failed", ended_at: new Date().toISOString(), error: msg });
+    bus.publish({
+      topic: "run.ended",
+      run_id: runId,
+      status: "failed",
+      job_name: job.name ?? undefined,
+      ticket_id: job.ticket_id ?? null,
+      workspace_id: job.workspace_id ?? null,
+    });
+    return "failed";
+  };
+
+  if (!cloudRepos.length) return fail(`cloud backend needs a repo with a GitHub remote (job ${job.name})`);
+
+  let launch: CloudLaunch;
+  try {
+    launch = await launchCloudWithRetry(backend, {
+      job,
+      runId,
+      context,
+      idempotencyKey: runId,
+      repos: cloudRepos,
+      autoCreatePr: true,
+      name: job.name,
+    });
+  } catch (e: any) {
+    return fail(`cloud launch failed: ${e?.message ?? e}`);
+  }
+
+  // Persist ids + status BEFORE anything else can fail — this is the row a sleeping Mac wakes up to.
+  runs.patch(runId, {
+    status: "running",
+    cloud_agent_id: launch.agentId,
+    cloud_run_id: launch.runId,
+    cloud_url: launch.url,
+    started_at: new Date().toISOString(),
+  });
+  bus.publish({ topic: "run.started", run_id: runId, job_id: job.id });
+
+  const ref: CloudRef = { agentId: launch.agentId, runId: launch.runId, workspaceId: ws?.id ?? null };
+  const streamResult = await streamCloudRun(backend, ref, runId, null);
+  if (!streamResult.terminal) {
+    // Disconnected, not finished — Mac slept, wifi dropped, whatever. Change NOTHING; the reconciler
+    // resumes from cloud_last_event_id on its own clock.
+    return runs.get(runId)?.status ?? "running";
+  }
+  return finalizeCloudRun(job, runId, backend, ref);
+}
+
+// Cloud path for steerRun below: a run with a live cloud_agent_id/cloud_run_id and a CloudBackend
+// steers via backend.followup instead of the liveSteer stdin map (which cloud runs never register
+// in — they have no child process). Kept as a helper so steerRun's own contract (synchronous
+// boolean) doesn't change for its other callers (api.ts, messages.ts).
+function tryCloudSteer(runId: string, text: string, from: string, messageId?: number): boolean {
+  const run = runs.get(runId);
+  if (!run || run.status !== "running" || !run.cloud_agent_id || !run.cloud_run_id) return false;
+  const job = jobs.get(run.job_id);
+  if (!job) return false;
+  const backend = getBackend(job.backend);
+  if (!isCloudBackend(backend)) return false;
+  const ref: CloudRef = { agentId: run.cloud_agent_id, runId: run.cloud_run_id, workspaceId: job.workspace_id ?? null };
+  void steerCloudRun(backend, ref, runId, text, from, messageId);
+  return true;
 }

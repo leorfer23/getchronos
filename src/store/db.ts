@@ -57,13 +57,19 @@ migrate(db);
 
 // Startup reconciliation: any run still 'running'/'queued' was orphaned by a daemon stop/crash
 // (its child process is gone and the in-memory queue is empty). Mark them so they don't hang forever.
+//
+// Cloud runs (cloud_agent_id set) are excluded on purpose: this reconciliation exists because a
+// LOCAL run's child process dies with the daemon. A cloud run's process did NOT die — it is still
+// working on the provider's VM — so marking it interrupted here would be factually wrong, not just
+// inconvenient, and would undo the whole point of the cloud backend (survive the Mac sleeping or the
+// daemon being off). cloud-reconcile.ts (started later, in index.ts) picks those back up instead.
 {
   const orphans = db
-    .prepare("SELECT id FROM runs WHERE status IN ('running','queued')")
+    .prepare("SELECT id FROM runs WHERE status IN ('running','queued') AND cloud_agent_id IS NULL")
     .all() as Array<{ id: string }>;
   if (orphans.length) {
     db.prepare(
-      "UPDATE runs SET status='interrupted', ended_at=?, error=COALESCE(error,'daemon restarted while run was active') WHERE status IN ('running','queued')"
+      "UPDATE runs SET status='interrupted', ended_at=?, error=COALESCE(error,'daemon restarted while run was active') WHERE status IN ('running','queued') AND cloud_agent_id IS NULL"
     ).run(now());
     console.log(`[chronos] reconciled ${orphans.length} orphaned run(s) → interrupted`);
   }
