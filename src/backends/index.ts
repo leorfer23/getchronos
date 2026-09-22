@@ -8,7 +8,7 @@ import { grokBackend } from "./grok.js";
 import { opencodeBackend } from "./opencode.js";
 import { openaiApiBackend } from "./openai-api.js";
 import { mockBackend } from "./mock.js";
-import type { AgentBackend } from "./types.js";
+import type { AgentBackend, BackendKind } from "./types.js";
 
 // Backend registry. Add a new harness (codex, gemini, …) = one module + one line here.
 const REGISTRY: Record<string, AgentBackend> = {
@@ -55,16 +55,18 @@ export function validateSpawnTarget(
   return null;
 }
 
-export function listBackends(): Array<{ name: string; models?: string[]; supportsResume: boolean; supportsHeadless: boolean }> {
+// `kind` rides along so a picker can badge a cloud backend (☁) and a caller can refuse to open a
+// pty for one — neither should have to import the registry and re-derive it.
+export function listBackends(): Array<{ name: string; kind: BackendKind; models?: string[]; supportsResume: boolean; supportsHeadless: boolean }> {
   const seen = new Set<AgentBackend>();
-  const out: Array<{ name: string; models?: string[]; supportsResume: boolean; supportsHeadless: boolean }> = [];
+  const out: Array<{ name: string; kind: BackendKind; models?: string[]; supportsResume: boolean; supportsHeadless: boolean }> = [];
   for (const b of Object.values(REGISTRY)) {
     if (seen.has(b)) continue;
     seen.add(b);
     // Resolvable by name (tests, deliberate smoke jobs) but never advertised: in the UI picker or
     // as a fallback_backend it would fake a verified, reviewed success with zero work done.
     if (b === mockBackend) continue;
-    out.push({ name: b.name, models: b.models, supportsResume: b.supportsResume, supportsHeadless: b.supportsHeadless !== false });
+    out.push({ name: b.name, kind: b.kind ?? "local", models: b.models, supportsResume: b.supportsResume, supportsHeadless: b.supportsHeadless !== false });
   }
   return out;
 }

@@ -80,9 +80,127 @@ export interface BackendCapabilities {
   mcp?: boolean;
 }
 
+/**
+ * Where a backend's work actually runs.
+ *
+ * "local" (the default, and what every backend before cursor-cloud is) = a child process on this
+ * machine: the runner spawns it, reads its stdout and owns its lifetime. "cloud" = the provider
+ * hosts the VM; Chronos only launches, stores the ids and RECONCILES. The distinction is load
+ * bearing in exactly one place — the runner must branch before it tries to spawn a binary that
+ * does not exist — and advisory everywhere else (the Desk picker badges it ☁).
+ */
+export type BackendKind = "local" | "cloud";
+
+/** Provider-side status of one cloud run, normalised across vendors. */
+export type CloudStatus = "running" | "finished" | "error" | "cancelled" | "expired";
+
+/**
+ * Which cloud run we are talking about. `workspaceId` is not decoration: the provider key lives in
+ * that workspace's vars (CURSOR_API_KEY), and a reconcile waking up hours later has nothing else to
+ * resolve it from — reading it from daemon env alone would silently use the wrong account.
+ */
+export interface CloudRef {
+  agentId: string;
+  runId: string;
+  workspaceId: string | null;
+}
+
+/** What a launch (or a follow-up turn) hands back — the ids Chronos must persist before anything else. */
+export interface CloudLaunch {
+  agentId: string;
+  /** The run id of THIS turn. A follow-up mints a new one; the old one stays in run_events. */
+  runId: string;
+  /** Human link to the run on the provider's site, for the Desk card. */
+  url: string | null;
+  status: CloudStatus;
+}
+
+/** One poll of a cloud run. `result`/`branches` only mean anything once `status` is terminal. */
+export interface CloudRunState {
+  status: CloudStatus;
+  /** The agent's final answer — becomes runs.summary, which merge-gate parses its verdict from. */
+  result: string | null;
+  durationMs: number | null;
+  branches: Array<{ repoUrl: string; branch: string; prUrl: string | null }>;
+  error: string | null;
+}
+
+/**
+ * Vendor-billed usage for one cloud run. Every field is the provider's own total, so the runner
+ * stores it with `cost_estimated: false` — unlike a local run, there is no token-table arithmetic.
+ */
+export interface CloudUsage {
+  tokens_in: number | null;
+  tokens_out: number | null;
+  tokens_cache_read: number | null;
+  tokens_cache_write: number | null;
+  cost_usd: number | null;
+}
+
+/**
+ * One frame off the event stream, already normalised. `eventId` is the resume cursor the runner
+ * persists (runs.cloud_last_event_id) so a Mac that slept mid-run replays from there instead of
+ * from the beginning. `event: null` = a frame with nothing worth storing (heartbeat, keepalive).
+ */
+export interface CloudFrame {
+  eventId: string | null;
+  event: NormalizedEvent | null;
+  /** result/done/error — stop reading and go finalise via getRun + usage. */
+  terminal: boolean;
+}
+
+/** Everything a launch needs that is not already on the Job row. */
+export interface CloudLaunchOpts {
+  job: Job;
+  runId: string;
+  /** Trigger-event payload, folded into the prompt exactly as a local run folds it. */
+  context: string | null;
+  /**
+   * Stable per-run key. A dispatch that is retried after a timeout MUST NOT launch the work twice —
+   * the provider rejects the second launch on this key instead of billing for a duplicate VM.
+   */
+  idempotencyKey: string;
+  /** GitHub https urls. The first is the work repo; the rest are read-only add_dirs. */
+  repos: Array<{ url: string; startingRef?: string | null }>;
+  /** delivery=pr → open a draft PR on a fresh branch. Phase 1 refuses anything else. */
+  autoCreatePr: boolean;
+  /** Provider-side display name (ticket key / job name), truncated by the backend. */
+  name?: string | null;
+}
+
+/**
+ * A backend whose runs live on someone else's VM.
+ *
+ * The whole point is that Chronos may be OFF while the work happens: launch persists ids, the
+ * stream is an optimisation for live rendering, and `getRun` + `usage` are the source of truth that
+ * a reconciler can reach for at any later time. Nothing here may assume a live process, a pty, a
+ * cwd, or that the same daemon instance that launched the run is the one that finishes it.
+ *
+ * `buildArgs`/`oneShot`/`interactiveArgs` are inherited but MUST throw: the runner branches on
+ * `kind === "cloud"` before it reaches them, and a silent fallthrough would spawn a binary that
+ * does not exist and report the ENOENT as the agent failing.
+ */
+export interface CloudBackend extends AgentBackend {
+  kind: "cloud";
+  launch(opts: CloudLaunchOpts): Promise<CloudLaunch>;
+  /** Replay + live tail from `lastEventId` (null = from the start of the run). */
+  stream(ref: CloudRef, lastEventId: string | null, signal?: AbortSignal): AsyncIterable<CloudFrame>;
+  getRun(ref: CloudRef): Promise<CloudRunState>;
+  usage(ref: CloudRef): Promise<CloudUsage>;
+  /** Steering (`mc tell`): a new turn on the SAME agent, so it keeps its context and its branch. */
+  followup(ref: CloudRef, text: string): Promise<CloudLaunch>;
+  cancel(ref: CloudRef): Promise<void>;
+}
+
+export function isCloudBackend(b: AgentBackend | null | undefined): b is CloudBackend {
+  return !!b && (b as any).kind === "cloud";
+}
+
 // A pluggable coding-agent CLI. Adding a new harness = one module implementing this + a registry line.
 export interface AgentBackend {
   name: string;
+  /** See BackendKind. Omitted → "local": the runner spawns bin() as a child process. */
+  kind?: BackendKind;
   /** See BackendCapabilities. Omitted → the backend honors neither. */
   capabilities?: BackendCapabilities;
   bin(): string; // resolved binary path/name
