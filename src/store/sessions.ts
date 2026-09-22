@@ -323,6 +323,20 @@ export const sessions = {
   countBlocked(id: string) {
     db.prepare("UPDATE sessions SET blocked_count = COALESCE(blocked_count,0) + 1 WHERE id=?").run(id);
   },
+  /** Cloud terminals only (backend kind "cloud"): mirror the provider ids onto the session row so
+   *  the Desk card renders without joining `runs`. Undefined fields are skipped — a partial update
+   *  (e.g. just cloud_last_event_id on reconcile) must not null out the rest. */
+  setCloud(id: string, c: { cloud_agent_id?: string | null; cloud_run_id?: string | null; cloud_url?: string | null; cloud_last_event_id?: string | null }) {
+    const sets: string[] = [];
+    const params: any[] = [];
+    if (c.cloud_agent_id !== undefined) { sets.push("cloud_agent_id=?"); params.push(c.cloud_agent_id); }
+    if (c.cloud_run_id !== undefined) { sets.push("cloud_run_id=?"); params.push(c.cloud_run_id); }
+    if (c.cloud_url !== undefined) { sets.push("cloud_url=?"); params.push(c.cloud_url); }
+    if (c.cloud_last_event_id !== undefined) { sets.push("cloud_last_event_id=?"); params.push(c.cloud_last_event_id); }
+    if (!sets.length) return;
+    params.push(id);
+    db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id=?`).run(...params);
+  },
   setMeta(id: string, m: { title?: string; summary?: string; tags?: string[]; first_prompt?: string }) {
     const sets: string[] = [];
     const params: any[] = [];

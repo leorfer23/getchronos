@@ -61,6 +61,7 @@ import { focusEfficiencySnapshot } from "./focus.js";
 import { sessionArtifacts } from "./session-artifacts.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
+import { cloudRunFor, cloudSessionState, cloudVisibleRepos, followUpCloudSession, openCloudSession, wantsCloudBackend } from "./desk-cloud.js";
 import { openSession, resumeOpts, promoteToLead, leadPromotionError, attach, refreshClient, writeTo, resize, killSession, closeOutSession, focusEvents, isLive, sendInput, sessionActivity, sessionPrompt, sessionScreen, setClientRate, continueFromRun } from "./terminal.js";
 import { sessionUsage, snapshotUsage } from "./session-usage.js";
 import { applyHook, declare as declareStatus, sessionGoalReached, setProgress, statusOf } from "./term-status.js";
@@ -421,6 +422,22 @@ export function startServer() {
     }
   });
 
+  // Repos the Cursor GitHub App can see for this workspace — the spawn picker's disable/tooltip
+  // gate for cursor-cloud (cached server-side 10 min in src/desk-cloud.ts; Cursor's own endpoint
+  // allows 1 req/min, so an uncached passthrough would rate-limit the whole Desk).
+  api.get("/backends/cursor-cloud/repos", async (req, res) => {
+    const scope = callerScope(req);
+    if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    const wsId = scope.ws ?? (req.query.workspace_id as string | undefined);
+    if (!wsId) return res.status(400).json({ error: "workspace_id required" });
+    const { repos: list, error } = await cloudVisibleRepos(wsId);
+    res.json({
+      repos: (list ?? []).map((r) => r.fullName ?? r.url ?? r.name ?? "").filter(Boolean),
+      configured: list !== null || error !== null,
+      error,
+    });
+  });
+
   // Drive an interactive CLI login (opens a browser); resolves when the session is established.
   api.post("/backends/:name/login", async (req, res) => {
     const b = getBackend(req.params.name);
@@ -470,11 +487,17 @@ export function startServer() {
       // ownership is spawnLeadFields' `lead_id`, and OpenSessionSchema has no `lead_id` for zod to
       // let through from the body in the first place.
       const { slice, ...body } = req.body || {};
-      const s = await openSession({
+      const openOpts = {
         ...body,
         created_by: req.body?.created_by || "operator",
         ...spawnLeadFields(lead),
-      });
+      };
+      // A cloud terminal has no pty: it is a dispatched run on someone else's VM, not a spawned
+      // process (see src/desk-cloud.ts). Routed on the NAME, not just isCloudBackend(getBackend()) —
+      // a caller asking for "cursor-cloud" before its module is registered must fail closed here
+      // instead of silently falling through to openSession(), which would spawn a claude-code pty
+      // under a session row labeled cursor-cloud.
+      const s = wantsCloudBackend(body?.backend) ? await openCloudSession(openOpts) : await openSession(openOpts);
       // `--slice n` from a Lead: link the new worker to that slice of ITS OWN board and start it.
       // Stamped here, from the credential, for the same reason `lead_id` is — and silently ignored
       // without one, because a worker naming a slice number is naming a board it cannot see.
@@ -648,6 +671,15 @@ export function startServer() {
       return res.status(403).json({ error: "typing into a terminal is admin-gated (x-mc-admin)" });
     const s = sessions.get(req.params.id);
     if (!s || (lead && !leadMayType(lead, s))) return res.status(404).json({ error: "not found" });
+    // A cloud session has no tty to write keystrokes into — the composer's message maps to a
+    // follow-up turn on the same cloud agent instead (src/desk-cloud.ts). Keys/nav sequences make
+    // no sense there either, so only free text is honored.
+    if (s.cloud_agent_id) {
+      if (!req.body?.text) return res.status(409).json({ error: "a cloud terminal only takes text — no keys" });
+      const r = followUpCloudSession(s, req.body.text);
+      if ("error" in r) return res.status(409).json({ error: r.error });
+      return res.json({ ok: true, run_id: r.run_id });
+    }
     const err = sendInput(req.params.id, req.body, req.body.by || "operator");
     if (err) return res.status(err.startsWith("rate limit") ? 429 : 409).json({ error: err });
     res.json({ ok: true });
@@ -1004,6 +1036,12 @@ export function startServer() {
   api.post("/sessions/:id/kill", (req, res) => {
     const s = sessions.get(req.params.id);
     if (s && !checkScope(req, res, s.workspace_id)) return;
+    // No pid to signal — stop the underlying run instead, so the cloud agent actually stops
+    // instead of just going unwatched. killSession() below still ends the session row either way.
+    if (s?.cloud_agent_id) {
+      const run = cloudRunFor(s);
+      if (run) stopRun(run.id);
+    }
     killSession(req.params.id);
     res.json({ ok: true });
   });
@@ -1099,7 +1137,9 @@ export function startServer() {
         // through the one shared login. Enforced at spawn too (openSession); this just stops the
         // dialog offering something the daemon will refuse.
         backends: workspaceBackends(w.backends),
-        repos: repos.list(w.id).map((r) => ({ id: r.id, name: r.name, path: r.path })),
+        // git_remote rides along so the picker can tell whether cursor-cloud may offer this repo at
+        // all (GET /backends/cursor-cloud/repos checks whether the Cursor GitHub App can also see it).
+        repos: repos.list(w.id).map((r) => ({ id: r.id, name: r.name, path: r.path, git_remote: r.git_remote })),
       })),
       backends: listBackends(),
       // Every client's parked rows ride the same payload as the wall: the Desk repaints on every bus
@@ -1110,20 +1150,28 @@ export function startServer() {
       // header the wall is about to paint.
       launches: launches.list().filter((l) => !scope.ws || l.workspace_id === scope.ws),
       sessions: rows.map((s) => {
+        // sessionActivity() already defaults to {live:false, quiet:true, ...} for an id never in the
+        // pty registry, which is every cloud session — no pty exists to read bytes from. Its state
+        // comes off the run it dispatched instead (nothing headless runs `mc state` from inside a
+        // Cursor VM), and its liveness is the row's own status rather than a process.
         const act = sessionActivity(s.id);
-        const agent = getAgent(s.id);
+        const agent = s.cloud_agent_id ? undefined : getAgent(s.id);
+        const cloudRun = cloudRunFor(s);
+        const live = s.cloud_agent_id ? s.status === "live" : act.live;
         // Precedence: an agent that reported `blocked` (mc state) outranks byte-level silence, and a
         // ticked goal outranks both — for as long as the tick still describes it (goalReachedStands:
         // a terminal you gave more work to is not done, whatever it said ten minutes ago).
         const state = sessionGoalReached(s, act)
           ? "done"
-          : !act.live
+          : !live
             ? "ended"
-            : agent?.state === "blocked"
-              ? "blocked"
-              : act.quiet
-                ? "waiting"
-                : "working";
+            : s.cloud_agent_id
+              ? cloudSessionState(cloudRun)
+              : agent?.state === "blocked"
+                ? "blocked"
+                : act.quiet
+                  ? "waiting"
+                  : "working";
         const { lead_id, workers, board } = leadFields.get(s.id) ?? { lead_id: null, workers: 0, board: null };
         return {
           ...s,
@@ -1135,12 +1183,14 @@ export function startServer() {
           workers,
           // `{ done, total }` of this Lead's plan, or null when it has not written one.
           board,
-          // `state` is what the operator should FEEL about this terminal; `live` is whether a pty is
-          // actually attached. They diverge: a terminal whose goal was ticked reads "done" long after
-          // its process is gone, and the wall must not offer a dead pty a keyboard.
-          live: act.live,
+          // `state` is what the operator should FEEL about this terminal; `live` is whether the work
+          // is actually running — a pty for a local session, the row's own status for a cloud one.
+          // They diverge from `state`: a terminal whose goal was ticked reads "done" long after its
+          // process (or cloud run) is gone, and the wall must not offer a dead one a keyboard.
+          live,
           // What it has cost so far: turns, how full its context window is, dollars. Read from the
-          // CLI's own transcript, so it needs no cooperation from the agent.
+          // CLI's own transcript, so it needs no cooperation from the agent. A cloud run's cost is the
+          // provider's own total (runs.cost_usd, cost_estimated:false) — same column, no cloud branch.
           usage: sessionUsage(s.id),
           state_label: agent?.state_label ?? null,
           blocked_reason: agent?.blocked_reason ?? null,
@@ -1149,10 +1199,14 @@ export function startServer() {
           // A standing watch as the Desk draws it: the order, next look, and Robert's last words.
           watch: watchView(s),
           // What a quiet terminal is asking, read off its screen (desk-prompt.ts): the question and
-          // its options, so the wall can answer without a zoom. Null while it is working.
-          prompt: state === "waiting" || state === "blocked" ? sessionPrompt(s.id) : null,
+          // its options, so the wall can answer without a zoom. Null while it is working. Cloud
+          // sessions have no screen to read; their run status IS the state above.
+          prompt: !s.cloud_agent_id && (state === "waiting" || state === "blocked") ? sessionPrompt(s.id) : null,
           // The card, resolved once (term-status.ts): phase, one-liner, subagents, progress.
           status: statusOf(s.id),
+          // The PR the run opened, once it lands — the terminal card's other cloud link (cloud_url,
+          // the ☁ page itself, already rides on the row via sessions.setCloud).
+          pr_url: s.ticket_id ? tickets.get(s.ticket_id)?.pr_url ?? null : null,
         };
       }),
     });

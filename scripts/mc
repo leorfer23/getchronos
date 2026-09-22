@@ -123,7 +123,7 @@ function handHeaders() {
 
 const HELP = `mc — Mission Control backlog CLI
   mc ticket new --title "..." [--priority P1|P2|P3] [--body "..."] [--status backlog] [--parent GOAL-KEY]
-                [--workspace ID] [--repo ID] [--backend claude-code|cursor-agent] [--model m]
+                [--workspace ID] [--repo ID] [--backend claude-code|cursor-agent|cursor-cloud] [--model m]
                 (--parent GOAL-KEY files this ticket as a child of a goal → the goal's agents inherit context)
   mc ticket list [--workspace ID] [--status s]
   mc ticket get <KEY>
