@@ -1392,26 +1392,27 @@ html.js .hero-illustration {
   text-align: center;
 }
 
-/* living hero Desk scene */
+/* living hero Desk scene — matches app-fleet.png's own visual language:
+   filled halftone panels, not empty outlines. "That illustration, but alive." */
 
 .hero-live-desk {
   /* display is set only by the html.js rule above — this block must not
      set it unconditionally, or it wins the cascade (same specificity,
      later in source) over the no-js default regardless of the JS class. */
   position: relative;
-  aspect-ratio: 7 / 4;
-  border: 2px dotted var(--border);
+  aspect-ratio: 4 / 3;
   border-radius: var(--radius-lg);
-  background: var(--bg-2);
+  background: var(--bg-1);
   overflow: hidden;
-  padding: var(--space-3) var(--space-3) 0;
+  padding: var(--space-4);
   flex-direction: column;
+  gap: var(--space-4);
 }
 
 .live-lamp-glow {
   position: absolute;
-  inset: -30% -10% 30% -10%;
-  background: radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 62%);
+  inset: -30% -10% 40% -10%;
+  background: radial-gradient(circle at 50% 15%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 65%);
   animation: live-lamp-drift 8s ease-in-out infinite;
   pointer-events: none;
   z-index: 0;
@@ -1419,12 +1420,12 @@ html.js .hero-illustration {
 
 @keyframes live-lamp-drift {
   0%, 100% {
-    opacity: 0.55;
+    opacity: 0.5;
     transform: translateY(0);
   }
   50% {
-    opacity: 0.9;
-    transform: translateY(5px);
+    opacity: 0.85;
+    transform: translateY(4px);
   }
 }
 
@@ -1432,51 +1433,94 @@ html.js .hero-illustration {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 3px;
   flex: 1;
   min-height: 0;
 }
 
 .live-card {
-  background: var(--bg-1);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 6px 7px;
+  border-radius: 2px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  justify-content: center;
-  position: relative;
   overflow: hidden;
-  transition: border-color 600ms var(--ease-out);
+  position: relative;
+  transition: box-shadow 600ms var(--ease-out);
 }
 
-.live-bar {
-  display: block;
-  height: 4px;
-  width: 34%;
-  border-radius: 2px;
-  background-image: radial-gradient(var(--ink-secondary) 0.5px, transparent 0.6px);
+.live-card-titlebar {
+  flex-shrink: 0;
+  height: 9%;
+  min-height: 6px;
+  background: var(--bg-1);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 3px;
+}
+
+.live-dot {
+  width: 2.5px;
+  height: 2.5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.live-card-body {
+  flex: 1;
+  min-height: 0;
+  padding: 6% 8%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12%;
+}
+
+/* panel colour variants — each a filled halftone body over a solid base,
+   matching the amber/slate/green/red palette in app-fleet.png exactly */
+
+.live-card--amber .live-card-body {
+  background-color: #c98935;
+  background-image: radial-gradient(#a66f26 0.55px, transparent 0.65px);
   background-size: 3px 3px;
-  opacity: 0.8;
+}
+
+.live-card--slate .live-card-body {
+  background-color: #5b6b85;
+  background-image: radial-gradient(#46536a 0.55px, transparent 0.65px);
+  background-size: 3px 3px;
+}
+
+.live-card--green .live-card-body {
+  background-color: #7a9b7e;
+  background-image: radial-gradient(#607d64 0.55px, transparent 0.65px);
+  background-size: 3px 3px;
+}
+
+.live-card--red .live-card-body {
+  background-color: #b85450;
+  background-image: radial-gradient(#96403c 0.55px, transparent 0.65px);
+  background-size: 3px 3px;
 }
 
 .live-line {
   display: block;
-  height: 3px;
-  border-radius: 1.5px;
-  width: 72%;
-  background-image: radial-gradient(var(--ink-secondary) 0.5px, transparent 0.6px);
-  background-size: 3px 3px;
+  height: 12%;
+  min-height: 2px;
+  border-radius: 1px;
+  width: var(--w, 60%);
   transform-origin: left center;
   transform: scaleX(0);
-  animation: live-type 700ms steps(8, end) forwards, live-idle-pulse 4.2s ease-in-out infinite;
-  animation-delay: calc(var(--i, 0) * 220ms + 300ms), calc(var(--i, 0) * 220ms + 1400ms);
+  animation: live-type 650ms steps(8, end) forwards;
+  animation-delay: calc(var(--i, 0) * 140ms + 200ms);
 }
 
-.live-line:nth-child(3) {
-  width: 50%;
+.live-line--dark {
+  background: rgba(12, 12, 16, 0.55);
+}
+
+.live-line--light {
+  background: rgba(253, 246, 234, 0.92);
 }
 
 @keyframes live-type {
@@ -1485,32 +1529,15 @@ html.js .hero-illustration {
   }
 }
 
-@keyframes live-idle-pulse {
-  0%, 100% {
-    opacity: 0.75;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-.live-line-cursor {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.live-line-cursor .live-line {
-  width: 48%;
-}
-
 .live-cursor {
-  width: 4px;
-  height: 8px;
-  flex-shrink: 0;
+  display: inline-block;
+  width: 3px;
+  height: 7px;
+  margin-left: 2px;
   background: var(--accent);
+  vertical-align: middle;
   animation: live-blink 1s steps(2, jump-none) infinite;
-  animation-delay: 1.6s;
+  animation-delay: 1.4s;
 }
 
 @keyframes live-blink {
@@ -1519,64 +1546,52 @@ html.js .hero-illustration {
   }
 }
 
-.live-card--ok {
-  animation: live-card-ok 1s var(--ease-out) forwards;
-  animation-delay: 4.6s;
+.live-card--cursor {
+  animation: live-cursor-lift 900ms var(--ease-out) 1;
+  animation-delay: 1.2s;
 }
 
-@keyframes live-card-ok {
-  from {
-    border-color: var(--border);
+@keyframes live-cursor-lift {
+  0%, 100% {
+    box-shadow: 0 0 0 0 transparent;
   }
-  to {
-    border-color: #6fcf97;
-  }
-}
-
-.live-card--ok .live-bar {
-  animation: live-bar-ok 1s var(--ease-out) forwards;
-  animation-delay: 4.6s;
-}
-
-@keyframes live-bar-ok {
-  to {
-    background-image: none;
-    background-color: #6fcf97;
-    opacity: 1;
+  40% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent);
   }
 }
 
 .live-card--blocked {
-  animation: live-card-blocked 800ms var(--ease-out) forwards;
-  animation-delay: 6s;
+  animation: live-card-blocked 700ms var(--ease-out) forwards;
+  animation-delay: 5.4s;
 }
 
 @keyframes live-card-blocked {
-  from {
-    border-color: var(--border);
+  0% {
+    box-shadow: 0 0 0 0 transparent;
   }
-  to {
-    border-color: #e2604f;
+  100% {
+    box-shadow: 0 0 0 2px #e2604f;
   }
 }
 
 .live-badge {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 3px;
+  right: 3px;
+  z-index: 2;
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 7px;
   font-weight: 700;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
   color: #fdf6ea;
   background: #e2604f;
-  padding: 2px 5px;
+  padding: 1.5px 4px;
   border-radius: 2px;
   opacity: 0;
   transform: scale(0.7);
   animation: live-badge-in 500ms var(--ease-out) forwards;
-  animation-delay: 6.2s;
+  animation-delay: 5.6s;
 }
 
 @keyframes live-badge-in {
@@ -1586,32 +1601,39 @@ html.js .hero-illustration {
   }
 }
 
-.live-desk-bar {
-  position: relative;
-  z-index: 1;
-  height: 10px;
-  margin-top: 6px;
-  border-radius: 3px 3px 0 0;
-  background-image: radial-gradient(var(--accent) 0.6px, transparent 0.7px);
-  background-size: 4px 4px;
-  opacity: 0.5;
-}
-
 .live-desk-mascot {
   position: relative;
   z-index: 1;
+  flex-shrink: 0;
   display: flex;
+  align-items: flex-end;
   justify-content: center;
-  margin-top: -8px;
+  gap: var(--space-4);
 }
 
 .live-desk-mascot .mascot {
-  height: 132px;
+  height: 118px;
+}
+
+.live-desk-clock {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  padding-bottom: var(--space-2);
 }
 
 @media (max-width: 640px) {
+  .live-wall {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
   .live-desk-mascot .mascot {
-    height: 110px;
+    height: 96px;
+  }
+
+  .live-desk-clock {
+    font-size: 20px;
   }
 }
 
