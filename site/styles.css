@@ -1379,8 +1379,21 @@ input[type='range'].scrubber::-moz-range-thumb {
   display: none;
 }
 
+html.js .hero-visual {
+  /* Stretch the right column to match the left column's full height
+     (headline + copy + CTA + quickstart, ~840px) instead of the live
+     scene stopping at its own content height and leaving a dead gap
+     below Tock while the left column keeps going. */
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+}
+
 html.js .hero-live-desk {
   display: flex;
+  flex: 1;
+  min-height: 0;
+  aspect-ratio: auto;
   margin-bottom: var(--space-6);
 }
 
@@ -1410,9 +1423,12 @@ html.js .hero-illustration {
 }
 
 .live-lamp-glow {
+  /* inset:0, not an oversized box with negative insets — that box's own
+     hard rectangular edge was showing through as a clipped-looking band
+     right above the card wall once overflow:hidden cropped the rest of it. */
   position: absolute;
-  inset: -30% -10% 40% -10%;
-  background: radial-gradient(circle at 50% 15%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 65%);
+  inset: 0;
+  background: radial-gradient(ellipse 65% 45% at 50% 8%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 70%);
   animation: live-lamp-drift 8s ease-in-out infinite;
   pointer-events: none;
   z-index: 0;
