@@ -27,13 +27,19 @@ const WS_TOKEN_HEADERS = process.env.MC_WORKSPACE_TOKEN ? { "x-mc-workspace-toke
 const LEAD_HEADERS = process.env.MC_LEAD_TOKEN ? { "x-mc-lead": process.env.MC_LEAD_TOKEN } : {};
 
 function parse(argv) {
-  const pos = [], opt = {};
+  const pos = [], opt = {}, multi = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a.startsWith("--")) { const k = a.slice(2); const v = argv[i + 1]?.startsWith("--") ? "true" : argv[++i]; opt[k] = v ?? "true"; }
+    if (a.startsWith("--")) {
+      const k = a.slice(2); const v = argv[i + 1]?.startsWith("--") ? "true" : argv[++i];
+      opt[k] = v ?? "true";
+      // `multi` keeps EVERY value a flag was given, in order, so a repeatable flag (`--goal a
+      // --goal b` queues two goals) works without changing what `opt` means for the ninety others.
+      (multi[k] ||= []).push(v ?? "true");
+    }
     else pos.push(a);
   }
-  return { pos, opt };
+  return { pos, opt, multi };
 }
 async function req(method, path, body, headers) {
   const r = await fetch(API + path, {
@@ -217,6 +223,12 @@ const HELP = `mc — Mission Control backlog CLI
                              set THIS terminal's objective (the title on its Desk card). Yours from
                              then on — the daemon stops deriving the title from your Understanding.
   mc goal done | mc goal clear                  tick the objective off / drop it
+  mc goal add "<the next thing>" [--kind k]     queue another finish line behind this one
+  mc goal list                                  the whole queue: 2/4 done, and which one you are on
+  mc goal drop <N> | mc goal reopen [N]         remove item N / untick the last tick
+                             A terminal can hold several goals. Your card always shows the one you
+                             are ON; "mc goal done" ticks it and moves to the next, and only the
+                             last tick closes the terminal out.
   mc state <state> ["label"] [--on subagents|ci|terminal|command|robert|person|deploy|other] [--eta 10m] [--reason auth|approval]
                              what your card says. working = colour for your line · waiting = on something that
                              is not the operator (--on, --eta) · blocked = a wall you can't pass · decide = a
@@ -228,6 +240,8 @@ const HELP = `mc — Mission Control backlog CLI
   mc session list [--workspace ID]   live terminals + their tickets
   mc session new [--ticket KEY] [--backend b] [--model m] [--workspace ID] [--cwd p] [--title t]
                  [--goal "what it's for"] [--kind pr|investigation|qa] [--description "the brief"]
+                 (--goal repeats: --goal "open the PR" --goal "update the runbook" = one terminal,
+                  two finish lines, worked in order)
                  [--slice N]
                                      spawn another agent terminal (e.g. a helper on your ticket)
                                      --slice N (inside a Lead) links it to that slice of your board
@@ -577,7 +591,7 @@ async function heavy(argv) {
 (async () => {
   // Before parse(): `mc heavy -- npm test -- --help` must reach npm, not print mc's usage.
   if (process.argv[2] === "heavy") return await heavy(process.argv.slice(3));
-  const { pos, opt } = parse(process.argv.slice(2));
+  const { pos, opt, multi } = parse(process.argv.slice(2));
   // `workspace` is what the schema and the API call it, and renaming a column that is a foreign key
   // in nineteen tables buys nothing. But most people have one of these per repo or per product, not
   // per client, so `mc project` is the same command under the word they would reach for first.
@@ -622,6 +636,47 @@ async function heavy(argv) {
       });
       return console.log(`created ${t.key} — ${t.title}${parent ? ` (under goal ${parent.key})` : ""}`);
     }
+    // A terminal may be given MORE THAN ONE finish line. The card still shows one at a time — the
+    // first not ticked — and `mc goal done` walks the queue. `add` appends, `list` shows where you
+    // are, `drop N` removes item N, `reopen` unticks the last tick.
+    if (cmd === "goal" && ["add", "list", "drop", "reopen"].includes(pos[1])) {
+      const sid = process.env.MC_SESSION || die(`no MC_SESSION — \`mc goal ${pos[1]}\` only works inside a terminal session`);
+      const kind = opt.kind ? String(opt.kind).toLowerCase() : null;
+      if (kind && !["pr", "investigation", "qa"].includes(kind)) die("--kind must be pr, investigation or qa");
+      const show = (goals) => {
+        if (!goals.length) return console.log("(no goal list — this terminal has one goal, see `mc goal set`)");
+        const done = goals.filter((g) => g.done_at).length;
+        console.log(
+          `🎯 ${done}/${goals.length} done\n` +
+            goals.map((g) => `  ${g.seq}. ${g.done_at ? "✓" : "·"} ${g.text}${g.kind ? `  [${g.kind}]` : ""}`).join("\n"),
+        );
+      };
+      if (pos[1] === "list") return show((await req("GET", "/sessions/" + sid + "/goals")).goals);
+      if (pos[1] === "add") {
+        const text = pos.slice(2).join(" ") || die('mc goal add "<the next thing this terminal must finish>" [--kind pr|investigation|qa]');
+        const out = await req("POST", "/sessions/" + sid + "/goals", {
+          goals: [{ text, ...(kind ? { kind } : {}) }],
+          source: "agent",
+        });
+        return show(out.goals);
+      }
+      if (pos[1] === "drop") {
+        const n = Number(pos[2]);
+        if (!Number.isInteger(n) || n < 1) die("mc goal drop <N> — the number `mc goal list` prints");
+        const { goals } = await req("GET", "/sessions/" + sid + "/goals");
+        const g = goals.find((x) => x.seq === n) || die(`no goal ${n} — run \`mc goal list\``);
+        return show((await req("DELETE", `/sessions/${sid}/goals/${g.id}`)).goals);
+      }
+      // reopen: "that one is not done after all" — untick it and the card goes back to it.
+      const { goals } = await req("GET", "/sessions/" + sid + "/goals");
+      const n = Number(pos[2]);
+      const target = Number.isInteger(n) && n >= 1 ? goals.find((x) => x.seq === n) : [...goals].reverse().find((x) => x.done_at);
+      if (!target) {
+        await req("PATCH", "/sessions/" + sid, { goal_done: false });
+        return console.log("🎯 reopened");
+      }
+      return show((await req("PATCH", `/sessions/${sid}/goals/${target.id}`, { done: false })).goals);
+    }
     // `mc goal` is overloaded on purpose: with a KEY it reports a ticket-goal's completion, with
     // `set`/`done` it drives THIS terminal's objective — the line the operator reads on the Desk wall.
     if (cmd === "goal" && (pos[1] === "set" || pos[1] === "done" || pos[1] === "clear")) {
@@ -641,7 +696,15 @@ async function heavy(argv) {
         : pos[1] === "clear" ? { goal: null, goal_source: "agent" }
         : { goal_done: true };
       const s2 = await req("PATCH", "/sessions/" + sid, body);
-      return console.log(pos[1] === "done" ? `✅ goal reached — ${s2.goal ?? ""}` : `🎯 ${s2.goal ?? "(cleared)"}`);
+      if (pos[1] !== "done") return console.log(`🎯 ${s2.goal ?? "(cleared)"}`);
+      // With a queue behind it, a tick is a step, not the end: say which one is now on the card so
+      // the agent keeps going instead of writing its Summary three goals early.
+      const left = (s2.goals_total ?? 0) - (s2.goals_done ?? 0);
+      return console.log(
+        left > 0
+          ? `✅ ticked — ${s2.goals_done}/${s2.goals_total} done. Next: ${s2.goal ?? ""}`
+          : `✅ goal reached — ${s2.goal ?? ""}`,
+      );
     }
     if (cmd === "goal") {
       const t = await findByKey(pos[1] || process.env.MC_TICKET || die("goal needs a KEY"));
@@ -1543,6 +1606,10 @@ async function heavy(argv) {
         ticket_id: ticketId, workspace_id: ws || null, repo_id: repo || null,
         backend: opt.backend, model: opt.model, role: opt.role || "worker",
         cwd: opt.cwd, title: opt.title, goal: opt.goal,
+        // `--goal a --goal b --goal c` opens ONE terminal with three finish lines, worked in order.
+        // With a single --goal the list is left empty and the terminal is the one-goal card it
+        // always was.
+        goals: (multi.goal ?? []).length > 1 ? multi.goal : undefined,
         // Same three the Desk dialog sends: the daemon composes them into the terminal's first
         // prompt, so a terminal opened from here is already working rather than sitting at a cursor.
         goal_kind: opt.kind, description: opt.description,
@@ -1965,7 +2032,9 @@ async function heavy(argv) {
       if (kind && !["pr", "investigation", "qa"].includes(kind)) die("--kind must be pr, investigation or qa");
       const body =
         pos[1] === "done"
-          ? { goal_done: true }
+          // The operator (or Robert) calling a terminal done means the TERMINAL is done — with a
+          // queue behind the card that is every open goal, not only the one showing (§5d).
+          ? { goal_done: true, goal_done_all: true }
           : {
               goal: pos.slice(3).join(" ") || die('mc session goal <ID> "<title>" [--kind pr|investigation|qa]'),
               goal_source: process.env.MC_AGENT_NAME ? "agent" : "human",

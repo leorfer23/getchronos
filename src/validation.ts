@@ -24,6 +24,31 @@ const id = z.string().min(1);
 const nullableId = id.nullable();
 
 // ───────────────────────────── sessions ─────────────────────────────
+/** One item of a terminal's goal list — bare words, or words with a shape of work. */
+export const GoalItemSchema = z.union([
+  z.string().min(1).max(400),
+  z.object({
+    text: z.string().min(1).max(400),
+    kind: z.enum(["pr", "investigation", "qa"]).nullable().optional(),
+  }),
+]);
+/** `POST /sessions/:id/goals` — append to the list, or replace it outright. */
+export const SessionGoalsSchema = z.object({
+  goals: z.array(GoalItemSchema).min(1).max(20),
+  /** true = this IS the list now (`mc goal set` with several); default appends. */
+  replace: z.boolean().optional(),
+  source: z.enum(["seed", "auto", "agent", "human"]).optional(),
+});
+/** `PATCH /sessions/:id/goals/:goalId` — retitle, reshape, tick or untick one item. */
+export const SessionGoalPatchSchema = z
+  .object({
+    text: z.string().min(1).max(400).optional(),
+    kind: z.enum(["pr", "investigation", "qa"]).nullable().optional(),
+    source: z.enum(["seed", "auto", "agent", "human"]).optional(),
+    done: z.boolean().optional(),
+  })
+  .refine((o) => Object.keys(o).length > 0, { message: "nothing to patch" });
+
 export const OpenSessionSchema = z.object({
   ticket_id: nullableId.optional(),
   workspace_id: nullableId.optional(),
@@ -31,6 +56,9 @@ export const OpenSessionSchema = z.object({
   title: z.string().nullable().optional(),
   goal: z.string().max(400).nullable().optional(),
   goal_kind: z.enum(["pr", "investigation", "qa"]).nullable().optional(),
+  /** More than one finish line, in the order to work them (src/goals.ts). The first becomes the
+   *  card's goal; the rest queue behind it. Capped so a spawn cannot queue a novel. */
+  goals: z.array(GoalItemSchema).max(20).nullable().optional(),
   /** Who opened it — for the day's ledger. operator | robert | agent:<name> | ticket | cron. */
   created_by: z.string().max(60).nullable().optional(),
   /** Free-text brief typed in the spawn dialog. Becomes the terminal's first prompt (see deskSeed). */
@@ -119,6 +147,10 @@ export const UsageReportSchema = z.object({
 export const SessionPatchSchema = z.object({
   goal: z.string().max(400).nullable().optional(),
   goal_done: z.boolean().optional(),
+  /** With `goal_done: true` on a terminal that has a goal LIST: tick every open item, not just the
+   *  one on the card. This is the operator closing the terminal ("done is done"), where the agent's
+   *  own `mc goal done` only ever ticks the one it is on. */
+  goal_done_all: z.boolean().optional(),
   goal_kind: z.enum(["pr", "investigation", "qa"]).nullable().optional(),
   // Who is renaming this terminal. Omitted = the operator (the card's inline edit), which locks the
   // goal against the automatic deriver; agents pass "agent" via `mc goal set`.

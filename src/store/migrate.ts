@@ -1689,6 +1689,29 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
         "ALTER TABLE sessions ADD COLUMN focus_only INTEGER NOT NULL DEFAULT 0 CHECK (focus_only IN (0,1))",
       ),
   },
+  {
+    version: 129,
+    name: "session_goals — a terminal may be given more than one finish line",
+    // A terminal used to have exactly one goal, in three columns on `sessions`. From every surface's
+    // point of view it still does: `sessions.goal` / `goal_kind` / `goal_done_at` keep mirroring the
+    // CURRENT goal (the first one not ticked). This table is the list behind that mirror — the
+    // operator can queue "open the PR", then "update the runbook", and the card still shows one
+    // thing at a time. A terminal with a single goal never needs a row here (src/store/sessions.ts
+    // seeds one lazily the first time a second goal is added), so nothing has to be backfilled.
+    up: (db) =>
+      db.exec(`
+      CREATE TABLE IF NOT EXISTS session_goals (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        kind TEXT,
+        source TEXT,
+        done_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_session_goals_session ON session_goals(session_id, seq);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
