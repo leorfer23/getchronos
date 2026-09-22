@@ -4,6 +4,7 @@ import { CONFIG } from "./config.js";
 import { sandboxWrap } from "./sandbox.js";
 import { childEnv } from "./child-env.js";
 import { getBackend } from "./backends/index.js";
+import { isCloudBackend } from "./backends/types.js";
 import { workspaces } from "./store.js";
 import type { Job, Workspace } from "./types.js";
 
@@ -37,11 +38,26 @@ export function verdictBlocks(mode: VerifyMode, verdict: Verdict): boolean {
   return mode === "strict" || !verdict.inconclusive;
 }
 
+/**
+ * The verifier is a separate local judge — it spawns its OWN process to read the goal + the run's
+ * result, and does not need to be the same backend as the run itself. A cloud run's own backend
+ * genuinely has no local process (`oneShot()` is required to throw — see CloudBackend in
+ * backends/types.ts), so resolving a cloud job's verifier onto `job.backend` crashed the run at the
+ * finish line the instant `job.verify` was on. When the run's backend is cloud, verify on the
+ * workspace's `review_backend` instead (falling back to claude-code if that is unset, or itself
+ * cloud) — a local backend picking the verdict, same as every other backend already does.
+ */
+export function verifierBackendName(ws: Workspace | undefined, job: Job): string {
+  if (!isCloudBackend(getBackend(job.backend))) return ws?.review_backend || job.backend;
+  if (ws?.review_backend && !isCloudBackend(getBackend(ws.review_backend))) return ws.review_backend;
+  return "claude-code";
+}
+
 // LLM-as-judge: a second Claude inspects the goal + the run's result (and may read the
 // working dir) and decides whether the goal was actually achieved.
 export async function verify(job: Job, resultSummary: string): Promise<Verdict> {
   const ws = job.workspace_id ? workspaces.get(job.workspace_id) : undefined;
-  const backend = getBackend(ws?.review_backend || job.backend);
+  const backend = getBackend(verifierBackendName(ws, job));
   const model = ws?.review_model || CONFIG.defaultModel; // cheap/fast judge (sonnet), not the opus manager
   const profileDir = ws?.config_dir ?? CONFIG.profiles[job.profile] ?? CONFIG.profiles.claude;
   const denyDirs = job.workspace_id ? workspaces.isolationDenyDirs(job.workspace_id) : [];

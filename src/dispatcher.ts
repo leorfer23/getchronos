@@ -1,6 +1,8 @@
 import { CONFIG } from "./config.js";
 import { bus } from "./bus.js";
 import { backendAllowed, getBackend, validateSpawnTarget, workspaceBackends } from "./backends/index.js";
+import { isCloudBackend } from "./backends/types.js";
+import type { CloudRef } from "./backends/types.js";
 import { jobs, repos, runs, tickets, workspaces } from "./store.js";
 import { AUTH_ERR_RE, execute, isReadOnlyRun } from "./runner.js";
 import { openSession } from "./terminal.js";
@@ -8,7 +10,7 @@ import { notify, esc } from "./telegram/api.js";
 import { burnHalted } from "./burn-guard.js";
 import { gateDispatch } from "./quota-gate.js";
 import { renderReplay } from "./replay.js";
-import type { Job, RunStatus } from "./types.js";
+import type { Job, Run, RunStatus } from "./types.js";
 
 // Single choke point for every trigger source. Enforces guardrails, then runs.
 const queue: Array<{ runId: string; jobId: string; depth: number }> = [];
@@ -19,6 +21,14 @@ let active = 0;
 let executor: typeof execute = execute;
 export function setExecutor(fn: typeof execute | null) {
   executor = fn ?? execute;
+}
+
+// Same pattern for stopCloudRun's backend lookup: swappable so tests can register a hand-written
+// fake CloudBackend without needing it in the real registry (src/backends/index.ts, not owned by
+// this file's tests — see runner.ts's cloud-reconcile.ts for the identical seam).
+let resolveStopBackend: typeof getBackend = getBackend;
+export function setStopBackendResolver(fn: typeof getBackend | null) {
+  resolveStopBackend = fn ?? getBackend;
 }
 
 // Cap on chained on_success/on_failure hops to stop a misconfigured A→B→A loop from running forever.
@@ -367,6 +377,11 @@ export function stopRun(runId: string): boolean {
     bus.publish({ topic: "run.ended", run_id: runId, status: "killed" });
     return true;
   }
+  // A cloud run has no pid — its process lives on the provider's VM, still billing until the
+  // provider itself is told to stop. See stopCloudRun: the row is marked `killed` only once
+  // `cancel()` actually confirms, not optimistically. Only while still running — a finished cloud
+  // run keeps its cloud_agent_id/cloud_run_id forever, and there is nothing left to cancel.
+  if (run.status === "running" && run.cloud_agent_id && run.cloud_run_id) return stopCloudRun(run);
   if (!run.pid) return false;
   try {
     process.kill(run.pid, "SIGTERM");
@@ -380,6 +395,39 @@ export function stopRun(runId: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Stop a cloud run. A stop that visibly succeeds while the Cursor VM keeps working (and billing)
+ * is worse than one that errors — so, unlike the local SIGTERM path, this does NOT mark the row
+ * `killed` until `backend.cancel(ref)` actually confirms. On failure it says so loudly (a run event
+ * + a console error) and leaves the row's status untouched, so a still-live run keeps reading as
+ * still-live instead of lying `killed`.
+ *
+ * The HTTP layer (`POST /runs/:id/kill`, api.ts) reads this return value synchronously — cancel() is
+ * a network call, so `true` here means "the stop was accepted and is in flight", the same contract
+ * the local SIGTERM path already has (that also marks `killed` before the process has actually
+ * exited). The row's status is the trustworthy signal either way.
+ */
+function stopCloudRun(run: Run): boolean {
+  const job = jobs.get(run.job_id);
+  if (!job) return false;
+  const backend = resolveStopBackend(job.backend);
+  if (!isCloudBackend(backend)) return false;
+  const ref: CloudRef = { agentId: run.cloud_agent_id!, runId: run.cloud_run_id!, workspaceId: job.workspace_id ?? null };
+  void (async () => {
+    try {
+      await backend.cancel(ref);
+      runs.patch(run.id, { status: "killed", ended_at: new Date().toISOString() });
+      bus.publish({ topic: "run.ended", run_id: run.id, status: "killed", job_name: job.name ?? undefined, ticket_id: job.ticket_id ?? null, workspace_id: job.workspace_id ?? null });
+    } catch (e: any) {
+      const msg = `cloud cancel failed — the provider VM may still be running (and billing): ${e?.message ?? e}`;
+      console.error(`[stop] ${run.id.slice(0, 8)}: ${msg}`);
+      runs.patch(run.id, { error: msg });
+      bus.publish({ topic: "run.event", run_id: run.id, event: { type: "stop_failed", error: msg } });
+    }
+  })();
+  return true;
 }
 
 export function status() {
