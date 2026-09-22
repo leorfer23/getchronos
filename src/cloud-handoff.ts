@@ -19,8 +19,9 @@
 import fs from "node:fs";
 import { execFileTimed } from "./exec.js";
 import { bus } from "./bus.js";
-import { db, jobs, repos, runs, sessions, tickets } from "./store.js";
+import { jobs, repos, runs, sessions, tickets } from "./store.js";
 import { dispatch } from "./dispatcher.js";
+import { isGitHubRemote } from "./backends/cursor-cloud.js";
 import { getBody } from "./tickets.js";
 import { digestText, killSession } from "./terminal.js";
 import type { Repo, Session, Ticket } from "./types.js";
@@ -46,12 +47,6 @@ function toHttpsUrl(remote: string): string | null {
   m = s.match(/^(?:https?|ssh):\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/i);
   if (m) return `https://${m[1]}/${m[2]}`;
   return null;
-}
-
-function isGitHubRemote(remote: string | null | undefined): boolean {
-  if (!remote) return false;
-  const https = toHttpsUrl(remote);
-  return !!https && https.toLowerCase().startsWith("https://github.com/");
 }
 
 /** Fails closed: no remote, or anything this parser cannot positively identify, is never "ours". */
@@ -121,8 +116,17 @@ export async function prepareHandoff(sessionId: string): Promise<HandoffPlan> {
   if (!session.worktree_path) return refuse("session has no claimed worktree — nothing to hand off");
   if (!fs.existsSync(session.worktree_path)) return refuse(`worktree is gone from disk: ${session.worktree_path}`);
 
-  const repo: Repo | undefined = session.repo_id ? repos.get(session.repo_id) : undefined;
-  if (!repo || !repo.git_remote) return refuse("session's repo has no GitHub remote registered");
+  // Resolved via the TICKET's repo, not session.repo_id: dispatcher.ts's validateSpawnTarget gate
+  // for cursor-cloud can only resolve a job's repo through job.ticket_id -> ticket.repo_id (jobs
+  // carry no repo_id of their own) — so that is the repo that actually governs whether dispatch()
+  // will accept this handoff, and refusing here on the same resolution avoids discovering the gap
+  // only after the local terminal has already been ended.
+  if (!session.ticket_id)
+    return refuse("session has no ticket — cursor-cloud can only resolve its target repo through a ticket in Phase 1");
+  const ticket = tickets.get(session.ticket_id);
+  if (!ticket) return refuse("session's ticket no longer exists");
+  const repo: Repo | undefined = ticket.repo_id ? repos.get(ticket.repo_id) : undefined;
+  if (!repo || !repo.git_remote) return refuse("ticket's repo has no GitHub remote registered");
   if (!isGitHubRemote(repo.git_remote)) return refuse(`repo remote is not on GitHub: ${repo.git_remote}`);
   // Phase 1 (see the rollout plan): GitHub + delivery=pr only.
   if (repo.delivery !== "pr") return refuse(`repo delivery is "${repo.delivery}", not "pr" — handoff needs delivery=pr`);
@@ -140,6 +144,8 @@ export async function prepareHandoff(sessionId: string): Promise<HandoffPlan> {
     );
   if (!files.length)
     warnings.push("no uncommitted changes in the worktree — the handoff branch will carry only what is already committed");
+  if (session.repo_id && session.repo_id !== ticket.repo_id)
+    warnings.push("session's own repo differs from its ticket's repo — the ticket's repo is what cursor-cloud will actually resolve");
 
   return {
     sessionId,

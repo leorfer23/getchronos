@@ -9,7 +9,9 @@ import { createTicket } from "./tickets.js";
 import { prepareHandoff, executeHandoff, isOwnRepo } from "./cloud-handoff.js";
 
 beforeEach(() => {
-  db.exec("DELETE FROM run_events; DELETE FROM runs; DELETE FROM jobs; DELETE FROM sessions; DELETE FROM repos; DELETE FROM tickets; DELETE FROM workspaces;");
+  // Children before parents: tickets.repo_id -> repos.id is enforced (no ON DELETE SET NULL there,
+  // unlike jobs.ticket_id), so repos must go after tickets, not before.
+  db.exec("DELETE FROM run_events; DELETE FROM runs; DELETE FROM jobs; DELETE FROM sessions; DELETE FROM tickets; DELETE FROM repos; DELETE FROM workspaces;");
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -48,10 +50,20 @@ function tmpWorktree(remote: string): string {
 }
 
 let n = 0;
-function fixture(over: { gitRemote?: string; delivery?: "commit" | "pr"; noWorktree?: boolean } = {}) {
+// noTicket exists only to exercise that specific refusal — dispatcher.ts's validateSpawnTarget can
+// only resolve cursor-cloud's repo via job.ticket_id -> ticket.repo_id (jobs carry no repo_id of
+// their own), so every other fixture needs a real ticket or prepareHandoff refuses before reaching
+// whatever else the test is actually about.
+function fixture(over: { gitRemote?: string; delivery?: "commit" | "pr"; noWorktree?: boolean; noTicket?: boolean } = {}) {
   n++;
   const remote = tmpBareRemote();
   const wt = over.noWorktree ? null : tmpWorktree(remote);
+  // Deliberately NOT `wt`: in production repo.path is the main checkout, a different directory from
+  // a session's own per-ticket worktree — createTicket() writes its .md file under repo.path, and if
+  // that were `wt` here, the ticket file would show up as an untracked file in the session's own
+  // worktree, which is not what happens for real. Just needs to be writable; createTicket() doesn't
+  // require it to be a git repo.
+  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "chronos-handoff-repo-"));
   const ws = workspaces.create({
     slug: `handoff${n}`,
     name: "H",
@@ -61,21 +73,35 @@ function fixture(over: { gitRemote?: string; delivery?: "commit" | "pr"; noWorkt
   const repo = repos.create({
     workspace_id: ws.id,
     name: `repo${n}`,
-    path: wt ?? "/nonexistent",
+    path: repoDir,
     git_remote: over.gitRemote ?? "https://github.com/leorfer23/getchronos",
     default_branch: "main",
     delivery: over.delivery ?? "pr",
   } as any);
-  const session = sessions.create({ workspace_id: ws.id, repo_id: repo.id, cwd: wt ?? "/tmp", backend: "claude-code", goal: "ship the thing" });
+  const ticket = over.noTicket ? undefined : createTicket({ workspace_id: ws.id, repo_id: repo.id, title: "ship the thing" });
+  const session = sessions.create({
+    workspace_id: ws.id,
+    repo_id: repo.id,
+    ticket_id: ticket?.id,
+    cwd: wt ?? "/tmp",
+    backend: "claude-code",
+    goal: "ship the thing",
+  });
   if (wt) sessions.setWorktree(session.id, { path: wt, branch: "main" });
-  return { ws, repo, session: sessions.get(session.id)!, wt, remote };
+  return { ws, repo, ticket, session: sessions.get(session.id)!, wt, remote };
 }
 
 async function waitForRun(runId: string, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const r = runs.get(runId)!;
-    if (r.status !== "queued" && r.status !== "running") return r;
+    if (r.status !== "queued" && r.status !== "running") {
+      // A ticket-linked run's post-exit review queueing (runner.ts) fires off the child process's
+      // own exit event, a tick or two after runs.status turns terminal — wait it out here so it
+      // never lands after the NEXT test's beforeEach has already wiped the ticket it needs.
+      await new Promise((res) => setTimeout(res, 100));
+      return r;
+    }
     if (Date.now() > deadline) throw new Error(`run ${runId} still ${r.status} after ${timeoutMs}ms`);
     await new Promise((res) => setTimeout(res, 25));
   }
@@ -150,6 +176,12 @@ describe("prepareHandoff", () => {
     assert.match(plan.refused!, /no claimed worktree/);
   });
 
+  test("refuses cleanly: no ticket — dispatch can only resolve cursor-cloud's repo through one", async () => {
+    const { session } = fixture({ noTicket: true });
+    const plan = await prepareHandoff(session.id);
+    assert.match(plan.refused!, /no ticket/);
+  });
+
   test("refuses cleanly: repo has no GitHub remote", async () => {
     const { session } = fixture({ gitRemote: "https://gitlab.com/leorfer23/getchronos" });
     const plan = await prepareHandoff(session.id);
@@ -217,21 +249,30 @@ describe("executeHandoff", () => {
     await waitForRun(result.runId!); // drain the mock run before beforeEach wipes its tables
   });
 
-  test("when the target backend is not registered, dispatch refuses cleanly and the branch is not lost", async () => {
-    const { session, wt } = fixture({ gitRemote: "https://github.com/leorfer23/getchronos" });
+  test("no ticket: refused before touching the terminal or the worktree at all", async () => {
+    // A regression guard for the exact gap that made this refusal necessary: it must be caught by
+    // prepareHandoff, not discovered after dispatch() rejects a job whose local terminal is already
+    // dead. See the "no ticket" refusal above and the comment on it in cloud-handoff.ts.
+    const { session, wt } = fixture({ noTicket: true });
     fs.writeFileSync(path.join(wt!, "wip.txt"), "work in progress\n");
 
-    // Default backendName ("cursor-cloud") is not registered in this worktree (PR3's backend module
-    // lands on a parallel branch) — dispatch()'s own validateSpawnTarget refuses before touching the
-    // executor at all, exactly the fail-closed path production hits until that PR lands.
     const result = await executeHandoff(session.id);
 
     assert.equal(result.ok, false);
-    assert.match(result.error!, /unknown backend: cursor-cloud/);
-    assert.equal(result.branch, `chronos/handoff/${session.id.slice(0, 8)}`, "the pushed branch is still reported back");
-    assert.ok(result.pushedSha, "the push itself succeeded — only dispatch refused");
-    assert.equal(sessions.get(result.newSessionId!)!.status, "ended", "placeholder torn down, nothing left live");
+    assert.match(result.error!, /no ticket/);
+    assert.equal(sessions.get(session.id)!.status, "live", "refused before touching anything");
+    assert.equal(jobs.list().length, 0, "no job created");
+    const status = execFileSync("git", ["-C", wt!, "status", "--porcelain"], { encoding: "utf8" });
+    assert.ok(status.includes("wip.txt"), "worktree untouched — the WIP file is still just an uncommitted change");
   });
+
+  // There is no live-dispatch test for the production default (backendName omitted -> "cursor-cloud",
+  // now genuinely registered since PR1 landed #26): dispatch() would pass validateSpawnTarget on a
+  // fully valid fixture and reach the real execute() with the real cursorCloudBackend, which is
+  // exactly what CLAUDE.md's "never call the real execute() with a real backend in tests" rule
+  // exists to prevent (PR2's runner.ts kind==="cloud" branch hasn't landed yet, so execute() would
+  // still try to call cursorCloudBackend.buildArgs(), which deliberately throws). The default string
+  // itself is a one-line, directly-reviewable piece of cloud-handoff.ts.
 
   test("a successful handoff pushes, dispatches, ends the local session, links the run, and leaves the worktree in place", async () => {
     const { session, wt } = fixture({ gitRemote: "https://github.com/leorfer23/getchronos" });
@@ -269,8 +310,8 @@ describe("executeHandoff", () => {
 
 describe("ticket key/title/body reach the cloud prompt", () => {
   test("folded into the dispatched job's goal", async () => {
-    const { session, ws, wt } = fixture({ gitRemote: "https://github.com/leorfer23/getchronos" });
-    const ticket = createTicket({ workspace_id: ws.id, title: "Fix the thing", context: "Do the specific thing described here." });
+    const { session, ws, repo, wt } = fixture({ gitRemote: "https://github.com/leorfer23/getchronos" });
+    const ticket = createTicket({ workspace_id: ws.id, repo_id: repo.id, title: "Fix the thing", context: "Do the specific thing described here." });
     db.prepare("UPDATE sessions SET ticket_id=? WHERE id=?").run(ticket.id, session.id);
     fs.writeFileSync(path.join(wt!, "wip.txt"), "wip\n");
 
