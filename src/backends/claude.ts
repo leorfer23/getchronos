@@ -68,14 +68,14 @@ export const claudeBackend: AgentBackend = {
     return JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n";
   },
 
-  oneShot({ prompt, system, model, configDir, resumeSessionId, allowedTools, maxBudgetUsd, mcpConfig }: OneShotOpts): SpawnSpec {
+  oneShot({ prompt, system, model, configDir, resumeSessionId, allowedTools, maxBudgetUsd, mcpConfig, inheritProfileMcp }: OneShotOpts): SpawnSpec {
     const args = ["-p", prompt, "--output-format", "stream-json", "--verbose"];
     if (system) args.push("--append-system-prompt", system);
     if (allowedTools !== undefined) args.push("--allowed-tools", allowedTools);
-    // strict stays unconditional (same as the warm path): only the bundle asked for here loads,
-    // never whatever the profile dir happens to have configured.
+    // strict by default (same as the warm path): only the bundle asked for here loads, never
+    // whatever the profile dir happens to have configured. inheritProfileMcp is Robert's exception.
     if (mcpConfig) args.push("--mcp-config", mcpConfig);
-    args.push("--strict-mcp-config");
+    if (!inheritProfileMcp) args.push("--strict-mcp-config");
     if (maxBudgetUsd != null) args.push("--max-budget-usd", String(maxBudgetUsd));
     args.push("--dangerously-skip-permissions");
     if (model) args.push("--model", model);

@@ -55,6 +55,9 @@ export interface OneShotOpts {
   // JSON for the CLI's MCP config (AgentDef.mcp). Honored where capabilities.mcp; ignored elsewhere,
   // so a caller passes the agent's declared bundle unconditionally and asks the backend what landed.
   mcpConfig?: string;
+  // Robert only: load the config dir's own MCP servers (drop --strict-mcp-config), because a remote
+  // server's OAuth token lives in that dir and no bundle can carry it. See WarmOpts.inheritProfileMcp.
+  inheritProfileMcp?: boolean;
 }
 
 export interface SpawnSpec {

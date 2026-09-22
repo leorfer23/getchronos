@@ -1,6 +1,8 @@
 import { humanizeStep, type RobertStep } from "../robert-steps.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import os from "node:os";
+import fs from "node:fs";
+import path from "node:path";
 import readline from "node:readline";
 import { randomUUID } from "node:crypto";
 import { noteClaudeStreamEvent } from "../usage-meter.js";
@@ -799,8 +801,9 @@ export function spawnManager(opts: {
     configDir: profileDir,
     cwd: process.cwd(),
     resumeSessionId: opts.resumeSessionId,
-    allowedTools: MANAGER_TOOLS,
+    allowedTools: [MANAGER_TOOLS, ...profileMcpTools(profileDir)].join(","),
     maxBudgetUsd: CONFIG.agent.maxBudgetUsd,
+    inheritProfileMcp: true, // the chief of everything runs on the operator's own MCP inventory
   });
 
   const { cmd, cmdArgs } = sandboxWrap("guard", process.cwd(), [], profileDir, [], spec.cmd, spec.args);
@@ -898,6 +901,20 @@ export function scanUiActions(text: string): { reply: string; actions: UiAction[
 // The operator's own Claude profile — used by Telegram, and by the web chat when no workspace is selected.
 const DEFAULT_PROFILE_DIR = CONFIG.profiles[CONFIG.agent.profile] ?? CONFIG.profiles.claude;
 
+// The MCP servers a Claude profile dir has configured, as --allowed-tools entries. `mcp__<server>`
+// allows every tool that server exposes; a server listed here but not logged in simply contributes
+// no tools, so an expired OAuth degrades to "that tool is missing" rather than to a failed spawn.
+// Only Robert uses this (see WarmOpts.inheritProfileMcp): he is the one agent whose tool inventory
+// is meant to be the operator's own, not a bundle the repo pins.
+export function profileMcpTools(profileDir: string): string[] {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(profileDir, ".claude.json"), "utf8"));
+    return Object.keys(cfg?.mcpServers ?? {}).map((name) => `mcp__${name}`);
+  } catch {
+    return []; // no config dir, or not readable — same as no servers
+  }
+}
+
 // Streamed turn progress: kind "text" = reply delta, "thinking" = reasoning delta, "tool" = a tool
 // starting (text = one-line description), "tool_done" = the most recent tool returned.
 
@@ -928,6 +945,12 @@ type WarmOpts = {
   // JSON for --mcp-config (AgentDef.mcp). Absent → --strict-mcp-config with nothing to load, i.e.
   // no MCP servers at all, which is what every executive got before agents could declare a bundle.
   mcpConfig?: string;
+  // Robert only: run with whatever the profile dir itself has configured instead of a repo bundle.
+  // Every other executive is strict on purpose (a bundle or nothing), but the chief of everything is
+  // the operator's own seat: his MCP inventory is the config dir's, and it has to stay there because
+  // a remote server's OAuth token is stored per config dir — a bundle in the repo could only carry
+  // the spec, never the login, and several of these servers' specs carry a bearer token besides.
+  inheritProfileMcp?: boolean;
 };
 
 export class WarmManager {
@@ -985,11 +1008,14 @@ export class WarmManager {
       "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
       "--include-partial-messages", // stream_event deltas → per-sentence voice streaming (web onDelta)
       "--append-system-prompt", this.opts.system,
-      "--allowed-tools", this.opts.allowedTools ?? "Bash,Read",
-      // strict stays unconditional: whatever the profile dir happens to have configured is never
-      // what an executive runs with — only the bundle her AGENT.md asked for, or nothing.
+      "--allowed-tools", [this.opts.allowedTools ?? "Bash,Read", ...(this.opts.inheritProfileMcp ? profileMcpTools(profileDir) : [])].join(","),
+      // strict for every executive: whatever the profile dir happens to have configured is never
+      // what she runs with — only the bundle her AGENT.md asked for, or nothing. Robert is the one
+      // exception (inheritProfileMcp): dropping strict is what lets the config dir's own servers
+      // load WITH the OAuth tokens that live in that same dir, which no repo bundle can carry.
       ...(this.opts.mcpConfig ? ["--mcp-config", this.opts.mcpConfig] : []),
-      "--strict-mcp-config", "--dangerously-skip-permissions",
+      ...(this.opts.inheritProfileMcp ? [] : ["--strict-mcp-config"]),
+      "--dangerously-skip-permissions",
       "--model", this.opts.model,
       // budget covers the whole process lifetime (up to maxTurns turns), not one message
       "--max-budget-usd", String(CONFIG.agent.maxBudgetUsd * this.opts.maxTurns),
@@ -1317,6 +1343,7 @@ function webManager(key: string, wsId: string | null): WarmManager {
       model: getWebModel(),
       profileDir: webProfileDir(wsId),
       allowedTools: MANAGER_TOOLS,
+      inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
       // MC_AGENT_NAME signs what he does through `mc` — a keystroke he types into someone
     // else's terminal lands in the activity trail as "robert", not as the operator.
     // MC_WORKSPACE is which client THIS desk Robert belongs to: there is one warm manager per
@@ -1636,6 +1663,7 @@ function warmForChat(chat: number): WarmManager {
       system: personaSystem("robert", robertPrompt("telegram")),
       model: CONFIG.agent.model,
       allowedTools: MANAGER_TOOLS,
+      inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
       resumeSessionId: getChatSession(chat) ?? null,
       onSessionId: (id) => setChatSession(chat, id),
       onStaleResume: () => clearChatSession(chat),
@@ -1675,6 +1703,7 @@ function warmForChatWs(chat: number, wsId: string): WarmManager {
       system: personaSystem("robert", robertPrompt("telegram"), agentContext(wsId), briefsBlock(wsId)),
       model: CONFIG.agent.model,
       allowedTools: MANAGER_TOOLS,
+      inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
       profileDir: webProfileDir(wsId), // the workspace's account + skills + MCP
       // deliberately no extraEnv: without CHRONOS_ADMIN the agent can only read and PROPOSE
       resumeSessionId: getWebSession(key),
