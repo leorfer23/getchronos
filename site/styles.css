@@ -512,6 +512,23 @@ section {
   max-width: 46ch;
 }
 
+.hero-capacity-claim {
+  margin-top: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+  max-width: 46ch;
+}
+
+.hero-supporting-line {
+  margin-top: var(--space-5);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 16px;
+  color: var(--ink-tertiary);
+}
+
 .hero-actions {
   margin-top: var(--space-6);
   display: flex;
@@ -599,7 +616,10 @@ section {
 }
 
 .rail-mascot {
-  height: 58px;
+  /* Above the mascot's own documented 96px halftone-legibility floor —
+     below it the dot screen "turns to mud" and the animation reads as
+     invisible, which is what happened at the old 58px. */
+  height: 104px;
   margin: 0 auto var(--space-3);
 }
 
@@ -1317,6 +1337,14 @@ input[type='range'].scrubber::-moz-range-thumb {
 
 /* copy pass v2: hero-block, fact lists, compare, desk centerpiece */
 
+.hero {
+  /* No override here fell through to the generic 96px section padding,
+     stacked with .night-intro's own 48px top padding below = ~226px of
+     dead air before the headline. Tightened so the first screen is full. */
+  padding-top: var(--space-6);
+  padding-bottom: var(--space-12);
+}
+
 .hero-grid-v2 {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
@@ -1330,25 +1358,299 @@ input[type='range'].scrubber::-moz-range-thumb {
      has no matching named area in .hero-grid-v2 and corrupts its implicit
      tracks. Reset back to normal auto-placement here. */
   grid-area: auto;
+  /* Same class also sets padding-top:48px for its other use — not needed
+     here now that .hero itself is tight. */
+  padding-top: 0;
 }
 
 .hero-visual {
   min-width: 0;
-  padding-top: var(--space-12);
 }
 
 .hero-illustration {
-  aspect-ratio: 4 / 5;
+  /* Matches app-fleet-scale.png's real 1344x768 (7:4) so nothing crops. */
+  aspect-ratio: 7 / 4;
   margin-bottom: var(--space-6);
+}
+
+/* Default (no JS): show the static illustration, hide the live scene.
+   The inline <script> in <head> flips html.no-js -> html.js before paint. */
+.hero-live-desk {
+  display: none;
+}
+
+html.js .hero-visual {
+  /* Stretch the right column to match the left column's full height
+     (headline + copy + CTA + quickstart, ~840px) instead of the live
+     scene stopping at its own content height and leaving a dead gap
+     below Tock while the left column keeps going. */
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+}
+
+html.js .hero-live-desk {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  aspect-ratio: auto;
+  margin-bottom: var(--space-6);
+}
+
+html.js .hero-illustration {
+  display: none;
 }
 
 .hero-clock-overlay {
   text-align: center;
 }
 
-.hero-mascot {
-  height: 48px;
-  margin: 0 auto var(--space-3);
+/* living hero Desk scene — matches app-fleet.png's own visual language:
+   filled halftone panels, not empty outlines. "That illustration, but alive." */
+
+.hero-live-desk {
+  /* display is set only by the html.js rule above — this block must not
+     set it unconditionally, or it wins the cascade (same specificity,
+     later in source) over the no-js default regardless of the JS class. */
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  overflow: hidden;
+  padding: var(--space-4);
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.live-lamp-glow {
+  /* inset:0, not an oversized box with negative insets — that box's own
+     hard rectangular edge was showing through as a clipped-looking band
+     right above the card wall once overflow:hidden cropped the rest of it. */
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 65% 45% at 50% 8%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 70%);
+  animation: live-lamp-drift 8s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@keyframes live-lamp-drift {
+  0%, 100% {
+    opacity: 0.5;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.85;
+    transform: translateY(4px);
+  }
+}
+
+.live-wall {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 3px;
+  flex: 1;
+  min-height: 0;
+}
+
+.live-card {
+  border-radius: 2px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  transition: box-shadow 600ms var(--ease-out);
+}
+
+.live-card-titlebar {
+  flex-shrink: 0;
+  height: 9%;
+  min-height: 6px;
+  background: var(--bg-1);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 3px;
+}
+
+.live-dot {
+  width: 2.5px;
+  height: 2.5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.live-card-body {
+  flex: 1;
+  min-height: 0;
+  padding: 6% 8%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12%;
+}
+
+/* panel colour variants — each a filled halftone body over a solid base,
+   matching the amber/slate/green/red palette in app-fleet.png exactly */
+
+.live-card--amber .live-card-body {
+  background-color: #c98935;
+  background-image: radial-gradient(#a66f26 0.55px, transparent 0.65px);
+  background-size: 3px 3px;
+}
+
+.live-card--slate .live-card-body {
+  background-color: #5b6b85;
+  background-image: radial-gradient(#46536a 0.55px, transparent 0.65px);
+  background-size: 3px 3px;
+}
+
+.live-card--green .live-card-body {
+  background-color: #7a9b7e;
+  background-image: radial-gradient(#607d64 0.55px, transparent 0.65px);
+  background-size: 3px 3px;
+}
+
+.live-card--red .live-card-body {
+  background-color: #b85450;
+  background-image: radial-gradient(#96403c 0.55px, transparent 0.65px);
+  background-size: 3px 3px;
+}
+
+.live-line {
+  display: block;
+  height: 12%;
+  min-height: 2px;
+  border-radius: 1px;
+  width: var(--w, 60%);
+  transform-origin: left center;
+  transform: scaleX(0);
+  animation: live-type 650ms steps(8, end) forwards;
+  animation-delay: calc(var(--i, 0) * 140ms + 200ms);
+}
+
+.live-line--dark {
+  background: rgba(12, 12, 16, 0.55);
+}
+
+.live-line--light {
+  background: rgba(253, 246, 234, 0.92);
+}
+
+@keyframes live-type {
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.live-cursor {
+  display: inline-block;
+  width: 3px;
+  height: 7px;
+  margin-left: 2px;
+  background: var(--accent);
+  vertical-align: middle;
+  animation: live-blink 1s steps(2, jump-none) infinite;
+  animation-delay: 1.4s;
+}
+
+@keyframes live-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.live-card--cursor {
+  animation: live-cursor-lift 900ms var(--ease-out) 1;
+  animation-delay: 1.2s;
+}
+
+@keyframes live-cursor-lift {
+  0%, 100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  40% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+}
+
+.live-card--blocked {
+  animation: live-card-blocked 700ms var(--ease-out) forwards;
+  animation-delay: 5.4s;
+}
+
+@keyframes live-card-blocked {
+  0% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 2px #e2604f;
+  }
+}
+
+.live-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  z-index: 2;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #fdf6ea;
+  background: #e2604f;
+  padding: 1.5px 4px;
+  border-radius: 2px;
+  opacity: 0;
+  transform: scale(0.7);
+  animation: live-badge-in 500ms var(--ease-out) forwards;
+  animation-delay: 5.6s;
+}
+
+@keyframes live-badge-in {
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.live-desk-mascot {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: var(--space-4);
+}
+
+.live-desk-mascot .mascot {
+  height: 118px;
+}
+
+.live-desk-clock {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  padding-bottom: var(--space-2);
+}
+
+@media (max-width: 640px) {
+  .live-wall {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .live-desk-mascot .mascot {
+    height: 96px;
+  }
+
+  .live-desk-clock {
+    font-size: 20px;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1358,10 +1660,6 @@ input[type='range'].scrubber::-moz-range-thumb {
 
   .hero-visual {
     padding-top: var(--space-8);
-  }
-
-  .hero-illustration {
-    aspect-ratio: 16 / 10;
   }
 }
 
@@ -1444,6 +1742,22 @@ input[type='range'].scrubber::-moz-range-thumb {
 
 .desk-facts {
   max-width: 900px;
+}
+
+.desk-fleet-reinforcement {
+  margin: var(--space-10) 0 0;
+  max-width: 640px;
+}
+
+.desk-fleet-reinforcement .media-frame {
+  aspect-ratio: 7 / 4;
+}
+
+.desk-fleet-reinforcement figcaption {
+  margin-top: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink-tertiary);
 }
 
 .proof-grid-3 {

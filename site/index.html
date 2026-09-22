@@ -1,6 +1,7 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="no-js">
 <head>
+<script>document.documentElement.className = document.documentElement.className.replace('no-js', 'js');</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chronos — the Desk that runs itself overnight</title>
@@ -43,33 +44,12 @@
 <header class="site-header">
   <div class="wrap header-inner">
     <a href="#top" class="brand">
-      <span class="mascot brand-mascot" data-mascot-src="assets/mascot.svg" aria-hidden="true">
-        <svg class="mascot-fallback" viewBox="0 0 150 180" aria-hidden="true">
-          <g class="limbs">
-            <path d="M26 66 q -13 6 -13 17" fill="none" stroke="var(--ink-secondary)" stroke-width="9" stroke-linecap="round"></path>
-            <path d="M124 66 q 13 6 13 17" fill="none" stroke="var(--ink-secondary)" stroke-width="9" stroke-linecap="round"></path>
-            <path d="M56 133 V150 M94 133 V150" fill="none" stroke="var(--ink-secondary)" stroke-width="11" stroke-linecap="round"></path>
-            <path d="M50 157 h16 M100 157 h-16" fill="none" stroke="var(--ink-secondary)" stroke-width="11" stroke-linecap="round"></path>
-          </g>
-          <g class="frame">
-            <rect x="16" y="14" width="118" height="16" rx="8" fill="url(#riso-dot-slate)"></rect>
-            <rect x="16" y="118" width="118" height="16" rx="8" fill="url(#riso-dot-slate)"></rect>
-          </g>
-          <g class="glass">
-            <path d="M28 30 C 30 52, 62 64, 75 76 C 88 64, 120 52, 122 30 Z" fill="var(--bg-2)"></path>
-            <path d="M28 118 C 30 96, 62 88, 75 78 C 88 88, 120 96, 122 118 Z" fill="var(--bg-2)"></path>
-          </g>
-          <path class="sand-top" d="M34.6 38.2 Q 75 51.2 115.4 38.2 L 75 76 Z" fill="url(#riso-dot-amber)"></path>
-          <rect class="stream" x="73.3" y="74" width="3.4" height="34" fill="var(--accent)"></rect>
-          <path class="sand-bottom" d="M34.6 114.1 Q 75 101.1 115.4 114.1 L 122 120 L 28 120 Z" fill="url(#riso-dot-amber)"></path>
-          <g class="eye">
-            <circle cx="59" cy="50" r="10" fill="url(#riso-dot-ink)"></circle>
-            <circle cx="91" cy="50" r="10" fill="url(#riso-dot-ink)"></circle>
-            <circle cx="60.5" cy="50" r="4.6" fill="#1b2136"></circle>
-            <circle cx="92.5" cy="50" r="4.6" fill="#1b2136"></circle>
-          </g>
-        </svg>
-      </span>
+      <img class="brand-mascot" src="assets/favicon.svg" alt="" width="30" height="30">
+      <!-- favicon.svg, not mascot.svg: the mascot's own README documents a 96px
+           halftone-legibility floor and ships this solid-ink mark as the
+           deliberate exception for anything smaller — a nav icon can't meet
+           that floor, so it shouldn't pretend to be the halftone character. -->
+
       <span class="brand-name">Chronos</span>
     </a>
     <nav class="site-nav" aria-label="Primary">
@@ -91,8 +71,10 @@
 <section class="hero" id="top" aria-label="Introduction">
   <div class="wrap hero-grid-v2">
     <div class="night-intro hero-block">
-      <h1 data-text="It works the hours you don't.">It works the hours you don't.</h1>
-      <p class="hero-sub">You already pay for Claude Code, Codex or Cursor. Chronos runs them on your own Mac — a wall of live terminals you work in all day, that keeps working after you close the laptop.</p>
+      <h1 data-text="One of you. A fleet of them.">One of you. A fleet of them.</h1>
+      <p class="hero-sub">You already pay for Claude Code, Codex or Cursor. Today you run one at a time, watching. Chronos runs as many as your machine and your subscriptions allow — in parallel, around the clock — and interrupts you only for a decision.</p>
+      <p class="hero-capacity-claim">Chronos sets no ceiling on how many run at once — your machine and your subscriptions do.</p>
+      <p class="hero-supporting-line">It works the hours you don't, too.</p>
       <p id="localTimeLine" class="hero-local-line">A local daemon that runs AI coding agents unattended.</p>
       <p class="hero-facts">One Node process on your machine · your own subscriptions · no account, no cloud</p>
       <div class="hero-actions">
@@ -115,39 +97,62 @@ npm start</code></pre>
     </div>
 
     <div class="hero-visual">
-      <div class="media-frame hero-illustration" data-label="Tock, before a wall of terminals">
-        <img src="assets/mascot-hero.png" alt="Tock the mascot standing before a wall of terminal cards" loading="eager" onerror="this.remove()">
+      <div class="media-frame hero-illustration" data-label="A wall of terminals receding into the distance, Tock small at the desk">
+        <img src="assets/app-fleet-scale.png" alt="A wall of terminal cards in perspective, receding into the distance, with Tock small at the desk" loading="eager" onerror="this.remove()">
       </div>
-      <div class="hero-clock-overlay">
-        <span class="mascot hero-mascot" data-mascot-src="assets/mascot.svg" aria-hidden="true">
-          <svg class="mascot-fallback" viewBox="0 0 150 180" aria-hidden="true">
-            <g class="limbs">
-              <path d="M26 66 q -13 6 -13 17" fill="none" stroke="var(--ink-secondary)" stroke-width="9" stroke-linecap="round"></path>
-              <path d="M124 66 q 13 6 13 17" fill="none" stroke="var(--ink-secondary)" stroke-width="9" stroke-linecap="round"></path>
-              <path d="M56 133 V150 M94 133 V150" fill="none" stroke="var(--ink-secondary)" stroke-width="11" stroke-linecap="round"></path>
-              <path d="M50 157 h16 M100 157 h-16" fill="none" stroke="var(--ink-secondary)" stroke-width="11" stroke-linecap="round"></path>
-            </g>
-            <g class="frame">
-              <rect x="16" y="14" width="118" height="16" rx="8" fill="url(#riso-dot-slate)"></rect>
-              <rect x="16" y="118" width="118" height="16" rx="8" fill="url(#riso-dot-slate)"></rect>
-            </g>
-            <g class="glass">
-              <path d="M28 30 C 30 52, 62 64, 75 76 C 88 64, 120 52, 122 30 Z" fill="var(--bg-2)"></path>
-              <path d="M28 118 C 30 96, 62 88, 75 78 C 88 88, 120 96, 122 118 Z" fill="var(--bg-2)"></path>
-            </g>
-            <path class="sand-top" d="M34.6 38.2 Q 75 51.2 115.4 38.2 L 75 76 Z" fill="url(#riso-dot-amber)"></path>
-            <rect class="stream" x="73.3" y="74" width="3.4" height="34" fill="var(--accent)"></rect>
-            <path class="sand-bottom" d="M34.6 114.1 Q 75 101.1 115.4 114.1 L 122 120 L 28 120 Z" fill="url(#riso-dot-amber)"></path>
-            <g class="eye">
-              <circle cx="59" cy="50" r="10" fill="url(#riso-dot-ink)"></circle>
-              <circle cx="91" cy="50" r="10" fill="url(#riso-dot-ink)"></circle>
-              <circle cx="60.5" cy="50" r="4.6" fill="#1b2136"></circle>
-              <circle cx="92.5" cy="50" r="4.6" fill="#1b2136"></circle>
-            </g>
-          </svg>
-        </span>
-        <div class="giant-clock"><span class="clock-value" data-text="23:40">23:40</span></div>
-        <div class="rail-scene-label hero-scene-label scene-label">dusk</div>
+
+      <div class="hero-live-desk" aria-hidden="true">
+        <div class="live-lamp-glow"></div>
+        <div class="live-wall">
+          <div class="live-card live-card--amber"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:0;--w:65%"></span><span class="live-line live-line--light" style="--i:1;--w:80%"></span><span class="live-line live-line--dark" style="--i:2;--w:40%"></span><span class="live-line live-line--dark" style="--i:3;--w:40%"></span></div></div>
+          <div class="live-card live-card--amber"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:4;--w:72%"></span><span class="live-line live-line--light" style="--i:5;--w:40%"></span><span class="live-line live-line--dark" style="--i:6;--w:72%"></span></div></div>
+          <div class="live-card live-card--amber"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--light" style="--i:7;--w:40%"></span><span class="live-line live-line--dark" style="--i:8;--w:65%"></span><span class="live-line live-line--dark" style="--i:9;--w:65%"></span></div></div>
+          <div class="live-card live-card--green live-card--cursor"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--light" style="--i:10;--w:40%"></span><span class="live-line live-line--dark" style="--i:11;--w:72%"></span><span class="live-line live-line--dark" style="--i:12;--w:65%"><span class="live-cursor"></span></span></div></div>
+          <div class="live-card live-card--amber"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:13;--w:40%"></span><span class="live-line live-line--dark" style="--i:14;--w:50%"></span><span class="live-line live-line--light" style="--i:15;--w:80%"></span></div></div>
+          <div class="live-card live-card--green"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:16;--w:72%"></span><span class="live-line live-line--dark" style="--i:17;--w:65%"></span><span class="live-line live-line--light" style="--i:18;--w:40%"></span></div></div>
+          <div class="live-card live-card--amber"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--light" style="--i:19;--w:72%"></span><span class="live-line live-line--dark" style="--i:20;--w:88%"></span><span class="live-line live-line--dark" style="--i:21;--w:50%"></span></div></div>
+          <div class="live-card live-card--amber"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:22;--w:50%"></span><span class="live-line live-line--dark" style="--i:23;--w:72%"></span><span class="live-line live-line--dark" style="--i:24;--w:40%"></span><span class="live-line live-line--light" style="--i:25;--w:72%"></span></div></div>
+          <div class="live-card live-card--slate"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:26;--w:40%"></span><span class="live-line live-line--light" style="--i:27;--w:72%"></span><span class="live-line live-line--dark" style="--i:28;--w:72%"></span><span class="live-line live-line--dark" style="--i:29;--w:80%"></span></div></div>
+          <div class="live-card live-card--red live-card--blocked"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:30;--w:40%"></span><span class="live-line live-line--light" style="--i:31;--w:72%"></span><span class="live-line live-line--dark" style="--i:32;--w:80%"></span></div><span class="live-badge">asked you</span></div>
+          <div class="live-card live-card--amber"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:33;--w:40%"></span><span class="live-line live-line--dark" style="--i:34;--w:72%"></span><span class="live-line live-line--light" style="--i:35;--w:50%"></span></div></div>
+          <div class="live-card live-card--green"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:36;--w:88%"></span><span class="live-line live-line--dark" style="--i:37;--w:58%"></span><span class="live-line live-line--dark" style="--i:38;--w:65%"></span><span class="live-line live-line--light" style="--i:39;--w:72%"></span></div></div>
+          <div class="live-card live-card--slate"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:40;--w:58%"></span><span class="live-line live-line--dark" style="--i:41;--w:50%"></span><span class="live-line live-line--light" style="--i:42;--w:88%"></span><span class="live-line live-line--dark" style="--i:43;--w:50%"></span></div></div>
+          <div class="live-card live-card--slate"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--light" style="--i:44;--w:72%"></span><span class="live-line live-line--dark" style="--i:45;--w:58%"></span><span class="live-line live-line--dark" style="--i:46;--w:72%"></span></div></div>
+          <div class="live-card live-card--green"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:47;--w:80%"></span><span class="live-line live-line--dark" style="--i:48;--w:65%"></span><span class="live-line live-line--light" style="--i:49;--w:58%"></span><span class="live-line live-line--dark" style="--i:50;--w:72%"></span></div></div>
+          <div class="live-card live-card--green"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--light" style="--i:51;--w:72%"></span><span class="live-line live-line--dark" style="--i:52;--w:65%"></span><span class="live-line live-line--dark" style="--i:53;--w:50%"></span></div></div>
+          <div class="live-card live-card--slate"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:54;--w:65%"></span><span class="live-line live-line--light" style="--i:55;--w:65%"></span><span class="live-line live-line--dark" style="--i:56;--w:40%"></span><span class="live-line live-line--dark" style="--i:57;--w:80%"></span></div></div>
+          <div class="live-card live-card--amber"><div class="live-card-titlebar"><span class="live-dot"></span><span class="live-dot"></span><span class="live-dot"></span></div><div class="live-card-body"><span class="live-line live-line--dark" style="--i:58;--w:72%"></span><span class="live-line live-line--dark" style="--i:59;--w:88%"></span><span class="live-line live-line--light" style="--i:60;--w:88%"></span></div></div>
+        </div>
+        <div class="live-desk-mascot">
+          <span class="mascot" data-mascot-src="assets/mascot.svg" aria-hidden="true">
+            <svg class="mascot-fallback" viewBox="0 0 150 180" aria-hidden="true">
+              <g class="limbs">
+                <path d="M26 66 q -13 6 -13 17" fill="none" stroke="var(--ink-secondary)" stroke-width="9" stroke-linecap="round"></path>
+                <path d="M124 66 q 13 6 13 17" fill="none" stroke="var(--ink-secondary)" stroke-width="9" stroke-linecap="round"></path>
+                <path d="M56 133 V150 M94 133 V150" fill="none" stroke="var(--ink-secondary)" stroke-width="11" stroke-linecap="round"></path>
+                <path d="M50 157 h16 M100 157 h-16" fill="none" stroke="var(--ink-secondary)" stroke-width="11" stroke-linecap="round"></path>
+              </g>
+              <g class="frame">
+                <rect x="16" y="14" width="118" height="16" rx="8" fill="url(#riso-dot-slate)"></rect>
+                <rect x="16" y="118" width="118" height="16" rx="8" fill="url(#riso-dot-slate)"></rect>
+              </g>
+              <g class="glass">
+                <path d="M28 30 C 30 52, 62 64, 75 76 C 88 64, 120 52, 122 30 Z" fill="var(--bg-2)"></path>
+                <path d="M28 118 C 30 96, 62 88, 75 78 C 88 88, 120 96, 122 118 Z" fill="var(--bg-2)"></path>
+              </g>
+              <path class="sand-top" d="M34.6 38.2 Q 75 51.2 115.4 38.2 L 75 76 Z" fill="url(#riso-dot-amber)"></path>
+              <rect class="stream" x="73.3" y="74" width="3.4" height="34" fill="var(--accent)"></rect>
+              <path class="sand-bottom" d="M34.6 114.1 Q 75 101.1 115.4 114.1 L 122 120 L 28 120 Z" fill="url(#riso-dot-amber)"></path>
+              <g class="eye">
+                <circle cx="59" cy="50" r="10" fill="url(#riso-dot-ink)"></circle>
+                <circle cx="91" cy="50" r="10" fill="url(#riso-dot-ink)"></circle>
+                <circle cx="60.5" cy="50" r="4.6" fill="#1b2136"></circle>
+                <circle cx="92.5" cy="50" r="4.6" fill="#1b2136"></circle>
+              </g>
+            </svg>
+          </span>
+          <span class="live-desk-clock mono clock-value" data-text="23:40">23:40</span>
+        </div>
       </div>
     </div>
   </div>
@@ -194,6 +199,12 @@ npm start</code></pre>
       <li><strong>An assistant that is always there,</strong> watching the whole wall and answering what it can from the composer at the bottom.</li>
       <li><strong>A card tells you before you open it</strong> — what it is doing, what it has spent, whether it is waiting on you.</li>
     </ul>
+    <figure class="desk-fleet-reinforcement">
+      <div class="media-frame" data-label="A grid of terminal cards in mixed states, Tock supervising below">
+        <img src="assets/app-fleet.png" alt="A 6x3 grid of terminal cards in mixed amber, green and red states, with Tock supervising the wall from below" loading="lazy" onerror="this.remove()">
+      </div>
+      <figcaption>Mixed states, one wall — some cards working, some done, one waiting on you.</figcaption>
+    </figure>
   </div>
 </section>
 
@@ -344,33 +355,7 @@ npm start</code></pre>
         <p>Nine hours, real behavior, nothing invented. Every line below maps to something true in the daemon's own docs.</p>
       </div>
       <div class="log-rail">
-        <span class="mascot log-rail-mascot" id="logRailMascot" data-mascot-src="assets/mascot.svg" aria-hidden="true">
-LOG            <svg class="mascot-fallback" viewBox="0 0 150 180" aria-hidden="true">
-              <g class="limbs">
-                <path d="M26 66 q -13 6 -13 17" fill="none" stroke="var(--ink-secondary)" stroke-width="9" stroke-linecap="round"></path>
-                <path d="M124 66 q 13 6 13 17" fill="none" stroke="var(--ink-secondary)" stroke-width="9" stroke-linecap="round"></path>
-                <path d="M56 133 V150 M94 133 V150" fill="none" stroke="var(--ink-secondary)" stroke-width="11" stroke-linecap="round"></path>
-                <path d="M50 157 h16 M100 157 h-16" fill="none" stroke="var(--ink-secondary)" stroke-width="11" stroke-linecap="round"></path>
-              </g>
-              <g class="frame">
-                <rect x="16" y="14" width="118" height="16" rx="8" fill="url(#riso-dot-slate)"></rect>
-                <rect x="16" y="118" width="118" height="16" rx="8" fill="url(#riso-dot-slate)"></rect>
-              </g>
-              <g class="glass">
-                <path d="M28 30 C 30 52, 62 64, 75 76 C 88 64, 120 52, 122 30 Z" fill="var(--bg-2)"></path>
-                <path d="M28 118 C 30 96, 62 88, 75 78 C 88 88, 120 96, 122 118 Z" fill="var(--bg-2)"></path>
-              </g>
-              <path class="sand-top" d="M34.6 38.2 Q 75 51.2 115.4 38.2 L 75 76 Z" fill="url(#riso-dot-amber)"></path>
-              <rect class="stream" x="73.3" y="74" width="3.4" height="34" fill="var(--accent)"></rect>
-              <path class="sand-bottom" d="M34.6 114.1 Q 75 101.1 115.4 114.1 L 122 120 L 28 120 Z" fill="url(#riso-dot-amber)"></path>
-              <g class="eye">
-                <circle cx="59" cy="50" r="10" fill="url(#riso-dot-ink)"></circle>
-                <circle cx="91" cy="50" r="10" fill="url(#riso-dot-ink)"></circle>
-                <circle cx="60.5" cy="50" r="4.6" fill="#1b2136"></circle>
-                <circle cx="92.5" cy="50" r="4.6" fill="#1b2136"></circle>
-              </g>
-            </svg>
-        </span>
+        <img class="log-rail-mascot" src="assets/favicon.svg" alt="" aria-hidden="true">
         <ol class="log-list">
           <li class="log-entry" data-time="1" data-active="false">
             <time class="log-time">23:41</time>
@@ -501,33 +486,7 @@ LOG            <svg class="mascot-fallback" viewBox="0 0 150 180" aria-hidden="t
     <div class="footer-top">
       <div class="footer-brand">
         <a href="#top" class="brand">
-          <span class="mascot brand-mascot" data-mascot-src="assets/mascot.svg" aria-hidden="true">
-            <svg class="mascot-fallback" viewBox="0 0 150 180" aria-hidden="true">
-              <g class="limbs">
-                <path d="M26 66 q -13 6 -13 17" fill="none" stroke="var(--ink-secondary)" stroke-width="9" stroke-linecap="round"></path>
-                <path d="M124 66 q 13 6 13 17" fill="none" stroke="var(--ink-secondary)" stroke-width="9" stroke-linecap="round"></path>
-                <path d="M56 133 V150 M94 133 V150" fill="none" stroke="var(--ink-secondary)" stroke-width="11" stroke-linecap="round"></path>
-                <path d="M50 157 h16 M100 157 h-16" fill="none" stroke="var(--ink-secondary)" stroke-width="11" stroke-linecap="round"></path>
-              </g>
-              <g class="frame">
-                <rect x="16" y="14" width="118" height="16" rx="8" fill="url(#riso-dot-slate)"></rect>
-                <rect x="16" y="118" width="118" height="16" rx="8" fill="url(#riso-dot-slate)"></rect>
-              </g>
-              <g class="glass">
-                <path d="M28 30 C 30 52, 62 64, 75 76 C 88 64, 120 52, 122 30 Z" fill="var(--bg-2)"></path>
-                <path d="M28 118 C 30 96, 62 88, 75 78 C 88 88, 120 96, 122 118 Z" fill="var(--bg-2)"></path>
-              </g>
-              <path class="sand-top" d="M34.6 38.2 Q 75 51.2 115.4 38.2 L 75 76 Z" fill="url(#riso-dot-amber)"></path>
-              <rect class="stream" x="73.3" y="74" width="3.4" height="34" fill="var(--accent)"></rect>
-              <path class="sand-bottom" d="M34.6 114.1 Q 75 101.1 115.4 114.1 L 122 120 L 28 120 Z" fill="url(#riso-dot-amber)"></path>
-              <g class="eye">
-                <circle cx="59" cy="50" r="10" fill="url(#riso-dot-ink)"></circle>
-                <circle cx="91" cy="50" r="10" fill="url(#riso-dot-ink)"></circle>
-                <circle cx="60.5" cy="50" r="4.6" fill="#1b2136"></circle>
-                <circle cx="92.5" cy="50" r="4.6" fill="#1b2136"></circle>
-              </g>
-            </svg>
-          </span>
+          <img class="brand-mascot" src="assets/favicon.svg" alt="" width="30" height="30">
           <span class="brand-name">Chronos</span>
         </a>
         <p>A local daemon: a Desk of live terminal cards you work in all day, running whichever CLI you already pay for, that keeps going unattended overnight.</p>
