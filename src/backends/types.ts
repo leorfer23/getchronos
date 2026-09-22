@@ -261,7 +261,10 @@ export interface AgentBackend {
   detectRateLimit(ev: NormalizedEvent): RateLimit | null;
   // Auth (optional): backends needing an interactive/CLI login implement these so MC can detect a
   // missing session and drive the login flow in-app. Omitted → assumed always authenticated.
-  checkAuth?(): Promise<boolean>;
+  // workspaceId (optional): a cloud backend's key may live in that workspace's vars rather than the
+  // daemon's own env (see CloudRef doc) — a caller that knows the workspace should pass it, or a
+  // workspace-scoped key silently reads as "not authenticated". Local backends ignore it.
+  checkAuth?(workspaceId?: string | null): Promise<boolean>;
   login?(): Promise<{ ok: boolean; message?: string }>;
 }
 

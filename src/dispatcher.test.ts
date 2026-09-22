@@ -1,7 +1,7 @@
 import { test, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { db, jobs, runs, tickets, workspaces } from "./store.js";
+import { db, jobs, repos, runs, tickets, workspaces } from "./store.js";
 import { dispatch, status, setExecutor } from "./dispatcher.js";
 import { CONFIG } from "./config.js";
 import type { Job, RunStatus } from "./types.js";
@@ -80,6 +80,74 @@ test("rejects retired model / unknown backend before creating a run", () => {
   assert.ok("error" in r2);
   assert.match(r2.error, /unknown backend/);
   assert.equal(runs.list(unknown.id).length, 0);
+});
+
+// The gate itself (src/backends/index.ts validateSpawnTarget) is unit-tested in
+// src/backends/cursor-cloud.test.ts. This covers the wiring: dispatch() must actually derive the
+// job's repo (job → ticket → repo, same two-step as runner.ts) and pass it through, or the gate
+// never fires and a cursor-cloud job against a non-GitHub repo launches happily.
+function ticketedJob(over: { git_remote: string | null; delivery: "commit" | "pr" }) {
+  const ws = workspaces.create({ slug: `cc-gate-${randomUUID().slice(0, 8)}`, name: "CC Gate", config_dir: "/tmp/cc-gate" } as any);
+  const repo = repos.create({
+    workspace_id: ws.id, name: "widgets", path: "/tmp/cc-gate-repo",
+    git_remote: over.git_remote, default_branch: "main", delivery: over.delivery,
+  } as any);
+  const t = tickets.create({
+    id: randomUUID(), workspace_id: ws.id, repo_id: repo.id, key: "CC-1", slug: "cc-1", title: "t",
+    status: "backlog", priority: "P2", complexity: null, backend: null, model: null, assignee: "agent",
+    file_path: "/tmp/cc-1.md", external_system: null, external_id: null, external_url: null, tags: null,
+  } as any);
+  return mkJob({ backend: "cursor-cloud", ticket_id: t.id, cwd: repo.path });
+}
+
+test("dispatch refuses cursor-cloud with no ticket at all — fails closed, not a silent pass", () => {
+  const j = mkJob({ backend: "cursor-cloud" }); // no ticket_id → no repo resolvable
+  const r = dispatch(j.id, "manual");
+  assert.ok("error" in r);
+  assert.match((r as { error: string }).error, /cursor-cloud refused/);
+  assert.match((r as { error: string }).error, /GitHub/);
+  assert.equal(runs.list(j.id).length, 0);
+});
+
+test("dispatch refuses cursor-cloud when the ticket has no repo_id — fails closed, not a silent pass", () => {
+  const ws = workspaces.create({ slug: `cc-gate-norepo-${randomUUID().slice(0, 8)}`, name: "CC Gate no-repo", config_dir: "/tmp/cc-gate-norepo" } as any);
+  const t = tickets.create({
+    id: randomUUID(), workspace_id: ws.id, repo_id: null, key: "CC-2", slug: "cc-2", title: "t",
+    status: "backlog", priority: "P2", complexity: null, backend: null, model: null, assignee: "agent",
+    file_path: "/tmp/cc-2.md", external_system: null, external_id: null, external_url: null, tags: null,
+  } as any);
+  const j = mkJob({ backend: "cursor-cloud", ticket_id: t.id });
+  const r = dispatch(j.id, "manual");
+  assert.ok("error" in r);
+  assert.match((r as { error: string }).error, /cursor-cloud refused/);
+  assert.equal(runs.list(j.id).length, 0);
+});
+
+test("dispatch refuses cursor-cloud against a non-GitHub repo, naming the repo, before creating a run", () => {
+  const j = ticketedJob({ git_remote: "https://gitlab.com/acme/widgets", delivery: "pr" });
+  const r = dispatch(j.id, "manual");
+  assert.ok("error" in r);
+  assert.match((r as { error: string }).error, /widgets/);
+  assert.match((r as { error: string }).error, /GitHub/);
+  assert.equal(runs.list(j.id).length, 0);
+});
+
+test("dispatch refuses cursor-cloud against a GitHub repo with delivery=commit, before creating a run", () => {
+  const j = ticketedJob({ git_remote: "https://github.com/acme/widgets", delivery: "commit" });
+  const r = dispatch(j.id, "manual");
+  assert.ok("error" in r);
+  assert.match((r as { error: string }).error, /widgets/);
+  assert.match((r as { error: string }).error, /delivery=pr/);
+  assert.equal(runs.list(j.id).length, 0);
+});
+
+test("dispatch lets cursor-cloud through for a GitHub repo with delivery=pr", async () => {
+  program(() => ({ status: "success" }));
+  const j = ticketedJob({ git_remote: "https://github.com/acme/widgets", delivery: "pr" });
+  const r = dispatch(j.id, "manual");
+  assert.ok("run_id" in r);
+  await settle();
+  assert.equal(runs.list(j.id)[0]?.status, "success");
 });
 
 test("success runs once — no retry, no chain", async () => {
