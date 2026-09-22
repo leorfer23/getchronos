@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { claudeBackend } from "./claude.js";
 import { cursorBackend } from "./cursor.js";
+import { cursorCloudBackend, isGitHubRemote } from "./cursor-cloud.js";
 import { codexBackend } from "./codex.js";
 import { grokBackend } from "./grok.js";
 import { opencodeBackend } from "./opencode.js";
@@ -16,6 +17,7 @@ const REGISTRY: Record<string, AgentBackend> = {
   claude: claudeBackend, // legacy alias
   "cursor-agent": cursorBackend,
   cursor: cursorBackend,
+  "cursor-cloud": cursorCloudBackend,
   codex: codexBackend,
   grok: grokBackend,
   "grok-cli": grokBackend, // alias
@@ -45,13 +47,27 @@ const RETIRED_MODELS = new Set([
 /**
  * Pre-spawn check for a job's (backend, model). Returns an explicit error message, or null if ok.
  * Unknown backend names used to silently fall through to claude-code via getBackend().
+ *
+ * `repo` is optional so every existing call site (dispatcher.ts, ideas.ts, quota-gate.ts, tickets.ts)
+ * keeps working unchanged — the cursor-cloud repo gate only fires when a caller actually passes repo
+ * info. Phase 1 is GitHub-repos-with-delivery=pr only (see docs/plans/2026-09-22-cursor-cloud-backend.md).
  */
 export function validateSpawnTarget(
   backend: string | null | undefined,
   model: string | null | undefined,
+  repo?: { name?: string | null; git_remote?: string | null; delivery?: "commit" | "pr" | null } | null,
 ): string | null {
   if (backend && !hasBackend(backend)) return `unknown backend: ${backend}`;
   if (model && RETIRED_MODELS.has(model)) return `modelo desconocido (retirado): ${model}`;
+  if (backend === "cursor-cloud" && repo) {
+    const label = repo.name ? `repo '${repo.name}'` : "this repo";
+    if (!isGitHubRemote(repo.git_remote)) {
+      return `cursor-cloud refused: ${label} has no GitHub remote — Phase 1 is GitHub-only`;
+    }
+    if (repo.delivery !== "pr") {
+      return `cursor-cloud refused: ${label} has delivery=${repo.delivery ?? "commit"} — cursor-cloud requires delivery=pr in Phase 1`;
+    }
+  }
   return null;
 }
 
