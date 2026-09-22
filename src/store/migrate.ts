@@ -1712,6 +1712,26 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       );
       CREATE INDEX IF NOT EXISTS idx_session_goals_session ON session_goals(session_id, seq);`),
   },
+  {
+    version: 130,
+    name: "runs/sessions cloud_* — a run that lives on someone else's VM",
+    // A cloud run has no pid and no stdout: Chronos launches it, then RECONCILES. These four columns
+    // are everything a daemon that was asleep (or off) while the work happened needs to pick the run
+    // back up — the agent+run ids to poll, the human link for the Desk card, and the SSE cursor so a
+    // replay resumes where the stream dropped instead of re-storing every event from the start.
+    // sessions gets the same four so a cloud TERMINAL card can render state and links without a pty.
+    up: (db) => {
+      for (const t of ["runs", "sessions"]) {
+        db.exec(`ALTER TABLE ${t} ADD COLUMN cloud_agent_id TEXT`);
+        db.exec(`ALTER TABLE ${t} ADD COLUMN cloud_run_id TEXT`);
+        db.exec(`ALTER TABLE ${t} ADD COLUMN cloud_url TEXT`);
+        db.exec(`ALTER TABLE ${t} ADD COLUMN cloud_last_event_id TEXT`);
+      }
+      // The reconciler's only query: every cloud run still believed to be running.
+      db.exec("CREATE INDEX IF NOT EXISTS idx_runs_cloud_live ON runs(status, cloud_agent_id)");
+    },
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

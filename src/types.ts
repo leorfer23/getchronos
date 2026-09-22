@@ -622,6 +622,14 @@ export interface Run {
   resets_at: string | null;
   context: string | null; // trigger-event payload injected into this run
   resume_session: string | null; // set on a resume run: the prior run's session_id to --resume into
+  /** Cloud runs only (backend kind "cloud"): the provider-side agent this row tracks. Null = local. */
+  cloud_agent_id: string | null;
+  /** The provider run id of the LATEST turn. A follow-up mints a new one; each is logged in run_events. */
+  cloud_run_id: string | null;
+  /** Human link to the run on the provider's site, for the Desk card. */
+  cloud_url: string | null;
+  /** SSE resume cursor. A daemon that slept mid-run replays from here instead of from the start. */
+  cloud_last_event_id: string | null;
 }
 
 export interface NewJob {
@@ -755,6 +763,14 @@ export interface Session {
   first_prompt?: string | null;
   ticket_key?: string | null;
   ticket_title?: string | null;
+  /** Cloud runs only (backend kind "cloud"): the provider-side agent this row tracks. Null = local. */
+  cloud_agent_id: string | null;
+  /** The provider run id of the LATEST turn. A follow-up mints a new one; each is logged in run_events. */
+  cloud_run_id: string | null;
+  /** Human link to the run on the provider's site, for the Desk card. */
+  cloud_url: string | null;
+  /** SSE resume cursor. A daemon that slept mid-run replays from here instead of from the start. */
+  cloud_last_event_id: string | null;
 }
 
 /** One standing-watch check: what Robert saw and said (desk-watch.ts). */
