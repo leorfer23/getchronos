@@ -8,8 +8,10 @@
  */
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { db, sessions, sessionGoals } from "./store.js";
-import { addGoals, goalLines, reopenGoal, setGoals, tickAllGoals, tickCurrentGoal } from "./goals.js";
+import { addGoals, goalLines, reopenGoal, setGoals, splitGoalText, tickAllGoals, tickCurrentGoal } from "./goals.js";
 
 const mk = (goal: string | null = "open the rollback PR") =>
   sessions.create({ cwd: "/tmp", goal, goal_kind: goal ? "pr" : null });
@@ -130,4 +132,31 @@ test("goalLines is what the agent is shown: numbered, ticked, in order", () => {
   addGoals(s.id, [{ text: "two", kind: "qa" }]);
   tickCurrentGoal(s.id);
   assert.deepEqual(goalLines(sessionGoals.list(s.id)), ["1. ✓ one [pr]", "2. · two [qa]"]);
+});
+
+test("one goal per line: the box the operator types into is the queue", () => {
+  assert.deepEqual(splitGoalText("open the PR\nupdate the runbook\n"), ["open the PR", "update the runbook"]);
+  // Typed as a list, because people type lists.
+  assert.deepEqual(splitGoalText("- open the PR\n* update the runbook\n• tell #eng"), [
+    "open the PR",
+    "update the runbook",
+    "tell #eng",
+  ]);
+  assert.deepEqual(splitGoalText("one goal"), ["one goal"], "a normal goal is one line and stays one goal");
+  assert.deepEqual(splitGoalText("  \n \n"), []);
+  assert.deepEqual(splitGoalText(null), []);
+});
+
+test("the Desk and the skill both carry the queue", () => {
+  const desk = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
+  // The dialog takes several, the header counts them, the card lets you tick one.
+  assert.match(desk, /one per line = several, worked in order/);
+  assert.match(desk, /goals_total > 1/);
+  assert.match(desk, /data-gtick/);
+  assert.match(desk, /goal_done_all/, "closing a card ticks the whole queue, not just the one showing");
+  // Every claude terminal is handed this file (installMcSkill) — it is where an agent learns that a
+  // tick is a step, not the end.
+  const skill = fs.readFileSync(path.join(process.cwd(), "skills/mission-control/SKILL.md"), "utf8");
+  assert.match(skill, /mc goal list/);
+  assert.match(skill, /mc goal add/);
 });

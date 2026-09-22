@@ -55,6 +55,9 @@ mc state blocked "need write access to the prod bucket" --reason auth   # a wall
 mc state decide "drop the legacy view or keep it? I'd drop it"          # only when mc ask-robert doesn't fit
 mc goal done                                               # objective reached → ✅ review (write the Summary first)
 mc state idle                                              # clear whatever you declared
+
+mc goal list                                               # were you given SEVERAL goals? this is the queue
+mc goal add "update the runbook"                           # queue one more behind the one you are on
 ```
 
 `--on` is one of `subagents · ci · deploy · terminal · command · robert · person · other`; `--eta`
@@ -84,7 +87,20 @@ takes `10`, `10m`, `2h`.
 6. **The one line is yours to write.** It shows your declared label, else your progress step, else
    your latest plain-English narration line — never your tool calls. Narrate in sentences that make
    sense on their own.
-7. **`mc goal done` when the goal is met**, even if the terminal stays open for follow-ups. It closes
+7. **You may have been given more than one goal.** Run `mc goal list` if `mc goal done` ever says
+   `ticked — 1/3 done. Next: …`, or if your first prompt listed them. The rules:
+
+   - Your card shows **one** goal at a time — the first one not ticked. Work them **in order**.
+   - `mc goal done` ticks **the one you are on** and moves your card to the next. It does not end the
+     terminal until the last one is ticked, so do not write your closing Summary early: finish the
+     goal, say what you did in a line or two, tick it, start the next one.
+   - Write the full closing reply (details → next steps → `Summary:`) before the **last** tick.
+   - `mc goal add "<the next thing>"` when the operator asks for one more thing mid-terminal —
+     better than silently widening the goal you are on. `mc goal drop N` / `mc goal reopen` fix the
+     queue. `mc goal set` still retitles the one you are on.
+   - If a queued goal turns out to be wrong, already true, or impossible, **say so and tick it** —
+     never invent work to fill it.
+8. **`mc goal done` when the goal is met**, even if the terminal stays open for follow-ups. It closes
    your row in the operator's day log: the daemon freezes what this terminal spent and records what you
    did from your own narration, and Robert's per-client worklog picks it up. So **write your closing
    reply first**, in this order, Summary always last:
@@ -104,7 +120,7 @@ takes `10`, `10m`, `2h`.
    steps** only when there are any. The `**Summary:**` paragraph is one or two plain sentences; it IS
    the entry the operator reads tomorrow, and its first sentence is your ✅ card's line. Write for a
    human on a phone: plain words, short, to the point — no filler, no recap of steps they watched.
-8. **Robert reads your card when you stop.** A finished turn, ✅ review, 🟣 decide, a declared 🔴
+9. **Robert reads your card when you stop.** A finished turn, ✅ review, 🟣 decide, a declared 🔴
    blocked or `waiting --on robert` wakes him about a minute and a half later (unless the operator is
    already typing into you). He looks at your last `Summary:` / narration and either sends you the next
    step, ticks you done, or hands the call to the operator. So **end every turn with Next steps (if
@@ -281,6 +297,7 @@ mc pad append <id> "<what you learned>"   # add to a row's detail, never replace
 mc session list                     # live terminals in this workspace
 mc session focus <ID> [-n 20]       # what another terminal is doing, in plain English (read-only)
 mc session new --goal "…" [--kind pr|investigation|qa] [--description "the brief"] [--cwd p]
+                                    # --goal repeats: two or three finish lines, worked in order
                                     # open a helper terminal to parallelize your work
 mc search "<query>" --kind session  # find past sessions that did related work
 ```

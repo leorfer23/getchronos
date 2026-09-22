@@ -38,7 +38,7 @@ import { snapshotUsage } from "./session-usage.js";
 import { installClaudeHooks, installCursorHooks, installGrokHooks } from "./term-hooks.js";
 import { agentBlock, agentPrompt } from "./agent-defs.js";
 import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, type SessionGoal, type Workspace } from "./types.js";
-import { goalLines, setGoals } from "./goals.js";
+import { goalLines, setGoals, splitGoalText } from "./goals.js";
 
 // Standing instruction folded into every session (via system prompt where the CLI supports it, else the
 // seed): the operator watches a plain-English "Focus" feed (Understanding → narration → Summary), not the
@@ -364,7 +364,11 @@ export async function openSession(
   ensurePtyHelper();
   // A terminal opened with a list is still opened with a goal: the first one is what the card, the
   // day's log and `spawn_goal` carry. The rest are queued onto the row right after it is created.
-  if (opts.goals?.length && !opts.goal) {
+  // A goal typed as several lines IS a list — see splitGoalText.
+  if (!opts.goals?.length && splitGoalText(opts.goal).length > 1) {
+    opts = { ...opts, goals: splitGoalText(opts.goal) };
+  }
+  if (opts.goals?.length) {
     const first = opts.goals[0];
     opts = { ...opts, goal: typeof first === "string" ? first : first.text };
   }

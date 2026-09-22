@@ -130,3 +130,16 @@ export function reopenGoal(sessionId: string, goalId?: string): TickResult {
 export function goalLines(goals: SessionGoal[]): string[] {
   return goals.map((g) => `${g.seq}. ${g.done_at ? "✓" : "·"} ${g.text}${g.kind ? ` [${g.kind}]` : ""}`);
 }
+
+/**
+ * One goal per line. A goal is a one-line label by definition, so a multi-line one is not a goal —
+ * it is a queue that was typed into a box that happens to accept newlines (the Desk's New-terminal
+ * dialog, a saved launch, `--goal "$(cat goals.txt)"`). Splitting here means every door that opens a
+ * terminal gets the queue for free instead of each one learning the trick.
+ */
+export function splitGoalText(text: string | null | undefined): string[] {
+  return (text ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^\s*[-*\u2022]\s+/, "").trim())
+    .filter(Boolean);
+}

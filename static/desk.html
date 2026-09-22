@@ -406,6 +406,13 @@
   .bgoal .gqueue li { font-size:13px; line-height:1.4; color:var(--muted); overflow-wrap:anywhere; }
   .bgoal .gqueue li.done { text-decoration:line-through; opacity:.55; }
   .bgoal .gqueue li.now { color:var(--text); font-weight:600; }
+  /* The dialog's goal box is one line until a second goal is typed into it. */
+  #f-goal { resize:vertical; min-height:34px; line-height:1.45; }
+  .bgoal .gqueue li { cursor:pointer; border-radius:5px; padding:1px 4px; margin-left:-4px; }
+  .bgoal .gqueue li:hover { background:var(--surface-2); color:var(--text); }
+  .bgoal .gadd { margin-top:9px; background:none; border:none; padding:2px 4px 2px 0; color:var(--faint);
+    font:inherit; font-size:12.5px; cursor:pointer; border-radius:5px; }
+  .bgoal .gadd:hover { color:var(--accent); }
   /* Deliverables: the same pin as the rail, one size up — what outlives the scrollback. */
   .bships { display:flex; flex-direction:column; gap:2px; }
   .bships .pin { font-size:13.5px; padding:4px 5px; grid-template-columns:16px 1fr auto; }
@@ -1020,8 +1027,8 @@
       <label>CLI <select name="backend" id="f-backend"></select></label>
     </div>
     <div class="row">
-      <label style="flex:2">Goal <span class="hint">— optional</span>
-        <input name="goal" placeholder="open the flyway rollback PR · or leave it empty" autocomplete="off">
+      <label style="flex:2">Goal <span class="hint">— optional · one per line = several, worked in order</span>
+        <textarea name="goal" id="f-goal" rows="1" spellcheck="false" placeholder="open the flyway rollback PR · or leave it empty"></textarea>
       </label>
       <label style="flex:0 0 128px">Kind
         <select name="goal_kind" id="f-kind" title="What done looks like. The agent is told this in its first prompt.">
@@ -1866,15 +1873,20 @@ function boardGoal(s) {
   // underneath it, ticked ones included — "where am I in this" in one glance.
   if (s.goals_total > 1) goalsLoad(s.id, s.goals_total);
   const queue = GOALS.id === s.id && s.goals_total > 1 ? GOALS.items : [];
+  const nowSeq = queue.find((x) => !x.done_at)?.seq ?? -1;
   const queueHtml = queue.length
     ? `<ol class="gqueue">` +
-      queue.map((g) => `<li class="${g.done_at ? "done" : g.seq === (queue.find((x) => !x.done_at)?.seq ?? -1) ? "now" : ""}">${g.done_at ? "✓" : "·"} ${esc(clip(g.text, 160))}</li>`).join("") +
+      queue.map((g) => `<li class="${g.done_at ? "done" : g.seq === nowSeq ? "now" : ""}" data-gtick="${esc(g.id)}" title="${g.done_at ? "click to untick" : "click to tick this one off"}">${g.done_at ? "✓" : "·"} ${esc(clip(g.text, 160))}</li>`).join("") +
       `</ol>`
     : "";
   const count = s.goals_total > 1 ? `<span class="n" title="goals ticked off">${s.goals_done}/${s.goals_total}</span>` : "";
+  // Queue another one from here. On a terminal with a single goal this is what turns it into a list:
+  // the goal already on the card becomes #1 and the new line lands behind it.
+  const addRow = s.live && goal ? `<button type="button" class="gadd" data-gadd>+ another goal</button>` : "";
   return `<section class="bcard bgoal${done ? " done" : ""}"><h4>Goal${count}${tag}</h4>`
     + `<div class="t${goal ? "" : " none"}">${esc(goal ? clip(goal, 400) : "what is this terminal for?")}</div>`
     + queueHtml
+    + addRow
     + (drift ? `<div class="sub">started as: ${esc(clip(started, 200))}</div>` : "")
     + `</section>`;
 }
@@ -1979,6 +1991,34 @@ function renderStory() {
   const body = qs("#story"); body.innerHTML = out; tidyLinks(body);
   for (const c of qsa(".fblock.clamp:not(.open)", body)) { const t = qs(".t", c); c.classList.toggle("over", t.scrollHeight > t.clientHeight + 2); }
 }
+// The Goal card is the one board card you can write on: click a queued goal to tick or untick it,
+// "+ another goal" to queue one more. Both go through the same doors `mc goal` uses, so a terminal
+// ticking its own goal and the operator ticking it from here are the same event.
+qs("#story").addEventListener("click", async (e) => {
+  const s = S.active && byId(S.active); if (!s) return;
+  const li = e.target.closest("[data-gtick]");
+  if (li) {
+    const g = GOALS.id === s.id ? GOALS.items.find((x) => x.id === li.dataset.gtick) : null;
+    if (!g) return;
+    try {
+      const r = await api(`/sessions/${s.id}/goals/${g.id}`, { method: "PATCH", body: JSON.stringify({ done: !g.done_at }) });
+      GOALS.items = r.goals; GOALS.at = Date.now();
+      Object.assign(s, r.session);
+      renderStory(); renderStage();
+    } catch (err) { toast(err.message); }
+    return;
+  }
+  if (!e.target.closest("[data-gadd]")) return;
+  const text = prompt("What should this terminal finish next?");
+  if (!text || !text.trim()) return;
+  try {
+    const r = await api("/sessions/" + s.id + "/goals", { method: "POST", body: JSON.stringify({ goals: [text.trim()] }) });
+    GOALS.id = s.id; GOALS.items = r.goals; GOALS.at = Date.now();
+    Object.assign(s, r.session);
+    renderStory(); renderStage();
+  } catch (err) { toast(err.message); }
+});
+
 // The board's clocks tick off the page's one clock (body.blink, 1Hz) instead of a repaint: a board
 // that rebuilds itself every second to move one digit is the animation this page does not have.
 function boardTick() {
@@ -3548,6 +3588,10 @@ qs("#form-new").addEventListener("submit", async (e) => {
   const f = new FormData(e.target);
   const goal = f.get("goal").trim();
   if (isLead && !goal) { e.preventDefault(); return toast("a Lead needs a goal"); }
+  // A Lead is Robert's deputy for ONE goal (LEADS.md) — it plans that goal into slices and opens its
+  // own workers. Several goals in the box is a different shape of work, so say so rather than
+  // silently queueing them onto it.
+  if (isLead && goal.split("\n").filter((l) => l.trim()).length > 1) { e.preventDefault(); return toast("a Lead is for one goal — open a terminal for a queue"); }
   const backend = f.get("backend");
   const model = String(f.get("model") || "").trim() || null;
   const focus = qs("#f-focus").checked;

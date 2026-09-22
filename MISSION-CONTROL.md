@@ -398,6 +398,15 @@ whatever is still queued.
 exactly as it did before the table existed; the first `goal add` folds the goal already on the row
 in as item #1, keeping its kind, its source and its tick.
 
+**On the Desk.** The New-terminal dialog's Goal box takes **one goal per line** (a Lead still takes
+exactly one — LEADS.md). The header carries a `🎯 2/4` chip, and the Goal card in Focus lists the
+queue: click a line to tick or untick it, `+ another goal` to queue one more. `splitGoalText` does
+the splitting inside `openSession`, so a saved launch, a jot's Run and `--goal "$(cat goals.txt)"`
+all get the queue without their own copy of the trick.
+
+**Agents are told.** `skills/mission-control/SKILL.md` §"Your card" carries the queue rules, and a
+terminal spawned with several is given the numbered list in its first prompt.
+
 ---
 
 ## 5c. Robert threads — one visible thread, N isolated conversations (`src/thread-router.ts`)
