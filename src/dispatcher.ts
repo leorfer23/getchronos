@@ -1,7 +1,7 @@
 import { CONFIG } from "./config.js";
 import { bus } from "./bus.js";
 import { backendAllowed, getBackend, validateSpawnTarget, workspaceBackends } from "./backends/index.js";
-import { jobs, runs, tickets, workspaces } from "./store.js";
+import { jobs, repos, runs, tickets, workspaces } from "./store.js";
 import { AUTH_ERR_RE, execute, isReadOnlyRun } from "./runner.js";
 import { openSession } from "./terminal.js";
 import { notify, esc } from "./telegram/api.js";
@@ -73,7 +73,11 @@ export function dispatch(
   if (!job.enabled) return { error: "job disabled" };
   // Fail closed with an explicit message before we create a run — an unknown/retired (backend,model)
   // used to spawn, die in ~1s with zero events, and surface as "Unexpected server error" (PER-22).
-  const spawnErr = validateSpawnTarget(job.backend, job.model);
+  // Jobs carry no repo_id directly — derive it via the ticket (same two-step as runner.ts) so the
+  // cursor-cloud GitHub/delivery=pr gate actually sees the repo instead of silently no-op'ing.
+  const dispatchTicket = job.ticket_id ? tickets.get(job.ticket_id) : undefined;
+  const dispatchRepo = dispatchTicket?.repo_id ? repos.get(dispatchTicket.repo_id) : undefined;
+  const spawnErr = validateSpawnTarget(job.backend, job.model, dispatchRepo);
   if (spawnErr) return { error: spawnErr };
   // Same client boundary the Desk enforces, on the headless path: cursor/grok/opencode share one
   // login across every workspace, so a client's job must not be able to reach for them.

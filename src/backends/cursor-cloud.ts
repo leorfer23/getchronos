@@ -43,13 +43,18 @@ function mapStatus(s: string | null | undefined): CloudStatus {
 }
 
 /** Workspace vars first (see CloudRef doc — the key lives with the workspace, not the daemon), then env. */
-function resolveApiKey(workspaceId: string | null): string {
+function findApiKey(workspaceId: string | null): string | null {
   if (workspaceId) {
     const fromWs = workspaceVars.active(workspaceId).CURSOR_API_KEY;
     if (fromWs) return fromWs;
   }
-  if (process.env.CURSOR_API_KEY) return process.env.CURSOR_API_KEY;
-  throw new Error("cursor-cloud: no CURSOR_API_KEY (checked workspace vars, then env)");
+  return process.env.CURSOR_API_KEY ?? null;
+}
+
+function resolveApiKey(workspaceId: string | null): string {
+  const key = findApiKey(workspaceId);
+  if (!key) throw new Error("cursor-cloud: no CURSOR_API_KEY (checked workspace vars, then env)");
+  return key;
 }
 
 const GITHUB_HTTPS_RE = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+?(?:\.git)?\/?$/i;
@@ -96,6 +101,32 @@ function parseSseBlock(block: string): { id: string | null; event: string | null
   return { id, event, data: dataLines.join("\n") };
 }
 
+const MODELS_TTL_MS = 60 * 60 * 1000; // "Models GET /v1/models ... Cache 1h" (brief)
+let modelsCache: { at: number; ids: string[] } | null = null;
+
+/**
+ * The live model catalog (39 ids on 2026-09-22), cached 1h. `AgentBackend.models` stays a small
+ * static fallback (below) because that field is read synchronously all over the codebase
+ * (listBackends() etc.) — a real vendor catalog can only be had by awaiting a fetch, so this is
+ * exported separately for a caller that can afford to await it (e.g. the Desk picker, PR 3).
+ */
+export async function fetchModelCatalog(workspaceId: string | null, opts: { force?: boolean } = {}): Promise<string[]> {
+  if (!opts.force && modelsCache && Date.now() - modelsCache.at < MODELS_TTL_MS) return modelsCache.ids;
+  const apiKey = resolveApiKey(workspaceId);
+  const res = await fetch(`${API_BASE}/v1/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`cursor-cloud models failed: ${res.status}`);
+  const j = await res.json();
+  const raw = Array.isArray(j.models) ? j.models : Array.isArray(j) ? j : [];
+  const ids: string[] = raw.map((m: any) => (typeof m === "string" ? m : m?.id)).filter((id: unknown): id is string => typeof id === "string" && !!id);
+  modelsCache = { at: Date.now(), ids };
+  return ids;
+}
+
+/** Test-only: forces the next fetchModelCatalog() call to hit the network again. */
+export function __resetModelCatalogCache(): void {
+  modelsCache = null;
+}
+
 export const cursorCloudBackend: CloudBackend = {
   name: "cursor-cloud",
   kind: "cloud",
@@ -104,10 +135,12 @@ export const cursorCloudBackend: CloudBackend = {
   pinsSession: true,
   appendsSystem: false,
   capabilities: {}, // no tool allowlist, no MCP in Phase 1
-  // Advisory only — the live catalog (39 ids on 2026-09-22) comes from GET /v1/models, not
-  // implemented here (Phase 1 scope is launch/stream/getRun/usage/followup/cancel). auto/null omits
-  // the model field entirely (see launch()).
-  models: ["auto", "claude-sonnet-5", "claude-opus-5", "composer-2.5"],
+  // Advisory static fallback only — this field is read synchronously (listBackends() etc.), so it
+  // can't hold the live 39-id catalog; see fetchModelCatalog() above for the real GET /v1/models,
+  // cached 1h. auto/null omits the model field entirely (see launch()). claude-sonnet-5 deliberately
+  // excluded: over its monthly spend cap on this account until 2026-10-12, so offering it here would
+  // just manufacture dead runs.
+  models: ["auto", "claude-opus-5", "composer-2.5"],
 
   bin(): string { throw new Error(NO_LOCAL_PROCESS); },
   buildArgs(): string[] { throw new Error(NO_LOCAL_PROCESS); },
@@ -159,8 +192,11 @@ export const cursorCloudBackend: CloudBackend = {
     return null;
   },
 
-  async checkAuth(): Promise<boolean> {
-    const apiKey = process.env.CURSOR_API_KEY;
+  async checkAuth(workspaceId?: string | null): Promise<boolean> {
+    // Same lookup order as every other method (see findApiKey/resolveApiKey): on this operator's
+    // machine the key lives in workspace vars for Personal + Chronos, NOT daemon env, so an
+    // env-only check reports "not authenticated" on the exact setup this backend runs on.
+    const apiKey = findApiKey(workspaceId ?? null);
     if (!apiKey) return false;
     try {
       const res = await fetch(`${API_BASE}/v1/me`, { headers: { Authorization: `Bearer ${apiKey}` } });

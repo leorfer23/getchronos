@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cursorCloudBackend, isGitHubRemote } from "./cursor-cloud.js";
+import { cursorCloudBackend, fetchModelCatalog, isGitHubRemote, __resetModelCatalogCache } from "./cursor-cloud.js";
 import { validateSpawnTarget } from "./index.js";
 import type { CloudLaunchOpts, CloudRef } from "./types.js";
 
@@ -206,6 +206,24 @@ test("cursor-cloud launch: resolves CURSOR_API_KEY from workspace vars before en
   }
 });
 
+test("cursor-cloud checkAuth: resolves the key from workspace vars, not just env", async () => {
+  const { calls, restore } = stubFetch({ "/v1/me": { status: 200, body: {} } });
+  const { workspaceVars, workspaces } = await import("../store.js");
+  const ws = workspaces.create({ slug: `cc-auth-${Date.now()}`, name: "CC auth", config_dir: "/tmp/cc-auth" } as any);
+  workspaceVars.set(ws.id, "CURSOR_API_KEY", "crsr_from_ws", null);
+  try {
+    delete process.env.CURSOR_API_KEY;
+    // No workspaceId → env only → no key anywhere → false, never a network call.
+    assert.equal(await cursorCloudBackend.checkAuth!(), false);
+    assert.equal(calls.length, 0);
+    // workspaceId passed → finds the key in that workspace's vars, same as every other method.
+    assert.equal(await cursorCloudBackend.checkAuth!(ws.id), true);
+    assert.equal(calls[0].headers.Authorization, "Bearer crsr_from_ws");
+  } finally {
+    restore();
+  }
+});
+
 test("cursor-cloud stream: parses SSE blocks, resumes via Last-Event-ID, marks result terminal", async () => {
   const sse = [
     "id: 1\nevent: status\ndata: {\"status\":\"RUNNING\"}\n\n",
@@ -405,4 +423,33 @@ test("validateSpawnTarget: repo arg is optional and does not affect other backen
   assert.equal(validateSpawnTarget("claude-code", "sonnet"), null);
   assert.match(validateSpawnTarget("no-such-backend", "sonnet")!, /unknown backend/);
   assert.equal(validateSpawnTarget("cursor-cloud", null), null); // no repo info passed → nothing to refuse yet
+});
+
+test("cursor-cloud: static models fallback omits claude-sonnet-5 (over its spend cap on this account)", () => {
+  assert.ok(!cursorCloudBackend.models!.includes("claude-sonnet-5"));
+});
+
+test("fetchModelCatalog: fetches GET /v1/models, caches 1h, force bypasses the cache", async () => {
+  __resetModelCatalogCache();
+  let n = 0;
+  const real = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    n++;
+    return { ok: true, status: 200, json: async () => ({ models: [{ id: "claude-opus-5" }, "composer-2.5", { id: null }] }) } as any;
+  }) as any;
+  try {
+    process.env.CURSOR_API_KEY = "crsr_test";
+    const first = await fetchModelCatalog(null);
+    assert.deepEqual(first, ["claude-opus-5", "composer-2.5"]);
+    assert.equal(n, 1);
+    const second = await fetchModelCatalog(null); // within the 1h TTL → cached, no second fetch
+    assert.deepEqual(second, first);
+    assert.equal(n, 1);
+    await fetchModelCatalog(null, { force: true });
+    assert.equal(n, 2);
+  } finally {
+    globalThis.fetch = real;
+    delete process.env.CURSOR_API_KEY;
+    __resetModelCatalogCache();
+  }
 });
