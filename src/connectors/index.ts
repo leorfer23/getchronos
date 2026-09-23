@@ -7,6 +7,7 @@ import { guard } from "../guard.js";
 import { clickup } from "./clickup.js";
 import { jira } from "./jira.js";
 import { externalStatusFor } from "./types.js";
+import { harvestComments, markPushed } from "../prose.js";
 import type { Connector } from "./types.js";
 import { isClosedTicketStatus, type Ticket, type TicketRow, type TicketStatus, type Workspace } from "../types.js";
 
@@ -121,6 +122,17 @@ export async function syncWorkspace(ws: Workspace): Promise<SyncResult> {
     // "Review all the ones we have": tickets we track that the pull didn't return. The widened query
     // (open + recently-closed) catches active closures; anything still missing is stale/long-closed.
     // ponytail: just surface the count — per-ticket refetch can come later if it proves needed.
+    // The operator's own comments are the best record of how he writes to this client. Best-effort:
+    // a failed /myself or a bad row must never fail the ticket sync around it.
+    if (conn.me && (conn.name === "jira" || conn.name === "clickup")) {
+      try {
+        const n = harvestComments(ws, conn.name, await conn.me(cfg), external);
+        if (n) console.log(`[prose] ${ws.slug}: +${n} sample(s) from ${conn.name} comments`);
+      } catch (e: any) {
+        console.warn(`[prose] ${ws.slug} harvest failed:`, e?.message ?? e);
+      }
+    }
+
     res.unseen = store.list({ workspace_id: ws.id }).filter((t) => t.external_system === conn.name && t.external_id && !seen.has(t.external_id)).length;
 
     if (res.created || res.updated) bus.publish({ topic: "ticket.updated", ticket_id: "" });
@@ -148,6 +160,8 @@ function connFor(t: Pick<Ticket, "external_system" | "external_id" | "workspace_
 export async function pushComment(t: Ticket, body: string): Promise<void> {
   const { conn, cfg } = connFor(t);
   await conn.addComment(cfg, t.external_id!, body);
+  // Posted with his credentials, but not his words — keep it out of his prose corpus.
+  markPushed(body);
 }
 
 // Push the ticket's CURRENT local status out to the tracker (collapsed via status_map). Returns the

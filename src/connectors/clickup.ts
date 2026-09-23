@@ -73,6 +73,10 @@ export async function fetchTasks(cfg: any): Promise<any[]> {
 
 export const clickup: Connector = {
   name: "clickup",
+  async me(cfg) {
+    const id = await myUserId(cfg);
+    return id == null ? null : String(id);
+  },
   async pull(cfg): Promise<ExternalTask[]> {
     const { token } = cfg;
     if (!token) throw new Error("clickup connector needs { token }");
@@ -91,7 +95,9 @@ export const clickup: Connector = {
       if (fetched++ < commentLimit) try {
         const cr = await fetch(`https://api.clickup.com/api/v2/task/${t.id}/comment`, { headers: { Authorization: token } });
         if (cr.ok) comments = ((await cr.json())?.comments ?? []).map((c: any): ExternalComment => ({
+          id: c.id != null ? String(c.id) : undefined,
           author: c.user?.username ?? "unknown",
+          author_id: c.user?.id != null ? String(c.user.id) : undefined,
           body: c.comment_text ?? "",
           created: msToIso(c.date),
         }));

@@ -12,6 +12,7 @@ import { notifyInfo } from "./telegram/api.js";
 import { esc } from "./telegram/api.js";
 import { kb, type Btn } from "./telegram/keyboards.js";
 import { maybeHygiene, reapEphemeralJobs } from "./hygiene.js";
+import { maybeLearnProse } from "./prose.js";
 import { maybeExpireIdeas, maybeMineIdeas } from "./ideas.js";
 import { pollDeliveries } from "./delivery.js";
 import { reapDoneWorktrees } from "./worktrees.js";
@@ -586,6 +587,7 @@ export function startMonitor() {
       await maybeDigest();
       await maybeWeeklyReport();
       await maybeHygiene();
+      maybeLearnProse();
       reapEphemeralJobs();
       maybeExpireIdeas();
       await maybeMineIdeas();

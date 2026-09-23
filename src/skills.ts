@@ -1,3 +1,4 @@
+import { proseBlock } from "./prose.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -181,6 +182,7 @@ export function agentContext(workspace_id: string, repo_id?: string | null): str
     contextBlock(workspace_id, repo_id),
     memoryBlock(workspace_id),
     skillIndexBlock(workspace_id),
+    proseBlock(workspace_id),
     lessonsBlock(workspace_id, {
       repo_id,
       topic: "comms",

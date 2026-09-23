@@ -1731,6 +1731,31 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       db.exec("CREATE INDEX IF NOT EXISTS idx_runs_cloud_live ON runs(status, cloud_agent_id)");
     },
   },
+  {
+    version: 131,
+    name: "prose_samples — the operator's own writing, per workspace",
+    // What the operator actually sent (Slack/Jira/ClickUp/email), so agents drafting business messages
+    // on his behalf write the way he does (src/prose.ts). `draft` is set when the sample is an edit:
+    // the agent's draft he rewrote — the strongest signal there is. `hash` dedupes a comment the
+    // connector sees on every pull.
+    up: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS prose_samples (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        body TEXT NOT NULL,
+        draft TEXT,
+        context TEXT,
+        ref TEXT,
+        hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )`);
+      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_prose_hash ON prose_samples(workspace_id, hash)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_prose_ws ON prose_samples(workspace_id, created_at)");
+    },
+  },
 
 ];
 
