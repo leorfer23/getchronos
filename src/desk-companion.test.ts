@@ -177,8 +177,8 @@ test("on by default, off by ⌘⇧T or the header icon, and the pty never sees t
   assert.match(html, /qs\("#h-comp"\)\.onclick/);
 });
 
-test("the xterm keeps the keyboard: every companion click hands it straight back", () => {
-  assert.match(html, /function compFocusBack\(\) \{ if \(S\.mode === "term"\) S\.panes\.get\(S\.active\)\?\.term\.focus\(\); \}/);
+test("the composer keeps the keyboard: every companion click hands it straight back", () => {
+  assert.match(html, /function compFocusBack\(\) \{ if \(S\.mode === "term"\) focusSay\(\); \}/);
   // mousedown is where focus moves, so that is where it is refused.
   assert.match(html, /for \(const sel of \["#askbar", "#comp", "#ticker", "#gut"\]\) qs\(sel\)\.addEventListener\("mousedown"[\s\S]{0,120}e\.preventDefault\(\)/);
   for (const re of [/compScrollTo\(Number\(row\.dataset\.at\) \|\| 0\);\s*compFocusBack\(\);/, /compCopy\(f\.dataset\.file\);\s*compFocusBack\(\);/])
@@ -275,4 +275,12 @@ test("a PR the terminal only printed is read off the pane, bounded so a frame ne
   // Deep sweep once, when the terminal comes on stage (pinAt still 0); the newest rows after that.
   assert.match(html, /const seen = compScreenPrs\(!C\.pinAt\);/);
   assert.match(html, /"\/artifacts" \+ \(seen\.length \? "\?urls=" \+ encodeURIComponent\(seen\.join\(","\)\) : ""\)/);
+});
+
+test("Terminal mode types in the composer, not the xterm: local until enter, bare keys pass through", () => {
+  assert.match(html, /body\.mode-focus \.composer\.live, body\.mode-term \.composer\.live \{ display:flex; \}/);
+  assert.match(html, /if \(S\.mode === "term"\) setTimeout\(focusSay, 60\);/);
+  assert.match(html, /setTimeout\(focusSay, 30\);/, "mounting the pane does not steal the keyboard");
+  assert.match(html, /const SAY_KEYS = \{ Enter: "enter", Escape: "esc", ArrowUp: "up", ArrowDown: "down" \};/);
+  assert.match(html, /if \(S\.mode === "term" && !say\.value && S\.active && SAY_KEYS\[e\.key\][^\n]*\n\s*e\.preventDefault\(\); e\.stopPropagation\(\);\n\s*return input\(S\.active, \{ key: SAY_KEYS\[e\.key\] \}\);/);
 });
