@@ -472,7 +472,9 @@
   .sbar button.qa kbd { font:inherit; font-size:11px; color:var(--faint); font-variant-numeric:tabular-nums; }
   .sbar button.qa.gear { padding:0 11px; color:var(--faint); }
   .composer { display:none; gap:8px; padding:8px 14px 10px; background:var(--surface); flex:none; }
-  body.mode-focus .composer.live { display:flex; }
+  /* Terminal mode too: typing into the xterm is a keystroke per round trip, the composer is local
+     until ⏎. The xterm stays clickable for raw keys; the composer is where the keyboard lands. */
+  body.mode-focus .composer.live, body.mode-term .composer.live { display:flex; }
   .composer textarea { flex:1; min-width:0; padding:10px 13px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--ink);
     font-size:17px; line-height:1.45; font-family:inherit; resize:none; max-height:40vh; }
   .composer textarea:focus { outline:0; border-color:var(--accent); }
@@ -1629,7 +1631,8 @@ function setMode(m) {
   if (S.mode === "fleet") renderFleet();
   syncPane();
   compRender();
-  if (S.mode === "term") setTimeout(() => S.panes.get(S.active)?.term.focus(), 60);
+  if (S.mode === "term") setTimeout(focusSay, 60);
+  syncSayHint();
 }
 function renderStage() {
   const s = S.active && byId(S.active);
@@ -2135,7 +2138,7 @@ function qaFire(i) {
   const s = S.active && byId(S.active); if (!s || !s.live) return;
   const a = (qaVisible() || [])[i]; if (!a) return;
   const back = () => compFocusBack();
-  if (a.kind === "changes") { if (S.mode === "term") S.panes.get(s.id)?.term.focus(); else qs("#say").focus(); return; }
+  if (a.kind === "changes") { focusSay(); return; }
   if (a.kind === "ask-robert") return qaAskRobert(s, a);
   if (a.kind === "kill") { stageAction("close"); return back(); }
   // Smart approve: a terminal sitting on "1. Yes / 2. No" wants the option taken, not the word
@@ -2351,8 +2354,8 @@ qs("#gut").addEventListener("click", (e) => {
   try { p.term.scrollToLine(Math.max(0, Number(t.dataset.line) - 2)); } catch {}
   compFocusBack();
 });
-// Every companion click hands the keyboard straight back: in Terminal mode the pty owns it, always.
-function compFocusBack() { if (S.mode === "term") S.panes.get(S.active)?.term.focus(); }
+// Every companion click hands the keyboard straight back: in Terminal mode the composer owns it.
+function compFocusBack() { if (S.mode === "term") focusSay(); }
 // A row is a moment; the nearest mark at or before it is the line that moment printed on. Rows older
 // than the pane (a reopened terminal, a tab opened mid-session) have no mark and scroll to the top.
 function compScrollTo(at) {
@@ -2697,7 +2700,7 @@ function stageClick(e) {
   if (t.dataset.fa) return stageAction(t.dataset.fa);
   if (t.dataset.fopt !== undefined) { const o = p?.options?.[Number(t.dataset.fopt)]; if (o) { answer(s.id, optionBody(o)); advance(s.id, "answered"); } return; }
   if (t.dataset.fyn) { answer(s.id, { text: t.dataset.fyn, enter: true }); return advance(s.id, "answered"); }
-  if (t.hasAttribute("data-ftype")) { if (S.mode === "term") S.panes.get(s.id)?.term.focus(); else qs("#say").focus(); }
+  if (t.hasAttribute("data-ftype")) focusSay();
 }
 qs("#story").addEventListener("click", stageClick);
 qs("#sbar").addEventListener("click", stageClick);
@@ -2709,7 +2712,19 @@ hGoal.onblur = () => S.active && saveGoal(S.active, hGoal.value.trim());
 // The composer: what you type goes through the daemon (typed, then Enter on its own tick).
 const say = qs("#say");
 say.addEventListener("input", () => { say.style.height = "auto"; say.style.height = Math.min(say.scrollHeight, window.innerHeight * 0.4) + "px"; });
-say.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); qs("#composer").requestSubmit(); } });
+// Terminal mode, empty composer: ⏎ ⎋ ↑ ↓ go straight to the pty as keys — a "press enter", an
+// interrupt, a menu pick — so the keyboard never has to leave the composer for the common moves.
+const SAY_KEYS = { Enter: "enter", Escape: "esc", ArrowUp: "up", ArrowDown: "down" };
+function focusSay() { if (qs("#composer").classList.contains("live")) say.focus(); }
+function syncSayHint() { say.placeholder = S.mode === "term" ? "Type to the terminal… (⏎ send · empty ⏎ ⎋ ↑ ↓ pass through)" : "Tell the agent… (⏎ send · ⇧⏎ newline)"; }
+syncSayHint();
+say.addEventListener("keydown", (e) => {
+  if (S.mode === "term" && !say.value && S.active && SAY_KEYS[e.key] && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    e.preventDefault(); e.stopPropagation();
+    return input(S.active, { key: SAY_KEYS[e.key] });
+  }
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); qs("#composer").requestSubmit(); }
+});
 qs("#composer").addEventListener("submit", (e) => {
   e.preventDefault();
   const text = say.value.trim(); if (!text || !S.active) return;
@@ -2731,14 +2746,7 @@ const shq = (p) => (/^[\w@%+=:,./-]+$/.test(p) ? p : "'" + p.replace(/'/g, "'\\'
 function insertDropped(id, text) {
   const s = byId(id);
   if (!s) return;
-  // Terminal mode: type it in with NO Enter — the path is a word in a sentence the operator is
-  // still writing ("read <path> and tell me why it looks like that"), never a command of its own.
-  if (S.mode === "term" && s.live) {
-    input(id, { text: text + " ", enter: false });
-    if (S.active === id) S.panes.get(id)?.term.focus();
-    return;
-  }
-  // Focus mode: the composer is the same door. At the caret, because the sentence is half-written.
+  // Both modes: into the composer at the caret, because the sentence is half-written.
   if (S.active !== id) return; // the stage moved on mid-upload — the path is in the toast
   const at = say.selectionStart ?? say.value.length, end = say.selectionEnd ?? at;
   const pre = say.value.slice(0, at), ins = (pre && !/\s$/.test(pre) ? " " : "") + text + " ";
@@ -2927,7 +2935,7 @@ function mountPane(s, host) {
   S.panes.set(s.id, pane);
   pane.ro = new ResizeObserver(() => { clearTimeout(pane.roT); pane.roT = setTimeout(() => { try { fit.fit(); sendSize(); } catch {} }, 60); });
   pane.ro.observe(host);
-  setTimeout(() => { try { term.focus(); } catch {} }, 30);
+  setTimeout(focusSay, 30);
   // The rail is painted before the pane exists, so the phase it opened in has no tick yet: give it one.
   if (S.active === s.id && C.lastPhase) compMark(C.lastPhase);
 }

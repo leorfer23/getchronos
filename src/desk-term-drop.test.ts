@@ -82,9 +82,9 @@ test("the page uploads because the web never gives it a real path, and prefers o
 
 test("the path goes in as a word: quoted if it needs it, space after it, never an Enter", () => {
   assert.match(html, /const shq = \(p\) => \(\/\^\[\\w@%\+=:,\.\/-\]\+\$\/\.test\(p\) \? p : "'" \+ p\.replace\(\/'\/g, "'\\\\''"\) \+ "'"\);/);
-  assert.match(html, /input\(id, \{ text: text \+ " ", enter: false \}\);/);
+  assert.doesNotMatch(html, /input\(id, \{ text: text \+ " ", enter: false \}\);/, "both modes drop into the composer");
   assert.match(html, /insertDropped\(id, out\.map\(shq\)\.join\(" "\)\);/);
-  // Focus mode: the composer is the same door, at the caret.
+  // Both modes: the composer is the door, at the caret.
   assert.match(html, /say\.value = pre \+ ins \+ say\.value\.slice\(end\);/);
   assert.match(html, /say\.selectionStart = say\.selectionEnd = pre\.length \+ ins\.length;/);
 });
