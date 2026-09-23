@@ -3209,11 +3209,11 @@ async function loadRecent() {
   S.ended = (Array.isArray(rows) ? rows : rows.sessions || [])
     .filter((x) => !liveIds.has(x.id) && x.ended_at)
     .map((x) => ({ ...x, state: "ended", live: false }))
-    .sort((a, b) => Date.parse(b.ended_at) - Date.parse(a.ended_at))
-    .slice(0, RECENT_MAX);
+    .sort((a, b) => Date.parse(b.ended_at) - Date.parse(a.ended_at));
   renderRecent();
 }
 // A worker whose Lead is still live is its Lead's business, exactly as on the rail and the phone.
+// Cap AFTER that filter: a busy Lead's workers can fill the whole page and leave Recent empty.
 function renderRecent() {
   const rows = S.fold.recent ? [] : S.ended.filter((s) => !S.dismissed.has(s.id) && !leadLive(s.lead_id)).slice(0, RECENT_MAX);
   const sec = qs("#sec-recent");
