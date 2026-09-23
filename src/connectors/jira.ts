@@ -61,6 +61,7 @@ async function hoursFieldId(cfg: any): Promise<string | null> {
 
 export const jira: Connector = {
   name: "jira",
+  me: (cfg) => myAccountId(cfg),
   async pull(cfg): Promise<ExternalTask[]> {
     const { base, header } = auth(cfg);
     // Default query keeps every open ticket AND anything closed in the last 30d, so a ticket
@@ -88,7 +89,9 @@ export const jira: Connector = {
             ? "in_progress"
             : "backlog";
       const comments: ExternalComment[] = (f.comment?.comments ?? []).map((c: any) => ({
+        id: c.id != null ? String(c.id) : undefined,
         author: c.author?.displayName ?? "unknown",
+        author_id: c.author?.accountId ?? undefined,
         body: adfToText(c.body).trim(),
         created: c.created ?? null,
       }));

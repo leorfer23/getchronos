@@ -27,6 +27,7 @@ export { sessions } from "./store/sessions.js";
 export { sessionGoals } from "./store/session-goals.js";
 export { notes } from "./store/notes.js";
 export { jots } from "./store/jots.js";
+export { proseSamples } from "./store/prose.js";
 export type { Jot, NewJot } from "./store/jots.js";
 export { launches } from "./store/launches.js";
 export type { Launch, NewLaunch } from "./store/launches.js";

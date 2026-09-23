@@ -151,6 +151,15 @@ const HELP = `mc — Mission Control backlog CLI
                              (≤200 chars) goes under ## T in the ★ memory-index (always in the prompt);
                              --detail goes to the memory-<t> branch memo, read on demand. Refused when
                              either would pass its cap — condense first. Use for "remember / always / from now on".
+  mc prose [--channel slack|jira|clickup|email|doc] [--about "<gist>"]
+                             how the operator writes in this workspace: the learned guide + his closest real
+                             messages. Run it BEFORE drafting anything that goes out under his name. Always English.
+  mc prose add [--channel C] [--draft "<your draft>"] [--context "<what he replied to>"] "<text he sent>"
+                             save one message he wrote (text may be piped on stdin). With --draft it is an edit:
+                             your draft next to what he actually sent — the strongest signal. Only HIS words.
+  mc prose samples [--channel C] [--json] | mc prose rm <id> | mc prose learn
+                             list/drop samples; "learn" re-runs the read-only learner now (also auto after new samples)
+  mc prose guide --body -    replace the prose-guide memo (the learner's output; stdin with "-")
   mc learn "<durable fact>" [--label L] [--workspace ID]   note a fact in the session-learnings inbox (NOT auto-loaded; the operator promotes it)
   mc lesson list [--state active|proposed] [--topic build|review|comms] [--repo ID]
                              rules this workspace has learned; ● active (injected into agents), ○ proposed
@@ -933,6 +942,54 @@ async function heavy(argv) {
       return console.log(r.added
         ? `remembered ✓ under ${r.topic} in memory-index${r.branch ? ` (detail → ${r.branch.slug})` : ""}`
         : `already in memory-index${r.branch ? ` (detail added → ${r.branch.slug})` : ""}`);
+    }
+    if (cmd === "prose") {
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (!wsId) die("prose needs --workspace or MC_WORKSPACE");
+      const base = "/workspaces/" + wsId + "/prose";
+      const sub = pos[1] || "show";
+      if (sub === "show" || sub === "get") {
+        const q = new URLSearchParams({ ...(opt.channel ? { channel: opt.channel } : {}), ...(opt.about ? { about: opt.about } : {}), ...(opt.limit ? { limit: opt.limit } : {}) });
+        const r = await req("GET", base + (q.size ? "?" + q : ""));
+        return console.log(r.text);
+      }
+      if (sub === "add") {
+        const piped = (await readStdin()).trim();
+        const body = opt.body && opt.body !== "-" ? opt.body : pos.slice(2).join(" ") || piped;
+        if (!body) die('prose add needs the text he sent: mc prose add [--channel slack] [--draft "…"] "<text>"');
+        // Only his own shell (no MC_SESSION) speaks first-hand; a terminal relaying his text is an agent.
+        const tok = process.env.MC_SESSION ? null : adminToken();
+        const r = await req("POST", base + "/samples", {
+          body, channel: opt.channel, source: opt.source, draft: opt.draft, context: opt.context, ref: opt.ref,
+        }, tok ? { "x-mc-admin": tok } : undefined);
+        return console.log(r.added ? `saved ✓ (${r.sample.channel}${r.sample.draft ? ", edit pair" : ""})` : "already saved");
+      }
+      if (sub === "samples" || sub === "list") {
+        const q = new URLSearchParams({ ...(opt.channel ? { channel: opt.channel } : {}), ...(opt.limit ? { limit: opt.limit } : {}) });
+        const rows = await req("GET", base + "/samples" + (q.size ? "?" + q : ""));
+        if (opt.json) return console.log(JSON.stringify(rows.map(({ id, channel, source, origin, body, draft, context }) => ({ id, channel, source, origin, body, draft, context })), null, 2));
+        if (!rows.length) return console.log("no samples yet — mc prose add \"<text he sent>\"");
+        for (const s of rows) console.log(`${s.id.slice(0, 8)}  ${s.channel.padEnd(7)} ${s.origin.padEnd(9)} ${s.draft ? "✎ " : ""}${s.body.replace(/\s+/g, " ").slice(0, 90)}`);
+        return;
+      }
+      if (sub === "rm") {
+        const ref = pos[2] || die("prose rm needs a sample id");
+        const rows = await req("GET", base + "/samples");
+        const s = rows.find((x) => x.id === ref || x.id.startsWith(ref)) || die(`sample not found: ${ref}`);
+        await req("DELETE", base + "/samples/" + s.id);
+        return console.log("removed ✓");
+      }
+      if (sub === "learn") {
+        const r = await req("POST", base + "/learn");
+        return console.log(`learning ✓ (job ${r.job_id.slice(0, 8)}) — the guide lands in memo prose-guide`);
+      }
+      if (sub === "guide") {
+        const body = !opt.body || opt.body === "-" ? (await readStdin()).trim() : opt.body;
+        if (!body) die("prose guide needs --body \"…\" or --body - with the guide on stdin");
+        await req("PUT", base + "/guide", { body });
+        return console.log("prose-guide saved ✓");
+      }
+      die(`unknown prose subcommand: ${sub}`);
     }
     if (cmd === "learn") {
       const fact = opt.body ?? pos.slice(1).join(" ");

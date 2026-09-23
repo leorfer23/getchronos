@@ -598,6 +598,15 @@ export const CONFIG = {
     stickyMinutes: Number(process.env.CHRONOS_THREAD_STICKY_MIN ?? 90),
     aliases: parseAliases(process.env.CHRONOS_THREAD_ALIASES),
   },
+  // Operator prose (src/prose.ts): per workspace, a read-only agent turns the operator's own writing
+  // into a style guide agents follow when they draft Slack/Jira/email on his behalf. It re-learns once
+  // `minNew` fresh samples have landed since the last pass, at most once a day. auto=0 → only
+  // `mc prose learn` runs it.
+  prose: {
+    auto: process.env.CHRONOS_PROSE_AUTO !== "0",
+    minNew: Number(process.env.CHRONOS_PROSE_MIN_NEW ?? 10),
+    model: process.env.CHRONOS_PROSE_MODEL ?? "opus",
+  },
   agent: {
     backend: process.env.CHRONOS_AGENT_BACKEND ?? "claude-code",
     profile: process.env.CHRONOS_AGENT_PROFILE ?? "claude", // a name from `profiles` below

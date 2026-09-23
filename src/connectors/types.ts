@@ -1,7 +1,11 @@
 import type { TicketStatus } from "../types.js";
 
 export interface ExternalComment {
+  /** The tracker's comment id, when it has one. */
+  id?: string;
   author: string;
+  /** The tracker's id for the author (Jira accountId / ClickUp user id) — what prose harvest matches on. */
+  author_id?: string;
   body: string;
   created: string | null; // ISO
 }
@@ -27,6 +31,9 @@ export interface ExternalTask {
 export interface Connector {
   name: string;
   pull(cfg: Record<string, any>): Promise<ExternalTask[]>;
+  // Optional: the tracker's id for whoever owns the token — the operator. Comments with that
+  // author_id are his own writing and feed the prose corpus (src/prose.ts).
+  me?(cfg: Record<string, any>): Promise<string | null>;
   // Move the external task to the given external status label. Connector resolves the label to its
   // own mechanism (Jira: a workflow transition; ClickUp: a status field write). No-op + log if the
   // label doesn't exist in the tracker, so an unmapped status never throws the whole sync.

@@ -339,6 +339,23 @@ can't go below the workspace floor — either is refused with the reason, never 
 
 Only when the operator asks for recurring or scheduled work.
 
+## Writing as the operator — `mc prose`
+
+Anything that goes out under the operator's name — a Slack message, a Jira/ClickUp comment, an email,
+a status note — must sound like **him**, not like a model. Each workspace learns how he writes there.
+
+```bash
+mc prose --channel slack --about "PR is merged, deploy tomorrow"   # guide + his closest real messages
+mc prose add --channel slack "<text he actually sent>"            # he pasted his own message: save it
+mc prose add --channel jira --draft "<your draft>" "<what he sent instead>"   # he rewrote you: save the pair
+```
+
+- **Before drafting, run `mc prose`.** Match his length, openings, structure and words. Always English,
+  even when his samples or his prompt to you are in another language.
+- **He rewrote your draft? Save the pair** with `--draft`. That gap is the best lesson there is.
+- Only his own words go in — never your draft alone, never a colleague's message, never Chronos output.
+- The guide (memo `prose-guide`) re-learns by itself once enough new samples land; `mc prose learn` forces it.
+
 ## Slack (when connected)
 
 If this workspace has Slack connected, you have Slack MCP tools scoped to THIS client only. Use them

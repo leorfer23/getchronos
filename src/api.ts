@@ -71,6 +71,8 @@ import { ensureSessionWorktree, listAllWorktrees, removeWorktreeAs } from "./wor
 import { askRobertEnabled, askerLabel, escalateAsk } from "./ask-robert.js";
 import * as noteSvc from "./notes.js";
 import { forgetMemorySeen, markMemorySeen, memoryNotice, rememberFact } from "./memory-tree.js";
+import { addSample, proseBrief, proseGuide, saveGuide, startLearning } from "./prose.js";
+import { proseSamples } from "./store/prose.js";
 import { recall, renderRecall } from "./recall.js";
 import { openConflicts } from "./memory-conflicts.js";
 import * as agentMemory from "./agent-memory.js";
@@ -126,7 +128,7 @@ import {
   validate,
   OpenSessionSchema, ResizeSchema, SessionPatchSchema, SessionGoalsSchema, SessionGoalPatchSchema, SessionInputSchema, SessionStatusSchema, SessionProgressSchema, SessionHookSchema, UsageReportSchema,
   AgentNameSchema, AgentReportSchema, AgentWaitSchema,
-  NewNoteSchema, PatchNoteSchema, LearnSchema, RememberSchema, AgentMemoryAppendSchema, BriefAppendSchema, BriefRewriteSchema, AgentMemoryRewriteSchema, StowSchema,
+  NewNoteSchema, PatchNoteSchema, LearnSchema, RememberSchema, ProseSampleSchema, ProseGuideSchema, AgentMemoryAppendSchema, BriefAppendSchema, BriefRewriteSchema, AgentMemoryRewriteSchema, StowSchema,
   WorklogEntrySchema, WorklogBackfillSchema,
   NewJobSchema, PatchJobSchema,
   NewTriggerSchema, PatchTriggerSchema,
@@ -1584,6 +1586,58 @@ export function startServer() {
     if (writer && writer.workspace_id === req.params.id) markMemorySeen(writer.id);
     res.status(201).json({ added: r.added, topic: r.topic, index: publicNote(r.note), branch: r.branch ? publicNote(r.branch) : null });
   });
+  // Operator prose (src/prose.ts): how he writes, per workspace, for agents that draft under his name.
+  // Workspace-walled like memory. `origin` is stamped here from the caller, never taken from the body:
+  // only the admin (the Desk, his own shell) can say "this is mine" first-hand.
+  api.get("/workspaces/:id/prose", (req, res) => {
+    if (!checkScope(req, res, req.params.id)) return;
+    if (!workspaces.get(req.params.id)) return res.status(404).json({ error: "workspace not found" });
+    const text = proseBrief(req.params.id, {
+      channel: req.query.channel ? String(req.query.channel) : undefined,
+      about: req.query.about ? String(req.query.about) : undefined,
+      limit: req.query.limit ? Math.min(10, Number(req.query.limit) || 4) : undefined,
+    });
+    const g = proseGuide(req.params.id);
+    res.json({ text, guide: g ? publicNote(g) : null, samples: proseSamples.countSince(req.params.id, null) });
+  });
+  api.get("/workspaces/:id/prose/samples", (req, res) => {
+    if (!checkScope(req, res, req.params.id)) return;
+    res.json(proseSamples.list(req.params.id, {
+      channel: req.query.channel ? String(req.query.channel) : undefined,
+      limit: req.query.limit ? Number(req.query.limit) || undefined : undefined,
+    }));
+  });
+  api.post("/workspaces/:id/prose/samples", validate(ProseSampleSchema), (req, res) => {
+    if (!checkScope(req, res, req.params.id)) return;
+    if (!workspaces.get(req.params.id)) return res.status(404).json({ error: "workspace not found" });
+    const origin = tokenOk(req.get("x-mc-admin"), CONFIG.adminToken) ? "operator" : "agent";
+    const r = addSample(req.params.id, req.body, origin);
+    if (!r.ok) return res.status(422).json({ error: r.error });
+    res.status(r.sample ? 201 : 200).json({ added: !!r.sample, sample: r.sample });
+  });
+  api.delete("/workspaces/:id/prose/samples/:sid", (req, res) => {
+    if (!checkScope(req, res, req.params.id)) return;
+    const s = proseSamples.get(req.params.sid);
+    if (!s || s.workspace_id !== req.params.id) return res.status(404).json({ error: "not found" });
+    proseSamples.remove(s.id);
+    res.json({ ok: true });
+  });
+  api.put("/workspaces/:id/prose/guide", validate(ProseGuideSchema), (req, res) => {
+    if (!checkScope(req, res, req.params.id)) return;
+    if (!workspaces.get(req.params.id)) return res.status(404).json({ error: "workspace not found" });
+    const r = saveGuide(req.params.id, req.body.body);
+    if (!r.ok) return res.status(409).json({ error: r.error });
+    res.json(publicNote(r.note));
+  });
+  api.post("/workspaces/:id/prose/learn", (req, res) => {
+    if (!checkScope(req, res, req.params.id)) return;
+    const ws = workspaces.get(req.params.id);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+    const r = startLearning(ws);
+    if (!r.ok) return res.status(409).json({ error: r.error });
+    res.status(202).json(r);
+  });
+
   // Retrieval-first memory (`mc recall`): one workspace-walled search across memos, skills,
   // lessons and past-session digests. Scoped callers can only recall their own workspace; there is
   // deliberately NO unscoped variant — cross-workspace recall would cross client walls.

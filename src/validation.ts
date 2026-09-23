@@ -234,6 +234,17 @@ export const RememberSchema = z.object({
   session: z.string().max(80).optional(),
 });
 
+/** `mc prose add`: one message the operator wrote (src/prose.ts). `draft` = the agent text he rewrote. */
+export const ProseSampleSchema = z.object({
+  body: z.string().trim().min(1).max(4000),
+  channel: z.string().trim().max(20).optional(),
+  source: z.enum(["manual", "slack", "jira", "clickup", "email", "edit"]).optional(),
+  draft: z.string().trim().max(4000).optional(),
+  context: z.string().trim().max(1000).optional(),
+  ref: z.string().trim().max(300).optional(),
+});
+export const ProseGuideSchema = z.object({ body: z.string().trim().min(1).max(4000) });
+
 // Persona memory. Capped so one runaway append can't bloat a file that loads on every single turn.
 export const AgentMemoryAppendSchema = z.object({
   fact: z.string().trim().min(1).max(2000),
