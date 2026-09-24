@@ -8,7 +8,9 @@
  *
  * A lesson is that correction distilled into one imperative rule, scoped to where it applies, and
  * injected back into the agents that need it — builders as constraints, reviewers as extra
- * criteria, the manager as how-to-talk-to-the operator. Rules earn their place: an AI reviewer's complaint
+ * criteria. `comms` rules (how to talk to the operator) are not injected as rows: they are input to
+ * the workspace's one-page voice page (prose.ts), which every agent carries and which is rewritten,
+ * never appended to, whenever one changes. Rules earn their place: an AI reviewer's complaint
  * starts as `proposed` and only becomes `active` once the same thing has come up more than once,
  * while the operator's own corrections are active immediately, because they do not repeat themselves.
  */
@@ -104,16 +106,24 @@ export function recordLesson(l: NewLesson): Lesson {
   );
   if (existing) {
     const updated = store.reinforce(existing.id, CONFIG.lessonPromoteAfter) ?? existing;
-    bus.publish({ topic: "lesson.updated", lesson_id: updated.id, workspace_id: l.workspace_id, state: updated.state });
+    publishLesson(updated);
     return updated;
   }
   const created = store.create({ ...l, rule });
-  bus.publish({ topic: "lesson.updated", lesson_id: created.id, workspace_id: l.workspace_id, state: created.state });
+  publishLesson(created);
   // Dedupe above answered "is this the same rule again?". This asks the other question — whether
   // the rule we just accepted contradicts one already standing. Compared only against rules that
   // could apply to the same work: same topic (or the catch-all), same repo scope.
   checkLessonForConflicts(created);
   return created;
+}
+
+/**
+ * Every change to a rule goes out on the bus with its topic. Pass `state` to announce the rule as it
+ * WAS (an edit that moves a rule out of comms, or a delete, still leaves the voice page stale).
+ */
+export function publishLesson(l: Lesson, state: string = l.state): void {
+  bus.publish({ topic: "lesson.updated", lesson_id: l.id, workspace_id: l.workspace_id, state, lesson_topic: l.topic });
 }
 
 /** The rules a new lesson could plausibly contradict: same topic and repo scope, active only. */
@@ -230,12 +240,16 @@ export function captureFeedback(
  * Retire rules that stopped meaning anything: a proposal nobody ever saw twice, and an active rule
  * that hasn't matched a single piece of work in months (its code moved, or the convention changed).
  * A rule that keeps firing is doing its job and is never archived for age.
+ *
+ * An active comms rule never "fires" — it is folded into the voice page (prose.ts), not injected on
+ * its own — so idleness says nothing about it. It stays until he edits or deletes it.
  */
 export function decayLessons(nowMs = Date.now()): number {
   const day = 86_400_000;
   let archived = 0;
   for (const l of store.list({})) {
     if (l.state !== "active" && l.state !== "proposed") continue;
+    if (l.state === "active" && l.topic === "comms") continue;
     const age = (nowMs - Date.parse(l.created_at)) / day;
     const idle = l.last_fired ? (nowMs - Date.parse(l.last_fired)) / day : age;
     const stale =

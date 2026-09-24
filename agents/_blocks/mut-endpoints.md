@@ -36,7 +36,8 @@ Mutation endpoints (method + JSON body schema):
 - POST /api/lessons {workspace_id,repo_id?,rule,scope?,topic:"build"|"review"|"comms"} — record a RULE that changes what
     agents do next time. Use this whenever the operator corrects you or a build: their correction is the most
     valuable signal this system gets, and a rule filed here is injected into every future build (topic build),
-    reviewer (topic review), or into your own standing context (topic comms — how he wants to be talked to).
+    reviewer (topic review), or folded into the workspace's one-page voice page that every agent carries
+    (topic comms — how he wants to be talked to; the page is rewritten within the hour, not appended to).
     One imperative sentence that generalises past this ticket; scope is a path glob or omitted.
     GET /api/lessons?workspace=&state=active lists them; PATCH /api/lessons/:id {state} promotes/archives.
 - PATCH /api/workspaces/:id {auto_plan?,auto_build?,auto_review?,skill_distill?,auto_skill?,plan_panel?,review_panel?,ideas_config?} — toggle a workspace's autonomy / idea feeders

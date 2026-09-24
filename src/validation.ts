@@ -243,7 +243,9 @@ export const ProseSampleSchema = z.object({
   context: z.string().trim().max(1000).optional(),
   ref: z.string().trim().max(300).optional(),
 });
-export const ProseGuideSchema = z.object({ body: z.string().trim().min(1).max(4000) });
+// A transport bound only: the one-page cap (prose.ts GUIDE_CAP) is saveGuide's, which refuses with
+// the length and what to do — a bare 400 here would teach the learner nothing.
+export const ProseGuideSchema = z.object({ body: z.string().trim().min(1).max(16000) });
 
 // Persona memory. Capped so one runaway append can't bloat a file that loads on every single turn.
 export const AgentMemoryAppendSchema = z.object({
