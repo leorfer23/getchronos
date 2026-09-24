@@ -11,6 +11,17 @@ export function transcribeIsLocal(): boolean {
   return transcribeUrl() === LOCAL_URL;
 }
 
+// The engines pick a decoder by file extension, so the name must match the bytes: iOS Safari records
+// audio/mp4 (AAC), Chrome/Android audio/webm. A mismatched name fails the whole upload.
+export function audioFilename(contentType = ""): string {
+  const t = contentType.toLowerCase().split(";")[0].trim();
+  if (/mp4|m4a|aac/.test(t)) return "audio.m4a";
+  if (/ogg|opus/.test(t)) return "audio.ogg";
+  if (/wav/.test(t)) return "audio.wav";
+  if (/mpeg|mp3/.test(t)) return "audio.mp3";
+  return "audio.webm";
+}
+
 // Post audio bytes to the configured engine, return the transcript text (trimmed).
 export async function transcribe(
   buf: Buffer,
@@ -25,7 +36,7 @@ export async function transcribe(
   form.append(
     "file",
     new Blob([new Uint8Array(buf)], { type: opts.contentType || "audio/webm" }),
-    opts.filename || "audio.webm"
+    opts.filename || audioFilename(opts.contentType)
   );
   form.append("response_format", "json");
   // Explicit language (e.g. "en"/"es") is far more reliable than auto-detect on short clips.
@@ -36,6 +47,11 @@ export async function transcribe(
     method: "POST",
     headers: openai && key ? { authorization: `Bearer ${key}` } : {},
     body: form,
+  }).catch((e) => {
+    // A bare "fetch failed" hides the usual cause: sh.chronos.whisper is down (it exits at start
+    // when --convert can't find ffmpeg).
+    const hint = url === LOCAL_URL ? " — is sh.chronos.whisper running? (--convert needs ffmpeg; see whisper.err.log)" : "";
+    throw new Error(`transcription engine not reachable at ${url}${hint}`, { cause: e });
   });
   if (!res.ok) throw new Error(`transcription HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data: any = await res.json();

@@ -107,7 +107,7 @@ import {
 } from "./agent-lifecycle.js";
 import { runCommandLine } from "./commands.js";
 import { flowData } from "./flow.js";
-import { transcribe } from "./transcribe.js";
+import { transcribe, audioFilename } from "./transcribe.js";
 import { speak, voiceFor, listVoices } from "./speak.js";
 import { askManagerWeb, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurn, setSticky } from "./thread-router.js";
@@ -4262,7 +4262,7 @@ export function startServer() {
     );
   });
 
-  // Voice: browser mic → transcript. Raw audio body (webm/ogg) → local whisper → { text }.
+  // Voice: browser mic → transcript. Raw audio body (webm/ogg, mp4 on iOS) → local whisper → { text }.
   api.post("/transcribe", requireAdmin, express.raw({ type: () => true, limit: "25mb" }), async (req, res) => {
     try {
       const buf = req.body as Buffer;
@@ -4271,7 +4271,7 @@ export function startServer() {
       const lang = String(req.query.lang || "").toLowerCase();
       const language = lang === "en" || lang === "es" ? lang : undefined;
       const t0 = Date.now();
-      const text = await transcribe(buf, { filename: "audio.webm", contentType: ct, language });
+      const text = await transcribe(buf, { filename: audioFilename(ct), contentType: ct, language });
       res.json({ text, ms: Date.now() - t0, bytes: buf.length });
     } catch (e: any) {
       res.status(500).json({ error: String(e?.message ?? e) });

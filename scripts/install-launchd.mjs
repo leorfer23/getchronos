@@ -51,6 +51,8 @@ const AGENTS = [
       const models = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".bin")).sort() : [];
       if (!models.length) return "no model in ~/.cache/whisper (see README → Voice)";
       if (!fs.existsSync("/opt/homebrew/bin/whisper-server")) return "whisper-server not installed (brew install whisper-cpp)";
+      // The template runs --convert (webm/mp4/ogg → wav via ffmpeg); without ffmpeg whisper-server exits at start.
+      if (!fs.existsSync("/opt/homebrew/bin/ffmpeg")) return "ffmpeg not installed (brew install ffmpeg) — whisper-server --convert exits without it";
       subs.__WHISPER_MODEL__ = models[models.length - 1];
       return null;
     },
