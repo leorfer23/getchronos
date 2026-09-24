@@ -152,7 +152,8 @@ export async function cloudVisibleRepos(
     const r = await fetchImpl("https://api.cursor.com/v1/repositories", { headers: { Authorization: `Bearer ${key}` } });
     if (!r.ok) throw new Error(`cursor api ${r.status}`);
     const body: any = await r.json();
-    const list: CursorRepo[] = Array.isArray(body?.repositories) ? body.repositories : Array.isArray(body) ? body : [];
+    // Cursor answers {items: [{url}]} (live-verified 2026-09-24); `repositories` kept for older shapes.
+    const list: CursorRepo[] = Array.isArray(body?.items) ? body.items : Array.isArray(body?.repositories) ? body.repositories : Array.isArray(body) ? body : [];
     repoCache.set(workspaceId, { at: Date.now(), repos: list, error: null });
     return { repos: list, error: null };
   } catch (e: any) {
