@@ -25,6 +25,17 @@ function terminals(deny: string[], calls: string[]) {
   });
 }
 
+test("the brain's policy frame adds a veto; it can never lift the local one", async () => {
+  const calls: string[] = [];
+  const t = terminals([], calls);
+  t.setPolicy(["ws-g"]);
+  await assert.rejects(t.spawn(spec()), /^Error: veto: workspace galley is denied on this host by the brain's policy/);
+  const t2 = terminals(["galley"], calls);
+  t2.setPolicy([]);
+  await assert.rejects(t2.spawn(spec()), /CHRONOS_HOST_DENY/);
+  assert.deepEqual(calls, []);
+});
+
 test("local veto: a denied workspace is refused BEFORE anything is resolved or forked", async () => {
   for (const deny of [["galley"], ["ws-g"]]) {
     const calls: string[] = [];
@@ -57,5 +68,6 @@ test("remoteKey: the same repo matches whatever form its remote was written in",
     assert.equal(remoteKey(u), want, u);
   }
   assert.notEqual(remoteKey("git@github.com:medialab-ai/airflow-2.git"), want);
+  assert.equal(remoteKey("not a remote"), "", "garbage never matches garbage");
   assert.equal(remoteKey(null), "");
 });

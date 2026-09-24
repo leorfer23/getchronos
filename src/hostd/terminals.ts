@@ -23,6 +23,7 @@ import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import pty, { type IPty } from "node-pty";
+import { normalizeGitRemote } from "../hostlink/git-remote.js";
 import { Ring, chunk, type CheckoutInfo, type HostToBrain, type LiveInfo } from "../hostlink/wire.js";
 import { expandHomeRelative, isSpawnSpec, type SpawnSpec } from "../hosts/spawn-spec.js";
 import type { SpawnReply } from "../hosts/remote.js";
@@ -103,19 +104,9 @@ type Chan = {
   workspace: { id: string; slug: string } | null;
 };
 
-/** Canonical form of a git remote so `git@github.com:o/r.git` and `https://github.com/o/r` match. */
+/** One key per repository however it was cloned — the brain's own matcher (hostlink/git-remote.ts). */
 export function remoteKey(url: string | null | undefined): string {
-  let u = String(url ?? "").trim();
-  if (!u) return "";
-  u = u.replace(/\.git\/?$/, "").replace(/\/+$/, "");
-  const scp = /^[\w.-]+@([^:/]+):(.+)$/.exec(u); // git@host:owner/repo
-  if (scp) return `${scp[1].toLowerCase()}/${scp[2]}`;
-  try {
-    const p = new URL(u);
-    return `${p.hostname.toLowerCase()}${p.pathname}`.replace(/\/+$/, "");
-  } catch {
-    return u;
-  }
+  return normalizeGitRemote(url) ?? "";
 }
 
 /** The real main checkouts among these paths (`.git` a directory), realpath'd like terminal.ts's. */
@@ -198,6 +189,23 @@ export class HostTerminals {
 
   attachLink(link: TerminalsLink): void { this.link = link; }
 
+  /**
+   * The brain's own deny list for this host (its `policy` frame). Applied as an EXTRA veto next to
+   * CHRONOS_HOST_DENY: the brain already refuses these, and this is belt-and-braces against a bug in
+   * its placement. It can only add refusals — the local veto is never loosened by anything the brain says.
+   */
+  private brainDeny: string[] = [];
+  setPolicy(deny: unknown): void {
+    this.brainDeny = Array.isArray(deny) ? deny.filter((d): d is string => typeof d === "string" && !!d) : [];
+  }
+
+  private denied(ws: { id: string; slug: string } | null): string | null {
+    if (!ws) return null;
+    if (this.o.deny().some((d) => d === ws.id || d === ws.slug)) return `veto: workspace ${ws.slug} is denied on this host (CHRONOS_HOST_DENY)`;
+    if (this.brainDeny.some((d) => d === ws.id || d === ws.slug)) return `veto: workspace ${ws.slug} is denied on this host by the brain's policy`;
+    return null;
+  }
+
   /** hello.live[]: every channel the brain should know about, exited-but-unreleased ones included. */
   live(): LiveInfo[] {
     return [...this.chans.values()].map((c) => ({
@@ -217,10 +225,8 @@ export class HostTerminals {
     if (!isSpawnSpec(raw)) throw new Error("spawn_pty needs a SpawnSpec");
     const spec = raw;
     // Lock #2 (HOSTS.md → Security): the local veto, before anything is resolved, prepared or forked.
-    const deny = this.o.deny();
-    if (spec.workspace && deny.some((d) => d === spec.workspace!.id || d === spec.workspace!.slug)) {
-      throw new VetoError(`veto: workspace ${spec.workspace.slug} is denied on this host (CHRONOS_HOST_DENY)`);
-    }
+    const veto = this.denied(spec.workspace);
+    if (veto) throw new VetoError(veto);
     for (const c of this.chans.values()) {
       if (c.sessionId === spec.session_id && !c.exit) throw new Error(`session ${spec.session_id.slice(0, 8)} is already running here`);
     }
@@ -233,16 +239,16 @@ export class HostTerminals {
 
     const checkouts = await this.o.checkouts();
     const byRemote = new Map<string, string>();
-    for (const c of checkouts) if (c.remote_url) byRemote.set(remoteKey(c.remote_url), c.path);
+    for (const c of checkouts) { const k = remoteKey(c.remote_url); if (k) byRemote.set(k, c.path); }
     let repoPath: string | null = null;
     if (spec.repo) {
-      repoPath = byRemote.get(remoteKey(spec.repo.git_remote)) ?? null;
+      repoPath = byRemote.get(remoteKey(spec.repo.git_remote) || "\0") ?? null;
       if (!repoPath) repoPath = await this.maybeClone(spec.repo.git_remote);
       if (!repoPath) {
         throw new Error(`repo ${spec.repo.git_remote} is not checked out on this host — clone it under CHRONOS_HOST_ROOTS (or set CHRONOS_HOST_AUTO_CLONE=1)`);
       }
     }
-    const wsRepoPaths = spec.repos.map((r) => byRemote.get(remoteKey(r.git_remote))).filter((p): p is string => !!p);
+    const wsRepoPaths = spec.repos.map((r) => byRemote.get(remoteKey(r.git_remote) || "\0")).filter((p): p is string => !!p);
     if (repoPath && !wsRepoPaths.includes(repoPath)) wsRepoPaths.push(repoPath);
 
     let cwd = this.home;
@@ -454,9 +460,10 @@ export class HostTerminals {
     // It becomes a git argument: a name only, never something git could read as an option.
     if (!/^[\w][\w./-]{0,200}$/.test(String(a.branch)) || String(a.branch).includes("..")) throw new Error("bad branch name");
     if (!/^[\w][\w./-]{0,200}$/.test(String(a.base || "main"))) throw new Error("bad base branch name");
-    const deny = this.o.deny();
-    if (c.workspace && deny.some((d) => d === c.workspace!.id || d === c.workspace!.slug)) throw new VetoError(`veto: workspace ${c.workspace.slug} is denied on this host`);
-    const repoPath = (await this.o.checkouts()).find((x) => remoteKey(x.remote_url) === remoteKey(a.git_remote))?.path;
+    const veto = this.denied(c.workspace);
+    if (veto) throw new VetoError(veto);
+    const want = remoteKey(a.git_remote);
+    const repoPath = want ? (await this.o.checkouts()).find((x) => remoteKey(x.remote_url) === want)?.path : undefined;
     if (!repoPath) throw new Error(`repo ${a.git_remote} is not checked out on this host`);
     const p = await ensureBranchWorktree(repoPath, String(a.base || "main"), String(a.branch));
     if (!p) throw new Error(`could not create a worktree for ${a.branch} (not a git repo, or the branch is checked out elsewhere)`);

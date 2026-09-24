@@ -147,7 +147,6 @@ export function startRemoteTerminals(link: BrainLink = brainLink()): () => void 
     link.onHostOnline((info) => {
       const h = ensureRemoteHost(info.host_id, link);
       h.setOnline(info.hello);
-      bus.publish({ topic: "host.online", host_id: info.host_id, name: info.name });
       void reconcileHost(h)
         .then((r) => {
           if (r.reattached.length || r.adopted.length || r.lost.length || r.orphans.length)
@@ -159,7 +158,6 @@ export function startRemoteTerminals(link: BrainLink = brainLink()): () => void 
     link.onHostOffline((id, reason) => {
       const h = findHost(id);
       if (h instanceof RemoteHost) h.setOffline();
-      bus.publish({ topic: "host.offline", host_id: id, reason });
       for (const s of liveOn(id)) bus.publish({ topic: "session.updated", session_id: s.id });
     }),
     link.onVitals((id, v) => {

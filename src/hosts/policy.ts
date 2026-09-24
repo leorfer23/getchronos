@@ -1,27 +1,16 @@
 import { hosts } from "../store/hosts.js";
+import { parsePolicy, type HostPolicy } from "../hostlink/registry.js";
 
 // Brain-side host policy (HOSTS.md → Security, "two locks on workspace isolation"). This is lock #1:
 // the brain refuses to place, spawn or answer for a workspace a host is denied. Lock #2 is the host's
 // own CHRONOS_HOST_DENY, which it enforces before it forks anything, whatever the brain sends.
 //
-// The Desk's Computers panel owns WRITING `hosts.policy_json`; this module only reads it. Shape:
-//   {"deny": ["<workspace id or slug>", ...]}
-// Anything unreadable reads as "no policy" for the deny list — the host's own veto still stands, and a
-// corrupt row must not silently become "deny nothing AND break every spawn": callers log, not throw.
+// The Desk's Computers panel owns WRITING `hosts.policy_json` (registry.ts / PATCH /api/hosts/:id);
+// this module only reads it. Shape: {"deny": ["<workspace id>", ...]} — the Desk writes ids; a slug is
+// matched too, since that is how an operator types one. Unreadable reads as an empty list (the host's
+// own veto still stands).
 
-export type HostPolicy = { deny: string[] };
-
-export function parsePolicy(raw: string | null | undefined): HostPolicy {
-  if (!raw) return { deny: [] };
-  try {
-    const v = JSON.parse(raw);
-    const deny = Array.isArray(v?.deny) ? v.deny.filter((x: unknown): x is string => typeof x === "string" && !!x.trim()).map((x: string) => x.trim()) : [];
-    return { deny };
-  } catch {
-    console.warn("[hosts] hosts.policy_json is not valid JSON — treating the deny list as empty");
-    return { deny: [] };
-  }
-}
+export type { HostPolicy } from "../hostlink/registry.js";
 
 export function hostPolicy(hostId: string): HostPolicy {
   return parsePolicy(hosts.get(hostId)?.policy_json);
@@ -31,4 +20,16 @@ export function hostPolicy(hostId: string): HostPolicy {
 export function workspaceDenied(deny: readonly string[], ws: { id: string; slug?: string | null } | null | undefined): boolean {
   if (!ws) return false;
   return deny.some((d) => d === ws.id || (!!ws.slug && d === ws.slug));
+}
+
+/**
+ * May NEW work be placed on this host, by the operator's say-so? `draining` takes no new terminals
+ * (its running ones finish, and one lost to a host restart may still come back), `disabled` takes
+ * nothing. A missing row is a host joined before the registry, treated as online.
+ */
+export function hostAccepts(hostId: string, fresh: boolean): { ok: true } | { ok: false; reason: string } {
+  const st = hosts.get(hostId)?.status;
+  if (st === "disabled") return { ok: false, reason: "that computer is disabled" };
+  if (st === "draining" && fresh) return { ok: false, reason: "that computer is draining — it takes no new terminals" };
+  return { ok: true };
 }

@@ -92,6 +92,8 @@ async function cmdRun(): Promise<number> {
     },
   });
   link.on("online", () => console.log(`[host] ${id} online via ${link.url}`));
+  // The brain's policy for this host: an extra veto next to CHRONOS_HOST_DENY, never a loosening.
+  link.on("policy", (f: { deny?: unknown }) => terminals.setPolicy(f?.deny));
   link.on("offline", (why: string) => console.log(`[host] link down (${why}) — reconnecting`));
   const fwd = await startForwarder(link, {
     port: mcPort(),

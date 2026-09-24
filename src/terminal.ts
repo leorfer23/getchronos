@@ -22,7 +22,7 @@ import { egressEnv, egressLocked } from "./egress.js";
 import { niceWrap } from "./machine.js";
 import { findHost, hostFor, LOCAL_HOST_ID, type PtyHandle } from "./hosts/index.js";
 import { brainPathsIn, buildRemoteSpawnSpec, profileNameFor } from "./hosts/spawn-spec.js";
-import { hostPolicy, workspaceDenied } from "./hosts/policy.js";
+import { hostAccepts, hostPolicy, workspaceDenied } from "./hosts/policy.js";
 import { mirrorFile } from "./hosts/transcript-mirror.js";
 import type { RemoteHost } from "./hosts/remote.js";
 import { getBody, appendNote, updateTicket, ticketBranch } from "./tickets.js";
@@ -370,6 +370,9 @@ export function assertRemotePlacement(hostId: string, workspaceId: string | null
   const h = findHost(hostId) as RemoteHost | undefined;
   if (!h) throw new Error(`unknown host \`${hostId}\` — not connected to this brain`);
   if (!h.online) throw new Error(`host ${h.hello?.name ?? hostId} is offline${resumeId ? " — this terminal lives there and reopens when it reconnects" : ""}`);
+  // The operator's switch on that computer (the Desk's Computers panel): draining / disabled.
+  const accepts = hostAccepts(hostId, !resumeId);
+  if (!accepts.ok) throw new Error(`host ${h.hello?.name ?? hostId}: ${accepts.reason}`);
   const ws = workspaceId ? workspaces.get(workspaceId) : undefined;
   const deny = [...hostPolicy(hostId).deny, ...h.reportedDeny()];
   if (workspaceDenied(deny, ws)) {
