@@ -18,6 +18,15 @@
 //   host down    an empty outline hourglass, dimmed, and "–".
 // Everything else is in the menu. Two flags check the build without a menu bar: `--render <dir>` writes
 // each look as PNG (1x and 2x, light and dark), `--print` polls once and prints what it would show.
+//
+// BRAIN mode (`--brain`, what scripts/build-brainbar.sh installs on the Mac that runs the daemon): the
+// same mark and the same four looks, for the WHOLE fleet. It polls the daemon's admin-only
+// GET http://127.0.0.1:${CHRONOS_PORT:-7777}/api/hosts/bar (src/hostlink/bar.ts) with the admin token
+// read from ~/.mc/.admin-token, else <repo>/.admin-token — the file, like the Desk window does, never
+// templated into the plist (world-readable) and never logged. A rejected token is re-read once at once:
+// the file can rotate under a running item. Working = amber sand + the fleet's working count; alert =
+// a host that has live work is offline; down = the daemon is not answering (or refuses the token).
+// The menu has one section per computer. Host mode is untouched by all of this: no flag, no change.
 
 import Cocoa
 
@@ -144,7 +153,7 @@ enum Look { case working, idle, alert, down }
 
 /// The favicon's hourglass (64-unit grid, content x 6…58, y 7…68) scaled to the menu bar. Strokes are
 /// set in points, not scaled: 2.4 units would be 0.6pt here and vanish at 1x.
-func hourglass(_ look: Look, height h: CGFloat = 16) -> NSImage {
+func hourglass(_ look: Look, height h: CGFloat = 16, label: String = "Chronos host") -> NSImage {
   let s = h / 61.0
   let markW = (52 * s).rounded(.up)
   let size = NSSize(width: markW + (look == .alert ? 4 : 0), height: h)
@@ -214,7 +223,7 @@ func hourglass(_ look: Look, height h: CGFloat = 16) -> NSImage {
   }
   // Template everywhere but "working": macOS then inks it for light/dark bars and highlight itself.
   img.isTemplate = look != .working
-  img.accessibilityDescription = "Chronos host"
+  img.accessibilityDescription = label
   return img
 }
 
@@ -252,6 +261,16 @@ func titleView(_ s: Status?) -> (look: Look, title: String, tooltip: String, dim
 
 enum Row { case header(String), note(String), separator, work(String, String) }
 
+/// What the item polls and how it reads: the host's own status (default) or the brain's fleet (--brain).
+/// The Bar below only draws; each mode keeps its own pure title/menu functions, testable with --print.
+protocol Feed: AnyObject {
+  var onChange: () -> Void { get set }
+  var label: String { get }
+  func tick()
+  func title() -> (look: Look, title: String, tooltip: String, dim: Bool)
+  func rows() -> [Row]
+}
+
 /// The menu's rows above "Open host log" / "Quit". Pure, like titleView.
 func menuRows(_ s: Status?) -> [Row] {
   guard let s = s else {
@@ -274,12 +293,21 @@ func menuRows(_ s: Status?) -> [Row] {
   return rows
 }
 
+extension Poller: Feed {
+  var label: String { "Chronos host" }
+  func title() -> (look: Look, title: String, tooltip: String, dim: Bool) { titleView(status) }
+  func rows() -> [Row] { menuRows(status) }
+}
+
 final class Bar: NSObject, NSMenuDelegate {
   let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-  let poller = Poller()
+  let feed: Feed
+  let brain: Bool
   let menu = NSMenu()
 
-  override init() {
+  init(brain: Bool) {
+    self.brain = brain
+    feed = brain ? BrainPoller() : Poller()
     super.init()
     menu.delegate = self
     menu.autoenablesItems = false
@@ -289,18 +317,18 @@ final class Bar: NSObject, NSMenuDelegate {
       // Fixed-width digits: the item must not shift the menu bar as the count changes.
       b.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
     }
-    poller.onChange = { [weak self] in self?.render() }
+    feed.onChange = { [weak self] in self?.render() }
     render()
-    poller.tick()
-    let t = Timer(timeInterval: POLL_SECONDS, repeats: true) { [weak self] _ in self?.poller.tick() }
+    feed.tick()
+    let t = Timer(timeInterval: POLL_SECONDS, repeats: true) { [weak self] _ in self?.feed.tick() }
     t.tolerance = 0.5
     RunLoop.main.add(t, forMode: .common) // keep updating while the menu is open
   }
 
   func render() {
     guard let b = item.button else { return }
-    let v = titleView(poller.status)
-    b.image = hourglass(v.look)
+    let v = feed.title()
+    b.image = hourglass(v.look, label: feed.label)
     b.title = v.title
     b.appearsDisabled = v.dim
     b.toolTip = v.tooltip
@@ -309,7 +337,7 @@ final class Bar: NSObject, NSMenuDelegate {
   // Rebuilt every time it opens, from the last poll (at most 3s old).
   func menuNeedsUpdate(_ menu: NSMenu) {
     menu.removeAllItems()
-    for r in menuRows(poller.status) {
+    for r in feed.rows() {
       switch r {
       case .header(let t): menu.addItem(label(t))
       case .note(let t): menu.addItem(label(t, small: true))
@@ -338,7 +366,12 @@ final class Bar: NSObject, NSMenuDelegate {
 
   func tail(_ menu: NSMenu) {
     menu.addItem(.separator())
-    let log = NSMenuItem(title: "Open host log", action: #selector(openLog), keyEquivalent: "")
+    if brain {
+      let desk = NSMenuItem(title: "Open Desk", action: #selector(openDesk), keyEquivalent: "")
+      desk.target = self
+      menu.addItem(desk)
+    }
+    let log = NSMenuItem(title: brain ? "Open daemon log" : "Open host log", action: #selector(openLog), keyEquivalent: "")
     log.target = self
     menu.addItem(log)
     let quit = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
@@ -347,21 +380,201 @@ final class Bar: NSObject, NSMenuDelegate {
   }
 
   @objc func openLog() {
-    let path = (hostHome as NSString).appendingPathComponent("host.out.log")
+    let path = brain ? (brainLogDir as NSString).appendingPathComponent("chronos.out.log") : (hostHome as NSString).appendingPathComponent("host.out.log")
     // Console follows the file as it grows; TextEdit is the fallback when Console is not there.
     for args in [["-a", "Console", path], ["-e", path]] {
-      let p = Process()
-      p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-      p.arguments = args
-      if (try? p.run()) != nil {
-        p.waitUntilExit()
-        if p.terminationStatus == 0 { return }
-      }
+      if openRun(args) { return }
+    }
+  }
+
+  /// The Desk app the operator already has (scripts/build-app.sh), on its Desk page; the browser if not.
+  @objc func openDesk() {
+    for args in deskOpenArgs() {
+      if openRun(args) { return }
     }
   }
 
   // Exit 0: the LaunchAgent restarts the item only after a crash, so Quit means quit until next login.
   @objc func quit() { NSApp.terminate(nil) }
+}
+
+/// `/usr/bin/open <args>`, true when it worked.
+func openRun(_ args: [String]) -> Bool {
+  let p = Process()
+  p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+  p.arguments = args
+  guard (try? p.run()) != nil else { return false }
+  p.waitUntilExit()
+  return p.terminationStatus == 0
+}
+
+// ───────────── brain mode: the whole fleet, from the daemon (src/hostlink/bar.ts) ─────────────
+
+struct BarItem: Decodable {
+  let kind: String
+  let id8: String
+  let repo: String?
+  let title: String?
+  let backend: String
+  let active: Bool
+  let started_at: Double
+  let last_output_at: Double
+}
+
+struct Computer: Decodable {
+  let id: String
+  let name: String
+  let is_brain: Bool
+  let connected: Bool
+  let since: Double?
+  let working: Int
+  let total: Int
+  let items: [BarItem]
+}
+
+struct Totals: Decodable { let working: Int; let total: Int }
+struct Fleet: Decodable { let computers: [Computer]; let totals: Totals }
+
+enum BrainState {
+  case ok(Fleet)
+  /// Nothing answers (the daemon is down or restarting), or it answered with something else.
+  case down
+  /// It answered 401/403 even with a freshly read token: the file is missing or stale.
+  case refused
+}
+
+let env = ProcessInfo.processInfo.environment
+func envOr(_ k: String, _ d: String) -> String { (env[k].flatMap { $0.isEmpty ? nil : $0 }) ?? d }
+let userHome = NSHomeDirectory() as NSString
+/// The install writes these into the LaunchAgent (paths and a port — nothing secret).
+let mcHome = envOr("CHRONOS_MC_HOME", userHome.appendingPathComponent(".mc"))
+let brainRepo = envOr("CHRONOS_REPO", userHome.appendingPathComponent("chronos"))
+let brainLogDir = envOr("CHRONOS_LOG_DIR", userHome.appendingPathComponent("chronos"))
+let brainPort: Int = Int(envOr("CHRONOS_PORT", "7777")).flatMap { $0 > 0 && $0 < 65536 ? $0 : nil } ?? 7777
+
+/// Where the admin token lives, in the order they are tried. Read, never stored anywhere else.
+func tokenFiles() -> [String] {
+  [(mcHome as NSString).appendingPathComponent(".admin-token"), (brainRepo as NSString).appendingPathComponent(".admin-token")]
+}
+
+func readAdminToken() -> String? {
+  if let t = env["CHRONOS_ADMIN_TOKEN"], !t.isEmpty { return t }
+  for f in tokenFiles() {
+    if let raw = try? String(contentsOfFile: f, encoding: .utf8) {
+      let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !t.isEmpty { return t }
+    }
+  }
+  return nil
+}
+
+/// `open` arguments for "Open Desk": the Desk app on /desk when it is built, else the browser.
+func deskOpenArgs() -> [[String]] {
+  let app = (mcHome as NSString).appendingPathComponent("mc-app.app")
+  let web = ["http://localhost:\(brainPort)/desk"]
+  return FileManager.default.fileExists(atPath: app) ? [["-a", app, "--args", "/desk"], web] : [web]
+}
+
+final class BrainPoller: Feed {
+  private let session: URLSession = {
+    let c = URLSessionConfiguration.ephemeral
+    c.timeoutIntervalForRequest = 2
+    c.requestCachePolicy = .reloadIgnoringLocalCacheData
+    c.connectionProxyDictionary = [:] // loopback, never through a system proxy
+    return URLSession(configuration: c)
+  }()
+  private var token: String?
+  private var busy = false
+  /// nil until the first poll answers.
+  private(set) var state: BrainState?
+  var onChange: () -> Void = {}
+  var label: String { "Chronos" }
+
+  func tick() {
+    if busy { return }
+    busy = true
+    if token == nil { token = readAdminToken() }
+    fetch(retry: true)
+  }
+
+  private func fetch(retry: Bool) {
+    guard let url = URL(string: "http://127.0.0.1:\(brainPort)/api/hosts/bar") else { return finish(.down) }
+    var req = URLRequest(url: url)
+    if let t = token { req.setValue(t, forHTTPHeaderField: "x-mc-admin") }
+    session.dataTask(with: req) { data, resp, _ in
+      let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+      DispatchQueue.main.async {
+        if code == 200, let data = data, let f = try? JSONDecoder().decode(Fleet.self, from: data) { return self.finish(.ok(f)) }
+        // The daemon's admin gate answers 403 (api.ts requireAdmin); 401 is accepted too. The token may
+        // have rotated since it was read: read the file again and try once more, right away.
+        if code == 401 || code == 403 {
+          if retry { self.token = readAdminToken(); return self.fetch(retry: false) }
+          return self.finish(.refused)
+        }
+        self.finish(.down)
+      }
+    }.resume()
+  }
+
+  private func finish(_ s: BrainState) {
+    state = s
+    busy = false
+    onChange()
+  }
+
+  func title() -> (look: Look, title: String, tooltip: String, dim: Bool) { brainTitleView(state) }
+  func rows() -> [Row] { brainMenuRows(state) }
+}
+
+/// Computers that have live work but no link: the brain cannot see those agents, so it says so.
+func stranded(_ f: Fleet) -> [Computer] { f.computers.filter { !$0.is_brain && !$0.connected && $0.total > 0 } }
+
+/// What the title shows for the fleet (nil = no answer yet). Pure: `--brain --print` uses it too.
+func brainTitleView(_ st: BrainState?) -> (look: Look, title: String, tooltip: String, dim: Bool) {
+  guard case .ok(let f)? = st else {
+    if case .refused? = st { return (.down, " –", "Chronos daemon refused the admin token", true) }
+    return (.down, " –", "Chronos daemon is not answering on 127.0.0.1:\(brainPort)", true)
+  }
+  let w = f.totals.working
+  let count = w > 0 ? " \(w)" : ""
+  let off = stranded(f)
+  if !off.isEmpty {
+    let names = off.map { $0.name }.joined(separator: ", ")
+    return (.alert, count, "\(names) offline with work on \(off.count == 1 ? "it" : "them") · \(w) working elsewhere", false)
+  }
+  let tip = f.totals.total == 0 ? "Chronos · nothing running" : "Chronos · \(w) working of \(f.totals.total)"
+  return (w > 0 ? .working : .idle, count, tip, false)
+}
+
+/// Rows per computer before "+N more": the menu is a glance, the Desk is the list.
+let MAX_ROWS = 8
+
+func clipped(_ s: String, _ n: Int = 48) -> String { s.count > n ? String(s.prefix(n - 1)) + "…" : s }
+
+/// The menu's rows above "Open Desk" / "Open daemon log" / "Quit". Pure, like brainTitleView.
+func brainMenuRows(_ st: BrainState?) -> [Row] {
+  guard case .ok(let f)? = st else {
+    if case .refused? = st {
+      return [.header("Chronos · admin token refused"), .note("Tried \(tokenFiles().joined(separator: ", "))")]
+    }
+    return [.header("Chronos · daemon not answering"), .note("Nothing answers on 127.0.0.1:\(brainPort)")]
+  }
+  var rows: [Row] = []
+  for (i, c) in f.computers.enumerated() {
+    if i > 0 { rows.append(.separator) }
+    var head = c.is_brain ? "This Mac" : "\(c.name) · \(c.connected ? "connected" : "offline")"
+    if !c.connected, let since = c.since { head += " · \(ago(since))" }
+    head += c.total == 0 ? " · nothing running" : " · \(c.working) working"
+    rows.append(.header(head))
+    for w in c.items.prefix(MAX_ROWS) {
+      // "● open the rollback PR — claude-code · 12m": filled = producing output right now, hollow = idle.
+      let what = clipped(w.title ?? w.repo ?? "~")
+      rows.append(.work("\(w.active ? "●" : "○")  \(what) — \(w.backend) · \(ago(w.started_at))",
+                        "\(w.kind) \(w.id8)\(w.repo.map { " · \($0)" } ?? "") · last output \(ago(w.last_output_at)) ago"))
+    }
+    if c.total > MAX_ROWS { rows.append(.note("+\(c.total - MAX_ROWS) more")) }
+  }
+  return rows
 }
 
 /// `--render <dir>`: every look as PNG at 1x and 2x, on a light and a dark menu bar. A template image is
@@ -406,18 +619,17 @@ func renderPreviews(to dir: String) -> Int32 {
 }
 
 /// `--print`: one poll, then what the item would show, as text — the title, its tooltip, the menu rows.
-/// How tests check the Swift side reads the status the TypeScript side serves.
-func printOnce() -> Int32 {
-  let poller = Poller()
+/// How tests check the Swift side reads the status the TypeScript side serves. With --brain, the fleet.
+func printOnce(_ feed: Feed) -> Int32 {
   var done = false
-  poller.onChange = { done = true }
-  poller.tick()
+  feed.onChange = { done = true }
+  feed.tick()
   let deadline = Date().addingTimeInterval(20)
   while !done && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
-  let v = titleView(poller.status)
+  let v = feed.title()
   print("title: \(v.look)\(v.title)\(v.dim ? " (dimmed)" : "")")
   print("tooltip: \(v.tooltip)")
-  for r in menuRows(poller.status) {
+  for r in feed.rows() {
     switch r {
     case .header(let t): print(t)
     case .note(let t): print("  \(t)")
@@ -428,11 +640,14 @@ func printOnce() -> Int32 {
   return 0
 }
 
-let args = CommandLine.arguments
-if args.count >= 3 && args[1] == "--render" { exit(renderPreviews(to: args[2])) }
-if args.count >= 2 && args[1] == "--print" { exit(printOnce()) }
+// `--brain` picks the mode (the brain's LaunchAgent passes it); it combines with --print.
+var args = Array(CommandLine.arguments.dropFirst())
+let brainMode = args.contains("--brain")
+args.removeAll { $0 == "--brain" }
+if args.count >= 2 && args[0] == "--render" { exit(renderPreviews(to: args[1])) }
+if args.count >= 1 && args[0] == "--print" { exit(printOnce(brainMode ? BrainPoller() : Poller())) }
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory) // no Dock icon, no app menu
-let bar = Bar()
+let bar = Bar(brain: brainMode)
 app.run()
