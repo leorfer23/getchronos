@@ -814,7 +814,7 @@ export async function openSession(
       cols: opts.cols ?? 100,
       rows: opts.rows ?? 30,
       seed: remoteSeed,
-      seedEnterMs: SEED_ENTER_MS,
+      seedEnterMs: seedEnterMsFor(backend.name),
       brainHome: os.homedir(),
       brainPaths: [process.cwd(), configDir],
     });
@@ -878,7 +878,7 @@ export async function openSession(
     // A revive's continue-nudge is not the terminal's first prompt: keep the one it was opened with.
     if (!opts.resumeId) sessions.setMeta(row.id, { first_prompt: seed });
     // A remote host types it itself, next to the pty (it rode in the SpawnSpec).
-    if (!remote) typeSeed(entry, seed);
+    if (!remote) typeSeed(entry, seed, seedEnterMsFor(backend.name));
   }
 
   indexSession(row.id);
@@ -1124,7 +1124,17 @@ const SEED_QUIET_MS = 1200;  // "the splash screen stopped moving"
 const SEED_MAX_MS = 20000;   // a CLI that keeps painting (spinner) still gets its prompt
 const SEED_ENTER_MS = 250;   // Enter as its own keystroke, after the paste has landed
 
-function typeSeed(entry: Live, seed: string) {
+/**
+ * How long after the paste the Enter goes. cursor-agent folds a pasted seed into a "[Pasted text #1]"
+ * chip and swallows a key that arrives while it is still doing that: at 250ms the seed sat in its
+ * prompt unsent (m2, 2026-09-24 — one more Enter by hand and the run went through). claude and grok
+ * submit fine at 250ms, so only cursor waits longer.
+ */
+export function seedEnterMsFor(backend: string): number {
+  return backend === "cursor-agent" || backend === "cursor" ? 1200 : SEED_ENTER_MS;
+}
+
+function typeSeed(entry: Live, seed: string, enterMs = SEED_ENTER_MS) {
   const started = Date.now();
   const line = seed.replace(/\r?\n/g, " ");
   const tick = setInterval(() => {
@@ -1134,7 +1144,7 @@ function typeSeed(entry: Live, seed: string) {
     clearInterval(tick);
     try {
       entry.pty.write(line);
-      setTimeout(() => { try { entry.pty.write("\r"); } catch {} }, SEED_ENTER_MS).unref?.();
+      setTimeout(() => { try { entry.pty.write("\r"); } catch {} }, enterMs).unref?.();
     } catch {
       // pty died while we waited — the session already ended, nothing to seed
     }
