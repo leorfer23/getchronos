@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import Database from "better-sqlite3";
-import { migrate, MIGRATIONS, LATEST_VERSION } from "./migrate.js";
+import { ensureLocalHost, migrate, MIGRATIONS, LATEST_VERSION } from "./migrate.js";
 
 test("migrate throws when DB version is newer than binary", () => {
   const db = new Database(":memory:");
@@ -168,4 +168,56 @@ test("migration 117 adds sessions.lead_token, nullable, no backfill — and a fr
   migrate(fresh);
   assert.doesNotThrow(() => fresh.prepare("SELECT lead_token FROM sessions LIMIT 0").run());
   fresh.close();
+});
+
+test("migration 134: a local host row, repo_checkouts backfilled from repos.path, host_id defaults to 'local'", () => {
+  const db = new Database(":memory:");
+  applyUpTo(db, 133); // schema as it existed right before hosts
+
+  const ts = "2026-09-24T00:00:00.000Z";
+  db.prepare(`INSERT INTO workspaces (id,slug,name,config_dir,created_at,updated_at) VALUES ('ws1','ws1','ws1','/tmp/ws1',@ts,@ts)`).run({ ts });
+  db.prepare(`INSERT INTO repos (id,workspace_id,name,path,created_at) VALUES ('r1','ws1','one','/src/one',@ts)`).run({ ts });
+  db.prepare(`INSERT INTO repos (id,workspace_id,name,path,created_at) VALUES ('r2','ws1','two','/src/two',@ts)`).run({ ts });
+  db.prepare(`INSERT INTO sessions (id,workspace_id,role,cwd,status,created_at) VALUES ('s1','ws1','human','/src/one','live',@ts)`).run({ ts });
+  db.prepare(`INSERT INTO jobs (id,name,goal,cwd,created_at,updated_at) VALUES ('j1','j','g','/tmp',@ts,@ts)`).run({ ts });
+  db.prepare(`INSERT INTO runs (id,job_id,status) VALUES ('run1','j1','running')`).run();
+
+  applyUpTo(db, 134);
+
+  const local = db.prepare("SELECT * FROM hosts WHERE id = 'local'").get() as any;
+  assert.ok(local, "the brain is always a host");
+  assert.equal(local.status, "online");
+  assert.equal(local.platform, process.platform);
+  assert.equal(local.token_hash, null, "the local host never authenticates over a link");
+
+  const checkouts = db.prepare("SELECT repo_id, host_id, path, head, scanned_at FROM repo_checkouts ORDER BY repo_id").all();
+  assert.deepEqual(checkouts, [
+    { repo_id: "r1", host_id: "local", path: "/src/one", head: null, scanned_at: null },
+    { repo_id: "r2", host_id: "local", path: "/src/two", head: null, scanned_at: null },
+  ]);
+
+  assert.equal((db.prepare("SELECT host_id FROM sessions WHERE id = 's1'").get() as any).host_id, "local");
+  assert.equal((db.prepare("SELECT host_id FROM runs WHERE id = 'run1'").get() as any).host_id, "local");
+  // New rows written by code that knows nothing about hosts land on 'local' too.
+  db.prepare(`INSERT INTO sessions (id,workspace_id,role,cwd,status,created_at) VALUES ('s2','ws1','human','/tmp','live',@ts)`).run({ ts });
+  assert.equal((db.prepare("SELECT host_id FROM sessions WHERE id = 's2'").get() as any).host_id, "local");
+
+  // A repo that goes takes its checkouts with it.
+  db.prepare("DELETE FROM repos WHERE id = 'r2'").run();
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM repo_checkouts WHERE repo_id = 'r2'").get() as any).n, 0);
+  db.close();
+});
+
+test("ensureLocalHost is idempotent and puts back a deleted local row", () => {
+  const db = new Database(":memory:");
+  migrate(db);
+  ensureLocalHost(db);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM hosts").get() as any).n, 1);
+  db.prepare("UPDATE hosts SET name = 'brain' WHERE id = 'local'").run();
+  ensureLocalHost(db);
+  assert.equal((db.prepare("SELECT name FROM hosts WHERE id = 'local'").get() as any).name, "brain", "never overwrites the row");
+  db.prepare("DELETE FROM hosts").run();
+  ensureLocalHost(db);
+  assert.ok(db.prepare("SELECT 1 FROM hosts WHERE id = 'local'").get());
+  db.close();
 });

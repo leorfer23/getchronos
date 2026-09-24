@@ -194,6 +194,38 @@ export interface Repo {
   created_at: string;
 }
 
+/**
+ * One computer that runs agent processes for this brain (HOSTS.md). The brain itself is always the
+ * `local` row. Every field past `status` belongs to remote hosts and stays null on `local`.
+ */
+export interface HostRow {
+  id: string;
+  name: string;
+  platform: string;
+  status: "online" | "offline" | "draining" | "disabled";
+  /** Brain-side placement policy: which workspaces this host may run. JSON, null = no policy yet. */
+  policy_json: string | null;
+  /** Headroom the brain keeps back on this host before placing work there. JSON. */
+  reserve_json: string | null;
+  token_hash: string | null;
+  /** Pinned TLS fingerprint the host checked at join. */
+  cert_fp: string | null;
+  last_seen_at: string | null;
+  /** What the host reported it can run: CLIs, logged-in profiles, gh. JSON. */
+  capabilities_json: string | null;
+  created_at: string;
+}
+
+/** Where one repo is checked out on one host. `repos.path` is the `local` row's `path`. */
+export interface RepoCheckout {
+  repo_id: string;
+  host_id: string;
+  path: string;
+  /** The commit the host last saw checked out, or null when nobody has scanned it yet. */
+  head: string | null;
+  scanned_at: string | null;
+}
+
 /** One evidence gate: a named shell command the build must pass before review. */
 export interface Gate {
   name: string;
@@ -630,6 +662,8 @@ export interface Run {
   cloud_url: string | null;
   /** SSE resume cursor. A daemon that slept mid-run replays from here instead of from the start. */
   cloud_last_event_id: string | null;
+  /** The computer this run's process lives on (HOSTS.md). `pid` means something only there. */
+  host_id: string;
 }
 
 export interface NewJob {
@@ -771,6 +805,9 @@ export interface Session {
   cloud_url: string | null;
   /** SSE resume cursor. A daemon that slept mid-run replays from here instead of from the start. */
   cloud_last_event_id: string | null;
+  /** The computer this terminal's pty lives on (HOSTS.md). `cwd`, `worktree_path` and `pid` are
+   *  paths and a process id on THAT machine. 'local' = the brain, which is every row until hosts ship. */
+  host_id: string;
 }
 
 /** One standing-watch check: what Robert saw and said (desk-watch.ts). */

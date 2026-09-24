@@ -19,13 +19,17 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chronos-boot-reconcile-"));
 const dbPath = path.join(dir, "test.db");
 
 const SEED = `
-import { jobs, runs } from "${path.join(process.cwd(), "src/store.js")}";
+import { db, jobs, runs } from "${path.join(process.cwd(), "src/store.js")}";
 const job = jobs.create({ name: "seed", goal: "g", cwd: "${dir}", sandbox: "off", backend: "mock", retry_max: 0 });
 const local = runs.create(job.id, "test");
 runs.patch(local.id, { status: "running", started_at: new Date().toISOString() });
 const cloud = runs.create(job.id, "test");
 runs.patch(cloud.id, { status: "running", started_at: new Date().toISOString(), cloud_agent_id: "bc-1", cloud_run_id: "run-1" });
-console.log(JSON.stringify({ localId: local.id, cloudId: cloud.id }));
+// A run on another computer (HOSTS.md): a child of that host's process, not of this daemon.
+const remote = runs.create(job.id, "test");
+runs.patch(remote.id, { status: "running", started_at: new Date().toISOString() });
+db.prepare("UPDATE runs SET host_id = 'm2' WHERE id = ?").run(remote.id);
+console.log(JSON.stringify({ localId: local.id, cloudId: cloud.id, remoteId: remote.id }));
 `;
 
 const READBACK = `
@@ -34,6 +38,7 @@ const ids = JSON.parse(process.argv[2]);
 console.log(JSON.stringify({
   local: runs.get(ids.localId)?.status,
   cloud: runs.get(ids.cloudId)?.status,
+  remote: runs.get(ids.remoteId)?.status,
 }));
 `;
 
@@ -58,4 +63,5 @@ test("boot reconciliation: a local run is marked interrupted, a cloud run is lef
 
   assert.equal(statuses.local, "interrupted", "a local run's process died with the daemon — reconciled");
   assert.equal(statuses.cloud, "running", "a cloud run's process lives on the provider's VM — untouched");
+  assert.equal(statuses.remote, "running", "a run on another host did not die with this daemon — untouched");
 });

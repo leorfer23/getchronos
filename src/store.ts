@@ -16,6 +16,7 @@ export { chat, agentChat } from "./store/chat.js";
 export { watches } from "./store/watches.js";
 export type { ChatSource } from "./store/chat.js";
 export { repos } from "./store/repos.js";
+export { hosts, repoCheckouts, LOCAL_HOST_ID } from "./store/hosts.js";
 export { repoAccelerators, ACCELERATOR_TOOLS, isAcceleratorTool } from "./store/accelerators.js";
 export { accelTelemetry } from "./store/accel-telemetry.js";
 export type { AccelTelemetryRow, AccelAggregate } from "./store/accel-telemetry.js";
