@@ -12,12 +12,13 @@ import http from "node:http";
 import https from "node:https";
 import express from "express";
 import WebSocket from "ws";
-import { BrainLink, forwardedHost, hostRoutes, lanUrls, parseListen, type HostLinkInfo } from "./brain-link.js";
+import { BrainLink, UpdateRefused, forwardedHost, hostRoutes, lanUrls, parseListen, type HostLinkInfo } from "./brain-link.js";
+import { MANUAL_GIT_UPDATE, brainBuild, hostsView } from "./view.js";
 import { JoinCodes, OPENSSL, decodeJoinCode, ensureBrainCert, resetBrainCertCache, type BrainCert } from "./join.js";
-import { PROTOCOL_VERSION, encodeControl, decodeControl, type Hello, type HostVitals } from "./wire.js";
+import { PROTOCOL_VERSION, encodeControl, decodeControl, type Hello, type HostVitals, type UpdateFrame } from "./wire.js";
 import { HostLink, connectHeaders } from "../hostd/link.js";
 import { startForwarder } from "../hostd/forwarder.js";
-import { join, writeHostSecrets, renderHostPlist, hostEntryArgs } from "../hostd/join.js";
+import { join, writeHostSecrets, renderHostPlist, hostEntryArgs, writeHostPlist } from "../hostd/join.js";
 import { parseEnvFile } from "../env-file.js";
 import { pinnedTlsOptions, fetchPeerCert } from "./pin.js";
 import { HostRegistry } from "./registry.js";
@@ -406,3 +407,102 @@ test("plist template renders every token, escapes XML, runs at load and keeps al
   assert.equal(args[args.length - 1], "run");
 });
 
+
+test("LaunchAgent entry: bin/getchronos.mjs host run when the tree has it (preflight first); written atomically by writeHostPlist", () => {
+  assert.deepEqual(hostEntryArgs("/n", process.cwd()), ["/n", path.join(process.cwd(), "bin", "getchronos.mjs"), "host", "run"]);
+  const agents = path.join(dir, "LaunchAgents");
+  const file = writeHostPlist({ hostHome: path.join(dir, "hh-plist"), pkgRoot: process.cwd(), launchAgentsDir: agents, env: { node: "/opt/homebrew/opt/node/bin/node", path: "/opt/homebrew/opt/node/bin:/usr/bin" } });
+  const out = fs.readFileSync(file, "utf8");
+  assert.match(out, /<string>\/opt\/homebrew\/opt\/node\/bin\/node<\/string>\s*<string>[^<]*\/bin\/getchronos\.mjs<\/string>\s*<string>host<\/string>\s*<string>run<\/string>/);
+  assert.deepEqual(fs.readdirSync(agents), ["sh.chronos.host.plist"], "no temp file left behind");
+});
+
+// ───────────────────────────── phase 6: update over the link ─────────────────────────────
+
+test("update: the Desk asks, the host reports running → restarting, and its hello on the brain's commit settles it done", { skip: (!HAS_OPENSSL && "no openssl") || (!brainBuild().commit && "brain is not a git checkout") }, async () => {
+  const { code } = await mintSecret();
+  const r = await join({ url: url(), code, hostHome: path.join(dir, "h-upd"), noLaunchd: true });
+  const env = parseEnvFile(r.secretsFile);
+  const id = env.CHRONOS_HOST_ID;
+  const target = brainBuild();
+  const OLD = "0".repeat(40);
+  const start = (commit: string, onUpdate?: (l: HostLink, f: UpdateFrame) => void) => {
+    const l = new HostLink({ brains: [url()], hostId: id, token: env.CHRONOS_HOST_TOKEN, fp: env.CHRONOS_HOST_CERT_FP, hello: async () => hello(id, { install: "git", commit }), vitals: async () => vitals(), backoffMinMs: 50, backoffMaxMs: 200 });
+    if (onUpdate) l.on("update", (f: UpdateFrame) => onUpdate(l, f));
+    return l;
+  };
+  const got: UpdateFrame[] = [];
+  let online = once<[HostLinkInfo]>((cb) => brain.onHostOnline(cb));
+  const a = start(OLD, (l, f) => {
+    got.push(f);
+    l.sendControl({ t: "update_status", id: f.id, state: "running", step: "npm ci" });
+    l.sendControl({ t: "update_status", id: "someone-else", state: "failed", error: "not ours" });
+    l.sendControl({ t: "update_status", id: f.id, state: "restarting" });
+  });
+  a.start();
+  await online;
+  const before = hostsView(brain).find((h) => h.id === id)!;
+  assert.equal(before.commit, OLD);
+  assert.equal(before.install, "git");
+  assert.equal(before.update?.available, true, "a different commit than the brain's");
+  assert.equal(before.update?.supported, true);
+
+  const rec = brain.requestUpdate(id);
+  assert.equal(rec.state, "requested");
+  assert.throws(() => brain.requestUpdate(id), (e: any) => e instanceof UpdateRefused && e.status === 409, "one at a time");
+  for (let i = 0; i < 100 && brain.updateStatus(id)?.state !== "restarting"; i++) await new Promise((res) => setTimeout(res, 20));
+  assert.equal(brain.updateStatus(id)?.state, "restarting");
+  assert.equal(brain.updateStatus(id)?.error, undefined, "a status for another update id is ignored");
+  assert.deepEqual(got.map((f) => f.target), [target], "the brain's own version + commit");
+
+  // The host restarts: the old link goes, the new process says hello on the target commit.
+  await a.stop();
+  online = once<[HostLinkInfo]>((cb) => brain.onHostOnline(cb));
+  const b = start(target.commit!);
+  b.start();
+  cleanups.push(() => b.stop());
+  await online;
+  assert.equal(brain.updateStatus(id)?.state, "done");
+  const after = hostsView(brain).find((h) => h.id === id)!;
+  assert.equal(after.update?.available, false);
+  assert.equal(after.update?.status?.state, "done");
+  const caps = JSON.parse(hosts.get(id)!.capabilities_json!);
+  assert.equal(caps.commit, target.commit, "the registry keeps the commit for when it is offline");
+  assert.equal(caps.install, "git");
+});
+
+test("update: a host from before self-update is refused with the one line to run on it; a host that comes back on the wrong commit is a failure", { skip: (!HAS_OPENSSL && "no openssl") || (!brainBuild().commit && "brain is not a git checkout") }, async () => {
+  const { code } = await mintSecret();
+  const r = await join({ url: url(), code, hostHome: path.join(dir, "h-upd-old"), noLaunchd: true });
+  const env = parseEnvFile(r.secretsFile);
+  const id = env.CHRONOS_HOST_ID;
+  const mk = (over: Partial<Hello>) => new HostLink({ brains: [url()], hostId: id, token: env.CHRONOS_HOST_TOKEN, fp: env.CHRONOS_HOST_CERT_FP, hello: async () => hello(id, over), vitals: async () => vitals(), backoffMinMs: 50, backoffMaxMs: 200 });
+  let online = once<[HostLinkInfo]>((cb) => brain.onHostOnline(cb));
+  const old = mk({});
+  old.start();
+  await online;
+  const v = hostsView(brain).find((h) => h.id === id)!;
+  assert.equal(v.update?.available, true, "older than the brain by construction");
+  assert.equal(v.update?.supported, false);
+  assert.equal(v.update?.manual, MANUAL_GIT_UPDATE);
+  assert.match(MANUAL_GIT_UPDATE, /^cd "\$HOME\/\.chronos-host\/app" && /);
+  assert.throws(() => brain.requestUpdate(id), (e: any) => e instanceof UpdateRefused && e.status === 400 && e.message.includes(MANUAL_GIT_UPDATE));
+  await old.stop();
+
+  // Phase-6 host that restarts but comes back on the old commit.
+  online = once<[HostLinkInfo]>((cb) => brain.onHostOnline(cb));
+  const a = mk({ install: "git", commit: "1".repeat(40) });
+  a.on("update", (f: UpdateFrame) => a.sendControl({ t: "update_status", id: f.id, state: "restarting" }));
+  a.start();
+  await online;
+  brain.requestUpdate(id);
+  for (let i = 0; i < 100 && brain.updateStatus(id)?.state !== "restarting"; i++) await new Promise((res) => setTimeout(res, 20));
+  await a.stop();
+  online = once<[HostLinkInfo]>((cb) => brain.onHostOnline(cb));
+  const b = mk({ install: "git", commit: "1".repeat(40) });
+  b.start();
+  cleanups.push(() => b.stop());
+  await online;
+  assert.equal(brain.updateStatus(id)?.state, "failed");
+  assert.match(brain.updateStatus(id)!.error!, /came back on 0\.1\.0 @ 111111111111/);
+});

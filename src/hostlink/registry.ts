@@ -14,7 +14,7 @@
 import fs from "node:fs";
 import { hosts, repoCheckouts, repos, LOCAL_HOST_ID } from "../store.js";
 import type { HostRow } from "../types.js";
-import type { CheckoutInfo, CliInfo, Hello, ProfileInfo } from "./wire.js";
+import type { CheckoutInfo, CliInfo, Hello, HostInstall, ProfileInfo } from "./wire.js";
 import { tokenMatches, type HostRecord } from "./join.js";
 
 export type HostStatus = HostRow["status"];
@@ -36,6 +36,9 @@ export type HostCapabilities = {
   /** The host's own veto (CHRONOS_HOST_DENY), as reported. The host enforces it; the brain shows it. */
   veto: string[];
   reported_at: string;
+  /** Phase 6: the commit it runs and how it was installed (absent = a host older than self-update). */
+  commit?: string | null;
+  install?: HostInstall;
 };
 
 export type HostPolicy = { deny: string[] };
@@ -115,6 +118,8 @@ export class HostRegistry {
       checkouts: Array.isArray(h.checkouts) ? h.checkouts : [],
       veto: Array.isArray(h.deny) ? h.deny.filter((x) => typeof x === "string") : [],
       reported_at: iso(at),
+      ...(typeof h.commit === "string" && /^[0-9a-f]{7,40}$/.test(h.commit) ? { commit: h.commit } : {}),
+      ...(h.install === "git" || h.install === "npm" || h.install === "dev" ? { install: h.install } : {}),
     };
     this.seenWritten.set(hostId, at);
     const updated = hosts.update(hostId, {

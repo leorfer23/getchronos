@@ -2,7 +2,8 @@
 
 > Status: **being built.** Phase 1 (the seam: `src/hosts/`, migration 134), phase 2 (link, join,
 > host process, the hosts registry and the Desk's Computers panel), phase 3 (remote terminals,
-> pinned + sticky) and phase 4 (placement and the per-host governor) have landed; see *Phases*. This is the plan the implementation PRs
+> pinned + sticky), phase 4 (placement and the per-host governor) and phase 6 (onboarding: preflight,
+> the `getchronos` package, self-update, uninstall) have landed; see *Phases*. This is the plan the implementation PRs
 > follow; each phase at the end is one PR (or a short series) and updates this file when it lands.
 
 ## The gap
@@ -28,9 +29,10 @@ them somewhere else to go. Hosts are that somewhere else.
   (MDM) Macs, where enabling Remote Login alone can flag the machine as non-compliant.
 - **Adding a computer takes two steps:**
   1. Desk → ⋯ → **Computers → + Add**. The brain mints a one-time join code and shows one command.
-  2. On the new Mac: paste that command (today a `git clone` + `npm ci` + `npm run host -- join`,
-     later `npx getchronos host join <brain-url> <code>`). It installs a user-level LaunchAgent,
-     stores its credential, connects, and shows up on the Desk with its vitals.
+  2. On the new Mac: paste that command (today a node check + `git clone` + `npm ci` +
+     `npm run host -- join`; once published, `npx getchronos host join <brain-url> <code>`). It
+     installs a user-level LaunchAgent, stores its credential, connects, and shows up on the Desk
+     with its vitals. After that, updates are a button on the Desk.
 - **Policy lives on the brain, and the host has the last word.** The brain decides which workspaces
   a host may run and places work there. The host also keeps a **local veto list** in its own
   `.secrets`. The brain can never route a denied workspace to it, and neither can a bug in the
@@ -180,14 +182,17 @@ host → brain   hello{host_id, version, platform, capabilities, profiles, check
 brain → host   spawn_pty{id, spec}  spawn_proc{id, spec}  write{ch, bytes}  resize{ch, cols, rows}
                kill{ch, signal}  rpc{id, op, args}  api_result{req_id, status, body}
                policy{deny[], reserve}  ack{ch, seq}
+               update{id, target{version, commit}}                             ← phase 6
+host → brain   update_status{id, state: running|restarting|failed|current, step?, error?}
 both           ping/pong (15s; 2 missed = link down, NOT process dead)
 ```
 
 - **Flow control:** per-channel `seq` plus brain `ack`s. The host keeps a 256 KB ring per PTY (the
   same size as `replayTail` today) and resends from the last ack after a reconnect. The Desk's
   per-socket pacing (`term-fanout.ts`) is unchanged: it is brain → browser.
-- **Versioning:** `hello.version`. The brain refuses a host with an incompatible major version, and
-  the Desk shows "update this host".
+- **Versioning:** `hello.proto` (protocol `major.minor`) and `hello.version` + `hello.commit` (the
+  code). The brain refuses a host with an incompatible protocol major; a host whose code differs from
+  the brain's shows *Update available* (see *Updating a host*).
 
 ### `mc`, hooks and the sandbox on a host
 
@@ -295,26 +300,61 @@ echo 'CHRONOS_HOST_PUBLIC_URL=wss://desk.example.com/host' >> .secrets
 npm run deploy
 ```
 
-Per computer:
+The first time the LAN listener starts, macOS may ask whether **node** may accept incoming
+connections. Allow it, or hosts on the same network cannot connect (the tunnel is unaffected). If you
+clicked Deny: System Settings → Network → Firewall → Options → set node to *Allow*.
+
+### Before adding a computer
+
+On the new Mac (the Desk's **+ Add** shows the same list):
+
+- **Node 22–26.** `node -v`. If it is older, newer, or missing: `brew install node@24`, then make it
+  win on PATH *after* Homebrew's own line in `.zprofile` (which re-prepends `/opt/homebrew/bin`):
+  `echo 'export PATH="/opt/homebrew/opt/node@24/bin:$PATH"' >> "$HOME/.zprofile" && exec zsh -l`.
+- **Xcode command-line tools** (git): `xcode-select --install`.
+- **Each client that may run there, logged in** — and only those. On an employer's Mac, do not log
+  in the other employers' profiles at all: `CLAUDE_CONFIG_DIR="$HOME/.claude-<client>" claude`.
+- **`gh auth login`** for the GitHub account that client uses; a second account on the same Mac goes
+  in its own config dir: `GH_CONFIG_DIR="$HOME/.gh-<client>" gh auth login`.
+- Nothing inbound: no Remote Login, no SSH, no open port. MDM-managed Macs stay compliant.
+
+### Adding it
 
 1. Desk → ⋯ → **Computers** → **+ Add** → name it → **Get the command**. With both transports set,
    pick *Same network* or *Anywhere*. The code inside works once, for 15 minutes.
-2. On that Mac (needs git, Node ≥ 22 and the Xcode command-line tools for `node-pty`), paste it in
-   Terminal. It is one line, safe to re-run:
+2. Paste it in Terminal on that Mac. It is one line, safe to re-run:
    ```bash
-   { [ -d ~/.chronos-host/app/.git ] && git -C ~/.chronos-host/app pull --ff-only || git clone https://github.com/leorfer23/getchronos ~/.chronos-host/app; } \
-     && cd ~/.chronos-host/app && npm ci && npm run host -- join wss://192.168.1.20:7779/host CHR1-…
+   node -e '<fails unless node is 22–26, with the fix>' && D="$HOME/.chronos-host/app" \
+     && { [ -d "$D/.git" ] && git -C "$D" fetch -q origin main && git -C "$D" reset -q --hard FETCH_HEAD \
+          || git clone -q https://github.com/leorfer23/getchronos "$D"; } \
+     && cd "$D" && npm ci --no-audit --no-fund && npm run host -- join wss://192.168.1.20:7779/host CHR1-…
    ```
-   The repo is `CHRONOS_HOST_REPO_URL` on the brain (default: package.json's `repository`). `npm run
-   host` runs `src/hostd` through tsx, as does the LaunchAgent, so there is no build step. `join`
-   checks the brain's fingerprint, stores its token in `~/.chronos-host/.secrets`, installs
-   `~/Library/LaunchAgents/sh.chronos.host.plist`, and connects. The Desk's *Waiting for it to
+   Once `getchronos` is published and the brain sets `CHRONOS_HOST_INSTALL=npm`, the line is
+   `node -e '…' && npx -y getchronos@<brain version> host join <url> <code>`; npx's copy lives in
+   npm's cache, which npm prunes when it likes, so `join` first installs that same version into
+   `~/.chronos-host/app` (with the same node's npm) and runs from there.
+
+   Every path is `"$HOME/…"`: a `~` inside quotes is not expanded, and a paste that lost its `~`
+   once created `./.chronos-host` wherever the operator stood.
+
+   `npm run host` enters through `bin/getchronos.mjs`, which runs a **preflight** before anything
+   else loads: node in range, `npm ci` finished (tsx, the native modules load), and the git on PATH
+   can fetch over https. A failure prints one `fix:` line to paste. Then `join` checks the brain's
+   fingerprint, stores its token in `~/.chronos-host/.secrets` (mode 600), installs
+   `~/Library/LaunchAgents/sh.chronos.host.plist` and connects. The Desk's *Waiting for it to
    connect…* turns into ✓.
-3. The computer's page in **Computers** shows what it reported: CLIs, which clients may run there
-   (toggle to keep one off it — that writes the brain policy; a client the Mac vetoes itself is
-   shown locked), each client's profile logged in or not, and each repo cloned or not. Fix anything
+3. The computer's page in **Computers** shows what it reported: its version, CLIs, which clients may
+   run there (toggle to keep one off it — that writes the brain policy; a client the Mac vetoes itself
+   is shown locked), each client's profile logged in or not, and each repo cloned or not. Fix anything
    ✗ on that Mac (`claude` login per profile, `gh auth login`, `git clone` under
-   `CHRONOS_HOST_ROOTS`). `npm run host -- doctor` prints the same checklist there.
+   `CHRONOS_HOST_ROOTS`). `npm run host -- doctor` there prints the same checklist, preflight first.
+
+The LaunchAgent runs `bin/getchronos.mjs host run` with **the node that ran `npm ci`**
+(`process.execPath` at join, #50) — never whatever a login shell finds — addressed by Homebrew's
+`opt/<formula>` link when that is the same binary: the `Cellar/<version>` path `process.execPath`
+reports is deleted by the next `brew upgrade` + cleanup, and launchd then cannot start the host at
+all, with nothing in any log. Both native modules are N-API (better-sqlite3 ≥ 13, node-pty ≥ 1), so a
+node upgrade inside 22–26 needs no rebuild.
 
 From then on: the header chip becomes **N computers** (one bar per connected computer; click for
 each one's CPU/RAM/GPU), terminals that run elsewhere carry the computer's name on the rail, and
@@ -330,6 +370,63 @@ CHRONOS_HOST_ROOTS=~/Documents/GitHub # where to look for (and clone) checkouts
 CHRONOS_HOST_AUTO_CLONE=0            # 1 = clone a missing repo on first placement
 CF_ACCESS_CLIENT_ID=… CF_ACCESS_CLIENT_SECRET=…   # only for a tunnel URL behind Cloudflare Access
 ```
+
+### Updating a host
+
+A computer whose commit (git install) or version (npm install) differs from the brain's shows
+**Update available** in Computers, with an **Update** button, and **Update all** in the list's header.
+Updating ends that computer's terminals while it restarts; the brain revives each with `--resume` on
+the same computer when it says hello again (the confirm says so). What the host does (`update.ts`):
+
+1. builds the new version **beside** the running one, in `~/.chronos-host/app.next` — git: a local
+   clone of the app checked out at the brain's commit, fetched from the app's own `origin` (the brain
+   sends a commit, never a URL); npm: `getchronos@<brain version>`;
+2. installs its dependencies with the **same node** the host runs (`process.execPath` + its own
+   `npm-cli.js`, not whatever `npm` is on PATH);
+3. runs the new version's own preflight under that node;
+4. only then swaps: `app` → `app.prev`, `app.next` → `app`; rewrites the plist for the next login;
+5. `launchctl kickstart -k gui/<uid>/sh.chronos.host` — its own label.
+
+Any failure before 4 deletes the candidate, reports the error to the Desk, and **keeps the old
+version running**. A host that does not answer for 20 minutes mid-update is shown as failed.
+`app.prev` is the way back by hand:
+`cd "$HOME/.chronos-host" && mv app app.bad && mv app.prev app && launchctl kickstart -k gui/$(id -u)/sh.chronos.host`.
+
+- A host from **before** self-update (it reports no `install` in hello) cannot be asked; the Desk shows
+  the one line to paste on it once:
+  `cd "$HOME/.chronos-host/app" && git fetch -q origin main && git reset -q --hard FETCH_HEAD && npm ci --no-audit --no-fund && launchctl kickstart -k gui/$(id -u)/sh.chronos.host`.
+- A host run by hand (not by its LaunchAgent) refuses a Desk update — it cannot restart itself; run
+  `npm run host -- update` there. A host running from someone's own checkout (`dev`) is never updated
+  from the Desk.
+- The brain updates with `npm run deploy`, as always; hosts then show *Update available*.
+
+### Uninstalling
+
+`npm run host -- uninstall` (or `npx getchronos host uninstall`) boots the LaunchAgent out and deletes
+its plist; `--purge` also deletes `~/.chronos-host` (credential, logs, app). It prints what it left:
+`~/.mc` (the `mc` CLI), the hooks/skill copies inside agent profiles, and the computer's row on the
+brain — Desk → Computers → **Remove this computer** revokes its token.
+
+### Troubleshooting
+
+Every one of these happened on the first two hosts. `npm run host -- doctor` on the host checks all
+of them.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `npm ci` fails in `better-sqlite3` (`gyp ERR!`), then the host crash-loops with `ERR_MODULE_NOT_FOUND … tsx/dist/loader.mjs` | Homebrew's node 26 with better-sqlite3 11, which had no prebuild for it and could not compile; `npm ci` stopped half-way and left no tsx | Fixed at the root: better-sqlite3 13 ships N-API prebuilds (no compile). On an old checkout: `cd "$HOME/.chronos-host/app" && git fetch -q origin main && git reset -q --hard FETCH_HEAD && npm ci`. The preflight now names a half-finished install instead of crashing |
+| `node -v` in your terminal is not the node the host runs | `.zprofile`'s `brew shellenv` re-prepends `/opt/homebrew/bin` after your PATH edit; version managers differ between login and non-login shells | Put the node you want **after** the shellenv line (see *Before adding a computer*), open a new terminal, re-run the join line. The LaunchAgent always runs the node that installed it |
+| A reinstall over SSH built with a different node | A login shell over SSH picked Homebrew's node, the terminal used another | Run the join line in Terminal on that Mac. Hosts need no SSH at all |
+| `git: 'remote-https' is not a git command` | A `git` earlier on PATH (a broken `~/.local/bin/git` with exec-path `//libexec/git-core`) shadowed the real one; agents' git over https fails the same way | `mv "$HOME/.local/bin/git" "$HOME/.local/bin/git.broken"` — the preflight prints the exact path |
+| `mc` from an agent on the host talks to the wrong daemon (404s) | An old standalone Chronos on that Mac owns `127.0.0.1:7777` | Handled: the forwarder falls back to 7787–7796 and tells agents which (#48). `host status` finds it |
+| A pasted command made `./.chronos-host` in the current folder | The paste lost its `~` | Commands now use `"$HOME/…"`; delete the stray folder |
+| LAN host never connects; the tunnel works | macOS blocked incoming connections to node on the brain | Allow node in the firewall prompt / System Settings → Network → Firewall |
+| The host stopped starting after `brew upgrade` | The plist named a `Cellar/<version>` node that `brew cleanup` deleted | Re-run the join line (plists now use `opt/<formula>`); a Desk update rewrites the plist too |
+| Terminals fail with `posix_spawnp failed` | node-pty's `spawn-helper` lost its exec bit (npm ships it 644) | Handled by the postinstall, also when installed from npm; the preflight prints the `chmod +x` line |
+
+Host-side logs: `~/.chronos-host/host.out.log` and `host.err.log`. Onboarding and updates add
+nothing to them beyond versions, commits, paths and errors — no workspace names; placement policy
+stays on the brain, keyed by workspace id.
 
 ## Coupling inventory (what has to move behind the seam)
 
@@ -579,12 +676,82 @@ it was.
    delivery; `gh` capability; the verifier on the host; egress proxy and CA on the host.
 6. **Onboarding polish.** `npx getchronos host join` published, `chronos host doctor`,
    `CONFIGURATION.md` section, and an "update host" flow for version mismatches.
+   - **Landed:**
+     - **Node:** better-sqlite3 11 → 13 (N-API, prebuilds inside the npm tarball: no install script,
+       no compile, one binary for every node major). `engines.node` `>=22 <27`. Verified: `npm ci` +
+       the whole suite on node 26.10 (where 11.10 fails to compile) and 24.8; `npm ci` + both natives
+       loading on 22.23.
+     - **Preflight** (`bin/host-core.mjs`, plain JS with no dependencies, so it runs on a broken tree):
+       node in 22–26, `node_modules` whole (tsx unless `dist/` is built; better-sqlite3 and node-pty
+       actually load; node-pty's `spawn-helper` executable), git on PATH able to fetch over https
+       (`--exec-path` exists and has `git-remote-https`). Each failure prints one `fix:` line using
+       `$HOME`. `join`/`update` stop on any failure; `run` (what launchd restarts forever) stops only
+       on what would crash anyway and logs the rest; `doctor` lists them first.
+     - **CLI** `bin/getchronos.mjs`: `host join|run|status|doctor|update|uninstall` (+ internal
+       `preflight`). `npm run host` is now `node bin/getchronos.mjs host`; it preflights, then loads
+       `dist/hostd/index.js` or `src/hostd/index.ts` through tsx **in the same process** (signals from
+       launchd reach the host). The LaunchAgent runs it; `hostEntryArgs` keeps the direct entry for a
+       tree that predates it.
+     - **Package** `getchronos` (still `private: true` — publishing is the operator's call): bin
+       `getchronos`, a `files` allowlist (`bin/`, `dist/` minus tests, the host plist template,
+       `scripts/mc` + its skill, the node-pty postinstall, `HOSTS.md`; `.pem`/`.secrets*`/`*.db`
+       negated), `prepack` = build. `pack.test.ts` plants decoys and asserts none ship.
+     - **Install path:** `installKind()` — `git` (the clone at `~/.chronos-host/app`), `npm`
+       (`~/.chronos-host/app/node_modules/getchronos`), `ephemeral` (npx's cache: join installs the
+       same version into `~/.chronos-host/app` with this node's npm and re-runs join from there — a
+       LaunchAgent must not point into a cache npm prunes), `dev` (any other checkout: runs, never
+       updated from the Desk). The plist's node is `stableNodePath(process.execPath)`.
+     - **Self-update** (`src/hostd/update.ts`, protocol **1.3**, additive): hello carries `commit`
+       and `install`; brain → host `update{id, target}`, host → brain `update_status`. Staged
+       candidate, same-node `npm ci`/`npm install`, candidate preflight, rename swap, plist rewrite,
+       `kickstart -k` of its own label (only when launchd runs this very pid). The brain keeps each
+       host's last update in memory (`requested → running → restarting → done|failed`), settles it on
+       the next hello, and times one out after 20 minutes. `updateVerdict()` (pure, `view.ts`):
+       git hosts compare commits, npm hosts versions; a host that reports no `install` predates this
+       and is "update available, by hand" with the one line to paste. `POST /api/hosts/:id/update`,
+       `POST /api/hosts/update-all`. Desk: version line, *Update* (armed) and *Update all*.
+     - **Join UX:** the command starts with a node check, uses `"$HOME/…"`, resets an existing clone
+       to `origin/main` instead of `pull --ff-only` (which fails on the detached HEAD an update leaves),
+       and becomes `npx -y getchronos@<brain version> host join …` with `CHRONOS_HOST_INSTALL=npm`.
+       + Add lists the prerequisites.
+     - **Uninstall:** bootout + plist; `--purge` removes `~/.chronos-host` (refuses a directory that
+       does not look like one); prints what it left.
+     - **postinstall fix:** `scripts/fix-node-pty-perms.mjs` resolves node-pty through module
+       resolution — installed as a dependency, npm hoists node-pty beside `getchronos` and the old
+       relative path fixed nothing.
+   - **Deferred:** publishing (see *Publishing* below); a Desk "roll back" (`app.prev` is kept, the
+     rollback is one pasted line); streaming `update_status` across a link drop mid-update (the final
+     state still arrives via hello); a Desk update for a host started by hand; migrating a host's
+     loaded LaunchAgent definition in place (an update rewrites the plist file for the next login,
+     while `kickstart` restarts the definition launchd already has — which already points at the same
+     app dir); Linux hosts.
+   - **Deviations:** "`git fetch && git reset --hard <sha>` in the app dir" became a staged clone at
+     `<sha>` beside it, because `npm ci` in place deletes the running host's `node_modules` and a
+     failure there leaves nothing to restart into — the one outcome this phase exists to prevent. The
+     join line resets to `origin/main` (not the brain's commit) so a brain on an unpushed commit can
+     still add computers; the Desk then offers the update.
+
+### Publishing (operator)
+
+Prepared, not done. From a **fresh clone** (a stale `dist/` would ship otherwise), with node 22–26:
+
+```bash
+git clone https://github.com/leorfer23/getchronos /tmp/getchronos-release && cd /tmp/getchronos-release
+npm ci && npm test
+npm pack --dry-run          # read the file list: bin/, dist/ (no tests), plist template, mc, skill
+npm pkg delete private      # the safety latch
+npm login && npm publish --access public
+```
+
+Then set `CHRONOS_HOST_INSTALL=npm` in the brain's `.secrets` and `npm run deploy`: new join lines
+become `npx -y getchronos@<version> host join …`. Bump `version` on every release — npm hosts update
+by version, not commit.
 
 ## Open questions
 
-- **Distribution.** The package is `chronos`, `private: true`, and not on npm. Until it is
-  published, step 2 of setup is `git clone … && npm ci && npm run host -- join …`. Publish as
-  `getchronos`?
+- **Distribution.** Prepared as `getchronos` (phase 6; see *Publishing*). Still `private: true` and
+  unpublished, so the join line stays git until the operator publishes. Open: publish on every merge
+  to main (versions move with commits), or only on tagged releases?
 - **Auto-clone.** Off by default: cloning a client's repo onto an employer-owned machine is a
   decision, not a side effect. Is a per-host opt-in enough, or per workspace × host?
 - **Tunnel for hosts by default?** The tunnel works anywhere and needs no new brain listener, but

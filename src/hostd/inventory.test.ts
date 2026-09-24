@@ -99,9 +99,10 @@ test("doctor checklist: a joined host with tools is all green; missing pieces sa
   assert.ok(ok.every((c) => c.ok), formatChecklist(ok));
   const bad = checklist({ ...base, node: "v20.1.0", secretsMode: 0o100644, joined: { id: null, brains: [], fp: null }, plistInstalled: false, clis: base.clis.map((c) => (c.name === "gh" ? { ...c, path: null } : c)) });
   const text = formatChecklist(bad);
-  assert.match(text, /✗ node ≥ 22/);
+  assert.match(text, /✗ node 22–26/);
   assert.match(text, /✗ gh — not found\n    → brew install gh/);
   assert.match(text, /✗ credential file is private — mode 644\n    → chmod 600/);
-  assert.match(text, /✗ joined a brain — no\n    → npm run host -- join/);
+  assert.match(text, /✗ joined a brain — no\n    → paste the command from Desk → Computers → \+ Add/);
+  assert.match(text, /→ brew install node@24 .*"\$HOME\/\.zprofile"/, "the node fix is the preflight's, with $HOME");
   assert.match(text, /✓ grok \(optional\)/, "a missing agent CLI is fine while another one exists");
 });

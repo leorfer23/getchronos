@@ -7,10 +7,11 @@ import http from "node:http";
 import express from "express";
 import { db, hosts, repoCheckouts, repos, workspaces, sessions, LOCAL_HOST_ID } from "../store.js";
 import { HostRegistry, normalizeGitRemote, parsePolicy } from "./registry.js";
-import { BrainLink, hostJoinCommand, hostRepoUrl, hostRoutes, DEFAULT_HOST_REPO_URL } from "./brain-link.js";
+import { BrainLink, hostInstallMode, hostJoinCommand, hostRepoUrl, hostRoutes, DEFAULT_HOST_REPO_URL, NODE_CHECK } from "./brain-link.js";
+import { spawnSync } from "node:child_process";
 import { JoinCodes, hashToken, mintHostCredential } from "./join.js";
 import { PROTOCOL_VERSION, type Hello } from "./wire.js";
-import { profileNameOf, remoteAdmission } from "./view.js";
+import { MANUAL_GIT_UPDATE, UPDATE_STALE_MS, brainBuild, profileNameOf, remoteAdmission, updateVerdict } from "./view.js";
 
 beforeEach(() => {
   db.exec("DELETE FROM sessions; DELETE FROM repos; DELETE FROM workspaces;");
@@ -181,19 +182,41 @@ test("small readers: policy JSON, profile names, remote admission", () => {
 
 // ───────────────────────────── the join command ─────────────────────────────
 
-test("the join command clones (or updates) the repo, installs, and joins — no build step", () => {
-  const cmd = hostJoinCommand("wss://192.168.1.20:7779/host", "CHR1-abc_DEF-1", "https://github.com/leorfer23/getchronos");
+test("the join command checks node first, then clones (or resets) the repo into \"$HOME/…\", installs, and joins", () => {
+  const cmd = hostJoinCommand("wss://192.168.1.20:7779/host", "CHR1-abc_DEF-1", "https://github.com/leorfer23/getchronos", "git");
   assert.equal(
     cmd,
-    "{ [ -d ~/.chronos-host/app/.git ] && git -C ~/.chronos-host/app pull --ff-only || git clone https://github.com/leorfer23/getchronos ~/.chronos-host/app; } && cd ~/.chronos-host/app && npm ci && npm run host -- join wss://192.168.1.20:7779/host CHR1-abc_DEF-1",
+    `${NODE_CHECK} && D="$HOME/.chronos-host/app" && { [ -d "$D/.git" ] && git -C "$D" fetch -q origin main && git -C "$D" reset -q --hard FETCH_HEAD || git clone -q https://github.com/leorfer23/getchronos "$D"; } && cd "$D" && npm ci --no-audit --no-fund && npm run host -- join wss://192.168.1.20:7779/host CHR1-abc_DEF-1`,
   );
-  assert.match(hostJoinCommand("wss://x/host", "a'b;rm -rf ~", "r"), /join wss:\/\/x\/host 'a'\\''b;rm -rf ~'$/, "anything odd is single-quoted");
-  // `npm run host` really is the tsx entry the command relies on.
+  assert.ok(cmd.startsWith("node -e "), "node is checked before anything is downloaded");
+  // No bare ~ anywhere after the node check: a pasted ~ inside quotes is not expanded.
+  assert.doesNotMatch(cmd.slice(NODE_CHECK.length), /~/);
+  assert.match(hostJoinCommand("wss://x/host", "a'b;rm -rf ~", "r", "git"), /join wss:\/\/x\/host 'a'\\''b;rm -rf ~'$/, "anything odd is single-quoted");
+  // `npm run host` enters through the dependency-free preflight, then tsx.
   const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
-  assert.equal(pkg.scripts.host, "tsx src/hostd/index.ts");
+  assert.equal(pkg.scripts.host, "node bin/getchronos.mjs host");
   assert.ok(pkg.devDependencies.tsx, "npm ci installs tsx (a devDependency) by default");
   assert.equal(hostRepoUrl({ CHRONOS_HOST_REPO_URL: "https://git.example/me/fork" } as any), "https://git.example/me/fork");
   assert.equal(hostRepoUrl({} as any), DEFAULT_HOST_REPO_URL, "package.json's repository, normalized");
+});
+
+test("the join command, npm flavour: npx the brain's own version; CHRONOS_HOST_INSTALL picks, git by default", () => {
+  assert.equal(
+    hostJoinCommand("wss://desk.example.com/host", "CHR1-x", "r", "npm", "0.3.1"),
+    `${NODE_CHECK} && npx -y getchronos@0.3.1 host join wss://desk.example.com/host CHR1-x`,
+  );
+  assert.equal(hostInstallMode({} as any), "git");
+  assert.equal(hostInstallMode({ CHRONOS_HOST_INSTALL: "npm" } as any), "npm");
+  assert.equal(hostInstallMode({ CHRONOS_HOST_INSTALL: "brew" } as any), "git");
+});
+
+test("the node check: exits 0 on this node, 1 with the fix on one outside 22–26", () => {
+  const script = /node -e '(.*)'$/.exec(NODE_CHECK)![1];
+  assert.equal(spawnSync(process.execPath, ["-e", script]).status, 0);
+  const fake = script.replace("process.versions.node", '"20.11.1"');
+  const r = spawnSync(process.execPath, ["-e", fake], { encoding: "utf8" });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /Chronos needs Node 22-26, this is 20\.11\.1\. Fix: brew install node@24/);
 });
 
 test("a join code's commands: LAN only with the listener up, tunnel only with a public URL", () => {
@@ -311,6 +334,59 @@ test("PATCH /api/hosts/:id: validated; policy, name, drain, enable, disable; the
     assert.equal((await api.call("DELETE", `/hosts/${LOCAL_HOST_ID}`)).status, 400);
     assert.deepEqual((await api.call("DELETE", `/hosts/${id}`)).body, { revoked: true });
     assert.equal((await api.call("PATCH", `/hosts/${id}`, { status: "online" })).status, 404, "a revoked host is gone for good");
+  } finally {
+    await api.close();
+  }
+});
+
+// ───────────────────────────── phase 6: update available ─────────────────────────────
+
+test("updateVerdict: git hosts compare commits, npm hosts versions, pre-phase-6 hosts are behind by construction", () => {
+  const brain = { version: "0.2.0", commit: "b".repeat(40) };
+  const host = (over: Partial<{ version: string | null; commit: string | null; install: any; connected: boolean }>) => ({ version: "0.2.0", commit: "b".repeat(40), install: "git" as const, connected: true, ...over });
+  assert.deepEqual(updateVerdict(brain, host({})), { available: false, supported: true, target: brain, manual: null, status: null });
+  assert.equal(updateVerdict(brain, host({ commit: "a".repeat(40) })).available, true);
+  assert.equal(updateVerdict(brain, host({ commit: "a".repeat(40), connected: false })).supported, false, "an offline host cannot be asked");
+  assert.equal(updateVerdict({ ...brain, commit: null }, host({})).supported, false, "a brain without a commit cannot lead a git host");
+  assert.equal(updateVerdict(brain, host({ install: "npm", version: "0.1.0", commit: null })).available, true);
+  assert.equal(updateVerdict(brain, host({ install: "npm", commit: null })).available, false);
+  const dev = updateVerdict(brain, host({ install: "dev", commit: "a".repeat(40) }));
+  assert.deepEqual([dev.available, dev.supported, dev.manual], [true, false, null]);
+  const old = updateVerdict(brain, host({ install: null, commit: null }));
+  assert.deepEqual([old.available, old.supported, old.manual], [true, false, MANUAL_GIT_UPDATE]);
+  assert.equal(updateVerdict(brain, host({ version: null, install: null })).available, false, "never reported: nothing to compare");
+  // An update nobody has heard of for 20 minutes is shown as failed, with where to look.
+  const rec = { id: "u1", target: brain, state: "running" as const, step: "npm ci", at: 0 };
+  const stale = updateVerdict(brain, host({ commit: "a".repeat(40) }), rec, UPDATE_STALE_MS + 1);
+  assert.equal(stale.status?.state, "failed");
+  assert.match(stale.status!.error!, /host\.err\.log/);
+  assert.equal(updateVerdict(brain, host({}), rec, 1000).status?.state, "running");
+});
+
+test("POST /api/hosts/:id/update and /hosts/update-all: admin only; the brain, an offline host and an unknown one are refused", async () => {
+  const reg = new HostRegistry();
+  const link = new BrainLink({ creds: reg, codes: new JoinCodes(), publicUrls: () => [] });
+  const c = joinOne(reg);
+  reg.hello(c.host_id, hello(c.host_id));
+  const api = await serve(link);
+  try {
+    assert.equal((await api.call("POST", `/hosts/${c.host_id}/update`, {}, "nope")).status, 403);
+    const brainRow = await api.call("POST", "/hosts/local/update", {});
+    assert.equal(brainRow.status, 400);
+    assert.match(brainRow.body.error, /npm run deploy/);
+    const off = await api.call("POST", `/hosts/${c.host_id}/update`, {});
+    assert.equal(off.status, 409);
+    assert.match(off.body.error, /not connected/);
+    assert.equal((await api.call("POST", "/hosts/h_nope/update", {})).status, 409);
+    const all = await api.call("POST", "/hosts/update-all", {});
+    assert.deepEqual(all.body, { started: [], skipped: [] }, "only connected computers are asked");
+    const view = (await api.call("GET", "/hosts")).body.hosts.find((h: any) => h.id === c.host_id);
+    assert.equal(view.install, null, "the fixture hello predates phase 6");
+    assert.equal(view.update.available, true);
+    assert.equal(view.update.supported, false);
+    const local = (await api.call("GET", "/hosts")).body.hosts.find((h: any) => h.is_brain);
+    assert.equal(local.update, null);
+    assert.equal(local.version, brainBuild().version);
   } finally {
     await api.close();
   }

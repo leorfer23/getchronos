@@ -19,11 +19,12 @@
  * and accepts any minor (a newer minor only adds optional fields or frame kinds the other side
  * ignores). Bump major only when an existing frame changes meaning.
  */
-export const PROTOCOL_VERSION = "1.2";
+export const PROTOCOL_VERSION = "1.3";
 // 1.1 (phase 3): hello.live[] carries `exit`/`transcript_offset`; `transcript` carries `offset`/`reset`;
 // brain → host `attach` and `release`. All additive: a 1.0 peer ignores what it does not know.
 // 1.2 (phase 4): vitals carry `ncpu`/`load1`/`swapUsedMb`/`swapTotalMb` (the brain runs the governor's
 // own admission() on a host's numbers and sizes its heavy-slot pool); capabilities carry `auto_clone`.
+// 1.3 (phase 6): hello carries `commit` / `install`; brain → host `update`, host → brain `update_status`.
 
 /** Binary data frame header: magic(1) kind(1) ch(u32) seq(u64). */
 export const DATA_HEADER_BYTES = 14;
@@ -108,6 +109,9 @@ export type Hello = {
   /** The host's local veto (CHRONOS_HOST_DENY). Reported so the brain can show it; the host enforces it. */
   deny: string[];
   live: LiveInfo[];
+  /** Phase 6: the commit this host runs (git installs), and how it was installed — see HostInstall. */
+  commit?: string | null;
+  install?: HostInstall;
 };
 
 export type HostToBrain =
@@ -125,7 +129,8 @@ export type HostToBrain =
   | { t: "rpc_result"; id: string; ok: false; error: string }
   | { t: "ping"; n: number }
   | { t: "pong"; n: number }
-  | { t: "error"; code: string; message: string; id?: string };
+  | { t: "error"; code: string; message: string; id?: string }
+  | UpdateStatus;
 
 export type BrainToHost =
   | { t: "welcome"; proto: string; host_id: string; ping_ms: number }
@@ -148,7 +153,34 @@ export type BrainToHost =
   | { t: "release"; ch: number }
   | { t: "ping"; n: number }
   | { t: "pong"; n: number }
-  | { t: "error"; code: string; message: string; id?: string };
+  | { t: "error"; code: string; message: string; id?: string }
+  | UpdateFrame;
+
+// ── phase 6: version + update ──
+/**
+ * How a host's code got there (bin/host-core.mjs `installKind`): `git` = the clone at
+ * ~/.chronos-host/app, updated by commit; `npm` = `getchronos` installed under ~/.chronos-host/app,
+ * updated by version; `dev` = someone's own checkout, which the brain never updates. A host that sends
+ * no `install` predates phase 6 and does not understand `update` at all.
+ */
+export type HostInstall = "git" | "npm" | "dev";
+/** What the brain runs, and so what an update brings a host to. */
+export type UpdateTarget = { version: string; commit: string | null };
+/** brain → host: become `target`, then restart. Answered with `update_status` frames carrying the same id. */
+export type UpdateFrame = { t: "update"; id: string; target: UpdateTarget };
+/**
+ * host → brain, as the update moves: `running` (with the step), then `restarting` (the new code is in
+ * place and the LaunchAgent is being kicked — the link drops next), or `failed` (the old version keeps
+ * running; `error` says why), or `current` (already there, nothing done).
+ */
+export type UpdateStatus = {
+  t: "update_status";
+  id: string;
+  state: "running" | "restarting" | "failed" | "current";
+  step?: string;
+  error?: string;
+};
+// ── end phase 6 ──
 
 export type ControlFrame = HostToBrain | BrainToHost;
 

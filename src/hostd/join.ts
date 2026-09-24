@@ -18,8 +18,9 @@ import { classifyBrainUrl } from "../hostlink/pin.js";
 import { decodeControl } from "../hostlink/wire.js";
 import { openBrainSocket } from "./link.js";
 import { REPO_ROOT } from "../repo-root.js";
+import { HOST_LABEL, stableNodePath } from "../../bin/host-core.mjs";
 
-export const HOST_LABEL = "sh.chronos.host";
+export { HOST_LABEL };
 
 export type JoinResult = { host_id: string; secretsFile: string; plistFile: string | null; brains: string[] };
 
@@ -105,14 +106,24 @@ export function loginShellEnv(): { node: string; path: string } {
   try {
     p = execFileSync(shell, ["-lc", 'printf %s "$PATH"'], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim().split("\n").pop()!.trim();
   } catch {}
-  const nodeDir = path.dirname(process.execPath);
+  // Same binary, but by Homebrew's `opt` link when there is one: the Cellar path process.execPath
+  // reports is deleted by the next `brew upgrade` + cleanup, and launchd then cannot start the agent
+  // at all (host-core.mjs stableNodePath).
+  const node = stableNodePath(process.execPath);
+  const nodeDir = path.dirname(node);
   const base = p || ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
   // The install node's own dir first, so `npm`/`npx` an agent runs match it too.
-  return { node: process.execPath, path: [nodeDir, ...base.split(":").filter((d) => d && d !== nodeDir)].join(":") };
+  return { node, path: [nodeDir, ...base.split(":").filter((d) => d && d !== nodeDir)].join(":") };
 }
 
-/** What the LaunchAgent runs: the built entry when there is one, else the source through tsx. */
+/**
+ * What the LaunchAgent runs: `bin/getchronos.mjs host run`, which preflights (a half-installed tree
+ * says what to run instead of crashing on a missing module) and then loads dist/ or src/ via tsx.
+ * A tree without the bin (older than phase 6) keeps the direct entry.
+ */
 export function hostEntryArgs(nodeBin: string, repo = REPO_ROOT): string[] {
+  const bin = path.join(repo, "bin", "getchronos.mjs");
+  if (fs.existsSync(bin)) return [nodeBin, bin, "host", "run"];
   const dist = path.join(repo, "dist", "hostd", "index.js");
   if (fs.existsSync(dist)) return [nodeBin, dist, "run"];
   // Absolute loader path: the LaunchAgent's cwd is ~/.chronos-host, where a bare "tsx" resolves to nothing.
@@ -130,6 +141,30 @@ export function renderHostPlist(template: string, v: { programArgs: string[]; ho
     __PATH__: xml(v.pathVar),
   };
   return template.replace(/__[A-Z_]+__/g, (t) => subs[t] ?? t);
+}
+
+/**
+ * Render and write `~/Library/LaunchAgents/sh.chronos.host.plist` for the code at `pkgRoot`. Does not
+ * load it: `join` bootstraps it, and an update only rewrites it for the next login (launchd restarts
+ * the job it already loaded; `kickstart` does not re-read the file).
+ */
+export function writeHostPlist(o: { hostHome: string; pkgRoot?: string; launchAgentsDir?: string; env?: { node: string; path: string } }): string {
+  const pkgRoot = o.pkgRoot ?? REPO_ROOT;
+  const env = o.env ?? loginShellEnv();
+  const tpl = fs.readFileSync(path.join(pkgRoot, "launchd", `${HOST_LABEL}.plist.template`), "utf8");
+  const dir = o.launchAgentsDir ?? path.join(os.homedir(), "Library", "LaunchAgents");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${HOST_LABEL}.plist`);
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, renderHostPlist(tpl, {
+    programArgs: hostEntryArgs(env.node, pkgRoot),
+    hostHome: o.hostHome,
+    home: os.homedir(),
+    user: os.userInfo().username,
+    pathVar: env.path,
+  }));
+  fs.renameSync(tmp, file);
+  return file;
 }
 
 export async function join(opts: {
@@ -154,18 +189,7 @@ export async function join(opts: {
   });
   let plistFile: string | null = null;
   if (!opts.noLaunchd) {
-    const env = loginShellEnv();
-    const tpl = fs.readFileSync(path.join(REPO_ROOT, "launchd", `${HOST_LABEL}.plist.template`), "utf8");
-    const dir = opts.launchAgentsDir ?? path.join(os.homedir(), "Library", "LaunchAgents");
-    fs.mkdirSync(dir, { recursive: true });
-    plistFile = path.join(dir, `${HOST_LABEL}.plist`);
-    fs.writeFileSync(plistFile, renderHostPlist(tpl, {
-      programArgs: hostEntryArgs(env.node),
-      hostHome: opts.hostHome,
-      home: os.homedir(),
-      user: os.userInfo().username,
-      pathVar: env.path,
-    }));
+    plistFile = writeHostPlist({ hostHome: opts.hostHome, launchAgentsDir: opts.launchAgentsDir });
     if (!opts.launchAgentsDir) {
       const domain = `gui/${process.getuid?.() ?? 501}`;
       try { execFileSync("/bin/launchctl", ["bootout", `${domain}/${HOST_LABEL}`], { stdio: "ignore" }); } catch {}

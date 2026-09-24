@@ -1,5 +1,5 @@
 {
-  "name": "chronos",
+  "name": "getchronos",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -15,19 +15,34 @@
     "url": "https://github.com/leorfer23/getchronos/issues"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22 <27"
   },
   "bin": {
-    "chronosd": "./dist/index.js"
+    "getchronos": "./bin/getchronos.mjs"
   },
+  "files": [
+    "bin/",
+    "dist/",
+    "!dist/**/*.test.js",
+    "!dist/**/*.eval.js",
+    "launchd/sh.chronos.host.plist.template",
+    "scripts/mc",
+    "scripts/fix-node-pty-perms.mjs",
+    "skills/mission-control/",
+    "HOSTS.md",
+    "!**/*.pem",
+    "!**/.secrets*",
+    "!**/*.db"
+  ],
   "scripts": {
     "postinstall": "node scripts/fix-node-pty-perms.mjs",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
     "build:daemon": "tsc -p tsconfig.json",
     "serve": "node dist/index.js",
-    "host": "tsx src/hostd/index.ts",
+    "host": "node bin/getchronos.mjs host",
     "install:launchd": "node scripts/install-launchd.mjs",
     "test": "CHRONOS_TEST=1 CHRONOS_DB=:memory: CHRONOS_MAX_CONCURRENT=3 CHRONOS_DAILY_BUDGET=5 CHRONOS_RESUME_RL_MAX_HOURS=6 CHRONOS_DESKTOP_NOTIFY=0 CHRONOS_SANDBOX_DEFAULT=off CHRONOS_QUOTA_GATE=off node --import tsx --test 'src/**/*.test.ts' && node --test scripts/mc-help.test.mjs && npm run evals",
     "deploy": "node scripts/predeploy-backup.mjs && npm test && npm run build && launchctl kickstart -k gui/$(id -u)/sh.chronos.daemon && sleep 3 && curl -s localhost:${CHRONOS_PORT:-7777}/api/health",
@@ -37,7 +52,7 @@
   "dependencies": {
     "@playwright/mcp": "^0.0.79",
     "@xterm/headless": "^6.0.0",
-    "better-sqlite3": "^11.8.1",
+    "better-sqlite3": "^13.0.3",
     "croner": "^9.0.0",
     "express": "^4.21.2",
     "node-pty": "^1.1.0",
