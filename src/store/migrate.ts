@@ -1861,6 +1861,16 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       db.exec("ALTER TABLE runs ADD COLUMN host_id TEXT NOT NULL DEFAULT 'local'");
     },
   },
+  {
+    version: 135,
+    name: "sessions.placement — why a terminal runs on the computer it runs on",
+    // HOSTS.md phase 4: place() picks a computer and says why ("most headroom (m2 62 · local 43−25)",
+    // "pinned", "sticky — …"). Kept on the row so the Desk card can show it after a restart and the
+    // day's log can answer "why did that land on m2?". Null = there was nothing to choose.
+    up: (db) => {
+      db.exec("ALTER TABLE sessions ADD COLUMN placement TEXT");
+    },
+  },
 
 ];
 

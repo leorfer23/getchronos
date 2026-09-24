@@ -208,6 +208,17 @@ test("migration 134: a local host row, repo_checkouts backfilled from repos.path
   db.close();
 });
 
+test("migration 135: sessions.placement exists and existing rows read null (nothing was chosen for them)", () => {
+  const db = new Database(":memory:");
+  applyUpTo(db, 134);
+  const ts = "2026-09-24T00:00:00.000Z";
+  db.prepare(`INSERT INTO workspaces (id,slug,name,config_dir,created_at,updated_at) VALUES ('ws1','ws1','ws1','/tmp/ws1',@ts,@ts)`).run({ ts });
+  db.prepare(`INSERT INTO sessions (id,workspace_id,role,cwd,status,created_at) VALUES ('s1','ws1','human','/tmp','live',@ts)`).run({ ts });
+  applyUpTo(db, 135);
+  assert.equal((db.prepare("SELECT placement FROM sessions WHERE id = 's1'").get() as any).placement, null);
+  db.close();
+});
+
 test("ensureLocalHost is idempotent and puts back a deleted local row", () => {
   const db = new Database(":memory:");
   migrate(db);

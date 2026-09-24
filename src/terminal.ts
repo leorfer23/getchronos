@@ -22,6 +22,7 @@ import { egressEnv, egressLocked } from "./egress.js";
 import { niceWrap } from "./machine.js";
 import { findHost, hostFor, LOCAL_HOST_ID, type PtyHandle } from "./hosts/index.js";
 import { brainPathsIn, buildRemoteSpawnSpec, profileNameFor } from "./hosts/spawn-spec.js";
+import { placeTerminal } from "./hosts/candidates.js";
 import { hostAccepts, hostPolicy, workspaceDenied } from "./hosts/policy.js";
 import { mirrorFile } from "./hosts/transcript-mirror.js";
 import type { RemoteHost } from "./hosts/remote.js";
@@ -436,32 +437,30 @@ export async function openSession(
     const first = opts.goals[0];
     opts = { ...opts, goal: typeof first === "string" ? first : first.text };
   }
-  // Machine governor (src/machine.ts): an AGENT may not open a terminal onto a Mac that is already
-  // thrashing — another claude CLI on a load-38 box with full swap makes every existing terminal
-  // slower and finishes nothing. Checked BEFORE the per-workspace seat count, because seats are
-  // about one client's fair share and this is about whether the machine can run a process at all.
-  // The operator is never refused: when he opens a terminal by hand, that IS the priority.
-  // `created_by` is "operator" (or unset) for a Desk/API open and the agent's handle otherwise.
-  // A stand-in for a walled terminal (`replaces`) is exempt for the same reason the seat cap exempts
-  // it: it takes an existing terminal's place rather than adding a process, and refusing it would
-  // strand the work on a dead CLI exactly when the machine is too busy to notice.
-  // Every terminal opens on the brain until placement lands (HOSTS.md phase 4), so it is the brain's
-  // own load that admits it.
+  // Which computer this pty runs on, and whether it may (HOSTS.md phase 4, src/hosts/placement.ts).
+  // One decision, before any row is written:
+  //  - sticky: a reopen (resume, continue-headless), a failover stand-in, a ticket whose worktree is on
+  //    one machine, or a brain directory the caller named, stays where that work is — or is refused
+  //    with the reason. Never a silent move: the CLI transcript and the files live on that disk;
+  //  - pinned: the computer the operator (or `mc session new --host`) chose;
+  //  - otherwise the computer with the most headroom, the brain's reserve counted against it.
+  // The machine governor rides along: an AGENT may not open a terminal onto a computer that is
+  // already thrashing — another claude CLI on a load-38 box with full swap makes every existing
+  // terminal slower and finishes nothing — judged per computer, on its own vitals. It is checked
+  // BEFORE the per-workspace seat count, because seats are about one client's fair share and this is
+  // about whether a machine can run a process at all. The operator is never refused: when he opens a
+  // terminal by hand, that IS the priority. `created_by` is "operator" (or unset) for a Desk/API open
+  // and the agent's handle otherwise. A stand-in for a walled terminal (`replaces`) is exempt for the
+  // same reason the seat cap exempts it: it takes an existing terminal's place rather than adding a
+  // process, and refusing it would strand the work on a dead CLI exactly when the machine is too busy
+  // to notice. With one computer this is exactly the brain-only check it replaced, word for word.
   const openedBy = (opts.created_by ?? "operator").trim();
-  // Which computer this pty runs on (HOSTS.md). Phase 3 placement is pinned + sticky only: a reopen
-  // (resume, continue-headless) stays on the row's own host — its transcript lives there — and a
-  // fresh terminal goes where it was pinned, else the brain.
-  const targetHost =
-    (opts.resumeId ? sessions.get(opts.resumeId)?.host_id : null) ||
-    (opts.agentSessionId && opts.resumeAgent ? sessions.get(opts.agentSessionId)?.host_id : null) ||
-    opts.host_id ||
-    LOCAL_HOST_ID;
+  const placed = placeTerminal(opts, openedBy);
+  const targetHost = placed.host_id;
   const remote = targetHost !== LOCAL_HOST_ID;
-  if (remote) assertRemotePlacement(targetHost, opts.workspace_id ?? null, opts.backend ?? null, opts.resumeId ?? null);
-  if (!remote && openedBy && openedBy !== "operator" && !opts.replaces) {
-    const verdict = hostFor({ host_id: LOCAL_HOST_ID }).vitals().admission;
-    if (!verdict.ok) throw new Error(`machine saturated — ${verdict.reason}`);
-  }
+  // Brain lock #1 again, as the design asks: placement checked policy and veto; this re-reads them
+  // (and the host's link) at the last moment before anything is written for a remote spawn.
+  if (remote) assertRemotePlacement(targetHost, opts.workspace_id ?? null, opts.backend ?? null, opts.resumeId || opts.replaces || null);
   // Guardrail: bound live sessions so a runaway agent can't fork unbounded terminals. Workers of a
   // Lead (`lead_id` set) count against THAT Lead's maxWorkers (CHRONOS_LEAD_MAX_WORKERS), not the
   // workspace seat cap — otherwise a Lead with >5 workers was impossible under the default of 6.
@@ -548,6 +547,16 @@ export async function openSession(
   } else {
     cwd = opts.cwd || (await resolveSessionCwd(opts));
     row = sessions.create({ ...opts, cwd });
+  }
+  // Say where it went and why, once there was a choice to make (HOSTS.md phase 4): on the row for the
+  // Desk card ("on m2 — most headroom"), in the log, and on the bus. A lone brain has nothing to say,
+  // so a single-machine install's rows and logs read exactly as they did.
+  if (placed.chose || remote) {
+    const why = placed.reason;
+    sessions.setPlacement(row.id, why);
+    row = { ...row, placement: why };
+    console.log(`[placement] ${row.id.slice(0, 8)} (${openedBy || "operator"}) → ${targetHost}: ${why}`);
+    bus.publish({ topic: "session.placed", session_id: row.id, workspace_id: row.workspace_id, host_id: targetHost, reason: why });
   }
   // Several finish lines, queued at spawn (src/goals.ts). The row keeps mirroring the FIRST one, so
   // everything downstream — the card, the title, the phase — sees a terminal with one goal; the list

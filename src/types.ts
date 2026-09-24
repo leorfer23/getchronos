@@ -808,6 +808,12 @@ export interface Session {
   /** The computer this terminal's pty lives on (HOSTS.md). `cwd`, `worktree_path` and `pid` are
    *  paths and a process id on THAT machine. 'local' = the brain, which is every row until hosts ship. */
   host_id: string;
+  /**
+   * Why this terminal runs on `host_id` (HOSTS.md phase 4, src/hosts/placement.ts): "most headroom
+   * (m2 62 · local 43−25)", "pinned", "sticky — …". Null when there was nothing to choose (one
+   * computer), so a single-machine install's rows read as they always did.
+   */
+  placement?: string | null;
 }
 
 /** One standing-watch check: what Robert saw and said (desk-watch.ts). */

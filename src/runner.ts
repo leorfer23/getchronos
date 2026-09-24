@@ -200,6 +200,8 @@ async function promptLogin(job: Job, runId: string) {
         role: "human",
         title: `login: ${job.profile}`,
         backend: job.backend,
+        // It logs in the BRAIN's profile, the one this headless job runs under: never another computer.
+        host_id: "local",
       } as any));
     bus.publish({
       topic: "auth.needed",

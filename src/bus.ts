@@ -105,6 +105,8 @@ export type BusEvent = (
   // A host refused a spawn by its local veto (CHRONOS_HOST_DENY), or the brain's own policy refused
   // one. Either means placement tried to put a workspace where it is not allowed.
   | { topic: "host.policy_violation"; host_id: string; workspace_id: string | null; session_id: string | null; reason: string }
+  // HOSTS.md phase 4: placement chose a computer for a terminal, and why ("most headroom (…)").
+  | { topic: "session.placed"; session_id: string; workspace_id: string | null; host_id: string; reason: string }
   | { topic: "clipboard.read"; by: string; describe: string; chars: number }
   | { topic: "clipboard.write"; by: string; describe: string; chars: number }
   | {

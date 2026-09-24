@@ -1576,7 +1576,7 @@ function paintRow(el, s) {
   el.className = "row" + (s.live ? "" : " ended") + (ph === "review" && s.live ? " done" : "") + (S.active === s.id ? " on" : "") + (s.role === "lead" ? " lead" : "") + (child ? " child" : "") + (ho?.off && s.live ? " hoff" : "");
   const ht = qs(".htag", el);
   ht.hidden = !ho;
-  if (ho) { ht.textContent = ho.off && s.live ? ho.name + " offline" : ho.name; ht.title = ho.off && s.live ? `Its computer (${ho.name}) is offline — the terminal keeps running there and comes back when it reconnects` : "Runs on " + ho.name; }
+  if (ho) { ht.textContent = ho.off && s.live ? ho.name + " offline" : ho.name; ht.title = ho.off && s.live ? `Its computer (${ho.name}) is offline — the terminal keeps running there and comes back when it reconnects` : "Runs on " + ho.name + (s.placement ? " — " + s.placement : ""); }
   el.style.setProperty("--ws", wsColor(s.workspace_id));
   qs(".dot", el).className = "dot " + (s.live ? s.state : "ended");
   const wsEl = qs(".ws", el);
@@ -1772,7 +1772,7 @@ function renderStage() {
   if (s.lead_id) bits.push(`<button type="button" class="bit-lead" data-lead="${esc(s.lead_id)}">↳ Lead ${esc(s.lead_id.slice(0, 8))}</button>`);
   bits.push(esc([s.backend.replace("-code", ""), s.model].filter(Boolean).join(" ")));
   const ho = hostOf(s);
-  if (ho) bits.push(ho.off && s.live ? `<span style="color:var(--warn)" title="Its computer is offline — the terminal keeps running there">${esc(ho.name)} offline</span>` : `<span title="Runs on this computer">on ${esc(ho.name)}</span>`);
+  if (ho) bits.push(ho.off && s.live ? `<span style="color:var(--warn)" title="Its computer is offline — the terminal keeps running there">${esc(ho.name)} offline</span>` : `<span title="${esc(s.placement ? "Placed here: " + s.placement : "Runs on this computer")}">on ${esc(ho.name)}</span>`);
   if (s.goals_total > 1) bits.push(`<span title="this terminal was given ${s.goals_total} goals — it is on number ${Math.min(s.goals_done + 1, s.goals_total)}">🎯 ${s.goals_done}/${s.goals_total}</span>`);
   if (s.goal_kind) bits.push(`<span title="${esc(KIND_TIP[s.goal_kind] || "")}">${esc(s.goal_kind === "investigation" ? "dig" : s.goal_kind)}</span>`);
   if (s.cloud_agent_id) bits.push(s.cloud_url ? `<a href="${esc(s.cloud_url)}" target="_blank" rel="noopener" title="Open this run on Cursor">☁ cloud</a>` : `<span title="Running on Cursor's cloud — no live terminal">☁ cloud</span>`);

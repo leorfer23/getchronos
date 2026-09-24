@@ -164,6 +164,23 @@ export const CONFIG = {
     // Machine-wide heavy slots. One suite per ~6 cores: a vitest pool alone forks that many workers.
     heavySlots: Number(process.env.CHRONOS_HEAVY_SLOTS ?? Math.max(1, Math.floor((os.cpus().length || 1) / 6))),
   },
+  // Placement (HOSTS.md phase 4, src/hosts/placement.ts): which computer a new terminal lands on.
+  //   auto   — sticky, then pinned, else the eligible computer with the most headroom (default);
+  //   pinned — phase 3's behavior: only a pinned or sticky terminal leaves the brain;
+  //   local  — every NEW terminal opens on the brain and a pin to another computer is refused. A
+  //            terminal that already lives on a host still reopens there: moving it would be silent.
+  // The operator's kill switch: flip it in .secrets and restart to stop work flowing to hosts.
+  placement: {
+    mode: ((m) => (m === "local" || m === "pinned" ? m : "auto"))((process.env.CHRONOS_PLACEMENT ?? "auto").trim().toLowerCase()) as
+      | "auto"
+      | "pinned"
+      | "local",
+    // Headroom points (0-100 scale, see headroom() in src/hosts/placement.ts) taken off the BRAIN's
+    // score before hosts are compared, so work lands on hosts first and the brain — which also runs
+    // the daemon, the Desk and Robert — takes the overflow. 25 ≈ "a host must be a quarter of the
+    // scale busier than the brain before the brain gets it". 0 = brain competes as an equal.
+    brainReserve: Math.max(0, Number(process.env.CHRONOS_BRAIN_RESERVE ?? 25) || 0),
+  },
   // Auto-sync external ticket connectors (clickup/jira) every N minutes (0 = off).
   connectorSyncMin: Number(process.env.CHRONOS_CONNECTOR_SYNC_MIN ?? 30),
   // Auto-register git checkouts found in a workspace's default_dir every N minutes (0 = off).
