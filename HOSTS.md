@@ -450,6 +450,51 @@ kind, short id, **repo folder**, backend, started / last output, active. Never a
 workspace or a title; a worktree reports its repo folder, not its branch (a ticket key carries the
 workspace prefix), and error text loses URL userinfo and query strings.
 
+#### On the brain: the whole fleet
+
+The brain Mac (daemon, Desk, DB) can carry the same item, showing every computer at once. Opt-in,
+from the brain's checkout:
+
+```bash
+scripts/build-brainbar.sh              # compile + load; --dry-run prints the steps and the plist
+node scripts/brainbar.mjs status       # running (pid N) | installed, not running | not installed
+node scripts/brainbar.mjs uninstall
+```
+
+The same `desktop/hostbar.swift`, compiled with `xcrun swiftc -O` into `~/.mc/bin/chronos-hostbar`
+(beside the Desk's `mc-app`) and started with `--brain` by `~/Library/LaunchAgents/sh.chronos.brainbar.plist`
+(from `launchd/sh.chronos.brainbar.plist.template`: at login, restarted after a crash, not after **Quit**).
+`install-launchd.mjs` never installs it, and `npm run deploy` touches it only when it is installed:
+then it rebuilds and restarts it if `hostbar.swift` is newer than the binary, and never fails the
+deploy if that does not work.
+
+It polls `GET http://127.0.0.1:${CHRONOS_PORT:-7777}/api/hosts/bar` every 3 s — admin only, like
+`/api/hosts` — with the admin token read from `~/.mc/.admin-token`, else `<repo>/.admin-token` (the
+plist carries only paths and the port; the token is read from the file, never logged). A rejected
+token is re-read and retried once at once, so a rotated token needs no restart.
+
+| State | Title | Tooltip / menu |
+|---|---|---|
+| Agents working anywhere | slate hourglass, **amber sand running**, and the fleet's working count | `Chronos · 3 working of 7` |
+| Nothing working | monochrome hourglass, sand settled, no number | `Chronos · nothing running` / `· 0 working of 4` |
+| A host with live work is offline | the ⚠ badge; the number is what the brain can still see working | `m5 offline with work on it · 2 working elsewhere` |
+| Daemon not answering (or it refuses the token) | empty outline hourglass, dimmed, `–` | `Chronos · daemon not answering` / `· admin token refused` |
+
+The menu: one section per computer — **This Mac** first, then each host by name with
+`connected`/`offline` (and for how long) and `N working` — with up to 8 rows each,
+`● open the rollback PR — claude-code · 12m` (the Desk card's title, else the repo folder; ● producing
+output, ○ idle), then `+N more`; then **Open Desk** (`~/.mc/mc-app.app` on `/desk`, else
+`http://localhost:7777/desk`), **Open daemon log** (`chronos.out.log`) and **Quit**.
+
+"Working" is the brain's own signal, the one the Desk paints by: a terminal's pty produced bytes within
+the last `CHRONOS_TERM_QUIET_MS` (6 s). A remote terminal's bytes stream to the brain, so this holds
+for every computer without asking any of them; a terminal on a host whose link is down cannot be seen
+producing and counts as idle (hence the badge). A headless run counts while it is `running`; cloud
+sessions run on no computer and are left out. The reply (`src/hostlink/bar.ts`) is an allowlist:
+per computer id, name, link state, since, counts; per item kind, short id, repo folder, backend,
+started / last output, active — and `title`, which only this admin-gated brain endpoint carries,
+never a host's `/__host/status`.
+
 ### Troubleshooting
 
 Every one of these happened on the first two hosts. `npm run host -- doctor` on the host checks all
@@ -854,6 +899,11 @@ it was.
        `welcome` carries the host's Desk name (additive, no protocol bump). See *Menu bar* above.
        Deviation: the LaunchAgent is `KeepAlive {SuccessfulExit: false}` rather than `KeepAlive true`,
        so **Quit** is not undone by launchd a second later.
+     - **Brain menu bar**: the same item on the brain, `--brain`, for the whole fleet
+       (`GET /api/hosts/bar`, `src/hostlink/bar.ts`; `scripts/build-brainbar.sh` /
+       `scripts/brainbar.mjs`, LaunchAgent `sh.chronos.brainbar`; `npm run deploy` refreshes it only
+       when installed). No `mc menubar` subcommand: `mc` is the agents' CLI and runs sandboxed,
+       while installing a LaunchAgent is the operator's call. See *Menu bar → On the brain*.
    - **Deferred:** publishing (see *Publishing* below); a Desk "roll back" (`app.prev` is kept, the
      rollback is one pasted line); streaming `update_status` across a link drop mid-update (the final
      state still arrives via hello); a Desk update for a host started by hand; migrating a host's
