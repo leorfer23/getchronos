@@ -1,8 +1,8 @@
 # Hosts — one Desk, N computers
 
-> Status: **phase 1 landed** (the seam: `src/hosts/`, migration 134); phases 2–6 are design. This is
-> the plan the implementation PRs follow; each phase at the end is one PR (or a short series) and
-> updates this file when it lands.
+> Status: **being built.** Phase 1 (the seam: `src/hosts/`, migration 134) and phase 2's transport
+> core (link, join, host process) have landed; see *Phases*. This is the plan the implementation PRs
+> follow; each phase at the end is one PR (or a short series) and updates this file when it lands.
 
 ## The gap
 
@@ -373,6 +373,30 @@ it was.
 2. **`chronos host` + link + join.** Host process, `/host` endpoint, host listener, join codes, a
    pinned cert, both transports, `hello`/vitals/capabilities, the Desk **Computers** panel, and a
    vitals chip per host in the header. Nothing is placed on hosts yet.
+   - **Landed (transport core):** `src/hostlink/wire.ts` (frames, protocol version, per-channel
+     seq, the 256 KB `Ring` + `SeqTracker`), `src/hostlink/join.ts` (single-use 15-min join codes
+     carrying the cert fingerprint and URL hints, 32-byte host tokens stored hashed, the brain's
+     self-signed cert via `/usr/bin/openssl`), `src/hostlink/pin.ts` (LAN names/IPs pinned, public
+     names CA-verified, `ws://` only on loopback), `src/hostlink/brain-link.ts` (the
+     `CHRONOS_HOST_LISTEN` listener and the tunnel `/host` door on the loopback API, both token-gated;
+     hello/version/identity checks; 15s ping with 2 misses = link down; RPC with ids and timeouts;
+     the `api` frame handler replaying forwarded `mc` requests into the daemon's own API with
+     brain-set `x-mc-host` / `x-mc-remote: 1` and a per-boot forward secret, admin token stripped,
+     workspace or Lead token required; `POST /api/hosts/join-codes`, `GET /api/hosts/links`,
+     `DELETE /api/hosts/:id`), and `src/hostd/` (`npm run host -- join|run|status|doctor`, the
+     `sh.chronos.host` LaunchAgent, hello with CLIs/profiles/checkouts/veto, vitals every 5s from
+     `machine.ts`, the loopback `mc` forwarder, `spawn_pty`/`spawn_proc` answered "not yet").
+   - **Deferred:** the Desk **Computers** panel and header vitals chips (a follow-up PR; the data is
+     already at `GET /api/hosts/links`). Persisting hosts in Phase 1's `hosts` / `repo_checkouts`
+     tables — until those land, joined hosts' token hashes live in `<root>/hostlink/hosts.json`
+     (sandbox-denied) and are marked `TODO(hosts-p1)`. `authz.ts` does not read `forwardedHost()`
+     yet: forwarded requests already need a brain-issued token, and "the session must belong to that
+     host" needs `sessions.host_id` (Phase 3).
+   - **Deviations:** join is a `/host` upgrade with `Authorization: Join <code>` rather than a separate
+     endpoint, so the listener still serves nothing but `/host`. Pinning is chosen by the URL's
+     hostname (see `pin.ts`), not by a flag. The wire carries `hello.proto` (protocol `major.minor`)
+     separately from `hello.version` (the chronos package version); only a different protocol major
+     is refused.
 3. **Remote terminals.** `spawn_pty` streaming, input, resize, kill and exit; the ring and ack
    resend; reconnect with re-attach; the forwarder with remote authz; `prepare()`; worktrees on
    the host; transcript streaming into focus and usage; drops. Placement: pinned plus sticky only.
