@@ -22,16 +22,34 @@ export function ensureTrustedCwd(configDir: string, cwd: string): "already" | "a
   try { state = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return "skipped"; }
   if (!state || typeof state !== "object" || Array.isArray(state)) return "skipped";
   const projects = (state.projects && typeof state.projects === "object") ? state.projects : (state.projects = {});
-  const cur = projects[cwd];
-  if (cur && typeof cur === "object" && cur.hasTrustDialogAccepted === true) return "already";
-  projects[cwd] = {
-    allowedTools: [], mcpContextUris: [], mcpServers: {}, enabledMcpjsonServers: [], disabledMcpjsonServers: [],
-    ...(cur && typeof cur === "object" ? cur : {}),
-    hasTrustDialogAccepted: true,
-  };
+  const keys = trustKeys(cwd);
+  const trusted = (k: string) => { const c = projects[k]; return !!c && typeof c === "object" && c.hasTrustDialogAccepted === true; };
+  if (keys.every(trusted)) return "already";
+  for (const k of keys) {
+    const cur = projects[k];
+    projects[k] = {
+      allowedTools: [], mcpContextUris: [], mcpServers: {}, enabledMcpjsonServers: [], disabledMcpjsonServers: [],
+      ...(cur && typeof cur === "object" ? cur : {}),
+      hasTrustDialogAccepted: true,
+    };
+  }
   // Atomic replace: claude rewrites this file itself, and a half-written one would lose the login.
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, file);
   return "added";
+}
+
+/**
+ * The folder as the CLI will name it: its own `getcwd()`, which on macOS is the path with the case
+ * the disk actually has. APFS is case-insensitive, so `~/Documents/GitHub/x` opens a folder that is
+ * really `~/Documents/Github/x` — and a trust entry written under the first spelling is invisible to
+ * a CLI that looks up the second (the M5 host, 2026-09-24: pre-trusted, then asked anyway, twice).
+ * `fs.realpathSync` keeps whatever case it was given; `.native` asks the OS. Both spellings are
+ * written when they differ, so a caller that compares against the given path still finds its key.
+ */
+export function trustKeys(cwd: string): string[] {
+  let real = cwd;
+  try { real = fs.realpathSync.native(cwd); } catch {}
+  return real === cwd ? [cwd] : [cwd, real];
 }

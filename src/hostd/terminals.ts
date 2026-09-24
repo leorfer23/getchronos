@@ -114,7 +114,7 @@ export function remoteKey(url: string | null | undefined): string {
 function mainCheckouts(paths: string[]): string[] {
   const out = new Set<string>();
   for (const p of paths) {
-    try { if (fs.statSync(path.join(p, ".git")).isDirectory()) out.add(fs.realpathSync(p)); } catch {}
+    try { if (fs.statSync(path.join(p, ".git")).isDirectory()) out.add(fs.realpathSync.native(p)); } catch {}
   }
   return [...out];
 }
@@ -342,7 +342,7 @@ export class HostTerminals {
     if (fs.existsSync(dest)) return null; // a different repo already sits at that name: never clobber
     fs.mkdirSync(root, { recursive: true });
     await execFileAsync("git", ["clone", "--", remote, dest], { timeout: 10 * 60_000 });
-    return fs.realpathSync(dest);
+    return fs.realpathSync.native(dest);
   }
 
   /** HOSTS.md `prepare()`: what terminal.ts does to the brain's own profile before a local spawn. */
