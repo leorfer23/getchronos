@@ -411,6 +411,18 @@ export function assertRemotePlacement(hostId: string, workspaceId: string | null
 // Open an interactive PTY session running the chosen agent CLI, sandboxed to its workspace.
 // - resumeId: revive an ended Chronos terminal (same row id, Claude --resume that id)
 // - agentSessionId + resumeAgent: open a new Chronos terminal that --resumes a headless run's CLI session
+/**
+ * Model for a terminal opened without one: workspace default → fleet default. Leaving it null used
+ * to mean "whatever the CLI profile says", which made most Desk spend land as unknown model.
+ * Claude only: both defaults are claude aliases ("sonnet"/"opus"). Handed to cursor-agent they
+ * override its own "auto" and hit Cursor's paid-model cap (every sonnet cursor terminal on
+ * 2026-09-21 died at spawn this way); grok/codex reject them outright. Null lets those backends pick.
+ */
+export function defaultSessionModel(backend: string | null | undefined, wsDefault: string | null | undefined): string | null {
+  if (getBackend(backend).name !== "claude-code") return null;
+  return wsDefault ?? CONFIG.defaultModel ?? null;
+}
+
 export async function openSession(
   opts: NewSession & {
     seed?: string;
@@ -517,10 +529,8 @@ export async function openSession(
   // Fresh sessions on a ticket get an isolated git worktree (resolveSessionCwd); resumes reuse the
   // worktree the row was created in (row.cwd) so the transcript and its files stay together.
   const wsEarly = opts.workspace_id ? workspaces.get(opts.workspace_id) : undefined;
-  // Explicit request → workspace default → fleet default. Leaving model null used to mean
-  // "whatever the CLI profile says", which made most Desk spend land as unknown model.
   if (!opts.model) {
-    const fallback = wsEarly?.default_model ?? CONFIG.defaultModel ?? null;
+    const fallback = defaultSessionModel(opts.backend, wsEarly?.default_model);
     if (fallback) opts = { ...opts, model: fallback };
   }
   let row: Session;

@@ -236,6 +236,16 @@ test("cloudVisibleRepos caches so the picker cannot exceed Cursor's 1 req/min li
   assert.deepEqual(second.repos, first.repos);
 });
 
+test("cloudVisibleRepos reads Cursor's live {items: [{url}]} shape, so the picker can see the repo", async () => {
+  const ws = mkWs();
+  workspaceVars.set(ws.id, "CURSOR_API_KEY", "crsr_test", null);
+  const stub: any = async () => ({ ok: true, json: async () => ({ items: [{ url: "https://github.com/leorfer23/getchronos" }] }) });
+  const { repos: list, error } = await cloudVisibleRepos(ws.id, stub);
+  assert.equal(error, null);
+  assert.equal(list?.length, 1);
+  assert.equal(repoVisibleTo(list, "https://github.com/leorfer23/getchronos.git"), true);
+});
+
 test("cloudVisibleRepos surfaces a fetch failure without throwing, and still caches it", async () => {
   const ws = mkWs();
   workspaceVars.set(ws.id, "CURSOR_API_KEY", "crsr_test", null);
