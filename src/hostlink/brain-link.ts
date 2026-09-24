@@ -17,6 +17,8 @@
 import http from "node:http";
 import https from "node:https";
 import os from "node:os";
+import fs from "node:fs";
+import path from "node:path";
 import crypto from "node:crypto";
 import type { Duplex } from "node:stream";
 import { EventEmitter } from "node:events";
@@ -26,7 +28,15 @@ import {
   MAX_CONTROL_BYTES, PROTOCOL_VERSION, checkCompat, decodeControl, decodeData, encodeControl, encodeData,
   type BrainToHost, type DataFrame, type Hello, type HostToBrain, type HostVitals,
 } from "./wire.js";
-import { HostCredStore, JoinCodes, ensureBrainCert, mintHostCredential, hashToken, type BrainCert } from "./join.js";
+import { JoinCodes, ensureBrainCert, mintHostCredential, hashToken, legacyHostsFile, type BrainCert } from "./join.js";
+import { HostRegistry } from "./registry.js";
+import { hostsView } from "./view.js";
+import { hosts, workspaces, LOCAL_HOST_ID } from "../store.js";
+import type { HostPatch } from "../store/hosts.js";
+import { validate, HostPatchSchema } from "../validation.js";
+import type { z } from "zod";
+import { bus } from "../bus.js";
+import { REPO_ROOT } from "../repo-root.js";
 
 export const HOST_PATH = "/host";
 /** Ping cadence and the miss count that means "link down" (HOSTS.md: 15s; 2 missed). */
@@ -41,6 +51,9 @@ const API_MAX_INFLIGHT = 32;
 const API_MAX_RESPONSE = 16 * 1024 * 1024;
 
 export type LinkVia = "lan" | "tunnel";
+
+/** Remote vitals kept per host for the Desk's sparklines — the same 10 minutes `machine.ts` keeps. */
+export const VITALS_KEEP = 120;
 
 export type HostLinkInfo = {
   host_id: string;
@@ -73,7 +86,8 @@ type Link = {
 };
 
 export type BrainLinkOptions = {
-  creds?: HostCredStore;
+  /** Where hosts and their token hashes live: the `hosts` table. */
+  creds?: HostRegistry;
   codes?: JoinCodes;
   pingMs?: number;
   /** Where forwarded `mc` requests go: the daemon's own loopback API. */
@@ -130,7 +144,7 @@ async function defaultVerifyCaller(headers: Record<string, string>): Promise<boo
 }
 
 export class BrainLink extends EventEmitter {
-  readonly creds: HostCredStore;
+  readonly creds: HostRegistry;
   readonly codes: JoinCodes;
   private readonly pingMs: number;
   private readonly wss: WebSocketServer;
@@ -138,10 +152,12 @@ export class BrainLink extends EventEmitter {
   private listener: https.Server | null = null;
   private listenUrls: string[] = [];
   private cert: BrainCert | null = null;
+  /** Last VITALS_KEEP vitals per host. Survives a link blip so a sparkline does not restart on every reconnect. */
+  private readonly history = new Map<string, HostVitals[]>();
 
   constructor(private readonly opts: BrainLinkOptions = {}) {
     super();
-    this.creds = opts.creds ?? new HostCredStore();
+    this.creds = opts.creds ?? new HostRegistry();
     this.codes = opts.codes ?? new JoinCodes();
     this.pingMs = opts.pingMs ?? PING_MS;
     this.wss = new WebSocketServer({ noServer: true, maxPayload: MAX_CONTROL_BYTES });
@@ -181,16 +197,16 @@ export class BrainLink extends EventEmitter {
         console.warn(`[hostlink] join refused (${r.reason}) from ${req.socket.remoteAddress} via ${via}`);
         return deny();
       }
-      const name = String(req.headers["x-chronos-host-name"] ?? r.name ?? "host").slice(0, 64).replace(/[^\w.\- ]/g, "") || "host";
+      // The name the operator typed when minting the code wins; the host's own hostname is the fallback.
+      const name = String(r.name || req.headers["x-chronos-host-name"] || "host").slice(0, 64).replace(/[^\w.\- ]/g, "") || "host";
       const cred = mintHostCredential();
       try {
-        this.creds.add({ host_id: cred.host_id, name, token_hash: hashToken(cred.token), created_at: Date.now() });
+        this.creds.add({ host_id: cred.host_id, name, token_hash: hashToken(cred.token), cert_fp: via === "lan" ? this.cert?.fingerprint ?? null : null, created_at: Date.now() });
       } catch (e: any) {
         // The code is spent either way (single use beats convenience); the operator mints another.
         console.warn(`[hostlink] join accepted but the credential could not be stored: ${e?.message ?? e}`);
         return deny("500 Internal Server Error");
       }
-      // TODO(hosts-p1): upsert a `hosts` row (status offline, cert_fp, token_hash) once the table lands.
       console.log(`[hostlink] host ${cred.host_id} (${name}) joined via ${via}`);
       this.wss.handleUpgrade(req, socket, head, (ws) => {
         ws.send(encodeControl({ t: "joined", host_id: cred.host_id, token: cred.token }));
@@ -205,7 +221,7 @@ export class BrainLink extends EventEmitter {
       console.warn(`[hostlink] host upgrade refused (bad credential${hostId ? ` for ${hostId.slice(0, 16)}` : ""}) from ${req.socket.remoteAddress} via ${via}`);
       return deny();
     }
-    this.wss.handleUpgrade(req, socket, head, (ws) => this.adopt(ws, rec.host_id, rec.name, via));
+    this.wss.handleUpgrade(req, socket, head, (ws) => this.adopt(ws, rec.id, rec.name, via));
   }
 
   private adopt(ws: WebSocket, id: string, name: string, via: LinkVia): void {
@@ -222,6 +238,7 @@ export class BrainLink extends EventEmitter {
 
   private onMessage(link: Link, raw: RawData, isBinary: boolean): void {
     link.lastSeen = Date.now();
+    if (link.hello) this.creds.seen(link.id, link.lastSeen);
     const buf = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer);
     if (isBinary) {
       if (!link.hello) return this.drop(link, 4400, "data before hello");
@@ -244,6 +261,10 @@ export class BrainLink extends EventEmitter {
       case "vitals": {
         const { t: _t, ...v } = f;
         link.vitals = v as HostVitals;
+        const hist = this.history.get(link.id) ?? [];
+        hist.push(link.vitals);
+        if (hist.length > VITALS_KEEP) hist.splice(0, hist.length - VITALS_KEEP);
+        this.history.set(link.id, hist);
         this.emit("vitals", link.id, link.vitals);
         return;
       }
@@ -284,7 +305,8 @@ export class BrainLink extends EventEmitter {
     }
     if (link.helloTimer) { clearTimeout(link.helloTimer); link.helloTimer = null; }
     link.hello = h;
-    if (h.name) link.name = String(h.name).slice(0, 64);
+    // The Desk shows the operator's name for a host (set at join, renamed from the Desk); the host's
+    // own hostname is kept in its capabilities.
     // One live link per host: a reconnect that beats the old socket's close replaces it.
     const prev = this.links.get(link.id);
     if (prev && prev !== link) this.drop(prev, 4409, "replaced by a newer connection");
@@ -293,8 +315,14 @@ export class BrainLink extends EventEmitter {
     link.pingTimer = setInterval(() => this.pingTick(link), this.pingMs);
     link.pingTimer.unref?.();
     console.log(`[hostlink] ${link.id} (${link.name}) online via ${link.via} — ${h.platform}/${h.arch}, chronos ${h.version}`);
-    // TODO(hosts-p1): upsert `hosts` (status online, capabilities_json, last_seen_at) and
-    // `repo_checkouts` from h.checkouts once those tables land.
+    try {
+      const row = this.creds.hello(link.id, h);
+      if (row) link.name = row.name;
+    } catch (e: any) {
+      console.warn(`[hostlink] ${link.id}: could not record hello: ${e?.message ?? e}`);
+    }
+    this.pushPolicy(link.id);
+    bus.publish({ topic: "host.online", host_id: link.id, name: link.name, via: link.via });
     this.emit("online", this.info(link));
   }
 
@@ -327,6 +355,8 @@ export class BrainLink extends EventEmitter {
     if (this.links.get(link.id) !== link) return; // never announced, or already replaced
     this.links.delete(link.id);
     console.log(`[hostlink] ${link.id} (${link.name}) offline — ${reason}`);
+    try { this.creds.offline(link.id); } catch (e: any) { console.warn(`[hostlink] ${link.id}: could not record offline: ${e?.message ?? e}`); }
+    bus.publish({ topic: "host.offline", host_id: link.id, name: link.name, reason });
     this.emit("offline", link.id, reason);
   }
 
@@ -391,9 +421,33 @@ export class BrainLink extends EventEmitter {
   /** Revoke a host's credential and drop its link. Its token stops working immediately. */
   revoke(hostId: string): boolean {
     const had = this.creds.revoke(hostId);
-    const l = this.links.get(hostId);
-    if (l) this.drop(l, 4401, "revoked");
+    this.disconnect(hostId, "revoked");
     return had;
+  }
+
+  /** Drop a host's live link, if any (revoked, or disabled from the Desk). */
+  disconnect(hostId: string, reason: string): void {
+    const l = this.links.get(hostId);
+    if (l) this.drop(l, 4401, reason);
+  }
+
+  /** The vitals this brain has seen from a host lately, oldest first. */
+  vitalsHistory(hostId: string): HostVitals[] {
+    return this.history.get(hostId) ?? [];
+  }
+
+  /**
+   * Tell a connected host the brain's policy for it. Advisory on the host (its own veto is the lock
+   * it enforces); the brain checks the same list before it ever sends a spawn.
+   */
+  pushPolicy(hostId: string): boolean {
+    const row = this.creds.get(hostId);
+    if (!row) return false;
+    let deny: string[] = [];
+    let reserve: unknown;
+    try { deny = JSON.parse(row.policy_json || "{}")?.deny ?? []; } catch {}
+    try { reserve = row.reserve_json ? JSON.parse(row.reserve_json) : undefined; } catch {}
+    return this.sendControl(hostId, { t: "policy", deny: Array.isArray(deny) ? deny : [], ...(reserve !== undefined ? { reserve } : {}) });
   }
 
   // ───────────── the `mc` forwarder, brain side ─────────────
@@ -484,12 +538,28 @@ export class BrainLink extends EventEmitter {
     return [...new Set([...this.listenUrls, ...(this.opts.publicUrls?.() ?? [])])];
   }
 
-  mintJoin(opts: { name?: string | null; url?: string | null } = {}): { code: string; command: string; expires_at: number; urls: string[]; fingerprint: string } {
+  /**
+   * Mint a join code and the command to paste on the new Mac, one per way in: `lan` (only when the
+   * host listener is up) and `tunnel` (only when CHRONOS_HOST_PUBLIC_URL is set). `command` is the
+   * best of them — or the one for `url`, when the caller named one.
+   */
+  mintJoin(opts: { name?: string | null; url?: string | null } = {}): {
+    code: string; command: string; commands: { lan: string | null; tunnel: string | null }; expires_at: number; urls: string[]; fingerprint: string;
+  } {
     const cert = this.cert ?? ensureBrainCert();
     const urls = this.advertisedUrls();
     const { code, expires_at } = this.codes.mint({ fp: cert?.fingerprint ?? "", urls, name: opts.name ?? null });
-    const url = opts.url || urls[0] || "<brain-url>";
-    return { code, command: `npm run host -- join ${url} ${code}`, expires_at, urls, fingerprint: cert?.fingerprint ?? "" };
+    const lan = this.listenUrls[0] ?? null;
+    const tunnel = (this.opts.publicUrls?.() ?? [])[0] ?? null;
+    const url = opts.url || lan || tunnel || urls[0] || "<brain-url>";
+    return {
+      code,
+      command: hostJoinCommand(url, code),
+      commands: { lan: lan ? hostJoinCommand(lan, code) : null, tunnel: tunnel ? hostJoinCommand(tunnel, code) : null },
+      expires_at,
+      urls,
+      fingerprint: cert?.fingerprint ?? "",
+    };
   }
 
   // ───────────── the dedicated LAN listener ─────────────
@@ -562,6 +632,40 @@ export function lanUrls(host: string, port: number, ifaces = os.networkInterface
   return out;
 }
 
+/**
+ * Where a new host gets the code from. The package is not on npm yet, so a host runs a clone of the
+ * repo: CHRONOS_HOST_REPO_URL, else package.json's `repository`, else the public GitHub repo.
+ */
+export const DEFAULT_HOST_REPO_URL = "https://github.com/leorfer23/getchronos";
+let pkgRepoCache: string | null | undefined;
+export function hostRepoUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const set = (env.CHRONOS_HOST_REPO_URL ?? "").trim();
+  if (set) return set;
+  if (pkgRepoCache === undefined) {
+    pkgRepoCache = null;
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+      const raw = typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url;
+      if (typeof raw === "string" && raw.trim()) pkgRepoCache = raw.trim().replace(/^git\+/, "").replace(/\.git$/, "");
+    } catch {}
+  }
+  return pkgRepoCache || DEFAULT_HOST_REPO_URL;
+}
+
+/** Single-quote for a POSIX shell, so a URL or code can never break out of the pasted command. */
+const shq = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+
+/**
+ * The one line the operator pastes on a new Mac (needs git, Node >= 22 and the Xcode command-line
+ * tools for node-pty). Re-running it is safe: an existing clone is fast-forwarded, not re-cloned.
+ * `npm run host` runs `src/hostd` through tsx (a devDependency `npm ci` installs), and so does the
+ * LaunchAgent join installs — so no build step.
+ */
+export function hostJoinCommand(url: string, code: string, repo = hostRepoUrl()): string {
+  const dir = "~/.chronos-host/app";
+  return `{ [ -d ${dir}/.git ] && git -C ${dir} pull --ff-only || git clone ${shq(repo)} ${dir}; } && cd ${dir} && npm ci && npm run host -- join ${shq(url)} ${shq(code)}`;
+}
+
 function defaultApiTarget(): { host: string; port: number } {
   return { host: "127.0.0.1", port: Number(process.env.CHRONOS_PORT ?? 7777) };
 }
@@ -581,10 +685,19 @@ export function brainLink(): BrainLink {
 }
 
 /**
- * Boot hook (index.ts). With `CHRONOS_HOST_LISTEN` unset — the default — this does nothing at all:
- * no port, no cert, no files. A single-machine install stays exactly what it was.
+ * Boot hook (index.ts). Always: hosts that joined under Phase 2's `hosts.json` move into the `hosts`
+ * table once, and no remote host is "online" before its link says hello. With `CHRONOS_HOST_LISTEN`
+ * unset — the default — that is all: no port, no cert. A single-machine install stays what it was.
  */
 export async function startHostLink(listen: string): Promise<void> {
+  try {
+    const reg = brainLink().creds;
+    const n = reg.importLegacy(legacyHostsFile());
+    if (n) console.log(`[hostlink] imported ${n} host(s) from ${legacyHostsFile()} into the hosts table (file left in place)`);
+    reg.bootReconcile();
+  } catch (e: any) {
+    console.warn(`[hostlink] host registry boot failed: ${e?.message ?? e}`);
+  }
   if (!listen.trim()) return;
   const cert = ensureBrainCert();
   if (!cert) {
@@ -600,26 +713,61 @@ export async function startHostLink(listen: string): Promise<void> {
 
 /**
  * Admin routes, mounted on the `/api` router by api.ts. Admin only: minting a join code is minting a
- * machine's way into the fleet, and the link list shows every host's inventory.
+ * machine's way into the fleet, and the host list shows every computer's inventory.
  */
 export function hostRoutes(requireAdmin: express.RequestHandler, link: () => BrainLink = brainLink): express.Router {
   const r = express.Router();
   r.post("/hosts/join-codes", requireAdmin, (req, res) => {
-    const name = typeof req.body?.name === "string" ? req.body.name.slice(0, 64) : null;
+    const name = typeof req.body?.name === "string" ? req.body.name.trim().slice(0, 64).replace(/[^\w.\- ]/g, "") || null : null;
     const url = typeof req.body?.url === "string" ? req.body.url : null;
     res.json(link().mintJoin({ name, url }));
+  });
+  r.get("/hosts", requireAdmin, (_req, res) => {
+    const l = link();
+    res.json({ hosts: hostsView(l), listen_urls: l.advertisedUrls(), pending_codes: l.codes.pending() });
   });
   r.get("/hosts/links", requireAdmin, (_req, res) => {
     const l = link();
     const online = new Set(l.list().map((h) => h.host_id));
     res.json({
       links: l.list(),
-      known: l.creds.list().filter((h) => !h.revoked_at).map((h) => ({ host_id: h.host_id, name: h.name, created_at: h.created_at, online: online.has(h.host_id) })),
+      known: l.creds.list().map((h) => ({ host_id: h.id, name: h.name, created_at: h.created_at, status: h.status, online: online.has(h.id) })),
       listen_urls: l.advertisedUrls(),
     });
   });
+  r.patch("/hosts/:id", requireAdmin, validate(HostPatchSchema), (req, res) => {
+    const l = link();
+    const id = String(req.params.id);
+    const row = hosts.get(id);
+    if (!row || (id !== LOCAL_HOST_ID && !row.token_hash)) return res.status(404).json({ error: "no such computer" });
+    const b = req.body as z.infer<typeof HostPatchSchema>;
+    if (id === LOCAL_HOST_ID && b.status) return res.status(400).json({ error: "this Mac is the brain: it cannot be drained or disabled" });
+    const patch: HostPatch = {};
+    if (b.name !== undefined) patch.name = b.name;
+    if (b.policy) {
+      const all = workspaces.list();
+      const known = new Set(all.flatMap((w) => [w.id, w.slug]));
+      const unknown = b.policy.deny.filter((d) => !known.has(d));
+      if (unknown.length) return res.status(400).json({ error: `unknown workspace(s): ${unknown.join(", ")}` });
+      patch.policy_json = JSON.stringify({ deny: [...new Set(b.policy.deny)] });
+    }
+    if (b.reserve !== undefined) patch.reserve_json = b.reserve === null ? null : JSON.stringify(b.reserve);
+    if (b.status === "draining" || b.status === "disabled") patch.status = b.status;
+    // "online" = take work again. The column says offline until the link is actually up.
+    if (b.status === "online") patch.status = l.isOnline(id) ? "online" : "offline";
+    hosts.update(id, patch);
+    if (b.status === "disabled") l.disconnect(id, "disabled from the Desk");
+    else if (b.policy || b.reserve !== undefined) l.pushPolicy(id);
+    const after = hosts.get(id)!;
+    bus.publish({ topic: "host.updated", host_id: id, status: after.status, actor: "human" });
+    res.json(hostsView(l).find((h) => h.id === id) ?? null);
+  });
   r.delete("/hosts/:id", requireAdmin, (req, res) => {
-    res.json({ revoked: link().revoke(String(req.params.id)) });
+    const id = String(req.params.id);
+    if (id === LOCAL_HOST_ID) return res.status(400).json({ error: "this Mac is the brain: it cannot be revoked" });
+    const revoked = link().revoke(id);
+    if (revoked) bus.publish({ topic: "host.updated", host_id: id, status: "disabled", actor: "human" });
+    res.json({ revoked });
   });
   return r;
 }

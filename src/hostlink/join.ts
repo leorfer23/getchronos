@@ -153,6 +153,7 @@ export function tokenMatches(presented: string | null | undefined, storedHash: s
   return a.length === 32 && b.length === 32 && crypto.timingSafeEqual(a, b);
 }
 
+/** A row of the Phase 2 `hosts.json` credential file. Read once at boot by `HostRegistry.importLegacy`. */
 export type HostRecord = { host_id: string; name: string; token_hash: string; created_at: number; revoked_at?: number | null };
 
 export function hostlinkDir(): string {
@@ -160,58 +161,10 @@ export function hostlinkDir(): string {
 }
 
 /**
- * Joined hosts and their token hashes, kept in `<data>/hostlink/hosts.json` (mode 600).
- *
- * INTERIM: Phase 1 adds the `hosts` table (`token_hash`, `cert_fp`, `status`, …). This file exists
- * only so a host that joined keeps working across a brain deploy before that table lands.
- * TODO(hosts-p1): upsert into `hosts` and read `token_hash` from there; import this file once, then
- * delete it.
+ * Where Phase 2 kept joined hosts' token hashes, before the `hosts` table took over (see
+ * `registry.ts`). Only ever read now, to import what is there; never written, never deleted.
  */
-export class HostCredStore {
-  constructor(readonly file = path.join(hostlinkDir(), "hosts.json")) {}
-
-  list(): HostRecord[] {
-    try {
-      const v = JSON.parse(fs.readFileSync(this.file, "utf8"));
-      return Array.isArray(v) ? v.filter((r) => r && typeof r.host_id === "string" && typeof r.token_hash === "string") : [];
-    } catch {
-      return [];
-    }
-  }
-
-  get(hostId: string): HostRecord | null {
-    return this.list().find((r) => r.host_id === hostId && !r.revoked_at) ?? null;
-  }
-
-  add(r: HostRecord): void {
-    this.write([...this.list().filter((x) => x.host_id !== r.host_id), r]);
-  }
-
-  revoke(hostId: string, at = Date.now()): boolean {
-    const all = this.list();
-    const r = all.find((x) => x.host_id === hostId && !x.revoked_at);
-    if (!r) return false;
-    r.revoked_at = at;
-    this.write(all);
-    return true;
-  }
-
-  verify(hostId: string, token: string): HostRecord | null {
-    const r = this.get(hostId);
-    // Hash compare runs even for an unknown id (against a dummy), so "no such host" and "wrong token"
-    // take the same time.
-    const ok = tokenMatches(token, r?.token_hash ?? "0".repeat(64));
-    return r && ok ? r : null;
-  }
-
-  private write(rows: HostRecord[]): void {
-    fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    const tmp = `${this.file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(rows, null, 2), { mode: 0o600 });
-    fs.renameSync(tmp, this.file);
-    try { fs.chmodSync(this.file, 0o600); } catch {}
-  }
-}
+export const legacyHostsFile = (dir = hostlinkDir()) => path.join(dir, "hosts.json");
 
 // ───────────────────────────── the brain's TLS certificate ─────────────────────────────
 

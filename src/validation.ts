@@ -968,3 +968,19 @@ export const QuickActionSchema = z.object({
 export const QuickActionsSchema = z.object({
   actions: z.array(QuickActionSchema).max(MAX_QUICK_ACTIONS),
 });
+
+// ───────────────────────────── hosts (HOSTS.md) ─────────────────────────────
+/**
+ * `PATCH /api/hosts/:id` — the Desk's Computers panel. `policy.deny` is the brain-side placement
+ * policy (workspace ids or slugs this computer may not run); the host's own veto is separate and
+ * not editable from here. `status` is the operator's half of the column: drain, pause (disabled),
+ * or back to taking work ("online" — stored as offline until its link is up). Revoking is DELETE.
+ */
+export const HostPatchSchema = z
+  .strictObject({
+    name: z.string().trim().min(1).max(64).regex(/^[\w.\- ]+$/, "letters, digits, space, dot, dash, underscore").optional(),
+    policy: z.strictObject({ deny: z.array(z.string().trim().min(1).max(128)).max(500) }).optional(),
+    status: z.enum(["online", "draining", "disabled"]).optional(),
+    reserve: z.record(z.string().min(1).max(32), z.number().min(0).max(1_000_000)).nullable().optional(),
+  })
+  .refine((b) => Object.values(b).some((v) => v !== undefined), { message: "nothing to change" });
