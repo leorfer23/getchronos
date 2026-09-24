@@ -5,14 +5,14 @@
 # The bundle exists for one reason: an icon. A bare Mach-O binary — which is what `swiftc -o
 # ~/.mc/bin/mc-app` produced — has no Info.plist, so macOS has nowhere to read CFBundleIconFile
 # from and falls back to the generic Unix-executable tile (the dark square with green "exec").
-# The Desk's own icon shipped in desktop/src-tauri/icons/icon.icns and nothing on this surface
-# consumed it. A bundle does, and the same Info.plist gets it a real name in the Dock and ⌘-tab
-# instead of "mc-app".
+# The icon is desktop/icon.icns — the hourglass mark, built from desktop/icon.svg by
+# scripts/build-icon.sh. A bundle is what lets macOS read it, and the same Info.plist gets it a real
+# name in the Dock and ⌘-tab instead of "mc-app".
 set -euo pipefail
 
 DESKTOP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/desktop"
 SRC="$DESKTOP/app.swift"
-ICNS="$DESKTOP/src-tauri/icons/icon.icns"
+ICNS="$DESKTOP/icon.icns"
 APP="$HOME/.mc/mc-app.app"
 LINK="$HOME/.mc/bin/mc-app"
 
