@@ -1295,7 +1295,7 @@ async function transcribe() {
   const t0 = performance.now();
   try {
     const r = await fetch("/api/transcribe" + (PREFS.lang ? "?lang=" + PREFS.lang : ""), { method: "POST", headers: { "content-type": blob.type, "x-mc-admin": TOKEN }, body: blob, signal: V.ctl.signal });
-    if (!r.ok) throw new Error((await r.text()).slice(0, 120) || "HTTP " + r.status);
+    if (!r.ok) { const t = await r.text(); let why = ""; try { why = JSON.parse(t).error; } catch {} throw new Error(why || t.slice(0, 200) || "HTTP " + r.status); }
     const { text, ms } = await r.json();
     const total = Math.round(performance.now() - t0);
     const onText = V.onText;
@@ -1309,7 +1309,8 @@ async function transcribe() {
     fx.fail(); clearInterval(V.tick);
     V.state = "failed"; V.err = String(err.message || err);
     if (V.mic) { V.mic.classList.remove("busy"); V.mic.textContent = "🎤"; }
-    paintRecbar(); toast("transcribe failed: " + V.err.slice(0, 100));
+    // The daemon says why (engine down, ffmpeg broken, …): long enough to read, with Retry right there.
+    paintRecbar(); toast("transcribe failed: " + V.err.slice(0, 220), { label: "Retry", fn: transcribe });
   }
 }
 qs("#rb-cancel").onclick = voiceCancel;

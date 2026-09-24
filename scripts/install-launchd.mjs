@@ -14,6 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { ffmpegProblem } from "../bin/ffmpeg-check.mjs";
 
 const argv = process.argv.slice(2);
 const printOnly = argv.includes("--print");
@@ -51,8 +52,10 @@ const AGENTS = [
       const models = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".bin")).sort() : [];
       if (!models.length) return "no model in ~/.cache/whisper (see README → Voice)";
       if (!fs.existsSync("/opt/homebrew/bin/whisper-server")) return "whisper-server not installed (brew install whisper-cpp)";
-      // The template runs --convert (webm/mp4/ogg → wav via ffmpeg); without ffmpeg whisper-server exits at start.
-      if (!fs.existsSync("/opt/homebrew/bin/ffmpeg")) return "ffmpeg not installed (brew install ffmpeg) — whisper-server --convert exits without it";
+      // The template runs --convert (webm/mp4/ogg → wav via ffmpeg): a missing or dyld-broken ffmpeg
+      // fails every phone upload, so run it rather than trusting the file is there.
+      const ff = ffmpegProblem();
+      if (ff) return `${ff} — whisper-server --convert needs a working ffmpeg (brew reinstall ffmpeg)`;
       subs.__WHISPER_MODEL__ = models[models.length - 1];
       return null;
     },

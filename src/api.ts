@@ -107,7 +107,7 @@ import {
 } from "./agent-lifecycle.js";
 import { runCommandLine } from "./commands.js";
 import { flowData } from "./flow.js";
-import { transcribe, audioFilename } from "./transcribe.js";
+import { transcribe, audioFilename, transcribeFailure } from "./transcribe.js";
 import { speak, voiceFor, listVoices } from "./speak.js";
 import { askManagerWeb, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurn, setSticky } from "./thread-router.js";
@@ -4274,7 +4274,9 @@ export function startServer() {
       const text = await transcribe(buf, { filename: audioFilename(ct), contentType: ct, language });
       res.json({ text, ms: Date.now() - t0, bytes: buf.length });
     } catch (e: any) {
-      res.status(500).json({ error: String(e?.message ?? e) });
+      const f = transcribeFailure(e, { mime: req.get("content-type") || "-", bytes: (req.body as Buffer)?.length ?? 0 });
+      console.error(f.log);
+      res.status(500).json({ error: f.error });
     }
   });
 
