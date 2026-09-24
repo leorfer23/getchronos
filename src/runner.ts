@@ -49,7 +49,8 @@ const execFileAsync = promisify(execFile);
 // intake: is the chief-of-staff sweep (intake.ts) — READ-ONLY by design (disallowed Edit/Write,
 // files idea drafts only). Missing it here parked a clean-exit intake run on a stray `mc ask`
 // (PER-35 / run 239abc1e), same class of omission as grade: before it.
-const READONLY_RUN_PREFIXES = ["plan:", "review:", "distill:", "grade:", "ideas:", "intake:"];
+// dream: is the per-workspace memory pass (dream.ts) — read-only on code, writes memory only via mc.
+const READONLY_RUN_PREFIXES = ["plan:", "review:", "distill:", "grade:", "ideas:", "intake:", "dream:"];
 export function isReadOnlyRun(name?: string | null): boolean {
   const base = baseJobName(name);
   return !!base && READONLY_RUN_PREFIXES.some((p) => base.startsWith(p));

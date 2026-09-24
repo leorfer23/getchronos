@@ -793,6 +793,10 @@
   .mem-inbox div span { flex:1; }
   .mem-inbox button { font-size:12px; padding:1px 8px; }
   .mem-empty { color:var(--faint); font-size:13.5px; line-height:1.6; margin:auto; max-width:420px; text-align:center; }
+  .mem-dream { display:flex; flex-direction:column; gap:2px; padding:4px 6px; font-size:12px; color:var(--muted); line-height:1.4; }
+  .mem-dream .t { color:var(--faint); font:11px ui-monospace,Menlo,monospace; }
+  .mem-dream.undone { text-decoration:line-through; color:var(--faint); }
+  .mem-dream button { all:unset; cursor:pointer; align-self:flex-start; font-size:12px; color:var(--accent); }
   /* Jobs: the list on the left, one job on the right — its settings in tabs, its runs, one run's story. */
   #dlg-jobs { width:min(1080px,96vw); }
   #dlg-jobs .dlg { padding:0; gap:0; height:min(82vh, 860px); }
@@ -4277,12 +4281,14 @@ qs("#job-new").onclick = () => newJob();
 qs("#jobs-close").onclick = () => qs("#dlg-jobs").close();
 // ── memory ───────────────────────────────────────────────────────────────────────────────────
 // The workspace's memory as the tree agents see it (src/memory-tree.ts): the ★ memory-index trunk,
-// its memory-<topic> branches under their topics, other ★ memos, the session-learnings inbox, and the
-// rest of the vault. One memo open on the right. Caps mirror the daemon's so the meter tells the truth.
-const MEM = { ws: null, notes: [], open: null, dirty: false, fromInbox: null };
-const MEM_INDEX = "memory-index", MEM_INBOX = "session-learnings";
-const MEM_CAP = { "memory-index": 3000, branch: 6000, prompt: 8000 };
-const memCap = (n) => n.slug === MEM_INDEX ? MEM_CAP[MEM_INDEX] : n.slug.startsWith("memory-") ? MEM_CAP.branch : 0;
+// then ★ memory-hot, the memory-<topic> branches under their topics, other ★ memos, the inbox and
+// archive (cold), the rest of the vault, and the last dream passes with an Undo for the newest.
+// One memo open on the right. Caps mirror the daemon's so the meter tells the truth.
+const MEM = { ws: null, notes: [], dreams: [], open: null, dirty: false, fromInbox: null };
+const MEM_INDEX = "memory-index", MEM_HOT = "memory-hot", MEM_ARCHIVE = "memory-archive", MEM_INBOX = "session-learnings";
+const MEM_CAP = { "memory-index": 3000, "memory-hot": 1500, branch: 6000, prompt: 8000 };
+const memIsBranch = (n) => /^memory-[a-z0-9-]+$/.test(n.slug) && n.slug !== MEM_INDEX && n.slug !== MEM_HOT && !n.slug.startsWith(MEM_ARCHIVE) && !/^Memory\s+—/.test(n.title);
+const memCap = (n) => MEM_CAP[n.slug] || (memIsBranch(n) ? MEM_CAP.branch : 0);
 const memTopics = (body) => [...String(body || "").matchAll(/^##\s+(.+?)\s*$/gm)].map((m) => m[1]);
 const memBullets = (body) => String(body || "").split("\n").map((l) => /^\s*[-*]\s+(.+)$/.exec(l)?.[1]?.trim()).filter(Boolean);
 async function openMemory(ws, slug) {
@@ -4299,6 +4305,16 @@ async function openMemory(ws, slug) {
 async function memLoad() {
   try { MEM.notes = (await api("/notes?workspace=" + encodeURIComponent(MEM.ws))).filter((n) => n.scope !== "global"); }
   catch (e) { MEM.notes = []; toast("memory: " + errMsg(e)); }
+  try { MEM.dreams = (await api("/workspaces/" + encodeURIComponent(MEM.ws) + "/dream/runs?limit=5")).runs || []; }
+  catch { MEM.dreams = []; }
+}
+async function memUndoDream(b) {
+  if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "↶ Undo — sure?"; setTimeout(() => { if (b.isConnected) { b.dataset.armed = ""; b.textContent = "↶ Undo"; } }, 3000); return; }
+  try {
+    await api("/workspaces/" + encodeURIComponent(MEM.ws) + "/dream/runs/" + b.dataset.undo + "/undo", { method: "POST", body: "{}" });
+    toast("dream pass undone — memory is back to how it was");
+    MEM.dirty = false; await memLoad(); memRender();
+  } catch (e) { toast("undo: " + errMsg(e)); }
 }
 function memRender() {
   const tabs = qs("#mem-tabs");
@@ -4307,7 +4323,7 @@ function memRender() {
   const index = MEM.notes.find((n) => n.slug === MEM_INDEX);
   const topics = memTopics(index?.body);
   qs("#mem-topics").innerHTML = topics.map((t) => `<option value="${esc(t)}">`).join("");
-  const branches = MEM.notes.filter((n) => n.slug.startsWith("memory-") && n.slug !== MEM_INDEX);
+  const branches = MEM.notes.filter(memIsBranch);
   const item = (n, cls = "") => {
     const cap = memCap(n);
     const over = cap && n.body.length > cap;
@@ -4324,14 +4340,25 @@ function memRender() {
     }
     for (const b of branches) if (!used.has(b.id)) h += item(b, "d1");
   } else h += `<button data-new-index="1"><span class="n">＋ Start the memory index</span></button>`;
-  for (const n of MEM.notes.filter((n) => n.context && n.slug !== MEM_INDEX)) h += item(n);
+  const hot = MEM.notes.find((n) => n.slug === MEM_HOT);
+  if (hot) h += item(hot);
+  for (const n of MEM.notes.filter((n) => n.context && n.slug !== MEM_INDEX && n.slug !== MEM_HOT && !memIsBranch(n))) h += item(n);
   const inbox = MEM.notes.find((n) => n.slug === MEM_INBOX);
-  if (inbox) h += `<div class="grp">Inbox · promote what matters</div>` + item(inbox);
-  const rest = MEM.notes.filter((n) => !n.context && n.slug !== MEM_INBOX && !n.slug.startsWith("memory-"));
+  const archive = MEM.notes.find((n) => n.slug === MEM_ARCHIVE);
+  if (inbox || archive) h += `<div class="grp">Cold · the dream pass files the inbox</div>` + (inbox ? item(inbox) : "") + (archive ? item(archive) : "");
+  const rest = MEM.notes.filter((n) => !n.context && n.slug !== MEM_INBOX && n.slug !== MEM_ARCHIVE && !memIsBranch(n));
   if (rest.length) h += `<div class="grp">Other memos · on demand</div>` + rest.map((n) => item(n)).join("");
+  if (MEM.dreams.length) {
+    const newest = MEM.dreams.find((d) => d.status === "applied");
+    h += `<div class="grp">Dreams · 13:00 &amp; 22:00</div>` + MEM.dreams.map((d) =>
+      `<div class="mem-dream${d.status === "undone" ? " undone" : ""}"><span class="t">${esc(age(d.finished_at || d.created_at))} ago · ${esc(d.status)}</span>` +
+      `<span>${esc(d.receipt || d.error || (d.status === "applied" ? "" : "no changes applied"))}</span>` +
+      (newest && d.id === newest.id ? `<button data-undo="${esc(d.id)}">↶ Undo</button>` : "") + `</div>`).join("");
+  }
   qs("#mem-tree").innerHTML = h;
   for (const b of qsa("button[data-id]", qs("#mem-tree"))) b.onclick = async () => { if (MEM.dirty) await memSave(); MEM.open = b.dataset.id; MEM.fromInbox = null; memRender(); };
   for (const b of qsa("button[data-topic]", qs("#mem-tree"))) b.onclick = () => { qs("#mem-topic").value = b.dataset.topic; qs("#mem-fact").focus(); };
+  for (const b of qsa("button[data-undo]", qs("#mem-tree"))) b.onclick = () => memUndoDream(b);
   const ni = qs("button[data-new-index]", qs("#mem-tree"));
   if (ni) ni.onclick = () => qs("#mem-fact").focus();
   const prompt = MEM.notes.filter((n) => n.context).reduce((a, n) => a + n.title.length + n.slug.length + n.body.length + 8, 0);

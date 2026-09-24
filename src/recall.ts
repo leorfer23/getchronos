@@ -192,7 +192,7 @@ export function memoryBlock(workspace_id: string): string {
     `- ALWAYS \`mc recall "<topic>"\` before starting work, and again whenever you hit an unfamiliar system, error or decision — a past session may have solved it.`,
     index ? `- Memo vault (\`mc memo get <slug>\`): ${index}` : null,
     `- The operator says "remember / always / from now on …" → \`mc remember "<short rule>" --topic <T> [--detail "…"]\`: it lands in the ★ memory-index every future agent here loads. Keep the line short; detail goes to the topic's memory-<t> memo. If refused for size, condense the index first.`,
-    `- The moment you learn a durable fact yourself (a gotcha, a convention, where something lives), note it: \`mc learn "<fact>"\` (an inbox the operator promotes from). Most sessions produce none — never record task status or secrets.`,
+    `- The moment you learn a durable fact yourself (a gotcha, a convention, where something lives), note it: \`mc learn "<fact>"\` (an inbox the dream pass files into this memory twice a day). Most sessions produce none — never record task status or secrets.`,
     `- Memory is private to THIS workspace. Never store, seek or mention other clients' or workspaces' information.`,
   ].filter(Boolean);
   return guard(lines.join("\n"), "memory-contract", workspace_id);

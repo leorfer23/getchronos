@@ -75,6 +75,7 @@ import { addSample, proseBrief, proseGuide, saveGuide, startLearning } from "./p
 import { proseSamples } from "./store/prose.js";
 import { recall, renderRecall } from "./recall.js";
 import { recordRead, recordRecall, sessionFor, usageRoute } from "./memory-usage.js";
+import * as dreamRoutes from "./dream-routes.js";
 import { openConflicts } from "./memory-conflicts.js";
 import * as agentMemory from "./agent-memory.js";
 import { isMemoryAgent } from "./agent-memory.js";
@@ -1656,6 +1657,15 @@ export function startServer() {
   // Which memory agents actually used (src/memory-usage.ts): per-ref counts, last use, which doors.
   // Workspace-walled like recall; the dream pass ranks and prunes on it. ?since=ISO or 7d/24h.
   api.get("/workspaces/:id/memory/usage", usageRoute);
+
+  // The dream pass (src/dream-pass.ts): gather one bundle, apply one plan, undo a pass. Walled per
+  // workspace in the handlers; `POST /dream/run` (dream now, any slot) is admin-only.
+  api.get("/workspaces/:id/dream/context", dreamRoutes.contextRoute);
+  api.get("/workspaces/:id/dream/branch/:slug", dreamRoutes.branchRoute);
+  api.post("/workspaces/:id/dream/apply", dreamRoutes.applyRoute);
+  api.get("/workspaces/:id/dream/runs", dreamRoutes.runsRoute);
+  api.post("/workspaces/:id/dream/runs/:run/undo", dreamRoutes.undoRoute);
+  api.post("/dream/run", dreamRoutes.runNowRoute);
 
   // Pairs of remembered facts a judge found to disagree. Read-only and workspace-walled, same as
   // recall: a conflict quotes two pieces of this workspace's memory.

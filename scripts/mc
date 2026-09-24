@@ -217,6 +217,10 @@ const HELP = `mc — Mission Control backlog CLI
   mc recall "<query>" [--workspace ID]                     search THIS workspace's memory (memos, skills, lessons, past sessions) — run before starting work
   mc memory conflicts [--workspace ID]                    two things you were told that disagree; settle with: resolve|dismiss <id>
   mc memory usage [--since 7d|ISO] [--limit N] [--json]   which memos/skills/lessons agents here actually read, and recalls that found nothing
+  mc dream runs [--workspace ID]                          recent dream passes (the twice-daily memory pass) with their receipts
+  mc dream undo <run> [--workspace ID]                    put the newest pass back — memos, inbox, archive, clocks
+  mc dream run [--workspace ID|slug]                      dream now, outside the 13:00/22:00 slots (admin; no workspace = every active one)
+  mc dream context [--run ID] | branch <slug> | apply [--dry-run] [--file F]   the dreamer's own loop (plan JSON on stdin)
   mc search "<query>" [--workspace ID] [--kind ticket|session|event|job|skill]
   mc ws list                         list projects  (alias: mc project list)
   mc ws create <slug>                scaffold a new project (identity capsule)
@@ -1506,6 +1510,61 @@ async function heavy(argv) {
       out.push(lines.length ? lines.join("\n") : "(nothing read yet in this window)");
       if (r.misses.length) out.push("\nrecalls that found nothing (memory gaps):\n" + r.misses.map((m) => `${String(m.count).padStart(4)}  "${m.query}"`).join("\n"));
       return console.log(out.join("\n"));
+    }
+    if (cmd === "dream") {
+      // The dream pass (src/dream-pass.ts). context/branch/apply are the dreamer's own loop; runs/undo
+      // are the operator's receipt and way back; run dispatches a pass now (admin — paid jobs).
+      const sub = pos[1] || "runs";
+      if (sub === "run") {
+        const r = await req("POST", "/dream/run", opt.workspace && opt.workspace !== "true" ? { workspace: opt.workspace } : {}, adminHeaders());
+        if (!r.started.length) return console.log("(no workspace had anything to dream about)");
+        return console.log(r.started.map((s) => `${s.workspace}: ${s.error ? "✗ " + s.error : s.skipped ? "· " + s.skipped : "dreaming — run " + s.run.slice(0, 8)}`).join("\n"));
+      }
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (!wsId) die(`dream ${sub} needs --workspace or MC_WORKSPACE — memory is workspace-walled`);
+      const base = "/workspaces/" + wsId + "/dream";
+      if (sub === "context") {
+        const withRun = opt.run && opt.run !== "true";
+        // No --run opens a pass: the operator's call, or the running dream job's next chunk (the daemon decides).
+        const r = await req("GET", base + "/context" + (withRun ? "?run=" + encodeURIComponent(opt.run) : ""), undefined, withRun || !adminToken() ? undefined : adminHeaders());
+        return console.log(JSON.stringify(r, null, 2));
+      }
+      if (sub === "branch") {
+        const slug = pos[2] || die("dream branch needs a <memory-slug>");
+        return console.log(await req("GET", base + "/branch/" + encodeURIComponent(slug)));
+      }
+      if (sub === "apply") {
+        // Read stdin to the end — readStdin() gives up after 250ms, and a truncated plan must never parse.
+        const raw = opt.file && opt.file !== "true" ? fs.readFileSync(opt.file, "utf8")
+          : process.stdin.isTTY ? "" : await new Promise((ok) => { let d = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (c) => (d += c)); process.stdin.on("end", () => ok(d)); });
+        if (!raw.trim()) die("dream apply reads the plan (JSON) from stdin or --file");
+        let plan; try { plan = JSON.parse(raw); } catch (e) { die("dream apply: the plan is not valid JSON — " + e.message); }
+        const dry = opt["dry-run"] === "true";
+        const r = await fetch(API + base + "/apply" + (dry ? "?dry=1" : ""), {
+          method: "POST", headers: { "content-type": "application/json", ...WS_TOKEN_HEADERS }, body: JSON.stringify(plan),
+        });
+        const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+        if (!r.ok) {
+          console.error(`dream apply refused (${r.status}) — fix every problem and resend:\n` + (j.problems?.length ? j.problems.map((p) => "- " + p).join("\n") : j.error));
+          process.exit(1);
+        }
+        const out = [(dry ? "DRY RUN — nothing written. " : "") + j.receipt];
+        if (j.writes.length) out.push("writes: " + j.writes.map((w) => `${w.slug} ${w.chars == null ? "(retired)" : w.chars + " chars"}`).join(", "));
+        if (j.archived.length) out.push(`archived (${j.archived.length}):\n` + j.archived.slice(0, 40).map((a) => `  - ${a.text.slice(0, 120)} — from ${a.from} · ${a.reason}`).join("\n") + (j.archived.length > 40 ? `\n  …+${j.archived.length - 40} more` : ""));
+        if (!dry) out.push(`undo: mc dream undo ${j.run.slice(0, 8)}`);
+        return console.log(out.join("\n"));
+      }
+      if (sub === "runs") {
+        const r = await req("GET", base + "/runs?limit=" + (Number(opt.limit) || 10));
+        if (!r.runs.length) return console.log("(no dream passes yet in this workspace)");
+        return console.log(r.runs.map((x) => `${x.id.slice(0, 8)}  ${x.status.padEnd(10)} ${(x.finished_at || x.created_at).slice(0, 16).replace("T", " ")}  ${x.receipt || x.error || x.slot || ""}`).join("\n"));
+      }
+      if (sub === "undo") {
+        const id = pos[2] || die("dream undo needs a run id (see mc dream runs)");
+        const r = await req("POST", base + "/runs/" + encodeURIComponent(id) + "/undo", {}, adminHeaders());
+        return console.log(`undone ${r.id.slice(0, 8)} — memory is back to how it was before that pass`);
+      }
+      die("dream: unknown subcommand " + sub + " (context|branch|apply|runs|undo|run)");
     }
     if (cmd === "memory" && pos[1] === "conflicts") {
       const wsId = opt.workspace || process.env.MC_WORKSPACE;

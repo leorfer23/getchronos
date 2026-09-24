@@ -8,11 +8,17 @@
  *                                               lines of one topic. NOT ★: agents see its slug in the
  *                                               memo index and `mc memo get` it when the topic comes up.
  *
- * Both levels are hard-capped. A write that would overflow is refused with what to condense,
+ *   Memory: hot (★, slug `memory-hot`)     — what is live in the last ~14 days: active threads,
+ *                                             recent decisions, where each stands. Rebuilt from
+ *                                             scratch by every dream pass, injected right after the index.
+ *   Memory archive (slug `memory-archive`)  — the cold tier: everything the dream pass took out, with
+ *                                             provenance. Never injected; `mc recall` finds it.
+ *
+ * Every level is hard-capped. A write that would overflow is refused with what to condense,
  * instead of silently truncating — the index stays a map, not a dump.
  *
- * `mc learn` stays what it was: an inbox of facts the operator may promote into the tree from the
- * Desk. `mc remember` writes straight into the tree.
+ * `mc learn` is an inbox (`session-learnings`, never injected): the dream pass (src/dream-pass.ts)
+ * triages it into the tree twice a day. `mc remember` writes straight into the tree.
  */
 import { notes as store, sessions } from "./store.js";
 import { kv } from "./store/kv.js";
@@ -27,6 +33,10 @@ export const INDEX_SLUG = "memory-index";
 export const INDEX_CAP = 3000;
 export const LINE_CAP = 200;
 export const BRANCH_CAP = 6000;
+export const HOT_SLUG = "memory-hot";
+export const HOT_CAP = 1500;
+export const ARCHIVE_SLUG = "memory-archive";
+export const INBOX_SLUG = "session-learnings";
 const DEDUPE = 0.8;
 
 const kebab = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
@@ -151,6 +161,9 @@ export function rememberFact(workspace_id: string, input: { fact: string; topic?
 // A terminal's system prompt is baked at spawn. When a ★ memo changes while it is open, the next
 // prompt it receives carries the new text (the claude UserPromptSubmit hook prints it as context).
 
+// The index, then hot, then every other ★ memo — the same order contextBlock injects them in.
+const headRank = (slug: string) => (slug === INDEX_SLUG ? 0 : slug === HOT_SLUG ? 1 : 2);
+
 const seenKey = (sessionId: string) => `memory.seen.${sessionId}`;
 const NOTICE_CAP = 3000;
 const NOTE_CAP = 1500;
@@ -170,7 +183,7 @@ export function memoryNotice(sessionId: string, now = new Date().toISOString()):
   const inScope = (n: Note) => !n.repo_ids || !n.repo_ids.length || (!!s.repo_id && n.repo_ids.includes(s.repo_id));
   const changed = store.contextNotes(s.workspace_id).filter((n) => n.scope !== "global" && inScope(n) && n.updated_at > since);
   if (!changed.length) return "";
-  changed.sort((a, b) => (a.slug === INDEX_SLUG ? -1 : b.slug === INDEX_SLUG ? 1 : 0));
+  changed.sort((a, b) => headRank(a.slug) - headRank(b.slug));
   let out = "Workspace memory changed since this terminal started. This replaces the copy in your system prompt:";
   for (const n of changed) {
     const body = guard(n.body.trim(), `memory-notice ${n.slug}`, s.workspace_id);

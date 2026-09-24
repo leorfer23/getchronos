@@ -20,7 +20,7 @@ comes from a real shipped bug or a destroyed checkout. Read before writing code.
    cwd, `retry_max: 0` (or a rate-limit reset beyond the resume cap) so no run leaves a live
    retry/resume timer keeping the event loop alive.
    For pure logic, still prefer helpers (`shouldPark`, `isReadOnlyRun`, formatters) or stubs.
-3. **Read-only runs** (`plan:` / `review:` / `grade:` / `distill:` / `ideas:` / `intake:` — see
+3. **Read-only runs** (`plan:` / `review:` / `grade:` / `distill:` / `ideas:` / `intake:` / `dream:` — see
    `isReadOnlyRun`) must never park on an open ask and must never be re-dispatched when an ask
    is answered. Gate both paths.
 4. **Workspace scoping is a security boundary.** Any endpoint that touches a run/ticket by id

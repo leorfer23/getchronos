@@ -832,6 +832,8 @@ export interface NewNote {
   context?: boolean;
   scope?: NoteScope;
   repo_ids?: string[] | null;
+  /** Exact slug (kebab-case) instead of one derived from the title; refused if already taken. */
+  slug?: string;
 }
 
 export type SkillStatus = "pending" | "active" | "archived";

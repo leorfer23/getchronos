@@ -47,7 +47,7 @@ const INFO_SITES: Array<[string, string]> = [
   ["autoplan.ts", "scout panel on"],
   ["autoplan.ts", "grading"],
   ["autoplan.ts", "AI reviewing"],
-  ["hygiene.ts", "Memory hygiene"],
+  ["hygiene.ts", "🧹 <b>Memory</b>"], // the stow nudge — the compaction narration left with the job (dream pass)
   ["burn-guard.ts", "Burn rate normal"],
   ["monitor.ts", "Idle terminal"],
   ["monitor.ts", "Weekly reports"],
