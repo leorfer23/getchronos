@@ -42,6 +42,7 @@ import { startTerminalFailover } from "./terminal-failover.js";
 import { startWorklog } from "./worklog.js";
 import { startCloudReconcile } from "./cloud-reconcile.js";
 import { searchIndex } from "./store.js";
+import { startHostLink } from "./hostlink/brain-link.js";
 
 // Defense-in-depth: every route handler and background async path is expected to catch its own
 // errors (see api.ts) — this is the backstop for whatever still slips through. Without it, Node's
@@ -68,6 +69,8 @@ startActivity();
 startMachineGovernor();
 reloadSchedules();
 startServer();
+// Hosts (HOSTS.md): the LAN listener for `chronos host` links — a no-op unless CHRONOS_HOST_LISTEN is set.
+void startHostLink(CONFIG.hostListen);
 void startEgress();
 startTelegram();
 startRelay();

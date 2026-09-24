@@ -155,6 +155,7 @@ import {
   BuildGraphifySchema, QueryGraphifySchema } from "./validation.js";
 import { pressureWord, swapPctOf } from "./machine.js";
 import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
+import { HOST_PATH, brainLink, hostRoutes } from "./hostlink/brain-link.js";
 import { kv } from "./store/kv.js";
 import { noteClaudeStatusline, usageSnapshot } from "./usage-meter.js";
 import { defaultQuickActions, QUICK_ACTIONS_KV, type QuickAction } from "./quick-actions.js";
@@ -2442,6 +2443,9 @@ export function startServer() {
   // Every live terminal whose goal is ticked, closed in one call — the Desk's "N done" count and
   // Robert's "close everything that is finished" are the same door. A Lead's narrower copy lives at
   // POST /leads/me/close-done (leadGate) and reuses closeDoneSessions below.
+  // Hosts: join codes, connected links, revoke (admin only — src/hostlink/brain-link.ts).
+  api.use(hostRoutes(requireAdmin));
+
   api.post("/desk/close-done", requireAdmin, (_req, res) => {
     res.json({ closed: closeDoneSessions() });
   });
@@ -4450,6 +4454,9 @@ export function startServer() {
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "", "http://x");
     const path = url.pathname;
+    // The tunnel door for `chronos host` links (HOSTS.md → Transport). Its own auth — a host token or
+    // a join code, never the admin token — lives in brain-link.ts.
+    if (path === HOST_PATH) return brainLink().handleUpgrade(req, socket, head, "tunnel");
     if (path !== "/ws" && path !== "/term") return socket.destroy();
     if (!tokenOk(url.searchParams.get("token"), CONFIG.adminToken)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
