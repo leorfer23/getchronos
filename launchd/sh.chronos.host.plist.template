@@ -9,9 +9,13 @@
   <key>Label</key>
   <string>sh.chronos.host</string>
 
-  <!-- Absolute node, resolved at join time through a LOGIN shell: a non-login shell (and launchd)
-       lacks /opt/homebrew/bin, and a version manager's node may be a different major than the one
-       node_modules was built for. The entry is dist/hostd/index.js when built, else src via tsx. -->
+  <!-- Absolute node: the one that ran `npm ci` and `join` (process.execPath), never what a login
+       shell finds — addressed by Homebrew's opt/<formula> link when that is the same binary, because
+       the Cellar/<version> path is deleted by `brew cleanup` and launchd would then fail silently.
+       The entry is bin/getchronos.mjs host run: a dependency-free preflight (a half-installed tree
+       logs one "fix:" line to host.err.log instead of crashing on a missing module), then
+       dist/hostd/index.js when built (npm), else src/hostd/index.ts through tsx (a clone).
+       An update rewrites this file for the next login; `kickstart` restarts the loaded job. -->
   <key>ProgramArguments</key>
   <array>
 __PROGRAM_ARGS__
