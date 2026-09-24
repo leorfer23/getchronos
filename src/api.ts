@@ -161,6 +161,7 @@ import {
 import { pressureWord, swapPctOf } from "./machine.js";
 import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
 import { HOST_PATH, brainLink, forwardedHost, hostRoutes } from "./hostlink/brain-link.js";
+import { barRoutes } from "./hostlink/bar.js";
 import { PlacementError } from "./hosts/candidates.js";
 import { kv } from "./store/kv.js";
 import { noteClaudeStatusline, usageSnapshot } from "./usage-meter.js";
@@ -2580,6 +2581,9 @@ export function startServer() {
   // Robert's "close everything that is finished" are the same door. A Lead's narrower copy lives at
   // POST /leads/me/close-done (leadGate) and reuses closeDoneSessions below.
   // Hosts: join codes, connected links, revoke (admin only — src/hostlink/brain-link.ts).
+  // The brain's menu bar item (desktop/hostbar.swift --brain): the whole fleet, every 3 s. Here and not
+  // in hostRoutes because it reads pty activity from terminal.ts, which brain-link.ts must not import.
+  api.use(barRoutes(requireAdmin, { link: brainLink, activity: sessionActivity }));
   api.use(hostRoutes(requireAdmin));
 
   api.post("/desk/close-done", requireAdmin, (_req, res) => {

@@ -666,7 +666,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_LEAD_DRIVE_PER_LEAD_HOUR` | `120` | `src/config.ts` |
 | `CHRONOS_LEAD_DRIVE_PER_WORKER_HOUR` | `20` | `src/config.ts` |
 | `CHRONOS_LESSON_PROPOSED_TTL_DAYS` | `60` | `src/config.ts` |
-| `CHRONOS_LOG_DIR` | `path.join` | `scripts/install-launchd.mjs` |
+| `CHRONOS_LOG_DIR` | `path.join` | `scripts/install-launchd.mjs`, `scripts/brainbar.mjs` (the brain menu bar item's plist) |
 | `CHRONOS_LOG_ROTATE_MAX_MB` | `20` | `src/config.ts` |
 | `CHRONOS_LOG_ROTATE_RETAIN` | `3` | `src/config.ts` |
 | `CHRONOS_MAIL_SWEEP` | `"0"` | `src/config.ts` |
@@ -691,7 +691,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_PLACEMENT` | `"auto"` | `src/config.ts` |
 | `CHRONOS_PLAN_CONCURRENCY` | `1` | `src/config.ts` |
 | `CHRONOS_PLAN_COOLDOWN_MIN` | `120` | `src/config.ts` |
-| `CHRONOS_PORT` | `"7777"` | `scripts/install-launchd.mjs` |
+| `CHRONOS_PORT` | `"7777"` | `scripts/install-launchd.mjs`, `scripts/brainbar.mjs` (the brain menu bar item's plist) |
 | `CHRONOS_PROFILES` | `""` | `src/config.ts` |
 | `CHRONOS_PROTECTED_DIRS` | — | `src/config.ts` |
 | `CHRONOS_PROTECTED_DIRS_EXTRA` | — | `src/config.ts` |

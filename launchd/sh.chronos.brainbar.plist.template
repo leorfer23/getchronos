@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template for the BRAIN's menu bar item (HOSTS.md → Menu bar). Do not install by hand —
+     scripts/build-brainbar.sh compiles desktop/hostbar.swift and renders this file to
+     ~/Library/LaunchAgents/sh.chronos.brainbar.plist. Same binary as a host's item, run with
+     the brain flag: it shows the whole fleet from the daemon's GET /api/hosts/bar. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.chronos.brainbar</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__BIN__</string>
+    <string>--brain</string>
+  </array>
+
+  <!-- Paths and a port only. Nothing secret belongs here: LaunchAgents are world-readable. The item
+       reads the admin token from __MC_HOME__/.admin-token, else __REPO_DIR__/.admin-token, itself,
+       on every start and whenever the daemon rejects it. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>CHRONOS_MC_HOME</key>
+    <string>__MC_HOME__</string>
+    <key>CHRONOS_REPO</key>
+    <string>__REPO_DIR__</string>
+    <key>CHRONOS_LOG_DIR</key>
+    <string>__LOG_DIR__</string>
+    <key>CHRONOS_PORT</key>
+    <string>__PORT__</string>
+  </dict>
+
+  <!-- A menu bar item for the logged-in operator: start with the login session, only in a GUI
+       session. KeepAlive only after a crash: Quit exits 0 and means "gone until the next login"
+       (same as the hosts' sh.chronos.hostbar). -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/brainbar.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/brainbar.log</string>
+</dict>
+</plist>
