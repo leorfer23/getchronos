@@ -27,7 +27,8 @@ test("the rail has a Recent section, folded, under Parked", () => {
 test("Recent holds the 20 newest ended terminals, hiding a live Lead's workers", () => {
   assert.match(desk, /const RECENT_MAX = 20;/);
   assert.match(desk, /rows = await api\("\/sessions\?status=ended&limit=100"\);/);
-  assert.match(desk, /\.sort\(\(a, b\) => Date\.parse\(b\.ended_at\) - Date\.parse\(a\.ended_at\)\)\s*\n\s*\.slice\(0, RECENT_MAX\);/);
+  // Sorted newest-first here, capped only in renderRecent — after the live-Lead filter (#31).
+  assert.match(desk, /\.sort\(\(a, b\) => Date\.parse\(b\.ended_at\) - Date\.parse\(a\.ended_at\)\);/);
   assert.match(desk, /S\.ended\.filter\(\(s\) => !S\.dismissed\.has\(s\.id\) && !leadLive\(s\.lead_id\)\)\.slice\(0, RECENT_MAX\)/);
   // Same row element and painter as the rail: an ended row already knows how to draw itself.
   assert.match(desk, /reconcile\(qs\("#recent"\), rows, rowEl, paintRow\);/);
