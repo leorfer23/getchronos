@@ -2,20 +2,26 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { noteClaudeStreamEvent } from "./usage-meter.js";
 import { CONFIG } from "./config.js";
 import { bus } from "./bus.js";
-import { asks, events, jobs, messages, repos, runs, sessions, tickets, workspaces } from "./store.js";
+import { asks, events, hosts, jobs, messages, repos, runs, sessions, tickets, workspaces } from "./store.js";
 import { resolveVerifyMode, verdictBlocks, verify } from "./verifier.js";
 import { createForRun, prDeliveryPatch } from "./reviews.js";
-import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow } from "./sandbox.js";
+import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow, type SandboxMode } from "./sandbox.js";
 import { niceWrap } from "./machine.js";
-import { hostFor } from "./hosts/index.js";
+import { hostFor, LOCAL_HOST_ID, type Host, type ProcHandle } from "./hosts/index.js";
+import { brainPathsInProc, buildRemoteProcSpec, type ProcSpec } from "./hosts/proc-spec.js";
+import { profileNameFor } from "./hosts/spawn-spec.js";
+import { worktreeRootFor } from "./worktree-core.js";
+import { gateRunners, workDirOf } from "./hosts/workdir.js";
 import { getBackend } from "./backends/index.js";
 import { isCloudBackend } from "./backends/types.js";
 import type {
+  AgentBackend,
   CloudBackend,
   CloudLaunch,
   CloudLaunchOpts,
@@ -24,11 +30,11 @@ import type {
   CloudStatus,
   CloudUsage,
 } from "./backends/types.js";
-import { gitTrackedSync, mcEnv, mcSystemText, openSession, syncAgentsMd } from "./terminal.js";
+import { gitTrackedSync, mcEnv, mcSystemText, openSession, parseAllowRaw, syncAgentsMd } from "./terminal.js";
 import { agentContext } from "./skills.js";
 import { baseJobName } from "./job-name.js";
 import { childEnv } from "./child-env.js";
-import { egressEnv, egressLocked } from "./egress.js";
+import { egressEnforced, egressEnv, egressLocked, egressPolicy } from "./egress.js";
 import { clampSandbox } from "./spawn-guard.js";
 import { gatesPassed, parseGates, runGates } from "./gates.js";
 import { renderReplay } from "./replay.js";
@@ -69,22 +75,10 @@ export function shouldFileReviewOnEnd(name?: string | null): boolean {
   return !!base && !NO_REVIEW_ON_END_PREFIXES.some((p) => base.startsWith(p));
 }
 
-// Sandbox dir adjustments for a ticket that builds in an ISOLATED worktree (job.cwd) of `repoPath`.
-// The shared main checkout must be WRITE-denied (guard is allow-by-default) so the agent — handed
-// absolute repo paths in its context — can't edit it, `cd` there, and `git add -A && commit`, sweeping
-// other concurrent builds' work onto main (the PER-36 incident). It stays READ-allowed: a linked
-// worktree's git must read the main checkout (commondir) to operate, and blocking reads breaks git
-// entirely. Two sub-paths are re-granted WRITE via addDirs: `.git` (shared objectstore/refs the
-// worktree commits through) and `.mc` (gitignored runtime ticket store, absent from the worktree, that
-// the agent reads + logs to). allow-own runs after the write-deny, so these narrower grants win.
-// Empty when there's no repo or the run isn't in a worktree. (`mc` CLI lives at ~/.mc/bin, outside repo.)
-export function worktreeSandboxDirs(
-  repoPath: string | undefined | null,
-  cwd: string,
-): { readonly: string[]; grant: string[] } {
-  if (!repoPath || path.resolve(repoPath) === path.resolve(cwd)) return { readonly: [], grant: [] };
-  return { readonly: [repoPath], grant: [path.join(repoPath, ".git"), path.join(repoPath, ".mc")] };
-}
+// worktreeSandboxDirs moved to worktree-core.ts (store-free) so a host builds the same sandbox for a
+// run in ITS worktree (HOSTS.md phase 5); re-exported here for existing callers.
+import { worktreeSandboxDirs } from "./worktree-core.js";
+export { worktreeSandboxDirs };
 
 // Pure decision extracted for unit testing (the real check lives inline in the close handler, where
 // `status` and the open-asks lookup are both already in scope). A run PARKS instead of finishing when
@@ -345,60 +339,204 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
   // Re-clamp at execute time (not just on job create/update) so a workspace's isolation floor is
   // enforced even against a stale row saved before the floor was tightened.
   const sandboxMode = clampSandbox(job.sandbox, job.workspace_id);
-  // A build worktree is created at dispatch and pruned when the ticket lands, but a rate-limit
-  // resume re-dispatches the same job hours later — into a cwd that no longer exists. Node reports
-  // a missing spawn cwd as ENOENT *naming the binary* ("spawn sandbox-exec ENOENT"), which reads as
-  // a broken sandbox and sent us chasing the wrong bug. Say what actually happened.
-  if (!fs.existsSync(job.cwd)) {
-    liveSteer.delete(runId);
-    const msg = `working directory gone: ${job.cwd} (worktree pruned?) — re-dispatch the ticket to rebuild it`;
-    runs.patch(runId, { status: "failed", ended_at: new Date().toISOString(), error: msg });
-    console.warn(`[run] ${job.name}: ${msg}`);
-    if (job.ticket_id && shouldFileReviewOnEnd(job.name)) {
-      try { await createForRun(job, runId, "failed"); } catch (e) { console.error("[review] createForRun failed", e); }
-    }
-    bus.publish({ topic: "run.ended", run_id: runId, status: "failed" });
-    return "failed";
-  }
-  // Headless build runs execute in a git worktree (never contains the untracked AGENTS.md a normal
-  // checkout accumulates via PTY-open/boot sync) — refresh it here too, and let it re-assert the
-  // local ignores for Chronos's in-repo artifacts. syncAgentsMd never throws, but this call is a
-  // courtesy, not load-bearing: a failure must never block the spawn below. Stays HERE, after the
-  // liveSteer registration: it is execute()'s first await and moving it earlier hung the steer tests.
+  // Which computer runs it (HOSTS.md phase 5): dispatch() placed it and wrote runs.host_id before
+  // the executor ran. `local` is everything below exactly as before; a host gets a ProcSpec instead.
+  let host: Host;
   try {
-    await syncAgentsMd(job.cwd);
+    host = hostFor(runs.get(runId));
   } catch (e: any) {
-    console.warn(`[run] ${job.name}: AGENTS.md sync failed`, e?.message ?? e);
+    return failBeforeSpawn(job, runId, `cannot run: ${e?.message ?? e}`);
+  }
+  const remote = host.id !== LOCAL_HOST_ID;
+  if (!remote) {
+    // A build worktree is created at dispatch and pruned when the ticket lands, but a rate-limit
+    // resume re-dispatches the same job hours later — into a cwd that no longer exists. Node reports
+    // a missing spawn cwd as ENOENT *naming the binary* ("spawn sandbox-exec ENOENT"), which reads as
+    // a broken sandbox and sent us chasing the wrong bug. Say what actually happened. (A host makes the
+    // same check on its own disk and answers with the same words.)
+    if (!fs.existsSync(job.cwd)) {
+      return failBeforeSpawn(job, runId, `working directory gone: ${job.cwd} (worktree pruned?) — re-dispatch the ticket to rebuild it`);
+    }
+    // Headless build runs execute in a git worktree (never contains the untracked AGENTS.md a normal
+    // checkout accumulates via PTY-open/boot sync) — refresh it here too, and let it re-assert the
+    // local ignores for Chronos's in-repo artifacts. syncAgentsMd never throws, but this call is a
+    // courtesy, not load-bearing: a failure must never block the spawn below. Stays HERE, after the
+    // liveSteer registration: it is execute()'s first await and moving it earlier hung the steer tests.
+    try {
+      await syncAgentsMd(job.cwd);
+    } catch (e: any) {
+      console.warn(`[run] ${job.name}: AGENTS.md sync failed`, e?.message ?? e);
+    }
   }
   // Spawn is committed past the cwd guard — NOW record the mailbox as delivered to this run (so a
   // later checkpoint in the same run doesn't re-show it). An undelivered row survives a cwd-gone
   // failure above and re-injects on the next dispatch instead of vanishing.
   if (pendingMessageIds.length) messages.markDelivered(pendingMessageIds, runId);
-  // Same credential grant a terminal in this workspace gets — a headless `bq` run needs gcloud just
-  // as much as an interactive one, and the two diverging would be its own confusing bug.
-  const allowSecrets = workspaceSandboxAllow(
-    job.workspace_id ? (workspaces.get(job.workspace_id)?.sandbox_allow ?? null) : null,
-  );
-  const sandboxed = sandboxWrap(sandboxMode, job.cwd, addDirs, profileDir, denyDirs, backend.bin(), args, egressLocked(job.workspace_id), wt.readonly, allowSecrets);
-  // Headless runs get the same `nice` a Desk terminal does (src/machine.ts): a dispatched build is
-  // no less able to fork a full vitest pool, and the operator's UI outranks both.
-  const { cmd, cmdArgs } = niceWrap(sandboxed.cmd, sandboxed.cmdArgs);
-  // Through the run's host (HOSTS.md): today always the brain, which is child_process.spawn with the
-  // same stdio as before (stdin piped only in steer mode, stdout/stderr always piped).
-  const child = await hostFor(runs.get(runId)).spawnProcess({
-    id: runId,
-    cmd,
-    args: cmdArgs,
-    cwd: job.cwd,
-    // MC_RUN: lets `mc steps`/`mc step` (unlike ticket/workspace/repo, sessions have no run — so this
-    // is set here, not inside mcEnv) address this run's progress checklist without the CLI knowing its
-    // own run id any other way.
-    env: { ...childEnv(ws), ...backend.env(job, profileDir), ...mcEnv(job.workspace_id, null, job.ticket_id), MC_RUN: runId, ...egressEnv(job.workspace_id) },
-    stdin: steerMode,
+  let child: ProcHandle;
+  if (!remote) {
+    // Same credential grant a terminal in this workspace gets — a headless `bq` run needs gcloud just
+    // as much as an interactive one, and the two diverging would be its own confusing bug.
+    const allowSecrets = workspaceSandboxAllow(
+      job.workspace_id ? (workspaces.get(job.workspace_id)?.sandbox_allow ?? null) : null,
+    );
+    const sandboxed = sandboxWrap(sandboxMode, job.cwd, addDirs, profileDir, denyDirs, backend.bin(), args, egressLocked(job.workspace_id), wt.readonly, allowSecrets);
+    // Headless runs get the same `nice` a Desk terminal does (src/machine.ts): a dispatched build is
+    // no less able to fork a full vitest pool, and the operator's UI outranks both.
+    const { cmd, cmdArgs } = niceWrap(sandboxed.cmd, sandboxed.cmdArgs);
+    // Through the run's host (HOSTS.md): the brain, which is child_process.spawn with the same stdio
+    // as before (stdin piped only in steer mode, stdout/stderr always piped).
+    child = await host.spawnProcess({
+      id: runId,
+      cmd,
+      args: cmdArgs,
+      cwd: job.cwd,
+      // MC_RUN: lets `mc steps`/`mc step` (unlike ticket/workspace/repo, sessions have no run — so this
+      // is set here, not inside mcEnv) address this run's progress checklist without the CLI knowing its
+      // own run id any other way.
+      env: { ...childEnv(ws), ...backend.env(job, profileDir), ...mcEnv(job.workspace_id, null, job.ticket_id), MC_RUN: runId, ...egressEnv(job.workspace_id) },
+      stdin: steerMode,
+    });
+  } else {
+    // Another computer: the same decisions, sent as intent (hosts/proc-spec.ts). The host resolves the
+    // checkout / worktree / profile / sandbox / egress on its own disk and builds the argv itself.
+    const built = remoteProcSpec(job, runId, host, {
+      effJob, context, sessionId, nativeResume, steerMode, sandboxMode, profileDir, backendName: backend.name,
+      env: { ...childEnv(ws), ...Object.fromEntries(Object.entries(backend.env(job, profileDir)).filter(([, v]) => v !== profileDir)), ...mcEnv(job.workspace_id, null, job.ticket_id), MC_RUN: runId },
+    });
+    if ("error" in built) return failBeforeSpawn(job, runId, built.error);
+    try {
+      child = await host.spawnProcess(built.spec);
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      // The host's own veto (lock #2) refused: placement sent a workspace where it is not allowed.
+      if (msg.startsWith("veto:")) {
+        console.warn(`[run] POLICY VIOLATION: host ${host.id} refused ${job.name} — ${msg}`);
+        bus.publish({ topic: "host.policy_violation", host_id: host.id, workspace_id: job.workspace_id ?? null, session_id: null, reason: msg });
+      }
+      return failBeforeSpawn(job, runId, `host ${hostLabel(host.id)}: ${msg}`);
+    }
+  }
+
+  // Where it runs, on ITS host — what the ship pipeline (gates, review diff, merge) works in later.
+  runs.patch(runId, { pid: child.pid ?? null, ...(child.cwd ? { cwd: child.cwd } : {}) });
+  return superviseRun(job, runId, child, { backend, profileDir, steerMode, initialText });
+}
+
+/**
+ * Supervise a run a restarted brain found still running on a host (remote-runs.ts): the same reader,
+ * watchdog (minus what it already spent) and finalize a fresh spawn gets. A steer-mode run is taken
+ * back with one message outstanding — its goal, or the steer it was working on — so its next result
+ * closes stdin and ends it, as it would have; steers queued in the dead brain's memory are gone, and
+ * `mc tell` (the mailbox) remains the durable path for anything new.
+ */
+export function adoptRun(job: Job, runId: string, child: ProcHandle): Promise<RunStatus> {
+  const backend = getBackend(job.backend);
+  const ws = job.workspace_id ? workspaces.get(job.workspace_id) : undefined;
+  const profileDir = ws?.config_dir ?? CONFIG.profiles[job.profile] ?? CONFIG.profiles.claude;
+  const steerMode = !!(ws?.live_steer && backend.steerArgs && backend.encodeSteer && child.stdin);
+  if (steerMode) liveSteer.set(runId, { stdin: null, outstanding: 1, encode: backend.encodeSteer!, queue: [], unconfirmed: [] });
+  const started = Date.parse(runs.get(runId)?.started_at ?? "");
+  const elapsedMs = Number.isFinite(started) ? Math.max(0, Date.now() - started) : 0;
+  return superviseRun(job, runId, child, { backend, profileDir, steerMode, initialText: null, elapsedMs });
+}
+
+/**
+ * A run that never got a process: say why on the row, and — for a ticket build — block the ticket the
+ * way a failed build does. Shared by the brain's cwd guard and every way a remote spawn can be refused.
+ */
+async function failBeforeSpawn(job: Job, runId: string, msg: string): Promise<RunStatus> {
+  liveSteer.delete(runId);
+  runs.patch(runId, { status: "failed", ended_at: new Date().toISOString(), error: msg });
+  console.warn(`[run] ${job.name}: ${msg}`);
+  if (job.ticket_id && shouldFileReviewOnEnd(job.name)) {
+    try { await createForRun(job, runId, "failed"); } catch (e) { console.error("[review] createForRun failed", e); }
+  }
+  bus.publish({ topic: "run.ended", run_id: runId, status: "failed" });
+  return "failed";
+}
+
+const hostLabel = (id: string) => hosts.get(id)?.name || id;
+
+/**
+ * The ProcSpec for a run on another computer, or why it cannot be sent. Everything path-shaped is
+ * intent: the repo by git remote, a worktree only as the directory that host itself reported (the job
+ * is pinned there), the profile by name, prose with brain paths tokenized, the ticket file delivered.
+ */
+function remoteProcSpec(
+  job: Job,
+  runId: string,
+  host: Host,
+  x: {
+    effJob: Job; context: string | null; sessionId: string; nativeResume: string | null; steerMode: boolean;
+    sandboxMode: SandboxMode; profileDir: string; backendName: string; env: Record<string, string>;
+  },
+): { spec: ProcSpec } | { error: string } {
+  const ws = job.workspace_id ? workspaces.get(job.workspace_id) : undefined;
+  const repo = runRepo(job);
+  const wsRepos = ws ? repos.list(ws.id) : repo ? [repo] : [];
+  const files: ProcSpec["files"] = [];
+  const t = job.ticket_id ? tickets.get(job.ticket_id) : undefined;
+  if (t && repo?.path && t.repo_id === repo.id && t.file_path.startsWith(repo.path + path.sep)) {
+    try { files.push({ repo_id: repo.id, rel: path.relative(repo.path, t.file_path), content: fs.readFileSync(t.file_path, "utf8") }); } catch {}
+  }
+  const brainPaths = [process.cwd(), x.profileDir, ...wsRepos.map((r) => r.path).filter(Boolean)];
+  const { spec, dropped, brainOnly } = buildRemoteProcSpec({
+    runId,
+    workspace: ws ? { id: ws.id, slug: ws.slug } : null,
+    backend: x.backendName,
+    profile: profileNameFor(ws?.config_dir, CONFIG.profiles, CONFIG.defaultProfile),
+    job: {
+      name: job.name, goal: x.effJob.goal, append_system: x.effJob.append_system ?? null, model: job.model ?? null,
+      allowed_tools: job.allowed_tools ?? null, disallowed_tools: job.disallowed_tools ?? null, max_budget_usd: job.max_budget_usd ?? null,
+    },
+    context: x.context,
+    sessionId: x.sessionId,
+    resume: x.nativeResume,
+    steer: x.steerMode,
+    repo: repo ? { id: repo.id, git_remote: repo.git_remote } : null,
+    wsRepos: wsRepos.map((r) => ({ id: r.id, git_remote: r.git_remote, path: r.path })),
+    // Only a directory THIS host reported: the job is pinned to it (tickets.ts worktree_ensure).
+    hostCwd: job.host_id === host.id ? job.cwd : null,
+    sandbox: { mode: x.sandboxMode, allowRaw: parseAllowRaw(ws?.sandbox_allow), egressLocked: egressEnforced(job.workspace_id) },
+    egress: egressPolicy(job.workspace_id),
+    env: x.env,
+    nice: CONFIG.agentNice,
+    timeoutMs: job.timeout_sec * 1000,
+    files,
+    brainHome: os.homedir(),
+    brainPaths: [process.cwd(), x.profileDir],
+    wtRootFor: worktreeRootFor,
   });
+  if (dropped.length) console.warn(`[run] ${job.name}: not sent to host ${host.id} (brain-only paths): ${dropped.join(", ")}`);
+  if (brainOnly.length) console.warn(`[run] ${job.name}: its prose names brain-only files a host cannot read: ${brainOnly.slice(0, 3).join(", ")}`);
+  // HOSTS.md's rule, checked on every remote run rather than trusted: no brain path reaches a host.
+  const leaks = brainPathsInProc(spec, [os.homedir(), ...brainPaths]);
+  if (leaks.length) return { error: `refusing to send brain paths to host ${host.id}: ${leaks.join("; ")}` };
+  return { spec };
+}
 
-  runs.patch(runId, { pid: child.pid ?? null });
+/** The repo a run works in: its ticket's, else the workspace repo whose checkout its cwd is. */
+export function runRepo(job: Pick<Job, "ticket_id" | "workspace_id" | "cwd">): Repo | undefined {
+  const t = job.ticket_id ? tickets.get(job.ticket_id) : undefined;
+  if (t?.repo_id) return repos.get(t.repo_id);
+  if (!job.workspace_id) return undefined;
+  const norm = (p: string) => p.replace(/\/+$/, "");
+  return repos.list(job.workspace_id).find((r) => r.path && norm(r.path) === norm(job.cwd));
+}
 
+/**
+ * Everything after the spawn — the stdout reader, steer, watchdog, close → finalize — for a process
+ * on any computer. Split from execute() so a run a restarted brain RE-ADOPTS from its host
+ * (remote-runs.ts) is supervised by the very same code; `initialText` is the goal a fresh steer-mode
+ * spawn writes first (an adopted one already had it).
+ */
+export async function superviseRun(
+  job: Job,
+  runId: string,
+  child: ProcHandle,
+  s: { backend: AgentBackend; profileDir: string; steerMode: boolean; initialText?: string | null; elapsedMs?: number },
+): Promise<RunStatus> {
+  const { backend, profileDir, steerMode } = s;
   if (steerMode) {
     // outstanding = user messages sent minus result events received. The initial goal counts as 1;
     // each steer +1; each result -1. At 0 we close stdin, which is what ends the CLI process — a
@@ -411,7 +549,7 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
     child.stdin!.on("error", (e: any) =>
       console.warn(`[steer] ${job.name}: stdin error (${e?.code ?? e?.message ?? e}) — run continues, mailbox is the fallback`),
     );
-    child.stdin!.write(backend.encodeSteer!(initialText));
+    if (s.initialText != null) child.stdin!.write(backend.encodeSteer!(s.initialText));
     for (const framed of entry.queue.splice(0)) child.stdin!.write(framed);
   }
 
@@ -447,7 +585,8 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
     } catch {}
     child.kill("SIGTERM");
     setTimeout(() => child.kill("SIGKILL"), 10_000).unref?.();
-  }, job.timeout_sec * 1000);
+    // A re-adopted run (brain restart) already spent part of its budget before this brain saw it.
+  }, Math.max(1000, job.timeout_sec * 1000 - (s.elapsedMs ?? 0)));
   watchdog.unref?.();
 
   const rl = readline.createInterface({ input: child.stdout });
@@ -545,7 +684,18 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
           `[steer] ${job.name}: ${steerEntry.unconfirmed.length} operator message(s) unprocessed at exit — returned to the mailbox`,
         );
       }
-      let status: RunStatus = timedOut ? "timeout" : code === 0 ? finalStatus : "failed";
+      // Gone with its host (a host restart, HOSTS.md phase 5): the same verdict a brain restart gives a
+      // local run — `interrupted`, for the recovery card — with the reason naming the computer. Not a
+      // failure the retry loop should replay, and nothing to review: nobody knows how far it got.
+      if (child.lost) {
+        const already = runs.get(runId)?.status;
+        const st: RunStatus = already === "killed" ? "killed" : "interrupted";
+        runs.patch(runId, { status: st, ended_at: new Date().toISOString(), error: child.lost });
+        bus.publish({ topic: "run.ended", run_id: runId, status: st, job_name: job.name ?? undefined, ticket_id: job.ticket_id ?? null, workspace_id: job.workspace_id ?? null });
+        return resolve(st);
+      }
+      // The host's own watchdog is a timeout too: it fires only when the brain's could not reach it.
+      let status: RunStatus = timedOut || child.timedOut ? "timeout" : code === 0 ? finalStatus : "failed";
       // A rate-limit / out-of-credits wall isn't the job's fault: don't count it as a failure
       // (no retry, no on_failure chain). The dispatcher resumes it once access is restored.
       if (rateLimited && status !== "success") status = "rate_limited";
@@ -628,7 +778,7 @@ export async function finalizeRun(
   if (status === "success" && job.verify) {
     const run = runs.get(runId);
     const mode = resolveVerifyMode(ws);
-    const verdict = await verify(job, run?.summary ?? "");
+    const verdict = await verify(job, run?.summary ?? "", workDirOf(job, run));
     runs.patch(runId, { verify_verdict: JSON.stringify({ ...verdict, mode }) });
     if (verdictBlocks(mode, verdict)) {
       status = "failed";
@@ -650,7 +800,10 @@ export async function finalizeRun(
     const repo = t?.repo_id ? repos.get(t.repo_id) : undefined;
     const gates = parseGates(repo);
     if (gates.length) {
-      gateResults = await runGates(gates, job.cwd, childEnv(ws));
+      // In the build's worktree, on whichever computer it is (HOSTS.md phase 5): a host runs them with
+      // its own toolchain and enforces the timeout itself.
+      const wd = workDirOf(job, runs.get(runId));
+      gateResults = await runGates(gates, wd.cwd, childEnv(ws), undefined, gateRunners(wd, job.workspace_id)?.shell);
       if (!gatesPassed(gateResults)) {
         const failed = gateResults.filter((g) => !g.ok).map((g) => g.name).join(", ");
         // Keep the verifier's verdict (nested) instead of clobbering it — shadow-mode history

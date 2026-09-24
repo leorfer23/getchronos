@@ -5,7 +5,14 @@ import { sandboxWrap } from "./sandbox.js";
 import { childEnv } from "./child-env.js";
 import { getBackend } from "./backends/index.js";
 import { isCloudBackend } from "./backends/types.js";
-import { workspaces } from "./store.js";
+import { repos, workspaces } from "./store.js";
+import { findHost } from "./hosts/index.js";
+import { RemoteHost } from "./hosts/remote.js";
+import { tokenizePaths } from "./hosts/proc-spec.js";
+import { portableAllow, portableEnv, profileNameFor } from "./hosts/spawn-spec.js";
+import { isRemoteDir, type WorkDir } from "./hosts/workdir.js";
+import { worktreeRootFor } from "./worktree-core.js";
+import os from "node:os";
 import type { Job, Workspace } from "./types.js";
 
 export interface Verdict {
@@ -53,21 +60,65 @@ export function verifierBackendName(ws: Workspace | undefined, job: Job): string
   return "claude-code";
 }
 
+// Fold one stdout line of the judge into its answer text.
+// claude/codex: single {type:"result"} line. grok: {type:"text",data} deltas. opencode: {type:"text",part:{text}}.
+function absorb(text: string, line: string): string {
+  const t = line.trim();
+  if (!t) return text;
+  try {
+    const p = JSON.parse(t);
+    if (p.type === "result" && typeof p.result === "string") return p.result;
+    if (p.type === "text" && typeof p.data === "string") return text + p.data;
+    if (p.type === "text" && typeof p.part?.text === "string") return text + p.part.text;
+  } catch {}
+  return text;
+}
+
 // LLM-as-judge: a second Claude inspects the goal + the run's result (and may read the
-// working dir) and decides whether the goal was actually achieved.
-export async function verify(job: Job, resultSummary: string): Promise<Verdict> {
+// working dir) and decides whether the goal was actually achieved. `wd` is where the run ran: on
+// another computer (HOSTS.md phase 5) the judge runs THERE, next to the files it has to read.
+export async function verify(job: Job, resultSummary: string, wd?: WorkDir): Promise<Verdict> {
   const ws = job.workspace_id ? workspaces.get(job.workspace_id) : undefined;
   const backend = getBackend(verifierBackendName(ws, job));
   const model = ws?.review_model || CONFIG.defaultModel; // cheap/fast judge (sonnet), not the opus manager
   const profileDir = ws?.config_dir ?? CONFIG.profiles[job.profile] ?? CONFIG.profiles.claude;
   const denyDirs = job.workspace_id ? workspaces.isolationDenyDirs(job.workspace_id) : [];
+  const cwd = wd?.cwd ?? job.cwd;
   const prompt =
     `You are a strict verifier. A job was run by an autonomous agent.\n\n` +
     `GOAL:\n${job.goal}\n\n` +
     `AGENT'S FINAL RESULT:\n${resultSummary || "(none)"}\n\n` +
-    `You may use Read/Bash in the working directory (${job.cwd}) to check for produced files or ` +
+    `You may use Read/Bash in the working directory (${cwd}) to check for produced files or ` +
     `side effects. Decide whether the goal was genuinely achieved. ` +
     `Reply with ONLY a JSON object on the last line: {"met": true|false, "reason": "<short>"}`;
+
+  if (wd && isRemoteDir(wd)) {
+    const h = findHost(wd.host_id);
+    if (!(h instanceof RemoteHost)) return { met: false, reason: `verifier unavailable: host ${wd.host_id} is not connected`, inconclusive: true };
+    const wsRepos = ws ? repos.list(ws.id) : [];
+    const { env, rel } = portableEnv(childEnv(ws) as Record<string, string>, os.homedir(), [process.cwd(), profileDir]);
+    try {
+      const r = await h.oneshot({
+        workspace: ws ? { id: ws.id, slug: ws.slug } : null,
+        backend: backend.name,
+        profile: profileNameFor(ws?.config_dir, CONFIG.profiles, CONFIG.defaultProfile),
+        prompt: tokenizePaths(prompt, wsRepos, worktreeRootFor) ?? prompt,
+        model,
+        allowed_tools: "Read,Bash",
+        max_budget_usd: 0.5,
+        cwd,
+        repos: wsRepos.filter((x) => x.git_remote).map((x) => ({ id: x.id, git_remote: x.git_remote! })),
+        sandbox: { mode: job.sandbox, allow: portableAllow(parseAllow(ws?.sandbox_allow), os.homedir()) },
+        env,
+        env_home_relative: rel,
+        timeout_ms: 120_000,
+      });
+      if (r.timed_out) return { met: false, reason: "verifier timed out", inconclusive: true };
+      return parseVerdict(r.stdout.split("\n").reduce(absorb, ""));
+    } catch (e: any) {
+      return { met: false, reason: `verifier unavailable: ${e?.message ?? e}`, inconclusive: true };
+    }
+  }
 
   const spec = backend.oneShot({ prompt, model, configDir: profileDir, cwd: job.cwd, allowedTools: "Read,Bash", maxBudgetUsd: 0.5 });
 
@@ -90,17 +141,7 @@ export async function verify(job: Job, resultSummary: string): Promise<Verdict> 
     }, 120_000);
     let text = "";
     const rl = readline.createInterface({ input: child.stdout });
-    rl.on("line", (line) => {
-      const t = line.trim();
-      if (!t) return;
-      try {
-        const p = JSON.parse(t);
-        // claude/codex: single {type:"result"} line. grok: {type:"text",data} deltas. opencode: {type:"text",part:{text}}.
-        if (p.type === "result" && typeof p.result === "string") text = p.result;
-        else if (p.type === "text" && typeof p.data === "string") text += p.data;
-        else if (p.type === "text" && typeof p.part?.text === "string") text += p.part.text;
-      } catch {}
-    });
+    rl.on("line", (line) => { text = absorb(text, line); });
     child.on("close", () => {
       clearTimeout(watchdog);
       resolve(timedOut ? { met: false, reason: "verifier timed out", inconclusive: true } : parseVerdict(text));
@@ -124,4 +165,8 @@ export function parseVerdict(text: string): Verdict {
     } catch {}
   }
   return { met: false, reason: "verifier output unparseable", inconclusive: true };
+}
+
+function parseAllow(raw: string | null | undefined): string[] {
+  try { const v = JSON.parse(raw ?? "[]"); return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []; } catch { return []; }
 }

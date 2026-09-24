@@ -11,7 +11,9 @@ import { notify, esc } from "./telegram/api.js";
 import { burnHalted } from "./burn-guard.js";
 import { gateDispatch } from "./quota-gate.js";
 import { renderReplay } from "./replay.js";
-import { hostFor } from "./hosts/index.js";
+import { findHost, hostFor, LOCAL_HOST_ID } from "./hosts/index.js";
+import { RemoteHost } from "./hosts/remote.js";
+import { placeRun } from "./hosts/run-placement.js";
 import type { Job, Run, RunStatus } from "./types.js";
 
 // Single choke point for every trigger source. Enforces guardrails, then runs.
@@ -135,9 +137,21 @@ export function dispatch(
       return { error: `another agent is already working in ${job.cwd} (run ${busy[0].run_id.slice(0, 8)})` };
   }
 
+  // Which computer runs it (HOSTS.md phase 5, src/hosts/run-placement.ts). Decided HERE, before the
+  // run row exists, and written onto it before pump() — the executor reads runs.host_id in its
+  // synchronous prologue (gotcha #1). Only work that already lives on a computer (a job pinned to a
+  // host's worktree, a resume of a transcript there) can be refused; everything else falls back to the
+  // brain, exactly as it ran before hosts.
+  const placed = placeRun(job, { resumeSession });
+  if ("error" in placed) return { error: placed.error };
+
   const run = runs.create(jobId, triggerSrc);
   if (context) runs.patch(run.id, { context });
   if (resumeSession) runs.patch(run.id, { resume_session: resumeSession });
+  if (placed.host_id !== LOCAL_HOST_ID || placed.reason) {
+    runs.patch(run.id, { host_id: placed.host_id, placement: placed.reason });
+    if (placed.host_id !== LOCAL_HOST_ID) console.log(`[placement] run ${run.id.slice(0, 8)} (${job.name}) → ${placed.host_id}${placed.reason ? ` — ${placed.reason}` : ""}`);
+  }
 
   // Guardrail: daily budget cap.
   if (CONFIG.dailyBudgetUsd > 0 && runs.spentTodayUsd() >= CONFIG.dailyBudgetUsd) {
@@ -202,21 +216,28 @@ function pump() {
         bus.publish({ topic: "run.ended", run_id: item.runId, status: "failed" });
         return "failed";
       })
-      .then(async (status) => {
-        // Rate-limit: prefer a workspace-configured fallback backend immediately; otherwise wait to resume.
-        if (status === "rate_limited") {
-          if (await maybeFallback(job, item.runId, item.depth)) return;
-          return maybeResume(job, item.runId, item.depth);
-        }
-        // A retry supersedes failure chaining: only fire on_failure once attempts are exhausted.
-        if (maybeRetry(job, item.runId)) return;
-        maybeChain(job, status, item.depth);
-      })
+      .then((status) => afterRun(job, item.runId, status, item.depth))
       .finally(() => {
         active--;
         pump();
       });
   }
+}
+
+/**
+ * What happens after a run ends: fallback / resume on a rate limit, else retry, else chain. Exported
+ * for a run a restarted brain RE-ADOPTS from its host (remote-runs.ts): its executor promise died
+ * with the old process, and its ending must still retry and chain like any other.
+ */
+export async function afterRun(job: Job, runId: string, status: RunStatus, depth = 0): Promise<void> {
+  // Rate-limit: prefer a workspace-configured fallback backend immediately; otherwise wait to resume.
+  if (status === "rate_limited") {
+    if (await maybeFallback(job, runId, depth)) return;
+    return maybeResume(job, runId, depth);
+  }
+  // A retry supersedes failure chaining: only fire on_failure once attempts are exhausted.
+  if (maybeRetry(job, runId)) return;
+  maybeChain(job, status, depth);
 }
 
 // Auto-retry failed/timed-out runs per the job's policy, with linear backoff.
@@ -346,6 +367,8 @@ async function maybeFallback(job: Job, runId: string, depth: number): Promise<bo
     backend: ws.fallback_backend,
     model,
     cwd: job.cwd,
+    // A stand-in for a job pinned to a host's worktree works in that same worktree (phase 5).
+    host_id: job.host_id ?? null,
     add_dirs: addDirs,
     allowed_tools: job.allowed_tools,
     disallowed_tools: job.disallowed_tools,
@@ -403,6 +426,16 @@ export function stopRun(runId: string): boolean {
   // `cancel()` actually confirms, not optimistically. Only while still running — a finished cloud
   // run keeps its cloud_agent_id/cloud_run_id forever, and there is nothing left to cancel.
   if (run.status === "running" && run.cloud_agent_id && run.cloud_run_id) return stopCloudRun(run);
+  // A run on another computer is stopped through its channel (HOSTS.md phase 5): its pid means nothing
+  // on this Mac. False when its host cannot be reached — its own watchdog still ends it at its timeout.
+  if (run.host_id && run.host_id !== LOCAL_HOST_ID) {
+    if (run.status !== "running") return false;
+    const h = findHost(run.host_id);
+    if (!(h instanceof RemoteHost) || !h.killRun(runId, "SIGTERM")) return false;
+    runs.setStatus(runId, "killed");
+    setTimeout(() => { if (runs.get(runId)?.ended_at == null) h.killRun(runId, "SIGKILL"); }, 5000).unref?.();
+    return true;
+  }
   if (!run.pid) return false;
   // Signalled on the run's own host (HOSTS.md): `pid` is a process id on that machine and nowhere
   // else. Inside the try on purpose — a run on a host this brain does not know is a stop that did

@@ -26,6 +26,7 @@ import { findHost, hostOnline, LOCAL_HOST_ID, registerHost, remoteHosts } from "
 import { RemoteHost, type HostLinkPort } from "./hosts/remote.js";
 import { adoptRemoteSession, isLive, openSession, remoteResumable, resumeOpts } from "./terminal.js";
 import { lastActivityState, reviveSeedFor } from "./revive.js";
+import { reconcileRuns } from "./remote-runs.js";
 import type { Session } from "./types.js";
 import type { LiveInfo } from "./hostlink/wire.js";
 
@@ -154,6 +155,13 @@ export function startRemoteTerminals(link: BrainLink = brainLink()): () => void 
           for (const s of liveOn(info.host_id)) bus.publish({ topic: "session.updated", session_id: s.id });
         })
         .catch((e) => console.warn(`[hosts] reconcile ${info.host_id} failed: ${e?.message ?? e}`));
+      // Its headless runs too (phase 5): re-attach, adopt after a brain restart, or mark lost.
+      void reconcileRuns(h)
+        .then((r) => {
+          if (r.reattached.length || r.adopted.length || r.lost.length || r.orphans.length)
+            console.log(`[hosts] ${info.host_id} runs reconciled — reattached ${r.reattached.length}, adopted ${r.adopted.length}, lost ${r.lost.length}, stopped ${r.orphans.length}`);
+        })
+        .catch((e) => console.warn(`[hosts] run reconcile ${info.host_id} failed: ${e?.message ?? e}`));
     }),
     link.onHostOffline((id, reason) => {
       const h = findHost(id);

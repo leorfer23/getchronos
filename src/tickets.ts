@@ -12,6 +12,9 @@ import { CONFIG } from "./config.js";
 import { wsTicketsDir } from "./sandbox.js";
 import { aiTicketSummary } from "./summarize.js";
 import { ensureTicketWorktree, isGitRepo } from "./worktrees.js";
+import { findHost, LOCAL_HOST_ID } from "./hosts/index.js";
+import { RemoteHost } from "./hosts/remote.js";
+import { placeTicketWork } from "./hosts/run-placement.js";
 import { parseGates, parseHumanGate } from "./gates.js";
 import { lessonsBlock } from "./lessons.js";
 import { relevanceBlock } from "./recall.js";
@@ -642,6 +645,29 @@ export const dispatchGrade = traceDispatch("grade", dispatchGradeRaw);
 export const dispatchTicket = traceDispatch("build", dispatchTicketRaw);
 export const dispatchCiFix = traceDispatch("CI fix", dispatchCiFixRaw);
 
+/**
+ * The ticket's worktree for a build-type run, on the computer that run will use (HOSTS.md phase 5).
+ * Placement comes FIRST: a worktree created on the brain for a build that then runs on a host is a
+ * directory nobody works in, and it would make the ticket look brain-bound to everything after it.
+ * Sticky to wherever the ticket's worktree already is. `host_id` null = the brain (the path is local);
+ * otherwise the path is on that host (the job is pinned there). Null path = could not create one.
+ */
+async function ticketWorktreeFor(
+  t: Ticket,
+  ws: Workspace,
+  repo: Repo,
+  job: { name: string; backend: string; sandbox: Workspace["sandbox_mode"] },
+): Promise<{ path: string | null; host_id: string | null }> {
+  const where = placeTicketWork({ ...job, workspace_id: ws.id }, t, repo, formatAttachmentsBlock(t.id));
+  if ("error" in where) throw new Error(where.error);
+  if (where.host_id === LOCAL_HOST_ID) return { path: await ensureTicketWorktree(repo, t.key), host_id: null };
+  const h = findHost(where.host_id);
+  if (!(h instanceof RemoteHost) || !repo.git_remote) throw new Error(`host ${where.host_id} is not connected`);
+  const r = await h.worktreeEnsure({ workspace: { id: ws.id, slug: ws.slug }, git_remote: repo.git_remote, branch: ticketBranch(t.key), base: repo.default_branch });
+  console.log(`[placement] ${t.key} ${job.name} → ${where.host_id}${where.reason ? ` — ${where.reason}` : ""} (worktree ${r.path})`);
+  return { path: r.path, host_id: where.host_id };
+}
+
 // Dispatch a READ-ONLY planning agent: a scout that enriches the ticket with a context brief (relevant
 // files/symbols/references, gotchas, open questions) — NOT an action plan — then marks it `planned`.
 // No code edits — Edit/Write tools are disallowed.
@@ -1010,13 +1036,15 @@ async function dispatchTicketRaw(
   // uncommitted work (a human's edits, another ticket's WIP) onto the branch via `git add -A`, and a
   // branch switch by the other session silently discards this one's edits. Non-git repo dirs have no
   // tree to share, so they keep building in place.
+  let buildHost: string | null = null;
   if (repo?.path && (await isGitRepo(repo.path))) {
-    const wt = await ensureTicketWorktree(repo, t.key);
-    if (!wt)
+    const wt = await ticketWorktreeFor(t, ws, repo, { name: `ticket:${t.key}`, backend: resolvedBackend, sandbox: ws.sandbox_mode });
+    if (!wt.path)
       throw new Error(
         `could not create an isolated worktree for ${t.key} in ${repo.path} — refusing to build in the shared checkout (would risk committing unrelated changes onto ${repo.default_branch})`,
       );
-    cwd = wt;
+    cwd = wt.path;
+    buildHost = wt.host_id;
   }
   const addDirs = wsRepos.map((r) => r.path).filter((p) => p !== cwd);
 
@@ -1122,6 +1150,8 @@ async function dispatchTicketRaw(
     model: t.model ?? routed.model ?? ws.default_model ?? undefined,
     cwd,
     add_dirs: addDirs.length ? addDirs : null, // sibling repos in this workspace (jobs.create JSON-encodes); OS sandbox + --add-dir
+    // Pinned to the host whose worktree `cwd` is (phase 5); the host resolves add-dirs itself there.
+    host_id: buildHost,
     sandbox: ws.sandbox_mode,
     // ponytail: no auto-retry on ticket builds. Retries shared the single mc/<key> worktree with the
     // run they replaced — two agents on one branch, duplicated work, spend burned on dead runs. A
@@ -1150,16 +1180,17 @@ async function dispatchCiFixRaw(id: string): Promise<{ job_id: string; run_id?: 
   // Reuse the ticket's PR branch in an isolated worktree. If one can't be made, FAIL LOUDLY rather
   // than checking the branch out in the shared main tree (git add -A there sweeps unrelated work).
   const branch = ticketBranch(t.key);
-  const wt = await ensureTicketWorktree(repo, t.key);
-  if (!wt)
+  const routed = routeAgent(t, ws);
+  const fixBackend = t.backend ?? routed.backend ?? ws.default_backend;
+  const wt = await ticketWorktreeFor(t, ws, repo, { name: `ci-fix:${t.key}`, backend: fixBackend, sandbox: ws.sandbox_mode });
+  if (!wt.path)
     throw new Error(
       `could not create an isolated worktree for ${t.key} — refusing to build in the shared checkout`,
     );
-  const cwd = wt;
+  const cwd = wt.path;
 
   const wsRepos = repos.list(ws.id).filter((r) => r.path && fs.existsSync(r.path));
   const addDirs = wsRepos.map((r) => r.path).filter((p) => p !== cwd);
-  const routed = routeAgent(t, ws);
 
   const goal =
     `CI is failing on the open PR for ticket ${t.key} in repo "${repo.name}". Fix it.\n` +
@@ -1179,10 +1210,11 @@ async function dispatchCiFixRaw(id: string): Promise<{ job_id: string; run_id?: 
     goal,
     workspace_id: ws.id,
     ticket_id: t.id,
-    backend: t.backend ?? routed.backend ?? ws.default_backend,
+    backend: fixBackend,
     model: t.model ?? routed.model ?? ws.default_model ?? undefined,
     cwd,
     add_dirs: addDirs.length ? addDirs : null,
+    host_id: wt.host_id,
     sandbox: ws.sandbox_mode,
     trigger_type: "manual",
   });
@@ -1213,7 +1245,9 @@ async function dispatchMergeGateRaw(id: string): Promise<{ job_id: string; run_i
   // Same rule as the CI fix: never work in the shared checkout — the daemon's `git add -A` there
   // would sweep unrelated changes into this ticket's commit.
   const branch = ticketBranch(t.key);
-  const wt = await ensureTicketWorktree(repo, t.key);
+  const gateBackend = ws.review_backend ?? ws.default_backend;
+  const where = await ticketWorktreeFor(t, ws, repo, { name: `merge-gate:${t.key}`, backend: gateBackend, sandbox: ws.sandbox_mode });
+  const wt = where.path;
   if (!wt)
     throw new Error(
       `could not create an isolated worktree for ${t.key} — refusing to run the merge gate in the shared checkout`,
@@ -1256,10 +1290,11 @@ async function dispatchMergeGateRaw(id: string): Promise<{ job_id: string; run_i
     goal,
     workspace_id: ws.id,
     ticket_id: t.id,
-    backend: ws.review_backend ?? ws.default_backend,
+    backend: gateBackend,
     model: ws.review_model ?? CONFIG.mergeGateModel,
     cwd: wt,
     add_dirs: addDirs.length ? addDirs : null,
+    host_id: where.host_id,
     sandbox: ws.sandbox_mode,
     trigger_type: "manual",
   });

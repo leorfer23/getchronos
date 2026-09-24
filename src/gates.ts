@@ -135,19 +135,30 @@ export function withRuntimePath(cmd: string, env: NodeJS.ProcessEnv): string {
  * the build agent, and "typecheck AND tests are broken" is a more useful instruction than the first
  * failure alone. Each gate is independently timed out so one hung command can't stall delivery.
  */
+/**
+ * Where a gate's commands run. Absent = on this machine, in `cwd`, as always. A build whose worktree is
+ * on another computer (HOSTS.md phase 5) passes runners that send the same commands there
+ * (hosts/workdir.ts gateRunners) — injected rather than imported so this module stays store-free.
+ */
+export type ShellRunner = (line: string, o: { env: NodeJS.ProcessEnv; timeoutMs: number; maxBuffer: number }) => Promise<{ stdout: string; stderr: string }>;
+export type CmdRunner = (cmd: string, args: string[], o: { env: NodeJS.ProcessEnv; timeoutMs: number; maxBuffer: number }) => Promise<{ stdout: string; stderr: string }>;
+
 export async function runGates(
   gates: Gate[],
   cwd: string,
   env: NodeJS.ProcessEnv,
   timeoutMs = CONFIG.gateTimeoutSec * 1000,
+  shell?: ShellRunner,
 ): Promise<GateResult[]> {
   const results: GateResult[] = [];
   for (const g of gates) {
     const started = Date.now();
     try {
-      const { stdout, stderr } = await execFileAsync("bash", ["-lc", withRuntimePath(g.cmd, env)], {
-        cwd, env, encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024,
-      });
+      const { stdout, stderr } = shell
+        ? await shell(g.cmd, { env, timeoutMs, maxBuffer: 16 * 1024 * 1024 })
+        : await execFileAsync("bash", ["-lc", withRuntimePath(g.cmd, env)], {
+            cwd, env, encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024,
+          });
       results.push({ name: g.name, cmd: g.cmd, ok: true, ms: Date.now() - started, output: tail((stdout + stderr).trim()) || null });
     } catch (e: any) {
       const out = String(e?.stdout ?? "") + String(e?.stderr ?? "");
@@ -179,10 +190,13 @@ export async function mergeGate(
   defaultBranch: string,
   env: NodeJS.ProcessEnv,
   timeoutMs = CONFIG.gateTimeoutSec * 1000,
+  run?: CmdRunner,
 ): Promise<GateResult | null> {
   const started = Date.now();
   const git = (args: string[]) =>
-    execFileAsync("git", ["-C", cwd, ...args], { env, encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
+    run
+      ? run("git", ["-C", cwd, ...args], { env, timeoutMs, maxBuffer: 16 * 1024 * 1024 })
+      : execFileAsync("git", ["-C", cwd, ...args], { env, encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
   const cmd = `git merge-tree --write-tree HEAD origin/${defaultBranch}`;
   try {
     // Compare against the remote's current tip, not a stale local ref — staleness is the whole bug.

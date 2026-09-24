@@ -1,12 +1,12 @@
 import path from "node:path";
-import fs from "node:fs";
 import { bus } from "./bus.js";
 import { CONFIG } from "./config.js";
 import { db, reviews, runs, jobs, tickets, workspaces, repos } from "./store.js";
 import { updateTicket, appendNote, ticketBranch, formatDoneCriteria, traceDispatch, createTicket } from "./tickets.js";
 import { formatAttachmentsBlock } from "./attachments.js";
 import { childEnv } from "./child-env.js";
-import { execFileTimed } from "./exec.js";
+import { LOCAL_HOST_ID } from "./hosts/index.js";
+import { checkoutOn, execIn, gateRunners, hostName, isRemoteDir, isSharedCheckout, workDirExists, workDirOf, type WorkDir } from "./hosts/workdir.js";
 import { dispatch } from "./dispatcher.js";
 import { maybeDistillSkill } from "./distill.js";
 import { captureLearnings } from "./notes.js";
@@ -43,10 +43,10 @@ const DIFF_CAP = 20000;
  * moves the base further back, which shows MORE of the change rather than less. A detached HEAD,
  * a missing branch or a non-repo returns null and the caller falls back to the working tree.
  */
-async function mergeBaseRef(cwd: string, defaultBranch: string): Promise<string | null> {
+async function mergeBaseRef(wd: WorkDir, defaultBranch: string, workspaceId?: string | null): Promise<string | null> {
   for (const ref of [`origin/${defaultBranch}`, defaultBranch]) {
     try {
-      const { stdout } = await execFileTimed("git", ["-C", cwd, "merge-base", ref, "HEAD"], { encoding: "utf8" });
+      const { stdout } = await execIn(wd, "git", ["-C", wd.cwd, "merge-base", ref, "HEAD"], { workspaceId });
       if (stdout.trim()) return stdout.trim();
     } catch {}
   }
@@ -71,13 +71,19 @@ async function mergeBaseRef(cwd: string, defaultBranch: string): Promise<string 
  * Diffing from the merge-base captures the branch's commits AND anything still uncommitted, so it no
  * longer matters who commits, or when.
  */
-export async function captureDiff(cwd: string, defaultBranch?: string | null): Promise<string | null> {
+export async function captureDiff(where: string | WorkDir, defaultBranch?: string | null, workspaceId?: string | null): Promise<string | null> {
+  // A path is the brain's; a WorkDir may be a worktree on another computer (HOSTS.md phase 5).
+  const wd: WorkDir = typeof where === "string" ? { host_id: LOCAL_HOST_ID, cwd: where } : where;
+  const cwd = wd.cwd;
   try {
     try {
-      await execFileTimed("git", ["-C", cwd, "add", "-A", "-N"]);
+      await execIn(wd, "git", ["-C", cwd, "add", "-A", "-N"], { workspaceId });
     } catch {}
-    const base = defaultBranch ? await mergeBaseRef(cwd, defaultBranch) : null;
-    const { stdout: out } = await execFileTimed("git", ["-C", cwd, "diff", ...(base ? [base] : [])], { encoding: "utf8", maxBuffer: 50 * 1024 * 1024 });
+    const base = defaultBranch ? await mergeBaseRef(wd, defaultBranch, workspaceId) : null;
+    // Only the head survives the cap below, so a host is asked to keep just the head (a bounded frame).
+    const { stdout: out } = await execIn(wd, "git", ["-C", cwd, "diff", ...(base ? [base] : [])], {
+      workspaceId, maxBuffer: isRemoteDir(wd) ? 4 * DIFF_CAP : 50 * 1024 * 1024, keep: "head",
+    });
     if (!out.trim()) return null;
     return out.length > DIFF_CAP ? out.slice(0, DIFF_CAP) + "\n…(truncated)" : out;
   } catch {
@@ -104,19 +110,23 @@ export async function createForRun(job: Job, runId: string, status: string, gate
     // that branch NOW, while it exists — else a later worktree reset/checkout strands it and the
     // PR ships empty (the exact PER-7 failure). Diff string is already captured for the panel.
     const repo = t?.repo_id ? repos.get(t.repo_id) : undefined;
+    // The build's directory on the computer it ran on (HOSTS.md phase 5): every git call below goes
+    // there — a worktree on a host is committed, diffed and merge-checked by that host.
+    const wd = workDirOf(job, runs.get(runId));
+    const wsId = job.workspace_id;
     // Resolved before the commit below, but measured from the merge-base, so it reads the same
     // either way: whether the agent committed its own work or left it for us.
-    const diff = await captureDiff(job.cwd, repo?.default_branch);
+    const diff = await captureDiff(wd, repo?.default_branch, wsId);
     // Only ever `git add -A` + commit inside an ISOLATED worktree — never the repo's shared checkout.
     // In the shared checkout, add -A sweeps unrelated uncommitted work (a human's edits, other runs'
     // files) onto the checked-out branch. A build with no worktree lands in repo.path; skip it here
-    // (delivery.ts / a rebuilt worktree carries the work) rather than corrupt the main tree.
-    const inWorktree =
-      repo?.path && job.cwd && path.resolve(job.cwd) !== path.resolve(repo.path);
+    // (delivery.ts / a rebuilt worktree carries the work) rather than corrupt the main tree. "Shared"
+    // is judged against THAT computer's checkout of the repo.
+    const inWorktree = !!repo?.path && !!wd.cwd && !isSharedCheckout(wd, repo);
     if (inWorktree) {
       try {
-        await execFileTimed("git", ["-C", job.cwd, "add", "-A"]);
-        await execFileTimed("git", ["-C", job.cwd, "commit", "-m", `${t!.key}: ${t!.title}`]);
+        await execIn(wd, "git", ["-C", wd.cwd, "add", "-A"], { workspaceId: wsId });
+        await execIn(wd, "git", ["-C", wd.cwd, "commit", "-m", `${t!.key}: ${t!.title}`], { workspaceId: wsId });
       } catch { /* nothing to commit — branch already carries the work */ }
     }
     // Built-in mergeability gate, run after the commit above so HEAD carries the build's work.
@@ -125,7 +135,7 @@ export async function createForRun(job: Job, runId: string, status: string, gate
     // takes the identical red-gate path below — rework with the failure output, iteration cap, UI.
     const allGates: GateResult[] = gates ? [...gates] : [];
     if (inWorktree && repo?.default_branch) {
-      const mg = await mergeGate(job.cwd, repo.default_branch, childEnv(t ? workspaces.get(t.workspace_id) : undefined));
+      const mg = await mergeGate(wd.cwd, repo.default_branch, childEnv(t ? workspaces.get(t.workspace_id) : undefined), undefined, gateRunners(wd, wsId)?.cmd);
       if (mg) allGates.push(mg);
     }
     gates = allGates.length ? allGates : null;
@@ -188,8 +198,8 @@ export async function ensureReviewForTicket(ticketId: string): Promise<Review | 
   if (!run) return undefined;
   const job = jobs.get(run.job_id);
   const repo = t.repo_id ? repos.get(t.repo_id) : undefined;
-  const cwd = job?.cwd || repo?.path;
-  const diff = cwd ? await captureDiff(cwd) : null;
+  const wd: WorkDir | null = job?.cwd ? workDirOf(job, run) : repo?.path ? { host_id: LOCAL_HOST_ID, cwd: repo.path } : null;
+  const diff = wd ? await captureDiff(wd, null, t.workspace_id) : null;
   const review = reviews.create({ run_id: run.id, ticket_id: ticketId, diff_ref: diff });
   bus.publish({
     topic: "review.created", review_id: review.id, run_id: run.id,
@@ -220,7 +230,11 @@ function dispatchReviewRaw(reviewId: string, opts: { lens?: Lens } = {}): { job_
   const buildRun = runs.get(r.run_id);
   const buildJob = buildRun ? jobs.get(buildRun.job_id) : undefined;
   const repo = t.repo_id ? repos.get(t.repo_id) : undefined;
-  const cwd = buildJob?.cwd || repo?.path;
+  // The reviewer reads the build's worktree, so it runs where that worktree is (HOSTS.md phase 5):
+  // a build that ran on a host pins its reviewer there, in the directory the host reported.
+  const buildWd = buildJob ? workDirOf(buildJob, buildRun) : null;
+  const cwd = buildWd?.cwd || repo?.path;
+  const reviewHost = buildWd && isRemoteDir(buildWd) ? buildWd.host_id : null;
   if (!cwd) throw new Error("no repo to review in");
   const lens = opts.lens;
   // Job name is the concurrent-dispatch identity. ensureReviewForTicket (mc review --report) and
@@ -315,6 +329,7 @@ function dispatchReviewRaw(reviewId: string, opts: { lens?: Lens } = {}): { job_
     backend: reviewBackend,
     model: reviewModel,
     cwd,
+    host_id: reviewHost,
     sandbox: ws.sandbox_mode,
     disallowed_tools: "Edit,Write,MultiEdit,NotebookEdit",
     trigger_type: "manual",
@@ -672,13 +687,18 @@ export async function merge(id: string, notes?: string | null, by = "human"): Pr
   // ENOENT"), which reads as a broken git install and sends the reader chasing PATH (see the same
   // footgun in runner.ts). Say what actually happened — and for work that already landed, let the
   // stale review close instead of stranding it forever behind a git call with nothing left to run.
-  if (job?.cwd && !fs.existsSync(job.cwd)) {
+  // Where the build's worktree is — on another computer when the build ran there (HOSTS.md phase 5).
+  // Everything below that touches it (commit, push, gh pr create, checkout) runs on that computer.
+  const wd = job?.cwd ? workDirOf(job, run) : null;
+  const wsId = t?.workspace_id ?? job?.workspace_id ?? null;
+  if (wd && !(await workDirExists(wd, wsId))) {
+    const where = isRemoteDir(wd) ? `${wd.cwd} on ${hostName(wd.host_id)}` : wd.cwd;
     if (!t || !LANDED_STATUSES.includes(t.status)) {
       throw new Error(
-        `working directory gone: ${job.cwd} (worktree pruned?) — nothing left to ship from this run; re-dispatch the ticket, or dismiss the review if the work is obsolete`
+        `working directory gone: ${where} (worktree pruned?) — nothing left to ship from this run; re-dispatch the ticket, or dismiss the review if the work is obsolete`
       );
     }
-    const why = `[worktree gone (${job.cwd}); ticket already ${t.status} — closing the stale review, no code shipped by this action]`;
+    const why = `[worktree gone (${where}); ticket already ${t.status} — closing the stale review, no code shipped by this action]`;
     return transition(id, "merged", null, notes ? `${notes}\n${why}` : why, by);
   }
 
@@ -692,16 +712,18 @@ export async function merge(id: string, notes?: string | null, by = "human"): Pr
     );
   }
 
-  if (repo?.delivery === "pr" && job?.cwd && t) {
+  if (repo?.delivery === "pr" && wd && t) {
     const branch = ticketBranch(t.key);
     const env = childEnv(ws);
+    // gh runs where the worktree is: on a host, with that host's gh login for this workspace
+    // (GH_CONFIG_DIR travels in the workspace env). Push/gh get a network-sized timeout there.
     const exec: RunCmd = async (cmd, args) =>
-      (await execFileTimed(cmd, args, { cwd: job.cwd, env, encoding: "utf8" })).stdout;
+      (await execIn(wd, cmd, args, { env, workspaceId: wsId, ...(isRemoteDir(wd) ? { timeoutMs: 120_000 } : {}) })).stdout;
     const title = `${t.key}: ${t.title}`;
     const body = prBody(t, r);
     const url = await shipPR(branch, repo.default_branch, title, body, exec); // throws on failure → review stays pending
     try {
-      await execFileTimed("git", ["-C", job.cwd, "checkout", repo.default_branch]);
+      await execIn(wd, "git", ["-C", wd.cwd, "checkout", repo.default_branch], { workspaceId: wsId });
     } catch {
       // leave the tree on the mc/ branch; the next dispatch checks out its own branch anyway
     }
@@ -717,30 +739,34 @@ export async function merge(id: string, notes?: string | null, by = "human"): Pr
     return merged ? { ...merged, pr_url: url } : merged;
   }
 
-  if (job?.cwd) {
+  if (job?.cwd && wd) {
     try {
-      await execFileTimed("git", ["-C", job.cwd, "add", "-A"]);
-      await execFileTimed(
-        "git",
-        ["-C", job.cwd, "commit", "-m", `merge: ${job.name}${notes ? ` — ${notes}` : ""}`],
-      );
+      await execIn(wd, "git", ["-C", wd.cwd, "add", "-A"], { workspaceId: wsId });
+      await execIn(wd, "git", ["-C", wd.cwd, "commit", "-m", `merge: ${job.name}${notes ? ` — ${notes}` : ""}`], { workspaceId: wsId });
     } catch {
       // nothing to commit / not a repo — still record the merge decision
     }
     // The commit above landed on the worktree's mc/<key> branch, not on the shared checkout's
     // default branch — fast-forward it across so commit delivery still ends with the work on main.
-    if (t && repo?.path && path.resolve(job.cwd) !== path.resolve(repo.path)) {
+    // The branch exists only where the worktree is, so it lands on THAT computer's checkout (a host's
+    // own clone, for a build that ran there): commit delivery is local to the machine that did the work.
+    const main = repo ? checkoutOn(wd.host_id, repo) : null;
+    if (t && repo?.path && main && !isSharedCheckout(wd, repo)) {
       const branch = ticketBranch(t.key);
       const env = childEnv(ws);
+      const mainWd: WorkDir = { host_id: wd.host_id, cwd: main };
+      const where = isRemoteDir(wd) ? `${main} on ${hostName(wd.host_id)}` : main;
       const why = await landOnDefaultBranch(branch, repo.default_branch, async (cmd, args) =>
-        (await execFileTimed(cmd, args, { cwd: repo.path, env, encoding: "utf8" })).stdout
+        (await execIn(mainWd, cmd, args, { env, workspaceId: wsId })).stdout
       );
       if (why)
         appendNote(
           t.id,
-          `Work is committed on branch \`${branch}\` but could not be fast-forwarded into ${repo.default_branch} at ${repo.path}: ${why}\nLand it manually: git -C ${repo.path} merge ${branch}`,
+          `Work is committed on branch \`${branch}\` but could not be fast-forwarded into ${repo.default_branch} at ${where}: ${why}\nLand it manually: git -C ${main} merge ${branch}`,
           by
         );
+      else if (isRemoteDir(wd))
+        appendNote(t.id, `Landed on ${repo.default_branch} in ${where} (the build ran on that computer; push it from there to share it).`, by);
     }
   }
   return transition(id, "merged", "done", notes, by);
