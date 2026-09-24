@@ -6,6 +6,7 @@
  *   getchronos host run                                      what the LaunchAgent runs
  *   getchronos host status | doctor                          link state · the setup checklist
  *   getchronos host update                                   update this host to the latest by hand
+ *   getchronos host menubar install|uninstall|status         this Mac's agents in its menu bar
  *   getchronos host uninstall [--purge]                      remove the LaunchAgent (and ~/.chronos-host)
  *
  * From a clone this is `npm run host -- <cmd>`; from npm it is `npx getchronos host <cmd>`.
@@ -27,11 +28,13 @@ const hostHome = process.env.CHRONOS_HOST_HOME || path.join(os.homedir(), ".chro
 
 const USAGE = `usage: getchronos host <command>
 
-  join <brain-url> <code> [--no-launchd]   join a brain (the Desk → Computers → + Add gives you this line)
+  join <brain-url> <code> [--no-launchd] [--menubar]
+                                           join a brain (the Desk → Computers → + Add gives you this line)
   run                                      connect and stay connected (what the LaunchAgent runs)
   status                                   this host's credential and live link state
   doctor                                   the setup checklist
   update                                   update this host now (the Desk's Update button does the same)
+  menubar install|uninstall|status         show this Mac's running agents in its menu bar (needs xcode-select --install)
   uninstall [--purge]                      stop + remove the LaunchAgent; --purge also deletes ${hostHome}`;
 
 /**
@@ -45,6 +48,7 @@ const BLOCKING = {
   run: (c) => c.id === "deps" || c.id.startsWith("native:"),
   status: (c) => c.id === "deps",
   doctor: (c) => c.id === "deps",
+  menubar: (c) => c.id === "deps",
 };
 
 function appDirFor(kind) {

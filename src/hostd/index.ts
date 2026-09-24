@@ -7,6 +7,7 @@
  *   npm run host -- status                    this host's credential and live link state
  *   npm run host -- doctor                    the setup checklist, locally
  *   npm run host -- update                    update this host now (the Desk's Update does the same)
+ *   npm run host -- menubar install|uninstall|status   the menu bar item (menubar.ts)
  *
  * `npm run host` and `npx getchronos host` both enter through bin/getchronos.mjs, which runs the
  * dependency-free preflight before this file (and its imports) are loaded at all.
@@ -38,6 +39,7 @@ import { decodeJoinCode } from "../hostlink/join.js";
 import { checkGit, checkDeps, shellPath } from "../../bin/host-core.mjs";
 import { defaultRunner, detectInstall, installForJoin, kickstart, launchdPid, npmCliFor, runUpdate } from "./update.js";
 import { writeHostPlist } from "./join.js";
+import { installMenubar, menubarPaths, menubarState, refreshMenubar, uninstallMenubar, type MenubarDeps } from "./menubar.js";
 import { buildStatus, isHostStatus, mcPortCandidates as portCandidates } from "./status.js";
 import type { UpdateFrame, UpdateStatus, UpdateTarget } from "../hostlink/wire.js";
 
@@ -58,9 +60,10 @@ const secretsMode = () => { try { return fs.statSync(HOST_SECRETS).mode; } catch
 
 async function cmdJoin(args: string[]): Promise<number> {
   const noLaunchd = args.includes("--no-launchd");
+  const withMenubar = args.includes("--menubar");
   const [url, code] = args.filter((a) => !a.startsWith("--"));
   if (!url || !code) {
-    console.error("usage: npm run host -- join <brain-url> <code> [--no-launchd]");
+    console.error("usage: npm run host -- join <brain-url> <code> [--no-launchd] [--menubar]");
     return 2;
   }
   // `npx getchronos host join` runs from npm's cache, which npm prunes at will: install this same
@@ -90,6 +93,9 @@ async function cmdJoin(args: string[]): Promise<number> {
     console.log(`  credential → ${r.secretsFile} (mode 600)`);
     console.log(`  brains     → ${r.brains.join(", ")}`);
     console.log(r.plistFile ? `  LaunchAgent → ${r.plistFile} (loaded; starts at login)` : `  LaunchAgent skipped — run it yourself: node ${shellPath(path.join(REPO_ROOT, "bin", "getchronos.mjs"))} host run`);
+    // The menu bar item is offered, never installed unasked: it compiles Swift and adds a login item.
+    if (withMenubar) return (await cmdMenubar(["install"])) === 0 ? 0 : 1;
+    console.log(`  menu bar    → see this Mac's agents at a glance: node ${shellPath(path.join(REPO_ROOT, "bin", "getchronos.mjs"))} host menubar install`);
     return 0;
   } catch (e: any) {
     console.error(`✗ join failed: ${e?.message ?? e}`);
@@ -242,6 +248,11 @@ async function updateTo(target: UpdateTarget, report: (s: Omit<UpdateStatus, "t"
     rewritePlist: (appDir) => {
       if (fs.existsSync(plistPath())) writeHostPlist({ hostHome: HOST_HOME, pkgRoot: inst.kind === "npm" ? path.join(appDir, "node_modules", "getchronos") : appDir });
     },
+    // The menu bar item is compiled from the app's own source: rebuild it from the new code, when installed.
+    afterSwap: async (appDir) => {
+      const pkgRoot = inst.kind === "npm" ? path.join(appDir, "node_modules", "getchronos") : appDir;
+      console.log(`[host] update: menu bar — ${await refreshMenubar({ run: defaultRunner, hostHome: HOST_HOME, pkgRoot })}`);
+    },
   });
 }
 
@@ -275,6 +286,34 @@ async function cmdUpdate(): Promise<number> {
   return r === "failed" ? 1 : 0;
 }
 
+const menubarDeps = (): MenubarDeps => ({ run: defaultRunner, hostHome: HOST_HOME, pkgRoot: REPO_ROOT });
+
+/** `host menubar install|uninstall|status` (HOSTS.md → Menu bar). */
+async function cmdMenubar(args: string[]): Promise<number> {
+  const [sub] = args;
+  const d = menubarDeps();
+  if (sub === "install") {
+    const r = await installMenubar(d, (s) => console.log(s));
+    if (!r.ok) {
+      console.error(`✗ menu bar: ${r.error}${r.fix ? `\n  fix: ${r.fix}` : ""}`);
+      return 1;
+    }
+    console.log(`✓ menu bar item installed — ${menubarPaths(d).bin}, starts at login (${menubarPaths(d).plist})`);
+    return 0;
+  }
+  if (sub === "uninstall") {
+    for (const l of await uninstallMenubar(d)) console.log(`✓ ${l}`);
+    return 0;
+  }
+  if (sub === "status") {
+    const s = await menubarState(d);
+    console.log(!s.installed ? "menu bar  not installed" : s.pid ? `menu bar  running (pid ${s.pid})` : "menu bar  installed, not running");
+    return 0;
+  }
+  console.log("usage: npm run host -- menubar <install | uninstall | status>");
+  return sub ? 2 : 0;
+}
+
 async function runDoctor(): Promise<{ ok: boolean; text: string }> {
   const [clis, checkouts] = await Promise.all([probeClis(), scanCheckouts()]);
   // The preflight's own checks first (bin/host-core.mjs): a broken git or a half-installed tree is
@@ -284,7 +323,14 @@ async function runDoctor(): Promise<{ ok: boolean; text: string }> {
   const build = await hostBuild();
   // A developer's own checkout runs fine; it is only never updated from the Desk.
   const installed = { ok: true, label: "installed", detail: `${build.install}${build.install === "dev" ? " (updates by hand)" : ""} — chronos ${chronosVersion()}${build.commit ? ` @ ${build.commit.slice(0, 12)}` : ""} (${inst.pkgRoot})` };
-  const checks = [installed, ...pre, ...checklist({
+  // Optional, so never a ✗: whether this Mac shows its agents in the menu bar.
+  const mb = await menubarState(menubarDeps()).catch(() => ({ installed: false, pid: null }));
+  const menubar = {
+    ok: true,
+    label: "menu bar item",
+    detail: !mb.installed ? `not installed (optional: node ${shellPath(path.join(REPO_ROOT, "bin", "getchronos.mjs"))} host menubar install)` : mb.pid ? `running (pid ${mb.pid})` : "installed, not running (it was quit; starts again at login)",
+  };
+  const checks = [installed, ...pre, menubar, ...checklist({
     node: process.version,
     clis,
     profiles: profiles(),
@@ -345,13 +391,14 @@ async function main(argv: string[]): Promise<number> {
     case "run": return cmdRun();
     case "status": return cmdStatus();
     case "update": return cmdUpdate();
+    case "menubar": return cmdMenubar(rest);
     case "doctor": {
       const r = await runDoctor();
       console.log(r.text);
       return r.ok ? 0 : 1;
     }
     default:
-      console.log("usage: npm run host -- <join <brain-url> <code> | run | status | doctor | update>  (uninstall: bin/getchronos.mjs host uninstall)");
+      console.log("usage: npm run host -- <join <brain-url> <code> | run | status | doctor | update | menubar>  (uninstall: bin/getchronos.mjs host uninstall)");
       return cmd ? 2 : 0;
   }
 }

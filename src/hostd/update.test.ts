@@ -154,6 +154,19 @@ test("a failed restart after the swap says exactly what to run by hand", async (
   assert.match(reports[reports.length - 1].error!, /launchctl kickstart -k gui\/\$\(id -u\)\/sh\.chronos\.host/);
 });
 
+test("afterSwap (the menu bar rebuild) runs after the swap, before the restart — and its failure never fails the update", async () => {
+  const { app } = gitApp();
+  const { run } = fakeRunner();
+  const order: string[] = [];
+  const { d } = deps({
+    run, install: { kind: "git", pkgRoot: app, appDir: app },
+    afterSwap: async (dir) => { order.push(`after:${fs.readFileSync(path.join(dir, "VERSION"), "utf8")}`); throw new Error("swiftc exploded"); },
+    restart: async () => { order.push("restart"); },
+  });
+  assert.equal(await runUpdate({ version: "0.1.0", commit: SHA_NEW }, d), "restarting");
+  assert.deepEqual(order, ["after:new", "restart"], "it sees the NEW code, then the host restarts anyway");
+});
+
 test("one update at a time", async () => {
   const { app } = gitApp();
   let release!: () => void;

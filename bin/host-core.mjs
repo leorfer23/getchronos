@@ -17,6 +17,8 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 
 export const HOST_LABEL = "sh.chronos.host";
+/** The menu bar item's LaunchAgent (src/hostd/menubar.ts). Uninstall removes it with the host. */
+export const HOSTBAR_LABEL = "sh.chronos.hostbar";
 export const PACKAGE_NAME = "getchronos";
 
 /**
@@ -223,6 +225,14 @@ export function uninstall({ home = os.homedir(), hostHome = path.join(home, ".ch
   }
   const plist = path.join(launchAgentsDir, `${HOST_LABEL}.plist`);
   if (fs.existsSync(plist)) { fs.rmSync(plist, { force: true }); done.push(`removed ${plist}`); }
+  // The menu bar item would otherwise sit there saying "not running" forever.
+  const barPlist = path.join(launchAgentsDir, `${HOSTBAR_LABEL}.plist`);
+  if (fs.existsSync(barPlist)) {
+    try { run("/bin/launchctl", ["bootout", `gui/${uid}/${HOSTBAR_LABEL}`]); } catch {}
+    fs.rmSync(barPlist, { force: true });
+    fs.rmSync(path.join(hostHome, "bin", "chronos-hostbar"), { force: true });
+    done.push(`removed the menu bar item (${barPlist})`);
+  }
   if (purge) {
     const looksOurs = path.resolve(hostHome) !== path.resolve(home) && path.resolve(hostHome) !== "/" &&
       ["app", ".secrets", "host.out.log"].some((f) => fs.existsSync(path.join(hostHome, f)));

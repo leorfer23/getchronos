@@ -39,10 +39,11 @@ test("npm pack: bin, dist, the plist template, mc and its skill — never secret
     const [info] = JSON.parse(out);
     const files: string[] = info.files.map((f: { path: string }) => f.path);
     assert.equal(info.name, "getchronos");
-    for (const need of ["package.json", "bin/getchronos.mjs", "bin/host-core.mjs", "launchd/sh.chronos.host.plist.template", "scripts/mc", "scripts/fix-node-pty-perms.mjs", "skills/mission-control/SKILL.md", `dist/${tag}/ok.js`]) {
+    for (const need of ["package.json", "bin/getchronos.mjs", "bin/host-core.mjs", "launchd/sh.chronos.host.plist.template", "launchd/sh.chronos.hostbar.plist.template", "desktop/hostbar.swift", "scripts/mc", "scripts/fix-node-pty-perms.mjs", "skills/mission-control/SKILL.md", `dist/${tag}/ok.js`]) {
       assert.ok(files.includes(need), `ships ${need}`);
     }
-    const bad = files.filter((f) =>
+    // desktop/ ships exactly one file: the menu bar item's source, compiled on the host (menubar.ts).
+    const bad = files.filter((f) => f !== "desktop/hostbar.swift").filter((f) =>
       /(^|\/)\.secrets/.test(f) || /\.pem$/.test(f) || /\.db(-wal|-shm)?$/.test(f) || /\.(test|eval)\.(js|ts|mjs)$/.test(f) ||
       /^(hostlink|attachments|notes|tickets|secrets|backups|sessions|src|evals|static|agents|relay|desktop|local)\//.test(f) || /^\.admin-token$/.test(f));
     assert.deepEqual(bad, [], "nothing private and no tests in the tarball");

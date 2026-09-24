@@ -87,6 +87,11 @@ export type UpdateDeps = {
   restart: () => Promise<void>;
   /** Rewrite the plist on disk for the next login (best-effort; the loaded job is what kickstart restarts). */
   rewritePlist?: (appDir: string) => void;
+  /**
+   * Anything else that runs from the app dir and must follow it, after the swap and before the restart
+   * (the menu bar item: menubar.ts refreshMenubar). Best-effort: logged, never fails the update.
+   */
+  afterSwap?: (appDir: string) => Promise<void>;
   /** This process's own commit/version, to answer "already current". */
   current: { version: string; commit: string | null };
   /** `getchronos@<version>` unless CHRONOS_HOST_PACKAGE_SPEC says otherwise (a mirror, a tarball in tests). */
@@ -184,6 +189,10 @@ async function update(target: UpdateTarget, d: UpdateDeps): Promise<"restarting"
     return fail(`could not swap the new version in: ${e?.message ?? e} — still running the old version`);
   }
   try { d.rewritePlist?.(appDir); } catch (e: any) { console.warn(`[host] update: could not rewrite the LaunchAgent plist: ${e?.message ?? e}`); }
+  if (d.afterSwap) {
+    d.report({ state: "running", step: "after the swap" });
+    try { await d.afterSwap(appDir); } catch (e: any) { console.warn(`[host] update: ${e?.message ?? e}`); }
+  }
   d.report({ state: "restarting" });
   try {
     await d.restart();
