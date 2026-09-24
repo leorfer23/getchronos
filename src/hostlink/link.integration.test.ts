@@ -13,13 +13,15 @@ import https from "node:https";
 import express from "express";
 import WebSocket from "ws";
 import { BrainLink, forwardedHost, hostRoutes, lanUrls, parseListen, type HostLinkInfo } from "./brain-link.js";
-import { HostCredStore, JoinCodes, OPENSSL, decodeJoinCode, ensureBrainCert, resetBrainCertCache, type BrainCert } from "./join.js";
+import { JoinCodes, OPENSSL, decodeJoinCode, ensureBrainCert, resetBrainCertCache, type BrainCert } from "./join.js";
 import { PROTOCOL_VERSION, encodeControl, decodeControl, type Hello, type HostVitals } from "./wire.js";
 import { HostLink, connectHeaders } from "../hostd/link.js";
 import { startForwarder } from "../hostd/forwarder.js";
 import { join, writeHostSecrets, renderHostPlist, hostEntryArgs } from "../hostd/join.js";
 import { parseEnvFile } from "../env-file.js";
 import { pinnedTlsOptions, fetchPeerCert } from "./pin.js";
+import { HostRegistry } from "./registry.js";
+import { hosts } from "../store.js";
 
 const HAS_OPENSSL = fs.existsSync(OPENSSL);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hostlink-it-"));
@@ -85,7 +87,7 @@ before(async () => {
   stubPort = (stub.address() as any).port;
 
   brain = new BrainLink({
-    creds: new HostCredStore(path.join(dir, "brain", "hosts.json")),
+    creds: new HostRegistry(),
     codes: new JoinCodes(),
     pingMs: 150,
     apiTarget: () => ({ host: "127.0.0.1", port: stubPort }),
@@ -119,8 +121,12 @@ test("join: a code turns into a 600 credential file; the brain keeps only a hash
   assert.equal(env.CHRONOS_HOST_BRAINS.split(",")[0], url());
   assert.equal(env.CHRONOS_HOST_DENY, "galley", "operator's own keys survive the rewrite");
   assert.equal(Buffer.from(env.CHRONOS_HOST_TOKEN, "base64url").length, 32);
-  const stored = fs.readFileSync(path.join(dir, "brain", "hosts.json"), "utf8");
-  assert.ok(!stored.includes(env.CHRONOS_HOST_TOKEN), "brain never stores the token");
+  const row = hosts.get(env.CHRONOS_HOST_ID)!;
+  assert.equal(row.name, "m2", "the name the operator minted the code with, not the Mac's hostname");
+  assert.equal(row.status, "offline", "joined, not yet connected");
+  assert.equal(row.cert_fp, cert.fingerprint);
+  assert.ok(row.token_hash && !JSON.stringify(row).includes(env.CHRONOS_HOST_TOKEN), "brain never stores the token");
+  assert.equal(fs.existsSync(path.join(dir, "brain", "hosts.json")), false, "no hosts.json any more");
   joined = { id: env.CHRONOS_HOST_ID, token: env.CHRONOS_HOST_TOKEN, fp: env.CHRONOS_HOST_CERT_FP };
 });
 
@@ -162,6 +168,14 @@ test("run: host connects with pinning, brain gets hello then vitals, RPC works, 
   assert.equal(vid, id);
   assert.equal(v.loadPerCore, 0.4);
   assert.equal(brain.list()[0].vitals?.cpu, 12);
+  const row = hosts.get(id)!;
+  assert.equal(row.status, "online");
+  assert.equal(row.platform, "darwin");
+  const caps = JSON.parse(row.capabilities_json!);
+  assert.deepEqual(caps.veto, ["galley"]);
+  assert.equal(caps.clis[0].name, "claude");
+  assert.equal(caps.version, "0.1.0");
+  assert.ok(brain.vitalsHistory(id).length >= 1);
 
   assert.equal((await brain.request(id, "vitals")) as any instanceof Object, true);
   await assert.rejects(brain.request(id, "spawn_pty", { session_id: "s1" }), /not yet/);
@@ -179,6 +193,14 @@ test("run: host connects with pinning, brain gets hello then vitals, RPC works, 
   const links = await (await get("/api/hosts/links", "adm")).json();
   assert.equal(links.links[0].host_id, id);
   assert.ok(links.known.some((k: any) => k.host_id === id && k.online));
+  const all = await (await get("/api/hosts", "adm")).json();
+  const me = all.hosts.find((h: any) => h.id === id);
+  assert.equal(me.connected, true);
+  assert.equal(me.status, "online");
+  assert.equal(me.link.via, "lan");
+  assert.ok(me.vitals.history.length >= 1 && me.vitals.history[0].cpu === 12, "sparkline history from the link");
+  assert.equal(me.admission.ok, true);
+  assert.ok(!JSON.stringify(all).includes("token_hash"));
   const minted = await (await get("/api/hosts/join-codes", "adm", "POST")).json();
   assert.match(minted.code, /^CHR1-/);
   assert.match(minted.command, /npm run host -- join wss:\/\/127\.0\.0\.1:\d+\/host CHR1-/);
@@ -306,6 +328,9 @@ test("revoke: the credential stops working and a live link is dropped", { skip: 
   await new Promise((r) => setTimeout(r, 100));
   assert.equal(host.state, "stopped", "a revoked host does not hammer the brain with retries");
   await assert.rejects(rawConnect(env.CHRONOS_HOST_ID, env.CHRONOS_HOST_TOKEN), /HTTP 401/);
+  const row = hosts.get(env.CHRONOS_HOST_ID)!;
+  assert.equal(row.status, "disabled");
+  assert.equal(row.token_hash, null);
   await host.stop();
 });
 

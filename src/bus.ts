@@ -78,6 +78,12 @@ export type BusEvent = (
   // that destroys a checkout. `actor` mirrors `by` so activity.ts attributes it (actorFor only
   // special-cases session.input's `by`).
   | { topic: "worktree.removed"; path: string; branch: string | null; by: string; actor?: string }
+  // A computer's link to this brain came up or went down (src/hostlink/brain-link.ts, HOSTS.md).
+  // Link down is NOT process dead: a host's terminals keep running through a Wi-Fi drop.
+  | { topic: "host.online"; host_id: string; name: string; via: string }
+  | { topic: "host.offline"; host_id: string; name: string; reason: string }
+  // The operator changed a host from the Desk: name, policy, drain/enable, revoke.
+  | { topic: "host.updated"; host_id: string; status: string; actor?: string }
   // A Lead closed its own done workers (`POST /leads/me/close-done`).
   | { topic: "lead.close-done"; lead_id: string; closed: string[]; by: string; actor: string }
   // A live Lead took over an ended Lead's workers/board/inbox (`mc lead adopt`).

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  HostCredStore, JOIN_TTL_MS, JoinCodes, OPENSSL, decodeJoinCode, encodeJoinCode, ensureBrainCert, fingerprintOfPem, fpEqual,
+  JOIN_TTL_MS, JoinCodes, OPENSSL, decodeJoinCode, encodeJoinCode, ensureBrainCert, fingerprintOfPem, fpEqual,
   hashToken, mintHostCredential, normalizeFp, resetBrainCertCache, tokenMatches,
 } from "./join.js";
 import { classifyBrainUrl, isLoopbackHost } from "./pin.js";
@@ -77,29 +77,6 @@ test("a host credential is 32 random bytes; only its hash matches", () => {
   assert.equal(tokenMatches("", h), false);
   assert.equal(tokenMatches(c.token, ""), false);
   assert.equal(tokenMatches(c.token, "zz"), false);
-});
-
-test("the credential store keeps hashes at mode 600, verifies, and revokes", () => {
-  const dir = tmp();
-  const store = new HostCredStore(path.join(dir, "hosts.json"));
-  const c = mintHostCredential();
-  store.add({ host_id: c.host_id, name: "m2", token_hash: hashToken(c.token), created_at: 1 });
-  const raw = fs.readFileSync(store.file, "utf8");
-  assert.ok(!raw.includes(c.token), "token itself never written");
-  assert.equal(fs.statSync(store.file).mode & 0o777, 0o600);
-  assert.equal(store.verify(c.host_id, c.token)?.name, "m2");
-  assert.equal(store.verify(c.host_id, "wrong"), null);
-  assert.equal(store.verify("h_nobody", c.token), null);
-  assert.equal(store.revoke(c.host_id), true);
-  assert.equal(store.verify(c.host_id, c.token), null);
-  assert.equal(store.revoke(c.host_id), false);
-});
-
-test("a missing or corrupt store reads as no hosts", () => {
-  const dir = tmp();
-  assert.deepEqual(new HostCredStore(path.join(dir, "none.json")).list(), []);
-  fs.writeFileSync(path.join(dir, "bad.json"), "{nope");
-  assert.deepEqual(new HostCredStore(path.join(dir, "bad.json")).list(), []);
 });
 
 // ───────────────────────────── fingerprints + cert ─────────────────────────────
