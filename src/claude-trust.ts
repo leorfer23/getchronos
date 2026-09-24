@@ -53,3 +53,30 @@ export function trustKeys(cwd: string): string[] {
   try { real = fs.realpathSync.native(cwd); } catch {}
   return real === cwd ? [cwd] : [cwd, real];
 }
+
+/**
+ * Pre-accept claude's one-time "Bypass Permissions mode" warning in the profile at `configDir`.
+ *
+ * Every Desk terminal runs claude with --dangerously-skip-permissions (backends/claude.ts), and a
+ * profile that has never been opened that way shows a "No, exit / Yes, I accept" screen first. A
+ * seeded terminal has nobody to answer it: the seed lands on the dialog, picks "No, exit", and the
+ * pty dies in seconds — the M5 host, 2026-09-24, right after the trust fix let it get that far. The
+ * operator's long-lived profiles had all answered it by hand once; a freshly logged-in one on a new
+ * computer never has. `skipDangerousModePermissionPrompt` in the profile's settings.json is what
+ * answering "Yes" writes. Other keys are preserved; a settings.json that is not an object is left
+ * alone.
+ */
+export function ensureBypassAccepted(configDir: string): "already" | "added" | "skipped" {
+  const file = path.join(configDir, "settings.json");
+  let state: any = {};
+  if (fs.existsSync(file)) {
+    try { state = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return "skipped"; }
+  } else if (!fs.existsSync(configDir)) return "skipped";
+  if (!state || typeof state !== "object" || Array.isArray(state)) return "skipped";
+  if (state.skipDangerousModePermissionPrompt === true) return "already";
+  state.skipDangerousModePermissionPrompt = true;
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, file);
+  return "added";
+}

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ensureTrustedCwd } from "./claude-trust.js";
+import { ensureBypassAccepted, ensureTrustedCwd } from "./claude-trust.js";
 
 const profile = (state?: unknown) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-trust-"));
@@ -67,4 +67,19 @@ test("trust is written under the on-disk case too, on a case-insensitive disk", 
   assert.equal(projects[asked].hasTrustDialogAccepted, true);
   assert.equal(projects[onDisk].hasTrustDialogAccepted, true);
   assert.equal(ensureTrustedCwd(cfg, asked), "already");
+});
+
+test("bypass-permissions warning: pre-accepted once, other settings kept, junk left alone", () => {
+  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), "bypass-"));
+  assert.equal(ensureBypassAccepted(cfg), "added"); // no settings.json yet: a logged-in profile dir is enough
+  const f = path.join(cfg, "settings.json");
+  fs.writeFileSync(f, JSON.stringify({ hooks: { Stop: [] }, model: "x" }));
+  assert.equal(ensureBypassAccepted(cfg), "added");
+  const s = JSON.parse(fs.readFileSync(f, "utf8"));
+  assert.deepEqual(s, { hooks: { Stop: [] }, model: "x", skipDangerousModePermissionPrompt: true });
+  assert.equal(ensureBypassAccepted(cfg), "already");
+  fs.writeFileSync(f, "not json");
+  assert.equal(ensureBypassAccepted(cfg), "skipped");
+  assert.equal(fs.readFileSync(f, "utf8"), "not json");
+  assert.equal(ensureBypassAccepted(path.join(cfg, "missing")), "skipped");
 });

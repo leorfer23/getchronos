@@ -11,7 +11,7 @@ import { sessions, sessionGoals, workspaces, repos, tickets, runs, jobs, notes a
 import { backendAllowed, getBackend, workspaceBackends } from "./backends/index.js";
 import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow } from "./sandbox.js";
 import { ensureDropDir } from "./drops.js";
-import { ensureTrustedCwd } from "./claude-trust.js";
+import { ensureBypassAccepted, ensureTrustedCwd } from "./claude-trust.js";
 import { ensureGrokTrustedCwd, grokHome } from "./grok-trust.js";
 import { isEarlyDeath, reportEarlyDeath } from "./desk-incidents.js";
 import { lastActivityState, reviveSeedFor } from "./revive.js";
@@ -588,6 +588,9 @@ export async function openSession(
     // to tap Yes — answer it here, in the profile, before the spawn (see claude-trust.ts).
     if (backend.name === "claude-code" && ensureTrustedCwd(configDir, cwd) === "added")
       console.log(`[terminal] pre-trusted ${cwd} in ${path.basename(configDir)}`);
+    // …and its one-time "Bypass Permissions mode" warning, for a profile that never answered it.
+    if (backend.name === "claude-code" && ensureBypassAccepted(configDir) === "added")
+      console.log(`[terminal] pre-accepted bypass-permissions mode in ${path.basename(configDir)}`);
     // grok asks the same question per folder (one account, ~/.grok, no per-workspace home) and types
     // the seed into the dialog when nobody answers — the pager quits on it (see grok-trust.ts).
     if (backend.name === "grok" && ensureGrokTrustedCwd(cwd) === "added")
