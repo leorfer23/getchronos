@@ -2,8 +2,9 @@
 
 > Status: **being built.** Phase 1 (the seam: `src/hosts/`, migration 134), phase 2 (link, join,
 > host process, the hosts registry and the Desk's Computers panel), phase 3 (remote terminals,
-> pinned + sticky), phase 4 (placement and the per-host governor) and phase 6 (onboarding: preflight,
-> the `getchronos` package, self-update, uninstall) have landed; see *Phases*. This is the plan the implementation PRs
+> pinned + sticky), phase 4 (placement and the per-host governor), phase 5 (headless runs, the ship
+> pipeline and the egress proxy on hosts) and phase 6 (onboarding: preflight, the `getchronos`
+> package, self-update, uninstall) have landed; see *Phases*. This is the plan the implementation PRs
 > follow; each phase at the end is one PR (or a short series) and updates this file when it lands.
 
 ## The gap
@@ -208,7 +209,8 @@ Both problems have the same fix:
   (`authz.ts:22-29`) never applies to them. They need the workspace token the brain issued for that
   session, and the session must belong to that host.
 - The per-workspace **egress proxy** (`egress.ts`) runs on the host, next to the agent, with the
-  policy the brain sends. Its CA bundle is generated on the host.
+  policy the brain sends. *(Phase 5: without credential brokering — a workspace whose egress
+  intercepts TLS to inject a secret stays on the brain, so no CA exists on a host; see phase 5.)*
 
 ### Placement
 
@@ -674,6 +676,89 @@ it was.
      exit.
 5. **Headless runs and the ship pipeline.** `spawn_proc`, `host.exec()` for gates, reviews and
    delivery; `gh` capability; the verifier on the host; egress proxy and CA on the host.
+   - **Landed:**
+     - **ProcSpec** (`src/hosts/proc-spec.ts`): `spawn_proc`'s intent. The repo by git remote, every
+       workspace repo, a cwd ONLY when the host reported it (a worktree it made), the profile by name,
+       sandbox + egress policy, env through the terminals' `portableEnv`, the run's timeout, and the
+       ticket markdown (it lives in the brain's gitignored `.mc/tickets/`) delivered as a file. The CLI's
+       argv is built **by the host** with its own backend registry from a pseudo-job: goal, system text
+       and trigger context are prose the brain composed (tickets.ts, reviews.ts…), and the brain paths
+       in them — the worktree, the repo, the ticket file — become `{{chronos:repo:<id>}}` /
+       `{{chronos:wtroot:<id>}}` tokens the host expands to its own paths. `brainPathsInProc` refuses a
+       spec with a brain path anywhere else (asserted in tests).
+     - **The host** (`src/hostd/procs.ts`, sharing `resolve.ts` with terminals.ts): veto first, then
+       checkout / host-reported cwd (held to its checkouts and their worktree roots) / profile / the
+       runner's own worktree sandbox (main checkout read-only, `.git`/`.mc` granted) / egress / prepare.
+       Stdout goes out as **whole lines** through a seq'd `Ring` of 4 MB (`PROC_RING_BYTES`: an evicted
+       line is a lost run event), stderr as `stderr` frames with the tail replayed on attach, steer via
+       `stdin` frames; `kill` / `ack` / `attach` / `release` / `exit` are the pty frames, routed by
+       channel owner (one channel-number space for terminals and runs). The host's **own watchdog**
+       stops a run at its timeout + 15 s grace and reports `exit.timed_out` — a dropped link cannot leave
+       a runaway. `exec` runs a command (or a gate line through `bash -lc` with the host's runtime PATH)
+       in a checkout/worktree it reported, with its own timeout and head/tail output caps; `oneshot` is
+       the verifier's judge there; `worktree_ensure` makes a ticket worktree under its checkout.
+     - **Brain** (`RemoteHost.spawnProcess` → `RemoteProc`): the `ProcHandle` runner.ts already reads —
+       stdout a stream fed in seq order (SeqTracker drops a resend's overlap), `onClose` after it drained,
+       steer writes held across a drop. `execute()` builds the ProcSpec instead of an argv for a remote
+       run and hands the handle to `superviseRun()` (split out of execute: reader, steer, watchdog,
+       close → finalize), so a remote run is parsed, steered, timed out and finalized by the same code.
+       `runs.cwd` records where it ran on its host.
+     - **Placement** (`src/hosts/run-placement.ts`): `dispatch()` places a run before `pump()` (gotcha #1)
+       with the same `place()` — `opened_by: agent`, so never past a host's admission, with the brain's
+       reserve — plus `needs.procs` (protocol 1.4 hosts), `needs.gh` for `ci-fix:`/`merge-gate:`,
+       `needs.brokered`. Sticky: a job pinned to a host's worktree (`jobs.host_id`, migration 137), a
+       native resume of a transcript on a host. A run is never refused for load: no eligible host / no
+       room → the brain, as before (only sticky work can be refused, when its computer can't take it).
+       Kill switches: `CHRONOS_PLACEMENT` (now for runs too) and per workspace `placement: brain|hosts`.
+     - **Which runs move**: `ticket:`, `ci-fix:`, `merge-gate:` (worktree on the host — tickets.ts places
+       FIRST and creates the worktree there, so no brain worktree makes the ticket look brain-bound);
+       the read-only `plan:`, `grade:`, `review:` (pinned to its build's worktree), `distill:`, `ideas:`;
+       and any job whose cwd is a workspace repo's checkout. **Stay on the brain:** `intake:` and
+       `prose:` (Slack/MCP read through the brain profile's OAuth logins), `dream:` (no repo; brain
+       state, brain landing dir), cloud hand-offs, unscoped jobs, jobs started in any other brain
+       directory or granted brain-only add-dirs, and any job whose goal still names a brain file after
+       tokenizing (attachments, a no-repo ticket's markdown). Robert's manager, the one-shot helpers,
+       the next-day planner and accelerators are not jobs and never reach placement.
+     - **The ship pipeline** (`src/hosts/workdir.ts`): a `WorkDir` is a directory with its owner;
+       `execIn` is `execFileTimed` on the brain and `host.exec` elsewhere. Routed through it: gates
+       (`runGates`/`mergeGate` take injected runners, so gates.ts stays store-free for the host), the
+       review diff/commit (`captureDiff`, `createForRun`, `ensureReviewForTicket`), `merge()` — `shipPR`
+       (push + `gh pr create` with the host's gh login, GH_CONFIG_DIR from the workspace env), the
+       checkout back to default, commit delivery landing on **that host's** checkout — and the verifier
+       (`oneshot` on the host). The reviewer and a rate-limit stand-in inherit the build's pin. Merge by
+       PR URL, the delivery poll and post-merge commands stay on the brain.
+     - **Reconnect** (`src/remote-runs.ts`): boot leaves remote running runs alone and sweeps QUEUED
+       ones wherever placed (the queue was memory), plus runs on revoked hosts. On hello: held →
+       re-attach; reported but not held (brain restarted) → adopted (`adoptRun`: same supervisor, the
+       watchdog minus elapsed time, then the dispatcher's `afterRun` retry/chain); not reported (host
+       restarted) → `interrupted` naming the host (the recovery card's, as after a deploy); ended here →
+       killed there. Revoking a host interrupts its runs. `stopRun` / continue-from-run kill a remote
+       run through its channel; a continued run's terminal opens on its host in `runs.cwd`.
+     - **Egress on hosts** (`src/egress-core.ts`, `src/hostd/egress.ts`): the proxy is store-free; a
+       host runs one per workspace from the policy each spawn carries (terminals and runs), locks the
+       agent to it with Seatbelt in `enforce`, refuses a locked spawn it cannot proxy, and streams each
+       allow/deny back as an `egress` frame into the brain's audit log (dropped if that workspace may
+       not run on that host). The phase-3/4 "egress-locked stays on the brain" rule is lifted for hosts
+       that report `capabilities.egress`.
+     - **Protocol 1.4** (additive, one block in wire.ts): `stdin`, `stderr`, `egress` frames,
+       `exit.timed_out`, `capabilities.procs/egress`, the exec spec/result.
+   - **Deferred:** `placement: hosts+cloud` — choosing Cursor Cloud for a job on its own needs a job
+     shape it can take (GitHub-only, `delivery=pr`) and a budget rule so the operator never gets a
+     surprise bill; not a small addition, so the setting takes `brain|hosts` only. Credential brokering
+     on hosts (and so a CA on hosts): a brokered workspace stays on the brain. Ticket attachments are
+     not shipped (a run whose goal names them stays on the brain; a reviewer pinned to a host after
+     attachments were added sees their paths but not the files). An adopted steer-mode run resumes with
+     one message outstanding; steers queued in the dead brain's memory are gone (the mailbox is the
+     durable path), and bytes processed but not yet acked when the brain died can repeat once. The
+     ticket-file copy is synced back only by the brain that sent it (not after an adoption). A host
+     update or restart ends its runs (they are its children) — they come back as `interrupted`, not
+     resumed.
+   - **Deviations:** runs are placed in `dispatch()` and build worktrees in tickets.ts before the job
+     exists, rather than both by one call; `exec`/`oneshot`/`worktreeEnsure` live on `RemoteHost`, not
+     the `Host` interface (on the brain they are the execFile calls the modules always made). Exec is
+     held to the host's checkouts and worktree roots (defense in depth on top of the veto). Commit
+     delivery for a build that ran on a host lands on the host's checkout, not the brain's — the branch
+     only exists there. Checkout scans for `exec` are cached for a minute.
 6. **Onboarding polish.** `npx getchronos host join` published, `chronos host doctor`,
    `CONFIGURATION.md` section, and an "update host" flow for version mismatches.
    - **Landed:**
