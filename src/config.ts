@@ -170,6 +170,9 @@ export const CONFIG = {
   // Cadence (minutes) for the retention sweep: run_events cap, orphaned search_fts 'event' rows,
   // egress_log cap. Independent of digestHour so it still runs with the nightly digest disabled.
   retentionSweepMin: Number(process.env.CHRONOS_RETENTION_SWEEP_MIN ?? 60),
+  // memory_usage (src/memory-usage.ts): which memory agents read. The dream pass ranks on recent use,
+  // so older rows only cost space — dropped by age in the same sweep. 0 = keep forever.
+  memoryUsageRetainDays: Number(process.env.CHRONOS_MEMORY_USAGE_RETAIN_DAYS ?? 60),
   // Connector sync history: keep at most this many rows.
   connectorSyncRetain: Number(process.env.CHRONOS_CONNECTOR_SYNC_RETAIN ?? 2000),
   dailyBudgetUsd: Number(process.env.CHRONOS_DAILY_BUDGET ?? 0), // 0 = no global cap; per-workspace daily_budget_usd (Spaces tab) is the control

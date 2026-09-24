@@ -20,6 +20,7 @@
 import { searchIndex, notes as notesStore, skills as skillsStore, sessions as sessionsStore } from "./store.js";
 import { relevantLessons } from "./lessons.js";
 import { guard } from "./guard.js";
+import { recordRelevance, type UsageVia } from "./memory-usage.js";
 import type { Workspace } from "./types.js";
 
 export interface RecallHit {
@@ -201,11 +202,16 @@ export function memoryBlock(workspace_id: string): string {
 
 // At dispatch, surface THIS workspace's own notes/skills that match the ticket, so the agent knows
 // what standing knowledge to read in full before starting. Cheap synchronous FTS (sub-ms). Only
-// note|skill kinds — never event/session (transcript noise). Pure + exported so it's testable
-// without dispatching. Returns "" when nothing relevant. `key` only labels the guard pass.
+// note|skill kinds — never event/session (transcript noise). Exported so it's testable without
+// dispatching. Returns "" when nothing relevant. `key` only labels the guard pass. Its one side
+// effect: what it surfaces is recorded as `relevance_inject` usage (src/memory-usage.ts, best-effort)
+// — `via` says which door.
 const REL_LIMIT = 8;
 
-export function relevanceBlock(ws: Pick<Workspace, "id">, title: string, tags: string[] = [], key?: string): string {
+export function relevanceBlock(
+  ws: Pick<Workspace, "id">, title: string, tags: string[] = [], key?: string,
+  via: UsageVia = { source: "dispatch" },
+): string {
   const q = [title, ...tags].join(" ").trim();
   if (!q) return "";
   const hits = [
@@ -220,13 +226,16 @@ export function relevanceBlock(ws: Pick<Workspace, "id">, title: string, tags: s
     .slice(0, 3);
 
   const lines: string[] = [];
+  const surfaced: { kind: "note" | "skill"; ref: string }[] = [];
   for (const h of hits) {
     const ref = h.kind === "note" ? notesStore.get(h.ref_id) : skillsStore.get(h.ref_id);
     if (!ref) continue;
     const view = h.kind === "note" ? `mc memo get ${ref.slug}` : `mc skill view ${ref.slug}`;
     lines.push(`- ${h.title} (${h.kind} ${ref.slug}) — "${cleanSnippet(h.snippet)}" → read in full: ${view}`);
+    surfaced.push({ kind: h.kind as "note" | "skill", ref: ref.id });
   }
   if (!lines.length) return "";
+  recordRelevance(ws.id, surfaced, via);
   // Guard the whole block (titles + snippets are workspace-authored → possible injection surface),
   // mirroring skillIndexBlock. One pass covers every string before it enters the goal prompt.
   return guard(`Possibly relevant workspace knowledge:\n${lines.join("\n")}`, `relevance ${key ?? "ticket"}`, ws.id);

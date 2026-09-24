@@ -35,6 +35,7 @@ import { promoteIdea, killIdea } from "./ideas.js";
 import { setSkillStatus } from "./skills.js";
 import { captureLearnings, createNote, listNotes } from "./notes.js";
 import { recall, renderRecall } from "./recall.js";
+import { recordRecall } from "./memory-usage.js";
 import { combinedSpend, combinedByWorkspace } from "./spend.js";
 import { gateMode, quotaSnapshot, recentDecisions } from "./quota-gate.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
@@ -349,7 +350,9 @@ const recallCmd: Command = {
     if (!ws) return "Which workspace? Usage: recall <workspace> <query>";
     const q = rest.join(" ").trim();
     if (!q) return "Usage: recall <query>";
-    return renderRecall(ws.id, q, recall(ws.id, q));
+    const hits = recall(ws.id, q);
+    recordRecall(ws.id, q, hits, { source: "command" });
+    return renderRecall(ws.id, q, hits);
   },
 };
 

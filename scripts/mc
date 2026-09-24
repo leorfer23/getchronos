@@ -216,6 +216,7 @@ const HELP = `mc — Mission Control backlog CLI
               [--workspace ID]       file a card into the idea pool (staging, not a ticket)
   mc recall "<query>" [--workspace ID]                     search THIS workspace's memory (memos, skills, lessons, past sessions) — run before starting work
   mc memory conflicts [--workspace ID]                    two things you were told that disagree; settle with: resolve|dismiss <id>
+  mc memory usage [--since 7d|ISO] [--limit N] [--json]   which memos/skills/lessons agents here actually read, and recalls that found nothing
   mc search "<query>" [--workspace ID] [--kind ticket|session|event|job|skill]
   mc ws list                         list projects  (alias: mc project list)
   mc ws create <slug>                scaffold a new project (identity capsule)
@@ -1115,7 +1116,10 @@ async function heavy(argv) {
       }
       if (sub === "get") {
         const n = await findMemo(pos[2] || die("memo get needs a name/slug"));
-        return console.log(n.body);
+        // Re-read it by id with ?use=1 so the daemon counts the read (memory usage, src/memory-usage.ts).
+        const qs = new URLSearchParams({ use: "1", ...(process.env.MC_SESSION ? { session: process.env.MC_SESSION } : {}) });
+        const full = await req("GET", "/notes/" + n.id + "?" + qs.toString()).catch(() => n);
+        return console.log(full.body);
       }
       if (sub === "new") {
         const title = opt.title || pos.slice(2).join(" ");
@@ -1310,7 +1314,7 @@ async function heavy(argv) {
       if (sub === "view") {
         const s = await findSkill(wsId, pos[2] || die("skill view needs a <slug>"));
         if (pos[3]) { const ref = await req("GET", "/skills/" + s.id + "?ref=" + encodeURIComponent(pos[3])); return console.log(ref); }
-        const full = await req("GET", "/skills/" + s.id + "?use=1");
+        const full = await req("GET", "/skills/" + s.id + "?use=1" + (process.env.MC_SESSION ? "&session=" + encodeURIComponent(process.env.MC_SESSION) : ""));
         return console.log(full.body || "(empty skill)");
       }
       if (sub === "new") {
@@ -1484,8 +1488,24 @@ async function heavy(argv) {
       if (!q) die('recall needs a query: mc recall "<topic>"');
       const wsId = opt.workspace || process.env.MC_WORKSPACE;
       if (!wsId) die("recall needs --workspace or MC_WORKSPACE — memory is workspace-walled");
-      const r = await req("GET", "/workspaces/" + wsId + "/recall?" + new URLSearchParams({ q }).toString());
+      const r = await req("GET", "/workspaces/" + wsId + "/recall?" + new URLSearchParams({ q, ...(process.env.MC_SESSION ? { session: process.env.MC_SESSION } : {}) }).toString());
       return console.log(r.text);
+    }
+    if (cmd === "memory" && pos[1] === "usage") {
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (!wsId) die("memory usage needs --workspace or MC_WORKSPACE — memory is workspace-walled");
+      const since = opt.since && opt.since !== "true" ? opt.since : "7d";
+      const r = await req("GET", "/workspaces/" + wsId + "/memory/usage?" + new URLSearchParams({ since }).toString());
+      if (opt.json === "true") return console.log(JSON.stringify(r, null, 2));
+      const short = { recall_hit: "hit", memo_get: "read", skill_view: "read", relevance_inject: "inject" };
+      const lines = r.refs.slice(0, Number(opt.limit) || 30).map((a) => {
+        const kinds = Object.entries(a.kinds).map(([k, n]) => `${short[k] || k} ${n}`).join(" · ");
+        return `${String(a.count).padStart(4)}  ${a.ref_kind.padEnd(7)} ${(a.label || a.ref.slice(0, 8) + " (gone)").slice(0, 60)}  — ${kinds} · last ${a.last_used.slice(0, 10)}`;
+      });
+      const out = [`memory usage since ${r.since.slice(0, 16).replace("T", " ")} — ${r.recalls} recall quer${r.recalls === 1 ? "y" : "ies"}, ${r.refs.length} piece(s) used`];
+      out.push(lines.length ? lines.join("\n") : "(nothing read yet in this window)");
+      if (r.misses.length) out.push("\nrecalls that found nothing (memory gaps):\n" + r.misses.map((m) => `${String(m.count).padStart(4)}  "${m.query}"`).join("\n"));
+      return console.log(out.join("\n"));
     }
     if (cmd === "memory" && pos[1] === "conflicts") {
       const wsId = opt.workspace || process.env.MC_WORKSPACE;

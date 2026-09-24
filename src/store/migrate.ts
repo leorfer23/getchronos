@@ -1756,6 +1756,30 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       db.exec("CREATE INDEX IF NOT EXISTS idx_prose_ws ON prose_samples(workspace_id, created_at)");
     },
   },
+  {
+    version: 132,
+    name: "memory_usage — which memory agents actually read",
+    // Evidence for ranking and pruning workspace memory (src/memory-usage.ts): every recall query and
+    // each hit it returned, every memo/skill an agent opened, every memo the relevance block put in
+    // front of a fresh agent. Append-only; the retention sweep drops rows past ~60 days. `hits` is
+    // set on `recall` rows only — a query that found nothing is a gap in the memory, not noise.
+    up: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS memory_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        ref_kind TEXT,
+        ref TEXT,
+        query TEXT,
+        hits INTEGER,
+        source TEXT,
+        session_id TEXT,
+        ts TEXT NOT NULL
+      )`);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_memory_usage_ws ON memory_usage(workspace_id, ts)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_memory_usage_ts ON memory_usage(ts)");
+    },
+  },
 
 ];
 

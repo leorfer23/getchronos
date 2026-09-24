@@ -16,6 +16,7 @@ import { maybeLearnProse } from "./prose.js";
 import { maybeExpireIdeas, maybeMineIdeas } from "./ideas.js";
 import { pollDeliveries } from "./delivery.js";
 import { reapDoneWorktrees } from "./worktrees.js";
+import { pruneMemoryUsage } from "./memory-usage.js";
 import { sweepStalls } from "./recovery.js";
 import { sweepHolds } from "./holds.js";
 import { holdBucket } from "./hold-bucket.js";
@@ -355,6 +356,7 @@ function maybeRetentionSweep() {
     egressLog.prune(CONFIG.egress.logCap);
     steps.prune(50_000); // generous cap — a few rows per run, this only bites truly ancient history
     messages.prune(20_000);
+    pruneMemoryUsage();
   } catch (e: any) {
     console.warn("[monitor] retention sweep", e?.message ?? e);
   }

@@ -509,7 +509,7 @@ export async function openSession(
   // Ticket-bound Desk terminals get the same relevance pointers dispatched jobs get (tickets.ts):
   // FTS on the ticket's title surfaces the memos/skills worth reading in full before starting.
   const relTicket = row.ticket_id ? tickets.get(row.ticket_id) : undefined;
-  const rel = ws && relTicket ? relevanceBlock(ws, relTicket.title, [], relTicket.key) : "";
+  const rel = ws && relTicket ? relevanceBlock(ws, relTicket.title, [], relTicket.key, { source: "spawn", session_id: row.id }) : "";
   // Every backend gets the Focus reporting contract; CLIs with a system-prompt channel carry it there,
   // the rest get it folded into the seed below. Claude and cursor let us pin the transcript id.
   const pinsSession = backend.pinsSession === true;
