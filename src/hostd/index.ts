@@ -112,7 +112,7 @@ async function cmdRun(): Promise<number> {
       });
       // Agents opened from now on point MC_API at the port that actually bound.
       terminals.setMcPort(port);
-      if (port !== 7777) console.log(`[host] mc forwarder on 127.0.0.1:${port} (7777 is taken on this Mac)`);
+      console.log(`[host] mc forwarder on 127.0.0.1:${port}${port !== 7777 && !env("CHRONOS_HOST_MC_PORT") ? " (7777 is taken on this Mac)" : ""}`);
       break;
     } catch (e: any) {
       console.warn(`[host] mc forwarder could not bind 127.0.0.1:${port} (${e?.message ?? e})`);

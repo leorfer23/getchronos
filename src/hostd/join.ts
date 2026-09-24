@@ -87,24 +87,28 @@ export function writeHostSecrets(file: string, values: Record<string, string>): 
 }
 
 /**
- * Node and PATH as a LOGIN shell sees them. launchd and non-login shells start without
- * /opt/homebrew/bin, so a plist that says just "node" either fails or finds a different node.
+ * The node the LaunchAgent runs, and PATH as a LOGIN shell sees it.
+ *
+ * The node is the one running `join` — `process.execPath` — never whatever `command -v node` finds in
+ * a login shell. `join` runs right after `npm ci` in the same shell, so this is the node the native
+ * modules (better-sqlite3, node-pty) were just compiled for. On the first real host the login shell
+ * found Homebrew's node 26 while the operator's shell (fnm) had built everything with node 24; the
+ * next reinstall under the other node failed to compile better-sqlite3 and left the host unable to
+ * start. One node for install and run is the whole rule.
+ *
+ * PATH still comes from a login shell: launchd starts without /opt/homebrew/bin and ~/.local/bin,
+ * and the agent CLIs (claude, gh, git) must resolve the way they do in the operator's terminal.
  */
 export function loginShellEnv(): { node: string; path: string } {
   const shell = process.env.SHELL || "/bin/zsh";
-  const ask = (script: string) => {
-    try {
-      return execFileSync(shell, ["-lc", script], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim().split("\n").pop()!.trim();
-    } catch {
-      return "";
-    }
-  };
-  const node = ask("command -v node");
-  const p = ask('printf %s "$PATH"');
-  return {
-    node: node && path.isAbsolute(node) ? node : process.execPath,
-    path: p || [path.dirname(process.execPath), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":"),
-  };
+  let p = "";
+  try {
+    p = execFileSync(shell, ["-lc", 'printf %s "$PATH"'], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim().split("\n").pop()!.trim();
+  } catch {}
+  const nodeDir = path.dirname(process.execPath);
+  const base = p || ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
+  // The install node's own dir first, so `npm`/`npx` an agent runs match it too.
+  return { node: process.execPath, path: [nodeDir, ...base.split(":").filter((d) => d && d !== nodeDir)].join(":") };
 }
 
 /** What the LaunchAgent runs: the built entry when there is one, else the source through tsx. */
