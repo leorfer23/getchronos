@@ -17,7 +17,7 @@ import { hostFor, LOCAL_HOST_ID, type Host, type ProcHandle } from "./hosts/inde
 import { brainPathsInProc, buildRemoteProcSpec, type ProcSpec } from "./hosts/proc-spec.js";
 import { profileNameFor } from "./hosts/spawn-spec.js";
 import { worktreeRootFor } from "./worktree-core.js";
-import { gateRunners, workDirOf } from "./hosts/workdir.js";
+import { checkoutOn, execIn, gateRunners, workDirOf } from "./hosts/workdir.js";
 import { samePath } from "./hosts/run-placement.js";
 import { getBackend } from "./backends/index.js";
 import { isCloudBackend } from "./backends/types.js";
@@ -447,6 +447,7 @@ export function adoptRun(job: Job, runId: string, child: ProcHandle): Promise<Ru
  */
 async function failBeforeSpawn(job: Job, runId: string, msg: string): Promise<RunStatus> {
   liveSteer.delete(runId);
+  delivered.delete(runId);
   runs.patch(runId, { status: "failed", ended_at: new Date().toISOString(), error: msg });
   console.warn(`[run] ${job.name}: ${msg}`);
   if (job.ticket_id && shouldFileReviewOnEnd(job.name)) {
@@ -478,7 +479,12 @@ function remoteProcSpec(
   const files: ProcSpec["files"] = [];
   const t = job.ticket_id ? tickets.get(job.ticket_id) : undefined;
   if (t && repo?.path && t.repo_id === repo.id && t.file_path.startsWith(repo.path + path.sep)) {
-    try { files.push({ repo_id: repo.id, rel: path.relative(repo.path, t.file_path), content: fs.readFileSync(t.file_path, "utf8") }); } catch {}
+    try {
+      const content = fs.readFileSync(t.file_path, "utf8");
+      const rel = path.relative(repo.path, t.file_path);
+      files.push({ repo_id: repo.id, rel, content });
+      delivered.set(runId, { host_id: host.id, repo, rel, brainFile: t.file_path, sent: content });
+    } catch {}
   }
   const brainPaths = [process.cwd(), x.profileDir, ...wsRepos.map((r) => r.path).filter(Boolean)];
   const { spec, dropped, brainOnly } = buildRemoteProcSpec({
@@ -514,6 +520,39 @@ function remoteProcSpec(
   const leaks = brainPathsInProc(spec, [os.homedir(), ...brainPaths]);
   if (leaks.length) return { error: `refusing to send brain paths to host ${host.id}: ${leaks.join("; ")}` };
   return { spec };
+}
+
+/**
+ * Ticket files shipped to a host with a run, by run id: what was sent and where it went. The build
+ * protocol has the agent append its Work log entry to that file, and on a host it edits the COPY — so
+ * when the run ends the copy comes home (syncTicketFileBack). In memory: a run a restarted brain
+ * re-adopts has lost this, and its copy stays on the host (the `mc note` trail still reaches the brain).
+ */
+const delivered = new Map<string, { host_id: string; repo: Repo; rel: string; brainFile: string; sent: string }>();
+
+/**
+ * Bring a remote run's edits to its ticket file back to the brain. Only when the brain's file is still
+ * what was sent: if something on the brain rewrote it meanwhile (`mc plan`, a status change), the
+ * brain's copy wins and the host's is left where it is, noted in the log — never a silent clobber.
+ */
+async function syncTicketFileBack(runId: string): Promise<void> {
+  const d = delivered.get(runId);
+  delivered.delete(runId);
+  if (!d) return;
+  const main = checkoutOn(d.host_id, d.repo);
+  if (!main) return;
+  try {
+    const { stdout } = await execIn({ host_id: d.host_id, cwd: main }, "cat", [d.rel], { workspaceId: d.repo.workspace_id, maxBuffer: 4 * 1024 * 1024 });
+    if (stdout === d.sent) return;
+    const now = fs.readFileSync(d.brainFile, "utf8");
+    if (now !== d.sent) {
+      console.warn(`[run] ${runId.slice(0, 8)}: ticket file changed on the brain and on host ${d.host_id} — kept the brain's; the host's copy is at ${main}/${d.rel}`);
+      return;
+    }
+    fs.writeFileSync(d.brainFile, stdout, { mode: 0o600 });
+  } catch (e: any) {
+    console.warn(`[run] ${runId.slice(0, 8)}: could not bring the ticket file back from host ${d.host_id}: ${e?.message ?? e}`);
+  }
 }
 
 /** The repo a run works in: its ticket's, else the workspace repo whose checkout its cwd is. */
@@ -586,7 +625,7 @@ export async function superviseRun(
     child.kill("SIGTERM");
     setTimeout(() => child.kill("SIGKILL"), 10_000).unref?.();
     // A re-adopted run (brain restart) already spent part of its budget before this brain saw it.
-  }, Math.max(1000, job.timeout_sec * 1000 - (s.elapsedMs ?? 0)));
+  }, s.elapsedMs ? Math.max(1000, job.timeout_sec * 1000 - s.elapsedMs) : job.timeout_sec * 1000);
   watchdog.unref?.();
 
   const rl = readline.createInterface({ input: child.stdout });
@@ -688,6 +727,7 @@ export async function superviseRun(
       // local run — `interrupted`, for the recovery card — with the reason naming the computer. Not a
       // failure the retry loop should replay, and nothing to review: nobody knows how far it got.
       if (child.lost) {
+        delivered.delete(runId);
         const already = runs.get(runId)?.status;
         const st: RunStatus = already === "killed" ? "killed" : "interrupted";
         runs.patch(runId, { status: st, ended_at: new Date().toISOString(), error: child.lost });
@@ -723,6 +763,9 @@ export async function superviseRun(
       // Everything from here on (park check → verifier → gates → the terminal runs.patch → review
       // queueing → run.ended) is the SAME post-run path a cloud run takes at finalize — see
       // finalizeRun below. Two finalize paths that drift is the bug that design exists to avoid.
+      // A run on a host edited ITS copy of the ticket file (the Work log): bring it home before the
+      // review reads the ticket.
+      await syncTicketFileBack(runId);
       const final = await finalizeRun(job, runId, status, err, { exitCode: code ?? null });
       resolve(final);
     });

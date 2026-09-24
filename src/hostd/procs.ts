@@ -111,6 +111,18 @@ export class HostProcs {
     this.home = o.home ?? os.homedir();
   }
 
+  /**
+   * The checkouts `exec` is held to. A scan runs `git remote get-url` per clone, and the ship pipeline
+   * makes a dozen exec calls per review — so it is kept for a minute, and rescanned once on a miss (a
+   * repo cloned since) before a directory is called foreign.
+   */
+  private scanned: { at: number; list: CheckoutInfo[] } | null = null;
+  private async isOwnDir(dir: string): Promise<boolean> {
+    if (this.scanned && Date.now() - this.scanned.at < 60_000 && insideCheckouts(dir, this.scanned.list)) return true;
+    this.scanned = { at: Date.now(), list: await this.o.checkouts() };
+    return insideCheckouts(dir, this.scanned.list);
+  }
+
   attachLink(link: TerminalsLink): void { this.link = link; }
 
   owns(ch: number): boolean { return this.chans.has(ch); }
@@ -339,7 +351,7 @@ export class HostProcs {
     if (veto) return none(veto);
     if (!isDir(spec.cwd)) return none(`cwd_missing: ${spec.cwd}`);
     // Held to what this host reported: its checkouts and their worktrees, never an arbitrary folder.
-    if (!insideCheckouts(spec.cwd, await this.o.checkouts())) return none(`outside: ${spec.cwd} is not a checkout or a worktree on this host`);
+    if (!(await this.isOwnDir(spec.cwd))) return none(`outside: ${spec.cwd} is not a checkout or a worktree on this host`);
     const env: Record<string, string> = { ...hostBaseEnv(this.home), ...expandHomeRelative(spec.env ?? {}, spec.env_home_relative ?? [], this.home) };
     let cmd: string, args: string[];
     if (typeof spec.shell === "string") {
