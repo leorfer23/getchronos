@@ -441,6 +441,19 @@ Hosts join, report vitals and capabilities, and are listed and edited on the Des
 A Desk terminal can be pinned to a connected host ("+ Terminal" picker, `POST /sessions` `host_id`,
 `mc session new --host m2`) and runs there end to end (Phase 3).
 
+**Placement (Phase 4).** A terminal that is not pinned goes wherever there is room: every open —
+the Desk's "Auto", `mc session new`, Robert, Leads, failover stand-ins, revives — runs one function
+(`place()`, `src/hosts/placement.ts`). Work that already lives somewhere stays there (a resume, a
+revive, a stand-in, a ticket whose worktree is on one Mac, a `cwd` on the brain), or is refused with
+the reason — never moved silently. Otherwise each eligible computer (online, not draining, workspace
+allowed by policy and by its veto, the CLI installed, the workspace's profile present, the repo
+cloned or `CHRONOS_HOST_AUTO_CLONE=1`, not egress-locked) is judged by the governor on its own vitals
+and scored by free capacity; the brain's score has `CHRONOS_BRAIN_RESERVE` taken off, so hosts take
+work first. When nobody has room the operator still gets the least-loaded computer and an agent is
+refused with every computer's reason. The pick and why are on the session (`placement`), in the log
+(`[placement] …`) and on the bus (`session.placed`). `mc heavy` / `mc machine` from an agent on a host
+use that host's own pool (`ncpu / 6` of that Mac) and vitals.
+
 On the brain:
 
 | Variable | Default | Meaning |
@@ -450,6 +463,8 @@ On the brain:
 | `CHRONOS_HOSTLINK_DIR` | `<root>/hostlink` | the brain cert and its key (sandbox-denied). Joined hosts and their token **hashes** live in the `hosts` table; a Phase 2 `hosts.json` found here is imported once at boot and left in place |
 | `CHRONOS_HOST_REPO_URL` | `repository` in package.json, else `https://github.com/leorfer23/getchronos` | what the join command clones on a new Mac (the package is not on npm yet) |
 | `CHRONOS_HOST_TRANSCRIPTS` | `<hostlink dir>/transcripts` | where the brain mirrors remote terminals' CLI transcripts (one `<session>.jsonl` each), which Focus and the usage ledger read |
+| `CHRONOS_PLACEMENT` | `auto` | the kill switch. `auto`: sticky, then pinned, else most headroom. `pinned`: Phase 3 — only a pinned or sticky terminal leaves the brain. `local`: every new terminal opens on the brain and a pin to another computer is refused (409); a terminal that already lives on a host still reopens there |
+| `CHRONOS_BRAIN_RESERVE` | `25` | headroom points (0–100 scale: half CPU against `CHRONOS_MAX_LOAD_PER_CORE`, half free RAM, minus 25/50 for memory pressure warning/critical) taken off the brain's score before computers are compared, so the brain — which also runs the daemon, the Desk and Robert — takes overflow, not first pick. `0` = the brain competes as an equal |
 
 Adding a host: Desk → ⋯ → **Computers** → **+ Add**, or with the admin token
 `POST /api/hosts/join-codes {name?}`. It returns a single-use code (15 minutes) and the command to
@@ -518,6 +533,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_ASK_REMIND_HOURS` | `2` | `src/config.ts` |
 | `CHRONOS_ASK_ROBERT` | — | `src/ask-robert.ts` |
 | `CHRONOS_ASK_TRIAGE_MIN` | `3` | `src/ask-robert.ts` |
+| `CHRONOS_BRAIN_RESERVE` | `25` | `src/config.ts` |
 | `CHRONOS_ATTACHMENTS` | `inRepo` | `src/attachments.ts` |
 | `CHRONOS_AUTOPLAN_MIN` | `5` | `src/config.ts` |
 | `CHRONOS_AUTO_CI_FIX` | — | `src/config.ts` |
@@ -574,7 +590,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_GROK_BIN` | `path.join` | `src/config.ts` |
 | `CHRONOS_GWS_BIN` | `"gws"` | `src/config.ts` |
 | `CHRONOS_HEARTBEAT_MIN` | `5` | `src/config.ts` |
-| `CHRONOS_HEAVY_SLOTS` | `max(1, ncpu / 6)` | `src/config.ts` |
+| `CHRONOS_HEAVY_SLOTS` | `max(1, ncpu / 6)` (the brain's pool; each host's is `ncpu / 6` of that host) | `src/config.ts` |
 | `CHRONOS_HEARTBEAT_URL` | `""` | `src/config.ts` |
 | `CHRONOS_HOLD_AGED_HOURS` | `72` | `src/config.ts` |
 | `CHRONOS_HOME` | — | `src/agent-memory.test.ts` |
@@ -629,6 +645,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_PERSONAL_HEARTBEAT_CRON` | `"*/5 * * * *"` | `src/config.ts` |
 | `CHRONOS_PERSONAL_HEARTBEAT_END` | `"22:00"` | `src/config.ts` |
 | `CHRONOS_PERSONAL_HEARTBEAT_START` | `"08:30"` | `src/config.ts` |
+| `CHRONOS_PLACEMENT` | `"auto"` | `src/config.ts` |
 | `CHRONOS_PLAN_CONCURRENCY` | `1` | `src/config.ts` |
 | `CHRONOS_PLAN_COOLDOWN_MIN` | `120` | `src/config.ts` |
 | `CHRONOS_PORT` | `"7777"` | `scripts/install-launchd.mjs` |
