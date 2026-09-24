@@ -55,6 +55,19 @@
   .counts .need.stop { color:var(--danger); }
   .counts .need:hover { text-decoration:underline; }
   header.bar .sp { flex:1; }
+  /* ── mac: this Mac's CPU / RAM / GPU, last 10 min as sparklines (machine.ts vitals) ─────────── */
+  .mchip { display:flex; align-items:center; gap:10px; border:1px solid var(--line); background:none; border-radius:8px;
+    padding:4px 9px; font:inherit; font-size:14px; color:var(--muted); cursor:pointer; font-variant-numeric:tabular-nums; }
+  .mchip:hover { background:var(--surface-2); }
+  .mchip .mv { display:flex; align-items:center; gap:5px; color:var(--ok); }
+  .mchip .mv span { color:var(--muted); }
+  .mchip .mv b { font-weight:700; color:var(--ink); min-width:3ch; text-align:right; }
+  .mchip .mv svg { display:block; overflow:visible; }
+  .mchip .mv.warn, .mchip .mv.warn b { color:var(--warn); }
+  .mchip .mv.crit, .mchip .mv.crit b { color:var(--danger); }
+  .mchip .mp { font-weight:700; color:var(--danger); }
+  .mchip.held { border-color:var(--danger); background:var(--danger-soft); }
+  .mpop .ur .w.warn { color:var(--warn); } .mpop .ur .w.crit { color:var(--danger); }
   /* ── usage: how much of each subscription is spent, as the vendor says (usage-meter.ts) ──── */
   .usage { display:flex; gap:6px; align-items:center; }
   .uchip { display:flex; align-items:center; gap:7px; border:1px solid var(--line); background:none; border-radius:8px;
@@ -915,6 +928,7 @@
   <div class="wordmark">desk<span>.</span></div>
   <div class="counts" id="counts"></div>
   <span class="sp"></span>
+  <button class="mchip" id="mac" hidden></button>
   <div class="usage" id="usage" title="Subscription usage — click for every profile and window"></div>
   <button class="btn primary" id="btn-new" title="New terminal (N) — pick Claude / Cursor / Grok + model · ⇧N with a brief">+ Terminal</button>
   <div class="tools">
@@ -924,6 +938,7 @@
 </header>
 <div class="ubanner" id="ubanner" hidden></div>
 <div class="menu upop" id="menu-usage"></div>
+<div class="menu upop mpop" id="menu-mac"></div>
 
 <div class="desk">
   <aside class="rail" id="rail">
@@ -5572,6 +5587,51 @@ qs("#usage").onclick = (e) => { const c = e.target.closest(".uchip"); if (c) ope
 async function loadUsage() { try { U.snap = await api("/usage"); renderUsage(); } catch {} }
 loadUsage();
 setInterval(loadUsage, 30000);
+
+// ── mac: CPU / RAM / GPU of this Mac + whether agents may open terminals (GET /machine) ──
+// RAM is coloured by macOS memory PRESSURE, not by %: a Mac at 90% used with pressure normal is fine.
+const M = { snap: null };
+const mLevel = (p) => (p == null ? "" : p >= 95 ? "crit" : p >= 80 ? "warn" : "");
+const mPressLevel = (lvl) => (lvl === 4 ? "crit" : lvl === 2 ? "warn" : "");
+function mSpark(vals) {
+  const w = 44, h = 14, pts = vals.filter((v) => v != null);
+  if (pts.length < 2) return `<svg width="${w}" height="${h}"></svg>`;
+  const step = w / (pts.length - 1);
+  const d = pts.map((v, i) => `${(i * step).toFixed(1)},${(h - (Math.min(100, v) / 100) * h).toFixed(1)}`).join(" ");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline points="${d}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+const mPct = (v) => (v == null ? "—" : Math.round(v) + "%");
+function renderMac() {
+  const s = M.snap, el = qs("#mac");
+  const hist = s?.vitals?.history || [];
+  if (!hist.length) { el.hidden = true; return; }
+  const last = hist[hist.length - 1];
+  const seg = (k, label, lv) => `<span class="mv ${lv}"><span>${label}</span><b>${mPct(last[k])}</b>${mSpark(hist.map((x) => x[k]))}</span>`;
+  const held = s.admission && !s.admission.ok;
+  el.hidden = false;
+  el.className = "mchip" + (held ? " held" : "");
+  el.title = held ? "Agents can't open terminals — " + s.admission.reason : "This Mac, last 10 minutes — click for load, memory pressure and heavy slots";
+  el.innerHTML = seg("cpu", "CPU", mLevel(last.cpu)) + seg("ram", "RAM", mPressLevel(s.pressureLevel)) + (last.gpu == null ? "" : seg("gpu", "GPU", mLevel(last.gpu))) + (held ? `<span class="mp">⏸ agents</span>` : "");
+}
+function openMac(anchor) {
+  const s = M.snap; if (!s) return;
+  const ram = s.vitals?.ram, last = s.vitals.history[s.vitals.history.length - 1] || {};
+  const gb = (mb) => (mb / 1024).toFixed(1);
+  const row = (n, v, sub, lv = "") => `<div class="ur"><span class="n">${n}</span><span class="w ${lv}">${v}</span><span class="s">${sub}</span></div>`;
+  const hv = s.heavy || { slots: 0, holders: [], waiting: 0 };
+  qs("#menu-mac").innerHTML = [
+    row("New agent terminals", s.admission.ok ? "allowed" : "held", s.admission.ok ? "you can always open one by hand" : esc(s.admission.reason), s.admission.ok ? "" : "crit"),
+    row("CPU", mPct(last.cpu), `load ${s.load1.toFixed(1)} on ${s.ncpu} cores · ${s.loadPerCore.toFixed(2)}/core`, mLevel(last.cpu)),
+    row("RAM", mPct(last.ram), `${ram ? gb(ram.usedMb) + " of " + gb(ram.totalMb) + " GB · " : ""}pressure ${esc(s.pressure)} · swap ${s.swapUsedPct == null ? "—" : Math.round(s.swapUsedPct) + "%"}`, mPressLevel(s.pressureLevel)),
+    last.gpu == null ? "" : row("GPU", mPct(last.gpu), "device utilization", mLevel(last.gpu)),
+    row("Heavy slots", `${hv.holders.length}/${hv.slots}`, hv.holders.length ? esc(hv.holders.map((x) => x.label).join(" · ")) + (hv.waiting ? ` · ${hv.waiting} waiting` : "") : "no full suite running"),
+  ].join("");
+  openMenu(qs("#menu-mac"), anchor);
+}
+qs("#mac").onclick = () => openMac(qs("#mac"));
+async function loadMac() { if (document.hidden) return; try { M.snap = await api("/machine"); renderMac(); } catch {} }
+loadMac();
+setInterval(loadMac, 5000);
 
 dwNames();
 setMode(S.mode);

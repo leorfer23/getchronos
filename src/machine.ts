@@ -14,7 +14,7 @@
  */
 import os from "node:os";
 import fs from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { CONFIG } from "./config.js";
 import { bus } from "./bus.js";
@@ -369,10 +369,93 @@ export function slotQueue(): Array<{ ticket: string; label: string; polling: boo
   return queue.map((w) => ({ ticket: w.ticket, label: w.label, polling: !!w.poll, since: w.since }));
 }
 
+// ───────────────────────────── 4. vitals: what the Desk header draws ─────────────────────────────
+
+/**
+ * CPU / RAM / GPU as the operator reads them in Activity Monitor, sampled every VITALS_EVERY_MS into
+ * a ring the Desk header draws as sparklines. Display only — admission never reads these; it keeps
+ * judging by load and memory PRESSURE (a Mac at 90% RAM with pressure "normal" is fine).
+ */
+export type Vitals = { at: number; cpu: number | null; ram: number | null; gpu: number | null };
+export type RamReading = { usedMb: number; totalMb: number };
+
+export const VITALS_EVERY_MS = 5000;
+export const VITALS_KEEP = 120; // 10 minutes
+let vitals: Vitals[] = [];
+let lastRam: RamReading | null = null;
+
+/**
+ * `vm_stat` → "Memory Used" the way Activity Monitor counts it: app memory (anonymous minus
+ * purgeable) + wired + compressor. `os.freemem()` is useless on macOS — the kernel keeps free pages
+ * near zero by filling them with file cache, so it always reads ~98% used.
+ */
+export function parseVmStat(out: string, totalBytes: number): RamReading | null {
+  const page = Number(/page size of (\d+) bytes/.exec(out)?.[1]);
+  const n = (label: string) => {
+    const m = new RegExp(`${label}:\\s+(\\d+)`).exec(out);
+    return m ? Number(m[1]) : null;
+  };
+  const anon = n("Anonymous pages"), purge = n("Pages purgeable"), wired = n("Pages wired down"), comp = n("Pages occupied by compressor");
+  if (!page || anon == null || wired == null || comp == null || !totalBytes) return null;
+  const used = (Math.max(0, anon - (purge ?? 0)) + wired + comp) * page;
+  return { usedMb: Math.min(used, totalBytes) / 1048576, totalMb: totalBytes / 1048576 };
+}
+
+/** `ioreg -c IOAccelerator` → Apple GPU "Device Utilization %"; the busiest accelerator wins. */
+export function parseGpuUtil(out: string): number | null {
+  const all = [...out.matchAll(/"Device Utilization %"\s*=\s*(\d+)/g)].map((m) => Number(m[1]));
+  return all.length ? Math.min(100, Math.max(...all)) : null;
+}
+
+/** CPU busy % between two `os.cpus()` snapshots, all cores together. */
+export function cpuBusyPct(prev: os.CpuInfo[], next: os.CpuInfo[]): number | null {
+  let busy = 0, total = 0;
+  for (let i = 0; i < Math.min(prev.length, next.length); i++) {
+    const a = prev[i].times, b = next[i].times;
+    const idle = b.idle - a.idle;
+    const all = b.user - a.user + (b.nice - a.nice) + (b.sys - a.sys) + (b.irq - a.irq) + idle;
+    busy += all - idle;
+    total += all;
+  }
+  return total > 0 ? Math.min(100, Math.max(0, (busy / total) * 100)) : null;
+}
+
+function run(cmd: string, args: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { encoding: "utf8", timeout: 2000 }, (err, out) => resolve(err ? null : out));
+  });
+}
+
+let cpuPrev = os.cpus();
+async function sampleVitals(): Promise<void> {
+  const cpuNow = os.cpus();
+  const cpu = cpuBusyPct(cpuPrev, cpuNow);
+  cpuPrev = cpuNow;
+  let ram: RamReading | null = null, gpu: number | null = null;
+  if (process.platform === "darwin") {
+    // Async on purpose: the daemon's event loop also carries every live pty.
+    const [vm, io] = await Promise.all([run("/usr/bin/vm_stat", []), run("/usr/sbin/ioreg", ["-r", "-d", "1", "-c", "IOAccelerator"])]);
+    ram = vm ? parseVmStat(vm, os.totalmem()) : null;
+    gpu = io ? parseGpuUtil(io) : null;
+  } else {
+    const total = os.totalmem();
+    ram = { usedMb: (total - os.freemem()) / 1048576, totalMb: total / 1048576 };
+  }
+  lastRam = ram;
+  vitals.push({ at: Date.now(), cpu, ram: ram ? (ram.usedMb / ram.totalMb) * 100 : null, gpu });
+  if (vitals.length > VITALS_KEEP) vitals = vitals.slice(-VITALS_KEEP);
+}
+
+export function vitalsSnapshot(): { every_ms: number; ram: RamReading | null; history: Vitals[] } {
+  return { every_ms: VITALS_EVERY_MS, ram: lastRam, history: vitals };
+}
+
 let wired = false;
 export function startMachineGovernor(): void {
   if (wired) return;
   wired = true;
+  void sampleVitals();
+  setInterval(() => void sampleVitals(), VITALS_EVERY_MS).unref?.();
   bus.on("event", (e: any) => {
     if (e?.topic === "session.ended") releaseForSession(e.session_id);
   });

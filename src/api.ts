@@ -153,7 +153,7 @@ import {
   QuickActionsSchema, HeavySlotSchema,
   ReportSchema, LeadBroadcastSchema, LeadAdoptSchema, BoardAddSchema, BoardPatchSchema, PatchAccelSchema,
   BuildGraphifySchema, QueryGraphifySchema } from "./validation.js";
-import { abandonPoll, acquireSlot, admission, beatSlot, currentLoad, heavySlotCount, pressureWord, releaseSlot, slotHolders, slotQueue, swapPctOf } from "./machine.js";
+import { abandonPoll, acquireSlot, admission, beatSlot, currentLoad, heavySlotCount, pressureWord, releaseSlot, slotHolders, slotQueue, swapPctOf, vitalsSnapshot } from "./machine.js";
 import { kv } from "./store/kv.js";
 import { noteClaudeStatusline, usageSnapshot } from "./usage-meter.js";
 import { defaultQuickActions, QUICK_ACTIONS_KV, type QuickAction } from "./quick-actions.js";
@@ -1824,6 +1824,7 @@ export function startServer() {
       swapUsedPct: swapPctOf(load),
       admission: admission(load),
       heavy: { slots: heavySlotCount(), holders: slotHolders(), waiting: slotQueue().length },
+      vitals: vitalsSnapshot(),
     });
   });
   // Heavy slots: `mc heavy -- <cmd>` long-polls here for one of N machine-wide permits, so five
