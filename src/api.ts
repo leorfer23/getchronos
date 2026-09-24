@@ -153,7 +153,8 @@ import {
   QuickActionsSchema, HeavySlotSchema,
   ReportSchema, LeadBroadcastSchema, LeadAdoptSchema, BoardAddSchema, BoardPatchSchema, PatchAccelSchema,
   BuildGraphifySchema, QueryGraphifySchema } from "./validation.js";
-import { abandonPoll, acquireSlot, admission, beatSlot, currentLoad, heavySlotCount, pressureWord, releaseSlot, slotHolders, slotQueue, swapPctOf, vitalsSnapshot } from "./machine.js";
+import { pressureWord, swapPctOf } from "./machine.js";
+import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
 import { kv } from "./store/kv.js";
 import { noteClaudeStatusline, usageSnapshot } from "./usage-meter.js";
 import { defaultQuickActions, QUICK_ACTIONS_KV, type QuickAction } from "./quick-actions.js";
@@ -1815,21 +1816,27 @@ export function startServer() {
   // How loaded the Mac itself is, and whether an AGENT would currently be allowed to open a terminal
   // on it (the operator always is). Read-only and machine-wide, so it is scoped only to the extent
   // every read is: a valid token, no workspace to compare against.
+  //
+  // "The Mac" is the brain's own host (HOSTS.md). Per-host vitals and a chip per computer arrive with
+  // the hosts themselves in phase 2; until then this reads exactly what it always has.
   api.get("/machine", (req, res) => {
     if (!checkScope(req, res, null)) return;
-    const load = currentLoad();
+    const host = hostById(LOCAL_HOST_ID);
+    const { load, admission, samples } = host.vitals();
     res.json({
       ...load,
       pressure: pressureWord(load.pressureLevel),
       swapUsedPct: swapPctOf(load),
-      admission: admission(load),
-      heavy: { slots: heavySlotCount(), holders: slotHolders(), waiting: slotQueue().length },
-      vitals: vitalsSnapshot(),
+      admission,
+      heavy: { slots: host.slots.size(), holders: host.slots.holders(), waiting: host.slots.waiting() },
+      vitals: samples,
     });
   });
   // Heavy slots: `mc heavy -- <cmd>` long-polls here for one of N machine-wide permits, so five
   // agents cannot each start a full vitest pool in the same minute. In-memory on purpose — a slot
-  // outliving a daemon restart would be a permit nobody can release.
+  // outliving a daemon restart would be a permit nobody can release. The pool is per host; every
+  // `mc heavy` runs on the brain until hosts forward their own (HOSTS.md phase 4).
+  const heavySlots = hostById(LOCAL_HOST_ID).slots;
   api.post("/machine/slots", validate(HeavySlotSchema), async (req, res) => {
     if (!checkScope(req, res, null)) return;
     // The ticket is minted HERE, before the await, so the hang-up handler below can name this exact
@@ -1838,21 +1845,21 @@ export function startServer() {
     // RESPONSE close, not request close: `req` emits "close" as soon as its body has been read, which
     // is immediately — wiring the hang-up handler there abandoned every poll on arrival and turned
     // the long poll into a busy loop. `res` closes early only when the client really went away.
-    res.on("close", () => { if (!res.writableEnded) abandonPoll(ticket); });
-    const grant = await acquireSlot({ session_id: req.body.session_id ?? null, label: req.body.label, ticket }, 55_000);
+    res.on("close", () => { if (!res.writableEnded) heavySlots.abandon(ticket); });
+    const grant = await heavySlots.acquire({ session_id: req.body.session_id ?? null, label: req.body.label, ticket }, 55_000);
     // The caller may have hung up while we were parked (that is what woke us) — nothing to answer.
     if (res.writableEnded || !res.writable) return;
     // The count rides along so a refused caller can print "2/2 busy" without a second round trip.
-    res.json({ ...grant, slots: heavySlotCount() });
+    res.json({ ...grant, slots: heavySlots.size() });
   });
   api.put("/machine/slots/:id", (req, res) => {
     if (!checkScope(req, res, null)) return;
-    if (!beatSlot(req.params.id)) return res.status(404).json({ error: "slot not held (reclaimed?)" });
+    if (!heavySlots.beat(req.params.id)) return res.status(404).json({ error: "slot not held (reclaimed?)" });
     res.json({ ok: true });
   });
   api.delete("/machine/slots/:id", (req, res) => {
     if (!checkScope(req, res, null)) return;
-    res.json({ released: releaseSlot(req.params.id) });
+    res.json({ released: heavySlots.release(req.params.id) });
   });
 
   api.get("/stats", (_req, res) => {
