@@ -461,7 +461,8 @@ On the brain:
 | `CHRONOS_HOST_LISTEN` | off | the dedicated LAN listener, e.g. `0.0.0.0:7779`. TLS with a self-signed brain cert (made on first use with `/usr/bin/openssl`), pinned by hosts at join. Serves `/host` WebSocket upgrades with a host token and a bare 404 for everything else |
 | `CHRONOS_HOST_PUBLIC_URL` | — | the `wss://<desk-domain>/host` tunnel URL(s), comma-separated, advertised in join codes. The tunnel door (`/host` on the loopback API) is always there and always needs a host token |
 | `CHRONOS_HOSTLINK_DIR` | `<root>/hostlink` | the brain cert and its key (sandbox-denied). Joined hosts and their token **hashes** live in the `hosts` table; a Phase 2 `hosts.json` found here is imported once at boot and left in place |
-| `CHRONOS_HOST_REPO_URL` | `repository` in package.json, else `https://github.com/leorfer23/getchronos` | what the join command clones on a new Mac (the package is not on npm yet) |
+| `CHRONOS_HOST_REPO_URL` | `repository` in package.json, else `https://github.com/leorfer23/getchronos` | what the git join command clones on a new Mac |
+| `CHRONOS_HOST_INSTALL` | `git` | how the join command installs Chronos on a new Mac: `git` (clone + `npm ci` into `$HOME/.chronos-host/app`) or `npm` (`npx -y getchronos@<the brain's version> host join …` — only once the package is published) |
 | `CHRONOS_HOST_TRANSCRIPTS` | `<hostlink dir>/transcripts` | where the brain mirrors remote terminals' CLI transcripts (one `<session>.jsonl` each), which Focus and the usage ledger read |
 | `CHRONOS_PLACEMENT` | `auto` | the kill switch. `auto`: sticky, then pinned, else most headroom. `pinned`: Phase 3 — only a pinned or sticky terminal leaves the brain. `local`: every new terminal opens on the brain and a pin to another computer is refused (409); a terminal that already lives on a host still reopens there |
 | `CHRONOS_BRAIN_RESERVE` | `25` | headroom points (0–100 scale: half CPU against `CHRONOS_MAX_LOAD_PER_CORE`, half free RAM, minus 25/50 for memory pressure warning/critical) taken off the brain's score before computers are compared, so the brain — which also runs the daemon, the Desk and Robert — takes overflow, not first pick. `0` = the brain competes as an equal |
@@ -472,20 +473,38 @@ paste on the new Mac — `commands.lan` when the listener is up, `commands.tunne
 `CHRONOS_HOST_PUBLIC_URL` is set, `command` the best of the two:
 
 ```bash
-{ [ -d ~/.chronos-host/app/.git ] && git -C ~/.chronos-host/app pull --ff-only || git clone <CHRONOS_HOST_REPO_URL> ~/.chronos-host/app; } \
-  && cd ~/.chronos-host/app && npm ci && npm run host -- join <url> <code>
+node -e '<fails unless node is 22–26>' && D="$HOME/.chronos-host/app" \
+  && { [ -d "$D/.git" ] && git -C "$D" fetch -q origin main && git -C "$D" reset -q --hard FETCH_HEAD || git clone -q <CHRONOS_HOST_REPO_URL> "$D"; } \
+  && cd "$D" && npm ci --no-audit --no-fund && npm run host -- join <url> <code>
+# CHRONOS_HOST_INSTALL=npm:
+node -e '…' && npx -y getchronos@<version> host join <url> <code>
 ```
 
-`npm run host` runs `src/hostd` through tsx, so there is no build step. `GET /api/hosts` lists every
+`npm run host` (and `npx getchronos host`) enters through `bin/getchronos.mjs`, which runs a
+dependency-free preflight — node range, a finished `npm ci`, a git that can fetch over https — and
+prints one pasteable fix per failure before loading `src/hostd` through tsx (or `dist/` in the npm
+package); there is no build step for a clone. `GET /api/hosts` lists every
 computer (never a token hash): link, vitals history, admission, live terminals, and a checklist per
 workspace (allowed?, profile logged in?, repos cloned?). `PATCH /api/hosts/:id`
 `{name?, policy?: {deny: [workspace id or slug]}, status?: "draining"|"online"|"disabled", reserve?}`
 edits one; `DELETE /api/hosts/:id` revokes it (status `disabled`, token hash forgotten, link dropped —
 re-joining is the only way back). `GET /api/hosts/links` is the raw link list.
 
-On the host — `npm run host -- join <url> <code>` writes these into `~/.chronos-host/.secrets` (mode
-600) and installs `~/Library/LaunchAgents/sh.chronos.host.plist`. `npm run host -- doctor` prints the
-setup checklist; `npm run host -- status` shows the live link.
+Updates (HOSTS.md → Updating a host): each computer in `GET /api/hosts` carries `version`, `commit`,
+`install` (`git` | `npm` | `dev`, null for a host older than self-update) and `update` —
+`{available, supported, target: {version, commit}, manual, status}`. `POST /api/hosts/:id/update`
+asks one connected host to update to what the brain runs (its version + `git rev-parse HEAD`);
+`POST /api/hosts/update-all` asks every connected one that is behind (`{started, skipped}`). The host
+builds the new version beside the running one and only swaps and restarts after it installed and
+passed its own preflight; its terminals come back `--resume` on the same host.
+
+On the host — `join` writes these into `~/.chronos-host/.secrets` (mode 600) and installs
+`~/Library/LaunchAgents/sh.chronos.host.plist`, which runs `bin/getchronos.mjs host run` under the node
+that installed it (by Homebrew's `opt/<formula>` path when that is the same binary, so `brew cleanup`
+cannot delete it from under launchd). `host doctor` prints the setup checklist, `host status` the live
+link and installed version, `host update` updates by hand, `host uninstall [--purge]` removes the
+LaunchAgent (and with `--purge` the whole `~/.chronos-host`). From a clone: `npm run host -- <cmd>`;
+from npm: `npx getchronos host <cmd>`.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -496,7 +515,8 @@ setup checklist; `npm run host -- status` shows the live link.
 | `CHRONOS_HOST_AUTO_CLONE` | `0` | `1` = a terminal for a repo this Mac has no checkout of clones it into the first `CHRONOS_HOST_ROOTS` entry; otherwise the spawn is refused with the remote named |
 | `CHRONOS_HOST_ROOTS` | `~/Documents/GitHub` | where to look for checkouts (comma- or colon-separated): each root, its children, and one grouping level below (`<root>/<client>/<repo>`) |
 | `CHRONOS_HOST_MC_PORT` | `7777`, then `7787`–`7796` | the loopback `mc` forwarder agents' `MC_API` points at. Unset, it takes 7777 or — when that is taken, e.g. by a Chronos daemon on the same Mac — the first free port of 7787–7796; set it to pin one |
-| `CHRONOS_HOST_HOME` | `~/.chronos-host` | the host's state dir (`.secrets`, logs) |
+| `CHRONOS_HOST_HOME` | `~/.chronos-host` | the host's state dir (`.secrets`, logs) and its code (`app/`: the clone, or npm's install of `getchronos`; `app.prev/` is the version before the last update) |
+| `CHRONOS_HOST_PACKAGE_SPEC` | `getchronos@<version>` | what an npm-installed host installs on join and update — a mirror, or a local `.tgz` to test a package before it is published |
 | `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` | — | Cloudflare Access service token, sent only to tunnel (CA-verified) URLs, never to a LAN IP |
 
 ### Retention
