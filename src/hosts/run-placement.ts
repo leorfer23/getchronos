@@ -45,7 +45,7 @@ import { worktreeRootFor } from "../worktree-core.js";
 import { REPO_ROOT } from "../repo-root.js";
 import type { Job, Repo, Ticket } from "../types.js";
 import { remoteHosts } from "./index.js";
-import { placementCandidates, ticketWorktreeHost } from "./candidates.js";
+import { carriesCursorKey, placementCandidates, ticketWorktreeHost } from "./candidates.js";
 import { place, type PlaceRequest, type Placement } from "./placement.js";
 import { brainOnlyPathsIn, tokenizePaths } from "./proc-spec.js";
 import { profileNameFor } from "./spawn-spec.js";
@@ -132,6 +132,7 @@ function request(job: Pick<Job, "name" | "backend" | "workspace_id" | "sandbox">
       brokered: egressBrokered(job.workspace_id),
       procs: true,
       gh: NEEDS_GH.includes(kindOf(job.name)),
+      cursor_key: carriesCursorKey(ws),
     },
     pinned: null,
     sticky,

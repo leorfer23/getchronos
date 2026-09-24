@@ -282,3 +282,25 @@ test("CHRONOS_PLACEMENT=local refuses pins elsewhere but still reopens a termina
   assert.equal(hostOf(run(req({ pinned: "local" }), hosts, { mode: "local" })), "local");
   assert.equal(hostOf(run(req({ sticky: { host_id: "m2", why: "x" }, fresh: false }), hosts, { mode: "local" })), "m2");
 });
+
+// The first real host had grok installed and never logged in: installed is not runnable.
+test("a CLI a host reports as not logged in is not placed there; unknown/absent still is", () => {
+  const brainIdle = brain({ load: load(1.5) });
+  const grokReq = req({ backend: "grok", profile: "claude" });
+  const m2 = host("m2", { clis: ["grok", "cursor-agent"], unauthed: ["grok"] });
+  assert.equal(hostOf(run(grokReq, [brainIdle, m2])), "local");
+  const m2ok = host("m2", { clis: ["grok", "cursor-agent"], unauthed: [] });
+  assert.equal(hostOf(run(grokReq, [brainIdle, m2ok])), "m2");
+  // Pinned to it: refused with the reason, never silently moved.
+  const pinned = run({ ...grokReq, pinned: "m2" }, [brainIdle, m2]);
+  assert.equal(pinned.ok, false);
+  assert.match((pinned as any).message, /grok not logged in/);
+});
+
+test("cursor-agent not logged in is fine when the spawn carries CURSOR_API_KEY", () => {
+  const brainIdle = brain({ load: load(1.5) });
+  const m2 = host("m2", { unauthed: ["cursor-agent"] });
+  const cur = req({ backend: "cursor-agent", profile: "claude" });
+  assert.equal(hostOf(run(cur, [brainIdle, m2])), "local");
+  assert.equal(hostOf(run({ ...cur, needs: { ...cur.needs, cursor_key: true } }, [brainIdle, m2])), "m2");
+});

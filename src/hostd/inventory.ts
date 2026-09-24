@@ -65,9 +65,47 @@ export async function probeClis(names: readonly string[] = CLI_NAMES): Promise<C
   return Promise.all(
     names.map(async (name) => {
       const p = which(name);
-      return { name, path: p, version: p ? await firstLine(p, ["--version"]) : null };
+      const info: CliInfo = { name, path: p, version: p ? await firstLine(p, ["--version"]) : null };
+      const auth = p ? await cliAuth(name, p) : undefined;
+      return auth ? { ...info, auth } : info;
     }),
   );
+}
+
+/**
+ * Is this CLI logged in here? Installed is not enough: the first real host had grok installed and never
+ * logged in, and placement would have sent it grok terminals that die on a login screen. Only cheap,
+ * local signals — never a model call:
+ *  - grok: its own auth file exists (what `grok` login writes).
+ *  - cursor-agent: CURSOR_API_KEY in this process's env, else `cursor-agent status`. Run from the host's
+ *    LaunchAgent that reads the login keychain; from an SSH shell the keychain is locked and the answer
+ *    is "unknown", never "no".
+ * claude is left out on purpose: its login is per PROFILE, and profiles are reported separately.
+ * opencode too: it runs on a gateway key the brain sends (AI_GATEWAY_API_KEY), with no local login.
+ */
+export async function cliAuth(name: string, bin: string, env: NodeJS.ProcessEnv = process.env, home = os.homedir()): Promise<CliInfo["auth"]> {
+  switch (name) {
+    case "grok":
+      return fs.existsSync(path.join(env.GROK_HOME || path.join(home, ".grok"), "auth.json")) ? "yes" : "no";
+    case "cursor-agent": {
+      if (env.CURSOR_API_KEY) return "yes";
+      const out = await new Promise<string>((resolve) =>
+        execFile(bin, ["status"], { encoding: "utf8", timeout: 15_000 }, (_e, o, e) => resolve(`${o ?? ""}\n${e ?? ""}`)),
+      );
+      return cursorAuthFrom(out);
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** `cursor-agent status` → yes / no / unknown. A locked keychain or a timeout is not a "no". */
+export function cursorAuthFrom(out: string): "yes" | "no" | "unknown" {
+  const t = out.replace(/\x1b\[[0-9;]*m/g, "");
+  if (/keychain is locked|unlock-keychain/i.test(t)) return "unknown";
+  if (/not (logged|signed) in|log ?in required|please (log|sign) ?in/i.test(t)) return "no";
+  if (/(logged|signed) in (as|with)|✓ ?logged in|authenticated/i.test(t)) return "yes";
+  return "unknown";
 }
 
 /**

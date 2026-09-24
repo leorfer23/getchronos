@@ -122,7 +122,7 @@ export function updateVerdict(brain: UpdateTarget, host: { version: string | nul
 // ── end phase 6 ──
 
 export type Checklist = {
-  clis: Array<{ name: string; ok: boolean; version: string | null }>;
+  clis: Array<{ name: string; ok: boolean; version: string | null; auth?: "yes" | "no" | "unknown" }>;
   profiles: Array<{ name: string; ok: boolean }>;
   /** Every workspace: may it run here (brain policy, host veto), and are its repos checked out. */
   workspaces: Array<{
@@ -165,7 +165,12 @@ export function checklistFor(row: HostRow, caps: Pick<HostCapabilities, "clis" |
   const checkouts = new Map(repoCheckouts.forHost(row.id).map((c) => [c.repo_id, c.path]));
   const profiles = caps?.profiles ?? [];
   return {
-    clis: (caps?.clis ?? []).map((c) => ({ name: c.name, ok: !!c.path, version: c.version ?? null })),
+    // "ok" is "placement may send this CLI's work here": installed AND not reported as logged out.
+    clis: (caps?.clis ?? []).map((c) => ({
+      name: c.name, ok: !!c.path && c.auth !== "no",
+      version: c.path && c.auth === "no" ? `${c.version ?? "installed"} · not logged in` : c.version ?? null,
+      ...(c.auth ? { auth: c.auth } : {}),
+    })),
     profiles: profiles.map((p) => ({ name: p.name, ok: !!p.exists })),
     workspaces: workspaces.list().map((w) => {
       const byPolicy = policy.deny.includes(w.id) || policy.deny.includes(w.slug);
