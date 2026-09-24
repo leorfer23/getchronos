@@ -1,5 +1,5 @@
 import type { ExternalTask, Connector, ExternalComment } from "./types.js";
-import { mapStatus, normalizePriority, adfToText } from "./types.js";
+import { mapStatus, normalizePriority, adfToText, adfMentions } from "./types.js";
 
 // Jira connector. connector_config: { base_url, email, api_token, jql?, status_map?, status_transitions? }.
 // API: REST v3, Basic auth (email:api_token).
@@ -94,6 +94,7 @@ export const jira: Connector = {
         author_id: c.author?.accountId ?? undefined,
         body: adfToText(c.body).trim(),
         created: c.created ?? null,
+        mentions: adfMentions(c.body),
       }));
       return {
         id: String(i.key),
@@ -105,6 +106,7 @@ export const jira: Connector = {
         description: adfToText(f.description).trim() || null,
         priority: normalizePriority(f.priority?.name),
         assignee: f.assignee?.displayName ?? null,
+        assignee_ids: f.assignee?.accountId ? [String(f.assignee.accountId)] : [],
         labels: Array.isArray(f.labels) ? f.labels : [],
         due: f.duedate ?? null,
         comments,

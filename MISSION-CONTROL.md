@@ -234,7 +234,7 @@ backlog ──auto_plan──▶ planning ──plan saved──▶ planned ─�
 starts at a ticket, which means the operator is still the one who has to notice that a Slack thread,
 a meeting that just ended, a review comment or a red CI run *is work*. This scheduled read-only sweep
 (default 07:00 on weekdays) reads the signals a repo-only miner can't see — Slack **channels** (DMs
-and @mentions stay with `slack-triage`), meetings that ended in the last day (`mc cal`), unresolved
+and @mentions stay with `slack-triage`, which files them into the workspace inbox), meetings that ended in the last day (`mc cal`), unresolved
 PR review comments (`gh`), blocked delivery, the external tracker, and the operator's own memos —
 and files **spec-complete drafts** into the idea pool: title, a pitch that cites the signal it came
 from, and `--acceptance`, which becomes the promoted ticket's acceptance criteria **verbatim**
@@ -242,6 +242,35 @@ from, and `--acceptance`, which becomes the promoted ticket's acceptance criteri
 listing what it found, with **Take all N** (`POST /api/ideas/promote {ids}`), or batch-triage in the
 Ideas view (`P` promotes the selection). Sources are computed from what the workspace actually has,
 so an agent is never sent looking for Slack tools that aren't installed.
+
+**The workspace inbox — "something needs you"** (`src/inbox.ts`, `src/inbox-dispatch.ts`,
+`src/inbox-routes.ts`, table `inbox_items`, migration 138): one place per client for what came *to the
+operator*, as opposed to what the fleet found to do. Two feeds, neither of which ever starts work:
+- **Slack** — the read-only `slack-triage:<slug>` job (haiku, business-hours cron, gated by
+  `slack_config.triage`) files each new DM / @mention / self-note with `mc inbox add --source slack
+  --kind dm|mention|self_note --title … --why … --actor … --url <permalink> --key <channel:ts>
+  [--urgent]` (`POST /api/workspaces/:id/inbox`, that workspace's token or admin). It no longer files
+  tickets. `--urgent` (a person asking a direct question / request) is the only thing that pushes to
+  Telegram, and only for a Slack `dm`/`mention`.
+- **Trackers** — every connector sync diffs the Jira/ClickUp pull against the last one (snapshot in
+  `kv` `inbox.tracker:<ws>:<source>`) and files, at zero model cost: a task newly assigned to the
+  operator (`Connector.me()`, cached per workspace on success), a new comment that @mentions him or
+  sits on his task (never his own), a status move on his task (unless Chronos pushed that status).
+  The first diff for a workspace records the baseline and files nothing; a pull with more than 10
+  brand-new tasks is read as a changed query and reseeds silently. Dedup keys like
+  `jira:ANA-12:comment:<id>`, unique per workspace+source. Tracker rows never push.
+  Limit: Jira's default JQL only pulls his own tasks, so a mention on someone else's task is only seen
+  when `connector_config.jql` widens the pull.
+
+Every field is `guard()`ed at ingestion (it later reaches an agent prompt). On the Desk, 📥 on the bar
+carries the unread count (`/api/desk` → `inbox`); the page lists rows grouped by client, newest first,
+with **Dispatch / Later (2h · tomorrow 9:00) / ✕**. API: `GET /api/inbox` (scoped token → its client
+only), `GET /api/workspaces/:id/inbox`, and admin-only `POST /api/inbox/:id/dismiss|snooze|dispatch`
+(each checks the row's workspace first — another client's token gets a 404). **Dispatch is the only
+door from a row to work**: it opens a new Desk terminal in that client (workspace default backend,
+`goal_kind: investigation`, `created_by: operator`) whose first prompt carries the item — source, what,
+why, who, link, tracker key + Chronos ticket — and tells it to investigate and propose, and never to
+post to Slack/Jira/ClickUp or message anyone without `mc ask`. The row records the session id.
 
 Autonomy is per-workspace and independently toggleable (also from Telegram): `auto_plan`, `auto_build`,
 `auto_review`, `auto_skill` (auto-publish agent skills), `skill_distill` (distill a skill on ticket done).
@@ -699,6 +728,9 @@ GET /workspaces/:id/skills   GET /skills/:id   POST /workspaces/:id/skills   PAT
 POST* /skills/:id/{approve,reject,archive}   DELETE* /skills/:id
 GET/POST /calendars   PATCH/DELETE /calendars/:id   POST /calendars/{refresh,ingest,import-local}
 GET  /calendar?from=&to=&workspace=      GET /search?q=&workspace=&kind=&since=
+
+# workspace inbox (§5 "The workspace inbox")
+GET /inbox?workspace=&all=   GET/POST /workspaces/:id/inbox   POST* /inbox/:id/{dismiss,snooze,dispatch}
 ```
 
 The Express server also serves the native overlay at `/overlay.html` (verbatim HTML via
@@ -732,6 +764,7 @@ goal set|done|clear   goal add|list|drop|reopen  (this terminal's finish line, o
 ask "question" [--options a,b]   asks            (mc ask; asks = open asks list)
 answer <id8> "text"                              (operator/Robert side of mc ask)
 tell <TICKET> "directive"   inbox                (operator/Robert → worker mailbox, §5b)
+inbox add|list                                   (the workspace inbox: Slack triage files here — §5)
 ```
 
 `mc note` is how a worker speaks on the ticket timeline: it appends to the ticket's Work log.

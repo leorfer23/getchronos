@@ -1002,3 +1002,20 @@ export const HostPatchSchema = z
     reserve: z.record(z.string().min(1).max(32), z.number().min(0).max(1_000_000)).nullable().optional(),
   })
   .refine((b) => Object.values(b).some((v) => v !== undefined), { message: "nothing to change" });
+
+// The workspace inbox (src/inbox.ts). What `mc inbox add` posts — the Slack triage filing a DM,
+// @mention or self-note. Tracker rows never come through here; the connector sync files those itself.
+export const NewInboxItemSchema = z.object({
+  source: z.enum(["slack", "jira", "clickup"]).default("slack"),
+  kind: z.enum(["dm", "mention", "self_note", "assigned", "comment", "status"]),
+  key: z.string().trim().min(1).max(300),
+  title: z.string().trim().min(1).max(500),
+  why: z.string().trim().max(1000).optional(),
+  body: z.string().max(8000).optional(),
+  url: z.string().trim().max(1000).optional(),
+  actor: z.string().trim().max(200).optional(),
+  ref: z.string().trim().max(120).optional(),
+  urgent: z.boolean().optional(),
+});
+// Snooze until — same grammar as `mc pad follow`: 2h, +1d, tomorrow 9:00, monday 10, an ISO stamp.
+export const InboxSnoozeSchema = z.object({ until: z.string().trim().min(1).max(80) });

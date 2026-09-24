@@ -8,6 +8,7 @@ import { clickup } from "./clickup.js";
 import { jira } from "./jira.js";
 import { externalStatusFor } from "./types.js";
 import { harvestComments, markPushed } from "../prose.js";
+import { emitTrackerInbox, operatorId } from "../inbox.js";
 import type { Connector } from "./types.js";
 import { isClosedTicketStatus, type Ticket, type TicketRow, type TicketStatus, type Workspace } from "../types.js";
 
@@ -59,6 +60,29 @@ export async function syncWorkspace(ws: Workspace): Promise<SyncResult> {
     const external = await conn.pull(cfg);
     res.pulled = external.length;
     const seen = new Set<string>();
+
+    // Who the operator is on this tracker — the inbox diff and the prose harvest both key on it.
+    const me = conn.me ? await operatorId(ws.id, () => conn.me!(cfg)) : null;
+
+    // The workspace inbox (src/inbox.ts): what changed FOR the operator since the last pull. Runs
+    // before the mirror loop so "does Chronos already mirror this task?" means before this sync.
+    // Notifications only — nothing here starts work. Best-effort: the mirror must never fail on it.
+    if (me && (conn.name === "jira" || conn.name === "clickup")) {
+      try {
+        const n = emitTrackerInbox(ws.id, conn.name, me, external, {
+          mirrored: (id) => !!store.byExternal(conn.name, id),
+          // A status Chronos pushed out itself (the local ticket already maps to it) is not news.
+          selfStatus: (t) => {
+            const local = store.byExternal(conn.name, t.id);
+            const target = local ? externalStatusFor(local.status, cfg) : null;
+            return !!target && target.trim().toLowerCase() === (t.statusRaw ?? "").trim().toLowerCase();
+          },
+        });
+        if (n) console.log(`[inbox] ${ws.slug}: +${n} from ${conn.name}`);
+      } catch (e: any) {
+        console.warn(`[inbox] ${ws.slug} tracker diff failed:`, e?.message ?? e);
+      }
+    }
 
     for (const t of external) {
       seen.add(t.id);
@@ -124,9 +148,9 @@ export async function syncWorkspace(ws: Workspace): Promise<SyncResult> {
     // ponytail: just surface the count — per-ticket refetch can come later if it proves needed.
     // The operator's own comments are the best record of how he writes to this client. Best-effort:
     // a failed /myself or a bad row must never fail the ticket sync around it.
-    if (conn.me && (conn.name === "jira" || conn.name === "clickup")) {
+    if (me && (conn.name === "jira" || conn.name === "clickup")) {
       try {
-        const n = harvestComments(ws, conn.name, await conn.me(cfg), external);
+        const n = harvestComments(ws, conn.name, me, external);
         if (n) console.log(`[prose] ${ws.slug}: +${n} sample(s) from ${conn.name} comments`);
       } catch (e: any) {
         console.warn(`[prose] ${ws.slug} harvest failed:`, e?.message ?? e);

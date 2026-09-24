@@ -58,3 +58,5 @@ export { memoryUsage, MEMORY_USAGE_KINDS } from "./store/memory-usage.js";
 export type { MemoryUsageRow, MemoryUsageKind, MemoryUsageAggregate, MemoryUsageMiss, NewMemoryUsage } from "./store/memory-usage.js";
 export { dreamRuns, memoryClocks } from "./store/dream.js";
 export type { DreamRun, DreamStatus, DreamSource, MemoryClock } from "./store/dream.js";
+export { inbox, INBOX_SOURCES, INBOX_KINDS, INBOX_STATES } from "./store/inbox.js";
+export type { InboxItem, NewInboxItem, InboxSource, InboxKind, InboxState } from "./store/inbox.js";

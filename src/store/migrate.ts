@@ -1904,6 +1904,39 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       db.exec("ALTER TABLE workspaces ADD COLUMN placement TEXT");
     },
   },
+  {
+    version: 138,
+    name: "inbox_items — the workspace inbox: what needs the operator, never work on its own",
+    // One row per "something needs you" (src/inbox.ts): a Slack DM/@mention the triage job filed, or a
+    // tracker change the connector sync diffed (assigned to him, a comment for him, a status move on
+    // his task). A row is a notification only — the one way it turns into work is the operator's
+    // Dispatch (POST /inbox/:id/dispatch), which opens a Desk terminal and records it here.
+    // external_key is the dedup key (a Slack ts/permalink, `jira:ANA-12:comment:<id>`), unique per
+    // workspace+source so a re-run of the triage or the sync never files the same thing twice.
+    up: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS inbox_items (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        external_key TEXT NOT NULL,
+        ref TEXT,
+        title TEXT NOT NULL,
+        why TEXT,
+        body TEXT,
+        url TEXT,
+        actor TEXT,
+        urgent INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL DEFAULT 'new',
+        snooze_until TEXT,
+        dispatched_session TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        UNIQUE (workspace_id, source, external_key)
+      )`);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_inbox_items_ws ON inbox_items(workspace_id, state, created_at)");
+    },
+  },
 
 ];
 

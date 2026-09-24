@@ -837,6 +837,23 @@
   .tabs button.empty { border-style:dashed; }
   #brief-body { min-height:46vh; font:14px/1.5 ui-monospace,"SF Mono",Menlo,monospace; }
   .brief-hint { font-size:13px; color:var(--faint); line-height:1.5; }
+  /* Inbox: what needs you, per client. Each row is a notification; Dispatch is the only thing that starts work. */
+  #dlg-inbox { width:min(760px,96vw); }
+  #dlg-inbox .dlg { max-height:min(84vh, 860px); }
+  .ib-list { overflow-y:auto; min-height:0; flex:1; display:flex; flex-direction:column; }
+  .ib-grp { display:flex; align-items:center; gap:8px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--faint); margin:14px 0 2px; font-weight:600; }
+  .ib-grp:first-child { margin-top:0; }
+  .ib-row { display:grid; grid-template-columns:22px minmax(0,1fr) auto; gap:2px 10px; padding:9px 4px; border-bottom:1px solid var(--line); }
+  .ib-row .src { grid-row:1 / span 2; font-size:15px; line-height:1.5; }
+  .ib-row .t { font-size:15.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ib-row .t a { color:inherit; text-decoration:none; }
+  .ib-row .t a:hover { text-decoration:underline; }
+  .ib-row .w { grid-column:2; font-size:14px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ib-row .m { grid-column:3; grid-row:1; font-size:12.5px; color:var(--faint); text-align:right; white-space:nowrap; }
+  .ib-row .acts { grid-column:3; grid-row:2; display:flex; gap:4px; justify-content:flex-end; }
+  .ib-row .acts .btn { padding:1px 10px; font-size:13.5px; }
+  .ib-row.urgent .t::before { content:"● "; color:var(--danger); }
+  .ib-empty { padding:34px 0; text-align:center; color:var(--faint); }
   /* Memory: the workspace's memory tree on the left (index → topic branches, inbox, other memos), one memo on the right. */
   #dlg-memory { width:min(1080px,96vw); }
   #dlg-memory .dlg { height:min(84vh, 880px); }
@@ -1219,6 +1236,7 @@
   <div class="usage" id="usage" title="Subscription usage — click for every profile and window"></div>
   <button class="btn primary" id="btn-new" title="New terminal (N) — pick Claude / Cursor / Grok + model · ⇧N with a brief">+ Terminal</button>
   <div class="tools">
+    <button class="icon" id="btn-inbox" title="Inbox — what needs you, per client">📥</button><span class="fab-unread" id="inbox-unread" hidden></span>
     <button class="icon" id="btn-robert" title="Robert (⌘K)">🤖</button><span class="fab-unread" id="fab-unread" hidden></span>
     <button class="icon" id="btn-more" title="More">⋯</button>
   </div>
@@ -1539,6 +1557,18 @@
   </div>
 </dialog>
 
+<!-- Inbox: per client, what needs you — Slack DMs/@mentions the triage filed, tracker items assigned to
+     you, comments for you, status moves on your tasks. Nothing here starts on its own: Dispatch opens a
+     terminal that investigates and proposes; Later snoozes; ✕ dismisses. -->
+<dialog id="dlg-inbox">
+  <div class="dlg">
+    <h3>Inbox <span class="hint" id="ib-hint"></span></h3>
+    <div class="tabs" id="ib-ws"></div>
+    <div class="ib-list" id="ib-list"></div>
+    <div class="actions"><button class="btn" id="ib-close">Close</button></div>
+  </div>
+</dialog>
+
 <dialog id="dlg-memory">
   <div class="dlg">
     <h3>Memory <span class="hint" id="mem-when"></span></h3>
@@ -1788,6 +1818,7 @@ const needsList = () => railOrder().filter((s) => ["blocked", "decide", "your_tu
 async function load() {
   const d = await api("/desk");
   S.workspaces = d.workspaces; S.backends = d.backends; S.sessions = d.sessions; S.jots = d.jots || []; S.launches = d.launches || [];
+  IB.counts = d.inbox || {}; syncInboxBadge();
   // A row you removed from Recent must stay removed: prune ✕ against what the Desk still knows,
   // live rows AND the ended ones Recent is holding, or the next load hands every dismissal back.
   const known = new Set([...d.sessions, ...S.ended].map((x) => x.id));
@@ -5435,6 +5466,77 @@ qs("#mem-add").addEventListener("submit", async (e) => {
 });
 qs("#mem-close").onclick = async () => { if (MEM.dirty) await memSave(); qs("#dlg-memory").close(); };
 qs("#btn-memory").onclick = () => openMemory();
+
+// ── inbox ────────────────────────────────────────────────────────────────────────────────────
+// What needs you, per client (src/inbox.ts). The badge is the unread count across clients; the page
+// lists them grouped by client, newest first. A row starts nothing: Dispatch opens a terminal that
+// investigates and proposes (POST /inbox/:id/dispatch), Later snoozes it, ✕ lets it go.
+const IB = { counts: {}, items: [], ws: "", later: null, t: 0 };
+const IB_ICON = { slack: "💬", jira: "🔷", clickup: "✅" };
+function syncInboxBadge() {
+  const n = Object.values(IB.counts).reduce((a, b) => a + b, 0);
+  const b = qs("#inbox-unread"); b.textContent = n; b.hidden = !n;
+  qs("#btn-inbox").title = n ? `Inbox — ${n} need${n === 1 ? "s" : ""} you` : "Inbox — nothing needs you";
+}
+async function loadInbox() {
+  const r = await api("/inbox");
+  IB.items = r.items || []; IB.counts = r.counts || {};
+  syncInboxBadge();
+  if (qs("#dlg-inbox").open) renderInbox();
+}
+function loadInboxSoon() { clearTimeout(IB.t); IB.t = setTimeout(() => loadInbox().catch(() => {}), 250); }
+async function openInbox() {
+  IB.later = null;
+  qs("#dlg-inbox").showModal();
+  renderInbox();
+  try { await loadInbox(); } catch (e) { toast(errMsg(e)); }
+}
+function renderInbox() {
+  const total = Object.values(IB.counts).reduce((a, b) => a + b, 0);
+  if (IB.ws && !IB.counts[IB.ws]) IB.ws = "";
+  const withItems = S.workspaces.filter((w) => IB.counts[w.id]);
+  qs("#ib-hint").textContent = total ? `${total} need${total === 1 ? "s" : ""} you` : "";
+  qs("#ib-ws").innerHTML = withItems.length > 1
+    ? [`<button data-ws="" class="${IB.ws ? "" : "on"}">All ${total}</button>`, ...withItems.map((w) => `<button data-ws="${esc(w.id)}" class="${IB.ws === w.id ? "on" : ""}">${esc(w.name)} ${IB.counts[w.id]}</button>`)].join("")
+    : "";
+  const rows = IB.items.filter((i) => !IB.ws || i.workspace_id === IB.ws);
+  if (!rows.length) { qs("#ib-list").innerHTML = `<div class="ib-empty">Nothing needs you.</div>`; return; }
+  const groups = new Map();
+  for (const i of rows) { if (!groups.has(i.workspace_id)) groups.set(i.workspace_id, []); groups.get(i.workspace_id).push(i); }
+  qs("#ib-list").innerHTML = [...groups].map(([ws, items]) =>
+    `<div class="ib-grp">${esc(wsName(ws) || "—")} <span>${items.length}</span></div>` + items.map(ibRow).join("")).join("");
+}
+function ibRow(i) {
+  const title = i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer" title="Open in ${esc(i.source)}">${esc(i.title)} ↗</a>` : esc(i.title);
+  const acts = IB.later === i.id
+    ? `<button class="btn" data-a="snooze" data-until="2h">2h</button><button class="btn" data-a="snooze" data-until="tomorrow 9:00">Tomorrow 9:00</button><button class="icon" data-a="back" title="Back">‹</button>`
+    : `<button class="btn primary" data-a="go" title="Open a terminal in this client that investigates and proposes — it answers no one">Dispatch</button><button class="btn" data-a="later" title="Snooze">Later</button><button class="icon" data-a="dismiss" title="Dismiss">✕</button>`;
+  return `<div class="ib-row${i.urgent ? " urgent" : ""}" data-id="${esc(i.id)}"><span class="src" title="${esc(i.source)} · ${esc(i.kind)}">${IB_ICON[i.source] || "•"}</span>` +
+    `<div class="t">${title}</div><div class="m">${i.actor ? esc(i.actor) + " · " : ""}${esc(age(i.created_at))}</div>` +
+    `<div class="w" title="${esc(i.why || "")}">${esc(i.why || "")}</div><div class="acts">${acts}</div></div>`;
+}
+qs("#ib-ws").onclick = (e) => { const b = e.target.closest("[data-ws]"); if (!b) return; IB.ws = b.dataset.ws; renderInbox(); };
+qs("#ib-list").onclick = async (e) => {
+  const b = e.target.closest("[data-a]"); if (!b) return;
+  const id = b.closest("[data-id]").dataset.id;
+  const a = b.dataset.a;
+  if (a === "later") { IB.later = id; return renderInbox(); }
+  if (a === "back") { IB.later = null; return renderInbox(); }
+  b.disabled = true;
+  try {
+    if (a === "go") {
+      const { session } = await api("/inbox/" + id + "/dispatch", { method: "POST", body: "{}" });
+      qs("#dlg-inbox").close();
+      await load(); select(session.id);
+      return;
+    }
+    if (a === "dismiss") await api("/inbox/" + id + "/dismiss", { method: "POST", body: "{}" });
+    if (a === "snooze") { await api("/inbox/" + id + "/snooze", { method: "POST", body: JSON.stringify({ until: b.dataset.until }) }); IB.later = null; }
+    await loadInbox();
+  } catch (err) { b.disabled = false; toast(errMsg(err)); }
+};
+qs("#ib-close").onclick = () => qs("#dlg-inbox").close();
+qs("#btn-inbox").onclick = () => openInbox();
 // ── briefs ───────────────────────────────────────────────────────────────────────────────────
 const B = { tab: null, rows: [], memory: "", dirty: false };
 async function openBriefs(tab) {
@@ -6316,6 +6418,7 @@ const BUS_TOPICS = [
   "jot.updated", "jot.ran", "jot.followup", "launch.updated", "launch.ran",
   "run.started", "run.ended", "job.updated",
   "host.online", "host.offline", "host.updated",
+  "inbox.updated",
 ].join(",");
 function connectBus() {
   if (!TOKEN) return;
@@ -6325,6 +6428,7 @@ function connectBus() {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     if (DW.topics.has(e.topic)) dwBus(e.topic);
     if (e.topic === "host.online" || e.topic === "host.offline" || e.topic === "host.updated") return loadHostsSoon();
+    if (e.topic === "inbox.updated") return loadInboxSoon();
     if (e.topic === "session.activity") {
       const s = byId(e.session_id);
       if (!s || s.state === "done" || s.state === "blocked") return;

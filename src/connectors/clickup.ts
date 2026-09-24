@@ -100,6 +100,10 @@ export const clickup: Connector = {
           author_id: c.user?.id != null ? String(c.user.id) : undefined,
           body: c.comment_text ?? "",
           created: msToIso(c.date),
+          // Rich comment blocks: an @mention is a `tag` block carrying the user.
+          mentions: (Array.isArray(c.comment) ? c.comment : [])
+            .filter((b: any) => b?.type === "tag" && b.user?.id != null)
+            .map((b: any) => String(b.user.id)),
         }));
       } catch { /* comments are best-effort; a fetch hiccup shouldn't drop the task */ }
       // Trust ClickUp's status TYPE for terminal states: 'done'/'closed' types (e.g. "complete",
@@ -118,6 +122,7 @@ export const clickup: Connector = {
         description: (t.description || t.text_content || "").trim() || null,
         priority: normalizePriority(t.priority?.priority),
         assignee: t.assignees?.[0]?.username ?? null,
+        assignee_ids: (t.assignees ?? []).filter((a: any) => a?.id != null).map((a: any) => String(a.id)),
         labels: (t.tags ?? []).map((x: any) => x.name).filter(Boolean),
         due: msToIso(t.due_date),
         comments,
