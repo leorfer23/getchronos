@@ -283,6 +283,14 @@
     border-radius:999px; padding:0 8px; line-height:18px; cursor:pointer; white-space:nowrap; font-variant-numeric:tabular-nums; }
   .row.jot .fu.due { color:var(--warn); background:color-mix(in srgb, var(--warn) 15%, transparent); }
   .row.jot .fu.live { color:var(--ok); background:color-mix(in srgb, var(--ok) 15%, transparent); }
+  /* How close it is, readable before the title: due = amber, today = filled accent, later = outline. */
+  .row.jot .fu.today { color:var(--surface); background:var(--accent); }
+  .row.jot .fu.later { color:var(--muted); background:transparent; box-shadow:inset 0 0 0 1px var(--line); }
+  .row.jot.fu-due { background:color-mix(in srgb, var(--warn) 7%, transparent); }
+  .row.jot.fu-today { background:color-mix(in srgb, var(--accent) 6%, transparent); }
+  /* Folded, the Notes section still shows what is coming up — only the follow-ups, nothing else. */
+  .rail section#sec-parked.fold .rows { display:flex; }
+  #sec-parked.fold .row.jot:not(.has-fu), #sec-parked.fold .jot-day, #sec-parked.fold .empty { display:none; }
   .row.jot:not(.open) .jot-more { display:none; }
   .jot-check { margin:6px 0 0; font-size:12.5px; line-height:1.4; color:var(--muted); }
   .jot-check b { color:var(--faint); font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.03em; margin-right:5px; }
@@ -3305,6 +3313,19 @@ function fuWhen(iso) {
   if (diff > 1 && diff < 7) return d.toLocaleDateString([], { weekday: "short" }) + " " + t;
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
+// Countdown for the badge: "due 2h", "in 40m", "in 5h", then "tmrw 09:00" / "Fri 09:00" / "Oct 3".
+function fuRel(iso) {
+  const ms = Date.parse(iso) - Date.now(), m = Math.round(Math.abs(ms) / 60000);
+  const span = m < 60 ? m + "m" : m < 1440 ? Math.round(m / 60) + "h" : Math.round(m / 1440) + "d";
+  if (ms <= 0) return m < 1 ? "due now" : "due " + span;
+  if (m < 60 * 12) return "in " + span;
+  return fuWhen(iso);
+}
+function fuProximity(j) {
+  const st = jotFollowState(j);
+  if (st !== "set") return st;
+  return Date.parse(j.follow_up_at) - Date.now() < 86400000 ? "today" : "later";
+}
 function jotFollowState(j) {
   if (!j.follow_up_at && liveSession(j.follow_up_session)) return "live";
   if (!j.follow_up_at) return "";
@@ -3350,7 +3371,7 @@ function editJot(el, j) {
 function jotEl(j) {
   const el = document.createElement("div");
   el.className = "row jot"; el.dataset.sid = j.id;
-  el.innerHTML = '<span class="stripe"></span><div class="main"><div class="t"><span class="ws"></span><span class="txt"></span><button class="fu" hidden></button></div>' +
+  el.innerHTML = '<span class="stripe"></span><div class="main"><div class="t"><span class="ws"></span><button class="fu" hidden></button><span class="txt"></span></div>' +
     '<div class="meta"></div><div class="jot-more"><div class="jot-view"></div><div class="jot-check" hidden></div>' +
     '<div class="jot-bar"><button data-a="edit">✏️ Edit</button><button data-a="follow">⏰ Follow up…</button><button data-a="run" data-label="▶ Run">▶ Run</button><button data-a="done">✓ Done</button></div></div></div>' +
     '<span class="acts"><button class="fub" title="Follow up…">⏰</button><button class="run" title="Open a terminal on this">▶ run</button><button class="ok" title="Mark done">✓</button><button class="del" title="Delete (click twice)">✕</button></span>';
@@ -3387,10 +3408,13 @@ function paintJot(el, j) {
   el.style.setProperty("--ws", wsColor(j.workspace_id));
   qs(".ws", el).textContent = wsName(j.workspace_id);
   qs(".txt", el).textContent = j.title;
-  const st = jotFollowState(j), fu = qs(".fu", el);
+  const st = jotFollowState(j), fu = qs(".fu", el), prox = fuProximity(j);
   fu.hidden = !st;
-  fu.className = "fu" + (st === "due" ? " due" : st === "live" ? " live" : "");
-  fu.textContent = st === "live" ? "🔄 following up" : st === "due" ? "⏰ due" : st ? "⏰ " + fuWhen(j.follow_up_at) : "";
+  fu.className = "fu" + (prox ? " " + prox : "");
+  fu.textContent = st === "live" ? "🔄 on it" : st ? "⏰ " + fuRel(j.follow_up_at) : "";
+  el.classList.toggle("has-fu", !!st);
+  el.classList.toggle("fu-due", prox === "due");
+  el.classList.toggle("fu-today", prox === "today");
   fu.title = st === "live" ? "A follow-up terminal is on it — open it" : st ? "Follow-up " + new Date(j.follow_up_at).toLocaleString() + (j.follow_up_check ? "\nCheck: " + j.follow_up_check : "") : "";
   const meta = [j.source === "agent" ? "agent" : j.source === "nextday" ? "planned" : "", age(j.created_at)];
   if (j.follow_up_count) meta.push(j.follow_up_count === 1 ? "followed up once" : "followed up " + j.follow_up_count + "×");
@@ -3422,7 +3446,9 @@ function renderParked() {
       const rank = (g) => (g === "fu" ? 0 : g === "notes" ? 1 : 2);
       if (rank(ga) !== rank(gb)) return rank(ga) - rank(gb);
       if (ga === "fu") {
-        const k = (j) => (jotFollowState(j) === "live" ? "" : j.follow_up_at || "");
+        // Soonest first — overdue ones are simply the soonest. One already being worked sinks to the
+        // bottom of the block: its terminal is on the rail, it needs nothing from you here.
+        const k = (j) => (jotFollowState(j) === "live" ? "~" : j.follow_up_at || "~");
         return k(a).localeCompare(k(b));
       }
       if (ga !== gb) return ga.localeCompare(gb);
@@ -5843,7 +5869,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 // Ages drift; nothing else here is on a timer.
-setInterval(() => { for (const s of railOrder()) repaintRow(s.id); if (S.active) renderStage(); }, 30000);
+setInterval(() => { for (const s of railOrder()) repaintRow(s.id); if (S.active) renderStage(); renderParked(); }, 30000);
 // The one clock every indicator blinks to (see .dot.working) — two repaints a second, no animation.
 // The companion's elapsed times ride it: a text compare per field, and the timeline diff is skipped
 // outright when no event has landed since the last paint (compRows' signature).
