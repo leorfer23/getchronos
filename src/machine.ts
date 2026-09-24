@@ -427,7 +427,12 @@ function run(cmd: string, args: string[]): Promise<string | null> {
 }
 
 let cpuPrev = os.cpus();
-async function sampleVitals(): Promise<void> {
+/**
+ * One reading, without touching the Desk's ring. Exported for `chronos host`, which reports the same
+ * numbers over its link every VITALS_EVERY_MS instead of drawing them. CPU is measured since the
+ * previous call in this process, so the first reading covers "since module load".
+ */
+export async function readVitals(): Promise<{ vitals: Vitals; ram: RamReading | null }> {
   const cpuNow = os.cpus();
   const cpu = cpuBusyPct(cpuPrev, cpuNow);
   cpuPrev = cpuNow;
@@ -441,8 +446,13 @@ async function sampleVitals(): Promise<void> {
     const total = os.totalmem();
     ram = { usedMb: (total - os.freemem()) / 1048576, totalMb: total / 1048576 };
   }
-  lastRam = ram;
-  vitals.push({ at: Date.now(), cpu, ram: ram ? (ram.usedMb / ram.totalMb) * 100 : null, gpu });
+  return { vitals: { at: Date.now(), cpu, ram: ram ? (ram.usedMb / ram.totalMb) * 100 : null, gpu }, ram };
+}
+
+async function sampleVitals(): Promise<void> {
+  const r = await readVitals();
+  lastRam = r.ram;
+  vitals.push(r.vitals);
   if (vitals.length > VITALS_KEEP) vitals = vitals.slice(-VITALS_KEEP);
 }
 

@@ -432,6 +432,39 @@ which is never injected and never counted. Turn `CHRONOS_STOW_PASS_HORIZON` on o
 it adds a second horizon in passes (10 aging / 3 perishable) so entries decay at the rate the fleet
 actually runs, rather than against a wall clock a daily pass never reaches.
 
+### Hosts — more than one Mac
+
+A **host** is another Mac that runs agents for this daemon (the **brain**); see [HOSTS.md](./HOSTS.md).
+With nothing set, there are no hosts and nothing listens beyond `127.0.0.1:7777`: a single-machine
+install is unchanged. Phase 2 ships the link, join codes and vitals; nothing is placed on a host yet.
+
+On the brain:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CHRONOS_HOST_LISTEN` | off | the dedicated LAN listener, e.g. `0.0.0.0:7779`. TLS with a self-signed brain cert (made on first use with `/usr/bin/openssl`), pinned by hosts at join. Serves `/host` WebSocket upgrades with a host token and a bare 404 for everything else |
+| `CHRONOS_HOST_PUBLIC_URL` | — | the `wss://<desk-domain>/host` tunnel URL(s), comma-separated, advertised in join codes. The tunnel door (`/host` on the loopback API) is always there and always needs a host token |
+| `CHRONOS_HOSTLINK_DIR` | `<root>/hostlink` | the brain cert, its key (sandbox-denied) and `hosts.json` — joined hosts' token **hashes** (sandbox-denied; replaced by the `hosts` table in Phase 1) |
+
+Adding a host (admin token): `POST /api/hosts/join-codes {name?}` returns a single-use code (15 minutes)
+and the command to paste on the new Mac. `GET /api/hosts/links` lists connected hosts with their
+hello and last vitals; `DELETE /api/hosts/:id` revokes a host's token and drops its link.
+
+On the host — `npm run host -- join <url> <code>` writes these into `~/.chronos-host/.secrets` (mode
+600) and installs `~/Library/LaunchAgents/sh.chronos.host.plist`. `npm run host -- doctor` prints the
+setup checklist; `npm run host -- status` shows the live link.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CHRONOS_HOST_BRAINS` | written by join | brain URLs, tried in order. LAN names and IPs (`192.168.…`, `*.local`, `*.lan`) are **pinned** to the brain cert; public names get normal CA checks (the tunnel). Plain `ws://` is refused except to loopback |
+| `CHRONOS_HOST_ID` / `CHRONOS_HOST_TOKEN` | written by join | this host's credential. The token is never printed or logged |
+| `CHRONOS_HOST_CERT_FP` | written by join | the pinned brain cert's SHA-256 |
+| `CHRONOS_HOST_DENY` | — | local veto: workspace slugs this Mac refuses, whatever the brain says |
+| `CHRONOS_HOST_ROOTS` | `~/Documents/GitHub` | where to look for checkouts (comma- or colon-separated) |
+| `CHRONOS_HOST_MC_PORT` | `7777` | the loopback `mc` forwarder, so `MC_API=http://localhost:7777/api` works unchanged for agents on the host |
+| `CHRONOS_HOST_HOME` | `~/.chronos-host` | the host's state dir (`.secrets`, logs) |
+| `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` | — | Cloudflare Access service token, sent only to tunnel (CA-verified) URLs, never to a LAN IP |
+
 ### Retention
 
 | Variable | Default | Meaning |
@@ -526,6 +559,17 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_HEARTBEAT_URL` | `""` | `src/config.ts` |
 | `CHRONOS_HOLD_AGED_HOURS` | `72` | `src/config.ts` |
 | `CHRONOS_HOME` | — | `src/agent-memory.test.ts` |
+| `CHRONOS_HOSTLINK_DIR` | `inRepo("hostlink")` | `src/hostlink/join.ts` |
+| `CHRONOS_HOST_BRAINS` | — | `src/hostd/index.ts` |
+| `CHRONOS_HOST_CERT_FP` | — | `src/hostd/index.ts` |
+| `CHRONOS_HOST_DENY` | — | `src/hostd/inventory.ts` |
+| `CHRONOS_HOST_HOME` | `~/.chronos-host` | `src/hostd/env.ts` |
+| `CHRONOS_HOST_ID` | — | `src/hostd/index.ts` |
+| `CHRONOS_HOST_LISTEN` | — | `src/config.ts` |
+| `CHRONOS_HOST_MC_PORT` | `7777` | `src/hostd/index.ts` |
+| `CHRONOS_HOST_PUBLIC_URL` | — | `src/hostlink/brain-link.ts` |
+| `CHRONOS_HOST_ROOTS` | `"~/Documents/GitHub"` | `src/hostd/inventory.ts` |
+| `CHRONOS_HOST_TOKEN` | — | `src/hostd/index.ts` |
 | `CHRONOS_HOURLY_BACKUP_RETAIN` | `48` | `src/config.ts` |
 | `CHRONOS_ICAL_BIN` | `"/opt/homebrew/bin/ical"` | `src/config.ts` |
 | `CHRONOS_IDEA_EXPIRED_COOLDOWN_DAYS` | `30` | `src/config.ts` |
@@ -557,6 +601,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_MONITOR_MIN` | `5` | `src/config.ts` |
 | `CHRONOS_NOTIFY_ALL` | — | `src/telegram/api.ts` |
 | `CHRONOS_OPENCODE_BIN` | `"opencode"` | `src/config.ts` |
+| `CHRONOS_OPENSSL` | `"/usr/bin/openssl"` | `src/hostlink/join.ts` |
 | `CHRONOS_PANEL_MIN_DIFFICULTY` | `4` | `src/config.ts` |
 | `CHRONOS_PERSONAL_HEARTBEAT` | `"0"` | `src/config.ts` |
 | `CHRONOS_PERSONAL_HEARTBEAT_CRON` | `"*/5 * * * *"` | `src/config.ts` |

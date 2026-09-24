@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template for `chronos host` (HOSTS.md). Do not install by hand — `npm run host -- join` renders
+     it with this Mac's values and writes ~/Library/LaunchAgents/sh.chronos.host.plist. A host is a
+     machine that runs agents for a brain elsewhere; it keeps one outbound WebSocket and listens only
+     on loopback (the mc forwarder). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.chronos.host</string>
+
+  <!-- Absolute node, resolved at join time through a LOGIN shell: a non-login shell (and launchd)
+       lacks /opt/homebrew/bin, and a version manager's node may be a different major than the one
+       node_modules was built for. The entry is dist/hostd/index.js when built, else src via tsx. -->
+  <key>ProgramArguments</key>
+  <array>
+__PROGRAM_ARGS__
+  </array>
+
+  <!-- The host's state dir, not the checkout: credentials live in __HOST_HOME__/.secrets (mode 600),
+       read by src/hostd/env.ts. Nothing secret belongs in this plist — LaunchAgents are world-readable. -->
+  <key>WorkingDirectory</key>
+  <string>__HOST_HOME__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- launchd hands a gui agent no HOME/USER, and the claude CLI's keychain lookup needs USER. -->
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>USER</key>
+    <string>__USER__</string>
+    <key>LOGNAME</key>
+    <string>__USER__</string>
+    <!-- The login shell's PATH captured at join, so CLI detection sees what the operator's terminal sees. -->
+    <key>PATH</key>
+    <string>__PATH__</string>
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+    <key>LC_ALL</key>
+    <string>en_US.UTF-8</string>
+    <key>CHRONOS_HOST_HOME</key>
+    <string>__HOST_HOME__</string>
+  </dict>
+
+  <!-- A host is useful only while it runs: start at login, restart if it dies. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>__HOST_HOME__/host.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOST_HOME__/host.err.log</string>
+</dict>
+</plist>

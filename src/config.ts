@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 // Imports node builtins only — safe to pull in this early (no cycle back through config).
 import { caKeyFile, leafKeyFile } from "./egress-ca.js";
 import { inRepo } from "./repo-root.js";
+// Builtins + repo-root only, like egress-ca: no cycle back through config.
+import { brainKeyFile, hostlinkDir } from "./hostlink/join.js";
 
 const home = os.homedir();
 
@@ -127,6 +129,11 @@ function discoverProfiles(): Record<string, string> {
 
 export const CONFIG = {
   port: Number(process.env.CHRONOS_PORT ?? 7777),
+  // Hosts (HOSTS.md): the dedicated LAN listener for `chronos host` links, e.g. "0.0.0.0:7779".
+  // Unset = no listener, no cert, no port — hosts can still reach the brain through the tunnel's
+  // /host path. CHRONOS_HOST_PUBLIC_URL (read in src/hostlink/brain-link.ts) is the wss:// tunnel
+  // URL advertised in join codes.
+  hostListen: (process.env.CHRONOS_HOST_LISTEN ?? "").trim(),
   dbPath,
   adminToken: loadOrCreateAdminToken(),
   claudeBin: process.env.CHRONOS_CLAUDE_BIN ?? "claude",
@@ -551,6 +558,10 @@ export const CONFIG = {
           // Same "resolved, not hardcoded" reasoning: CHRONOS_EGRESS_CA_DIR must not move the keys
           // out of the deny list.
           caKeyFile(), leafKeyFile(),
+          // The brain's host-link TLS key (src/hostlink/join.ts): whoever reads it can impersonate
+          // the brain to every pinned host on the LAN. hosts.json holds only token hashes, but it is
+          // the list of machines allowed in, and no agent has a reason to read it.
+          brainKeyFile(), path.join(hostlinkDir(), "hosts.json"),
           // Holds every project's API token — same rationale as .admin-token above.
           dbPath, `${dbPath}-wal`, `${dbPath}-shm`,
           // NOTE: ~/Library/Keychains intentionally NOT denied — Claude reads its own auth token
