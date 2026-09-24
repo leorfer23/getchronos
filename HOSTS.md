@@ -409,6 +409,47 @@ its plist; `--purge` also deletes `~/.chronos-host` (credential, logs, app). It 
 `~/.mc` (the `mc` CLI), the hooks/skill copies inside agent profiles, and the computer's row on the
 brain — Desk → Computers → **Remove this computer** revokes its token.
 
+### Menu bar
+
+A host can show, in its own menu bar, whether it is working and on what — so a glance at each Mac on
+the desk answers "is m2 busy?". Offered after `join` (never installed unasked), or any time:
+
+```bash
+node "$HOME/.chronos-host/app/bin/getchronos.mjs" host menubar install   # a clone: npm run host -- menubar install
+# or at join time: … host join <url> <code> --menubar
+```
+
+It needs the Xcode command-line tools (`xcode-select --install` — a host already has them for git):
+`desktop/hostbar.swift` is compiled on the host with `xcrun swiftc -O` into
+`~/.chronos-host/bin/chronos-hostbar` and started by `~/Library/LaunchAgents/sh.chronos.hostbar.plist`
+(at login; restarted after a crash, not after **Quit**, which lasts until the next login).
+`menubar status` says whether it runs, `menubar uninstall` removes it, `host uninstall` takes it too,
+and `doctor` lists it. A self-update rebuilds and restarts it from the new code when it is installed —
+and never fails the update if the rebuild does (the log says why).
+
+What it shows — the hourglass is the Chronos mark (`site/assets/favicon.svg`), drawn natively:
+
+| State | Title | Tooltip / menu header |
+|---|---|---|
+| Agents working | slate hourglass, **amber sand running**, and the number producing output in the last 20 s | `m2 · connected · 2 working of 3` |
+| Connected, nothing working | monochrome hourglass, sand settled in the bottom bulb, no number | `m2 · connected · nothing running` |
+| Link to the brain down | the same hourglass with a small ⚠ badge; the number stays (agents keep running while the link is down) | `m2 · reconnecting — <reason>` / `· offline` |
+| Host process not running | empty outline hourglass, dimmed, `–` | `Chronos host · not running` |
+
+The menu: the header (with how long the link has been down, and why), one row per live terminal and
+headless run — `● app — claude-code · 12m`, filled while it produces output, hollow when idle — then
+**Open host log** (`host.out.log` in Console) and **Quit**. The name is the operator's name for the
+computer from the Desk (the brain sends it in `welcome`, the host remembers it in `~/.chronos-host/name`),
+else its hostname.
+
+It reads only `GET http://127.0.0.1:<port>/__host/status`, every 3 s, at the port the forwarder binds
+(`CHRONOS_HOST_MC_PORT` from `.secrets` — the one key it reads there — else 7777, then 7787–7796,
+accepting only a reply with a `host_id`). That endpoint is loopback-only and unauthenticated, so it is
+built from an allowlist (`src/hostd/status.ts`): link state + reason, name, version/commit, and per item
+kind, short id, **repo folder**, backend, started / last output, active. Never a token, an env var, a
+workspace or a title; a worktree reports its repo folder, not its branch (a ticket key carries the
+workspace prefix), and error text loses URL userinfo and query strings.
+
 ### Troubleshooting
 
 Every one of these happened on the first two hosts. `npm run host -- doctor` on the host checks all
@@ -424,6 +465,8 @@ of them.
 | A pasted command made `./.chronos-host` in the current folder | The paste lost its `~` | Commands now use `"$HOME/…"`; delete the stray folder |
 | LAN host never connects; the tunnel works | macOS blocked incoming connections to node on the brain | Allow node in the firewall prompt / System Settings → Network → Firewall |
 | The host stopped starting after `brew upgrade` | The plist named a `Cellar/<version>` node that `brew cleanup` deleted | Re-run the join line (plists now use `opt/<formula>`); a Desk update rewrites the plist too |
+| `menubar install` says `swiftc not found` | No Xcode command-line tools (the `/usr/bin/swiftc` shim does not count) | `xcode-select --install`, then install again |
+| The menu bar item shows `–` | The host process is not running, or answers on a port the item does not try | `npm run host -- status`; a pinned `CHRONOS_HOST_MC_PORT` in `.secrets` is read by both |
 | Terminals fail with `posix_spawnp failed` | node-pty's `spawn-helper` lost its exec bit (npm ships it 644) | Handled by the postinstall, also when installed from npm; the preflight prints the `chmod +x` line |
 
 Host-side logs: `~/.chronos-host/host.out.log` and `host.err.log`. Onboarding and updates add
@@ -804,6 +847,13 @@ it was.
      - **postinstall fix:** `scripts/fix-node-pty-perms.mjs` resolves node-pty through module
        resolution — installed as a dependency, npm hoists node-pty beside `getchronos` and the old
        relative path fixed nothing.
+     - **Menu bar** (after phase 6): `desktop/hostbar.swift` + `getchronos host menubar
+       install|uninstall|status` (`src/hostd/menubar.ts`), `join --menubar`, rebuilt by a self-update
+       (`afterSwap`), listed by `doctor`, removed by `uninstall`. `/__host/status` grew `link`,
+       `reason`, `name`, `version`/`commit` and `work[]` from an allowlist (`status.ts`); the brain's
+       `welcome` carries the host's Desk name (additive, no protocol bump). See *Menu bar* above.
+       Deviation: the LaunchAgent is `KeepAlive {SuccessfulExit: false}` rather than `KeepAlive true`,
+       so **Quit** is not undone by launchd a second later.
    - **Deferred:** publishing (see *Publishing* below); a Desk "roll back" (`app.prev` is kept, the
      rollback is one pasted line); streaming `update_status` across a link drop mid-update (the final
      state still arrives via hello); a Desk update for a host started by hand; migrating a host's
