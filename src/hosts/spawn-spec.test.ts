@@ -96,12 +96,12 @@ test("intent, not paths: repo by remote, profile by name, worktree by branch, sa
   assert.equal(spec.resume_cwd, null, "a fresh spawn names no directory at all");
 });
 
-test("resume carries only the cwd the host reported; a fresh one never does", () => {
+test("resume carries only the cwd the host reported; a fresh spawn names none", () => {
   const hostPath = "/Users/a.smith/Documents/GitHub/airflow";
   const r = buildRemoteSpawnSpec(input({ resume: true, resumeCwd: hostPath })).spec;
   assert.equal(r.resume_cwd, hostPath);
   assert.equal(r.cwd_hint, "worktree", "the fallback when that directory is gone on the host");
-  assert.equal(buildRemoteSpawnSpec(input({ resume: false, resumeCwd: hostPath })).spec.resume_cwd, null);
+  assert.equal(buildRemoteSpawnSpec(input({ resume: false, resumeCwd: null })).spec.resume_cwd, null);
   // Two Macs with one username share a home path; the host-reported cwd is still allowed through.
   const same = buildRemoteSpawnSpec(input({ resume: true, resumeCwd: `${BRAIN_HOME}/Documents/GitHub/airflow` })).spec;
   assert.deepEqual(brainPathsIn(same, [BRAIN_HOME]), []);

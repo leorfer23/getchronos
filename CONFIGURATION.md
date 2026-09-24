@@ -437,8 +437,9 @@ actually runs, rather than against a wall clock a daily pass never reaches.
 A **host** is another Mac that runs agents for this daemon (the **brain**); see [HOSTS.md](./HOSTS.md).
 With nothing set, there are no hosts and nothing listens beyond `127.0.0.1:7777`: a single-machine
 install is unchanged — the Desk shows no Computers chip, tag or picker until a second Mac joins.
-Hosts join, report vitals and capabilities, and are listed and edited on the Desk (⋯ → Computers);
-remote terminals arrive in Phase 3.
+Hosts join, report vitals and capabilities, and are listed and edited on the Desk (⋯ → Computers).
+A Desk terminal can be pinned to a connected host ("+ Terminal" picker, `POST /sessions` `host_id`,
+`mc session new --host m2`) and runs there end to end (Phase 3).
 
 On the brain:
 
@@ -448,6 +449,7 @@ On the brain:
 | `CHRONOS_HOST_PUBLIC_URL` | — | the `wss://<desk-domain>/host` tunnel URL(s), comma-separated, advertised in join codes. The tunnel door (`/host` on the loopback API) is always there and always needs a host token |
 | `CHRONOS_HOSTLINK_DIR` | `<root>/hostlink` | the brain cert and its key (sandbox-denied). Joined hosts and their token **hashes** live in the `hosts` table; a Phase 2 `hosts.json` found here is imported once at boot and left in place |
 | `CHRONOS_HOST_REPO_URL` | `repository` in package.json, else `https://github.com/leorfer23/getchronos` | what the join command clones on a new Mac (the package is not on npm yet) |
+| `CHRONOS_HOST_TRANSCRIPTS` | `<hostlink dir>/transcripts` | where the brain mirrors remote terminals' CLI transcripts (one `<session>.jsonl` each), which Focus and the usage ledger read |
 
 Adding a host: Desk → ⋯ → **Computers** → **+ Add**, or with the admin token
 `POST /api/hosts/join-codes {name?}`. It returns a single-use code (15 minutes) and the command to
@@ -475,7 +477,8 @@ setup checklist; `npm run host -- status` shows the live link.
 | `CHRONOS_HOST_BRAINS` | written by join | brain URLs, tried in order. LAN names and IPs (`192.168.…`, `*.local`, `*.lan`) are **pinned** to the brain cert; public names get normal CA checks (the tunnel). Plain `ws://` is refused except to loopback |
 | `CHRONOS_HOST_ID` / `CHRONOS_HOST_TOKEN` | written by join | this host's credential. The token is never printed or logged |
 | `CHRONOS_HOST_CERT_FP` | written by join | the pinned brain cert's SHA-256 |
-| `CHRONOS_HOST_DENY` | — | local veto: workspace slugs this Mac refuses, whatever the brain says |
+| `CHRONOS_HOST_DENY` | — | local veto: workspace slugs (or ids) this Mac refuses, whatever the brain says — checked before anything is forked. The brain's own deny list for this host (its `policy` frame) is applied too, and can only add refusals |
+| `CHRONOS_HOST_AUTO_CLONE` | `0` | `1` = a terminal for a repo this Mac has no checkout of clones it into the first `CHRONOS_HOST_ROOTS` entry; otherwise the spawn is refused with the remote named |
 | `CHRONOS_HOST_ROOTS` | `~/Documents/GitHub` | where to look for checkouts (comma- or colon-separated) |
 | `CHRONOS_HOST_MC_PORT` | `7777` | the loopback `mc` forwarder, so `MC_API=http://localhost:7777/api` works unchanged for agents on the host |
 | `CHRONOS_HOST_HOME` | `~/.chronos-host` | the host's state dir (`.secrets`, logs) |
@@ -578,6 +581,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_HOSTLINK_DIR` | `inRepo("hostlink")` | `src/hostlink/join.ts` |
 | `CHRONOS_HOST_BRAINS` | — | `src/hostd/index.ts` |
 | `CHRONOS_HOST_CERT_FP` | — | `src/hostd/index.ts` |
+| `CHRONOS_HOST_AUTO_CLONE` | `0` | `src/hostd/index.ts` |
 | `CHRONOS_HOST_DENY` | — | `src/hostd/inventory.ts` |
 | `CHRONOS_HOST_HOME` | `~/.chronos-host` | `src/hostd/env.ts` |
 | `CHRONOS_HOST_ID` | — | `src/hostd/index.ts` |
@@ -587,6 +591,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_HOST_REPO_URL` | package.json `repository` | `src/hostlink/brain-link.ts` |
 | `CHRONOS_HOST_ROOTS` | `"~/Documents/GitHub"` | `src/hostd/inventory.ts` |
 | `CHRONOS_HOST_TOKEN` | — | `src/hostd/index.ts` |
+| `CHRONOS_HOST_TRANSCRIPTS` | `<hostlink>/transcripts` | `src/hosts/transcript-mirror.ts` |
 | `CHRONOS_HOURLY_BACKUP_RETAIN` | `48` | `src/config.ts` |
 | `CHRONOS_ICAL_BIN` | `"/opt/homebrew/bin/ical"` | `src/config.ts` |
 | `CHRONOS_IDEA_EXPIRED_COOLDOWN_DAYS` | `30` | `src/config.ts` |

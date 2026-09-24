@@ -32,8 +32,9 @@ export interface SpawnSpec {
   /** A ticket terminal's isolated worktree, created under the host's own `.chronos-worktrees`. */
   worktree: { branch: string; base: string } | null;
   /**
-   * Only on resume: the directory this row ran in, which the HOST reported when it first spawned it
-   * (claude files transcripts per cwd, so a resume must start there). Never a brain path.
+   * A directory the HOST itself reported — the row's cwd or worktree on a resume (claude files
+   * transcripts per cwd, so a resume must start there), or the walled terminal's on a failover
+   * stand-in. Never a brain path; null on a fresh spawn, where the host resolves from the fields above.
    */
   resume_cwd: string | null;
   cwd_hint: CwdHint;
@@ -115,6 +116,7 @@ export type RemoteSpecInput = {
   repo: { id: string; git_remote: string | null } | null;
   wsRepos: Array<{ id: string; git_remote: string | null }>;
   worktree: { branch: string; base: string } | null;
+  /** Only a directory the target host reported (see SpawnSpec.resume_cwd); the caller vouches. */
   resumeCwd: string | null;
   profile: string;
   sandbox: { mode: SandboxMode; allowRaw: string[]; egressLocked: boolean };
@@ -169,7 +171,7 @@ export function buildRemoteSpawnSpec(i: RemoteSpecInput): { spec: SpawnSpec; dro
     repo,
     repos: i.wsRepos.map(withRemote).filter((r): r is { id: string; git_remote: string } => !!r),
     worktree: repo ? i.worktree : null,
-    resume_cwd: i.resume ? i.resumeCwd : null,
+    resume_cwd: i.resumeCwd,
     // Where to land when there is no (usable) resume_cwd. The host reads the fields themselves; the
     // hint is what the Desk and logs show.
     cwd_hint: repo && i.worktree ? "worktree" : repo ? "repo" : "landing",

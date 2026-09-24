@@ -1,7 +1,8 @@
 # Hosts — one Desk, N computers
 
-> Status: **being built.** Phase 1 (the seam: `src/hosts/`, migration 134) and phase 2 (link, join,
-> host process, the hosts registry and the Desk's Computers panel) have landed; see *Phases*. This is the plan the implementation PRs
+> Status: **being built.** Phase 1 (the seam: `src/hosts/`, migration 134), phase 2 (link, join,
+> host process, the hosts registry and the Desk's Computers panel) and phase 3 (remote terminals,
+> pinned + sticky) have landed; see *Phases*. This is the plan the implementation PRs
 > follow; each phase at the end is one PR (or a short series) and updates this file when it lands.
 
 ## The gap
@@ -416,9 +417,7 @@ it was.
      ⋯ → Computers (+ Add with the real join command), host tags on the rail and the "+ Terminal"
      computer picker, which sends `host_id` with `POST /sessions`. Join codes return one command per
      transport (`commands.lan`, `commands.tunnel`).
-   - **Deferred:** `authz.ts` does not read `forwardedHost()` yet: forwarded requests already need a
-     brain-issued token, and "the session must belong to that host" needs `sessions.host_id`
-     (Phase 3). Per-host admission on the Desk is computed from the host's vitals with
+   - **Deferred:** `authz.ts` did not read `forwardedHost()` yet (done in phase 3). Per-host admission on the Desk is computed from the host's vitals with
      `machine.ts`'s thresholds (display only; placement is Phase 4). The full "New terminal" dialog
      (⇧N) has no computer picker yet — only the quick line does. A paused (`disabled`, not revoked)
      host's `chronos host` stops retrying on the 401, so re-enabling it needs that process restarted.
@@ -430,6 +429,83 @@ it was.
 3. **Remote terminals.** `spawn_pty` streaming, input, resize, kill and exit; the ring and ack
    resend; reconnect with re-attach; the forwarder with remote authz; `prepare()`; worktrees on
    the host; transcript streaming into focus and usage; drops. Placement: pinned plus sticky only.
+   - **Landed:**
+     - **SpawnSpec** (`src/hosts/spawn-spec.ts`): repo and every workspace repo by git remote, a
+       ticket worktree by branch + base, profile by NAME, sandbox `{mode, allow, egress_locked}`,
+       system text, seed, and an env of secrets / workspace vars / `mc` identity / Lead tokens only.
+       Values under the brain's home travel as `~/…` (flagged in `env_home_relative`) and the host
+       expands them against its own home; a value naming a brain-only path elsewhere is dropped and
+       logged by key. `brainPathsIn()` runs on every remote spawn and refuses one that would leak a
+       brain path (asserted in tests). `Host.spawnPty` takes `PtySpawn | SpawnSpec`: `local` builds
+       argv exactly as before, a remote host takes intent.
+     - **`openSession`** (`terminal.ts`): the target host is the row's (resume, continue-headless,
+       failover stand-in: sticky) or the pin (`host_id`), else `local`. The local path is unchanged —
+       the only moves are that its Live wiring became `installLive()` (shared with remote spawns and
+       re-adoption) and profile prep sits under `if (!remote)`. Brain lock #1
+       (`assertRemotePlacement`) runs before any row is written: connected, not `disabled` (nor
+       `draining` for new work), workspace not denied by `hosts.policy_json` **or** by the veto the
+       host reported in hello, not a cloud backend, not egress-locked, macOS with sandbox-exec when
+       sandboxed. A remote row is created with `cwd = ""` and gets the host's answer
+       (`sessions.setCwd`).
+     - **`RemoteHost`** (`src/hosts/remote.ts`): a `PtyHandle` per channel whose write/resize/kill
+       are frames; data frames go through `SeqTracker` (a resend overlap is dropped, once) into the
+       same `onData` a node-pty fires; batched acks; frames that beat the spawn reply are held;
+       exit → the ordinary `onExit` close-out → `release`. Registered on first hello, marked offline
+       (never removed) on link down.
+     - **The host** (`src/hostd/terminals.ts`): local veto first (CHRONOS_HOST_DENY **plus** the
+       brain's `policy` frame, which can only add refusals), then checkout by git remote
+       (`normalizeGitRemote`, moved store-free to `hostlink/git-remote.ts`; missing → a clear error,
+       or `CHRONOS_HOST_AUTO_CLONE=1` clones into the first root), ticket worktree via
+       `worktree-core.ts` (the brain's own code, split from `worktrees.ts` so the host never opens a
+       DB), profile name → its dir, Seatbelt profile built from its own home (every checkout here
+       that is not the workspace's is denied), `niceWrap`, `prepare()` (skill, `mc` into
+       `~/.mc/bin`, card hooks, claude/grok trust, AGENTS.md — `agent-prep.ts`, split from
+       terminal.ts), env base + `MC_API=http://localhost:<forwarder>/api`. Output is ringed with a
+       seq; live streaming stops on link down and resumes only after the brain's `attach{ch, seq,
+       transcript_offset}`, which resends what the brain lacks. An exit while the brain is away is
+       held (reported in `hello.live[].exit`) until `release`. Seeds are typed host-side.
+     - **Reconnect** (`src/remote-terminals.ts`): on hello, rows live on that host are reconciled
+       against `hello.live[]`: held + reported → re-attach from our last seq; reported but not held
+       (the brain restarted) → adopted into `live` (`adoptRemoteSession`) then attached; not
+       reported (the host restarted) → ended, and revived `--resume` on the same host when its CLI
+       can resume; a reported channel whose row ended here → killed there. Boot still reaps and
+       revives only `local` rows. `host_offline` on `GET /sessions/:id`, `/sessions/:id/status` and
+       `/desk` rows (which stay `live` while their host is away).
+     - **Transcripts:** the host tails the CLI's JSONL (focus.ts's own `locateTranscript` against its
+       paths) and streams whole lines with their file offset; the brain writes them by offset into
+       `<hostlink>/transcripts/<session>.jsonl` (`hosts/transcript-mirror.ts`), which Focus
+       (`FocusCtx.transcriptFile`), the usage ledger and so term-status read like a local file.
+     - **Authz for forwarded requests** (`authz.ts`, `forwardedGate` in front of `/api`): never
+       loopback-trusted; a workspace or live Lead token is required (a Lead's only from its own
+       host); `x-mc-session` — now sent by `mc` — must be live, on the forwarding host, in the
+       token's workspace; the workspace must not be denied on that host. `callerScope` returns
+       invalid for a token-less forwarded request instead of "unrestricted".
+     - **Pin + drops + worktrees:** `POST /sessions` takes `host_id` (id or name; `mc session new
+       --host`). `POST /sessions/:id/drop` for a remote terminal forwards the bytes (≤ 16 MB, one
+       control frame) and the host writes them into its own `~/.mc/drops/<session>`.
+       `POST /sessions/:id/worktree` (`mc worktree`) names the branch on the brain and creates the
+       worktree on the host. Refused host spawns (`veto: …`) and brain-policy refusals publish
+       `host.policy_violation`.
+     - **Protocol 1.1** (additive): `live[].exit` / `transcript_offset`, `transcript.offset` /
+       `reset`, brain → host `attach` and `release`.
+   - **Deferred:** cursor-agent transcripts (a SQLite store, no append-only shape to stream — the
+     Desk story/usage for a remote cursor terminal stay empty); per-host heavy slots (a remote
+     `mc heavy` queues on the brain's pool) and real per-host admission (phase 4); the egress proxy
+     on hosts, so an egress-**locked** workspace is refused on hosts and an audit-mode one runs
+     there without the audit proxy (phase 5); ticket files (`tickets/<ws>/…` on the brain) are not
+     granted — a remote ticket seed says `mc ticket get <KEY>` instead of a path; grok's legacy
+     unpinned resume id lookup (`grok-resume.ts`) runs only for local terminals; after a BRAIN
+     restart the scrollback that was already acked is gone (the host resends only unacked output;
+     the attach repaint redraws a full-screen TUI); `CHRONOS_HOST_ORPHAN_MIN`.
+   - **Deviations:** checkout/worktree/prepare/transcript are done inside a remote spawn rather than
+     as separate `Host` verbs (nothing on the brain needs them alone yet). Host isolation denies every
+     checkout on that host that is not the workspace's (the brain's local rule denies other
+     workspaces' registered repos; a host cannot tell whose an unregistered clone is, and is never
+     told another client's repos). Keystrokes typed while a host is offline are dropped, not queued.
+     A failover stand-in opens on the walled terminal's host. The workspace's `default_dir` landing
+     dir is a brain path, so a repo-less remote terminal lands in the first workspace checkout on the
+     host, else its home. The spawn frame carries `resume_cwd` only for a directory the host itself
+     reported for that row (or the terminal it stands in for).
 4. **Placement and governor.** `place()` with policy, veto, capabilities and headroom; per-host
    admission and heavy slots; brain reserve; drain; refusal reasons across hosts.
 5. **Headless runs and the ship pipeline.** `spawn_proc`, `host.exec()` for gates, reviews and

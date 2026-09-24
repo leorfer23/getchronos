@@ -349,6 +349,21 @@ export function ensureWorktreeRoot(repoPath: string): string | null {
   return fs.existsSync(root) ? root : null;
 }
 
+/**
+ * A cwd the caller asked for, if — and only if — it is a directory the target host itself reported:
+ * the reopened row's own cwd / claimed worktree, or the replaced terminal's on that same host. A
+ * resume with no such request lands where the row last ran. Anything else is null: the host resolves.
+ */
+function hostReportedCwd(asked: string | null | undefined, resumed: Session | null, replaced: Session | undefined, hostId: string): string | null {
+  const known = new Set<string>();
+  for (const r of [resumed, replaced?.host_id === hostId ? replaced : null]) {
+    if (r?.cwd) known.add(r.cwd);
+    if (r?.worktree_path) known.add(r.worktree_path);
+  }
+  if (asked && known.has(asked)) return asked;
+  return resumed?.cwd || null;
+}
+
 /** `workspaces.sandbox_allow` as the raw entries (a SpawnSpec re-resolves them on the host's home). */
 function parseAllowRaw(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -757,8 +772,9 @@ export async function openSession(
       repo: repo ? { id: repo.id, git_remote: repo.git_remote } : null,
       wsRepos: opts.workspace_id ? repos.list(opts.workspace_id).map((r) => ({ id: r.id, git_remote: r.git_remote })) : [],
       worktree: t && repo ? { branch: ticketBranch(t.key), base: repo.default_branch } : null,
-      // Only a path the HOST reported for this row (its cwd, or the worktree it claimed there).
-      resumeCwd: doResume ? (opts.cwd && (opts.cwd === row.worktree_path || opts.cwd === row.cwd) ? opts.cwd : row.cwd || null) : null,
+      // Only a path the HOST reported: this row's cwd or claimed worktree (a resume), or those of the
+      // terminal this one stands in for on the same host (failover). Never a brain-chosen directory.
+      resumeCwd: hostReportedCwd(opts.cwd, doResume ? row : null, opts.replaces ? sessions.get(opts.replaces) : undefined, targetHost),
       profile: profileNameFor(ws?.config_dir, CONFIG.profiles, CONFIG.defaultProfile),
       sandbox: { mode, allowRaw: parseAllowRaw(ws?.sandbox_allow), egressLocked: egressLocked(opts.workspace_id) },
       system: sysArg,
@@ -1171,7 +1187,10 @@ export function digestText(id: string, fallback: string): string {
  * The digest LLM is claimed once per session: goal-done + exit must not fire two haiku boots.
  */
 export function closeOutSession(id: string, opts: { cwd?: string; transcript?: string } = {}) {
-  try { snapshotUsage(id, opts.cwd ? { cwd: opts.cwd } : {}); } catch {}
+  // A remote terminal's cwd is a path on its host: reading "its branch" here would read this Mac's.
+  const row = sessions.get(id);
+  const here = !row?.host_id || row.host_id === LOCAL_HOST_ID;
+  try { snapshotUsage(id, opts.cwd && here ? { cwd: opts.cwd } : {}); } catch {}
   const s = sessions.get(id);
   if (!s) return;
   const ws = s.workspace_id ? workspaces.get(s.workspace_id) : undefined;
