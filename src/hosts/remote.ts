@@ -1,6 +1,5 @@
-import { admission, VITALS_EVERY_MS, type MachineLoad } from "../machine.js";
+import { admission, heavyPoolFor, heavySlotsForCpus, loadFromVitals, VITALS_EVERY_MS, type MachineLoad } from "../machine.js";
 import { SeqTracker, type BrainToHost, type DataFrame, type Hello, type HostToBrain, type HostVitals as WireVitals, type LiveInfo as WireLive } from "../hostlink/wire.js";
-import { localHost } from "./local.js";
 import { isSpawnSpec, type SpawnSpec } from "./spawn-spec.js";
 import { mirrorSize, writeTranscript } from "./transcript-mirror.js";
 import type { Disposable, HeavySlotPool, Host, HostVitals, LiveInfo, ProcHandle, PtyHandle, PtySpawn } from "./types.js";
@@ -30,6 +29,12 @@ const EARLY_CAP = 256 * 1024;
 /** Acks are batched: one per channel per this long, not one per frame. */
 const ACK_MS = 100;
 const SPAWN_TIMEOUT_MS = 90_000; // a ticket worktree off a fresh `git fetch` is the slow case
+/**
+ * Vitals older than this are not a reading: a host that stopped reporting (a wedged process, a link
+ * the pings have not declared dead yet) must not be placed onto on the strength of numbers from
+ * before it went quiet. Six missed frames.
+ */
+export const VITALS_STALE_MS = 6 * VITALS_EVERY_MS;
 
 export class RemoteChannel implements PtyHandle {
   readonly tracker = new SeqTracker();
@@ -139,6 +144,8 @@ export class RemoteHost implements Host {
   private early = new Map<number, { frames: DataFrame[]; bytes: number; exit?: { code: number | null; signal: string | null } }>();
   hello: Hello | null = null;
   private wireVitals: WireVitals | null = null;
+  /** When the BRAIN received the last vitals frame. Not `vitals.at`: that is the host's clock. */
+  vitalsReceivedAt: number | null = null;
   private samples: WireVitals[] = [];
   onlineSince: number | null = null;
   offlineSince: number | null = Date.now();
@@ -163,8 +170,9 @@ export class RemoteHost implements Host {
     this.early.clear();
   }
 
-  setVitals(v: WireVitals): void {
+  setVitals(v: WireVitals, receivedAt = Date.now()): void {
     this.wireVitals = v;
+    this.vitalsReceivedAt = receivedAt;
     this.samples.push(v);
     if (this.samples.length > 120) this.samples.shift();
   }
@@ -287,26 +295,38 @@ export class RemoteHost implements Host {
     return this.reportedLive().filter((l) => !l.exit).map((l) => ({ id: l.session_id, kind: l.kind, pid: l.pid ?? undefined, started_at: 0 }));
   }
 
+  /** The last vitals frame, or null when there is none recent enough to judge by (see VITALS_STALE_MS). */
+  latestVitals(now = Date.now()): WireVitals | null {
+    if (!this.wireVitals || this.vitalsReceivedAt == null) return null;
+    return now - this.vitalsReceivedAt > VITALS_STALE_MS ? null : this.wireVitals;
+  }
+
+  /** The host's core count from its vitals (protocol 1.2), or null before the first frame / from a 1.1 host. */
+  ncpu(): number | null {
+    return this.wireVitals?.ncpu ?? null;
+  }
+
   vitals(): HostVitals {
-    const v = this.wireVitals;
-    // Phase 4 (placement) makes this a real per-host governor reading; until then it is what the host
-    // pushed, shaped like the brain's own so `admission()` reads it the same way.
-    const load: MachineLoad = {
-      load1: v?.loadPerCore ?? 0,
-      ncpu: 1,
-      loadPerCore: v?.loadPerCore ?? 0,
-      swapUsedMb: null,
-      swapTotalMb: null,
-      pressureLevel: v?.pressure ?? null,
-    };
+    // A real governor reading (HOSTS.md phase 4): the host's own numbers, through the very admission()
+    // the brain applies to itself, with the host's core count. No recent frame = nothing to admit on.
+    const v = this.latestVitals();
+    const load: MachineLoad = v
+      ? loadFromVitals(v)
+      : { load1: 0, ncpu: this.ncpu() ?? 1, loadPerCore: 0, swapUsedMb: null, swapTotalMb: null, pressureLevel: null };
+    const name = this.hello?.name ?? this.id;
     return {
       load,
-      admission: this.online ? admission(load) : { ok: false, reason: `${this.hello?.name ?? this.id} is offline` },
+      admission: !this.online ? { ok: false, reason: `${name} is offline` } : !v ? { ok: false, reason: `no recent vitals from ${name}` } : admission(load),
       samples: { every_ms: VITALS_EVERY_MS, ram: null, history: this.samples.map((s) => ({ at: s.at, cpu: s.cpu, ram: s.ram, gpu: s.gpu })) },
     };
   }
 
-  // TODO(phase 4): per-host heavy-slot pools. Until then a remote `mc heavy` queues on the brain's
-  // pool — over-serialized across machines, never over-committed.
-  readonly slots: HeavySlotPool = localHost.slots;
+  /**
+   * This host's `mc heavy` permits (HOSTS.md → Heavy slots are per host), kept on the brain and keyed
+   * by host id: `ncpu / 6` of THIS machine, read on every grant so the first vitals frame sizes it.
+   * Getter, not a field: the pool outlives this object if the host is ever re-registered.
+   */
+  get slots(): HeavySlotPool {
+    return heavyPoolFor(this.id, () => heavySlotsForCpus(this.ncpu()));
+  }
 }
