@@ -10,6 +10,7 @@ import { notify, notifyInfo, esc } from "./telegram/api.js";
 import { kb } from "./telegram/keyboards.js";
 import type { Note } from "./types.js";
 import { REPO_ROOT } from "./repo-root.js";
+import { latestSlot, slotDay } from "./dream.js";
 
 const LEARN_SLUG = "session-learnings";
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -110,20 +111,30 @@ const goal =
 // dispatch a read-only agent to compact it in place; independently, offer to ★-promote un-flagged
 // memos that carry enough facts to be worth feeding back into agents.
 //
-// Catch-up semantics, NOT a fixed slot: the old "Sunday, exactly hour==digestHour" gate never fired
-// once in four weeks — the laptop was asleep or the daemon restarted at that hour every single time,
-// and the in-memory lastHygieneDay meant a restart forgot it had fired anyway. Now the last run is
-// kv-persisted and the sweep fires on the first tick that is ≥6 days after it (past digestHour, so
-// it still lands in the same quiet part of the day), whenever that tick happens to come.
-export function hygieneDue(last: string | undefined, now = new Date(), digestHour = CONFIG.digestHour): boolean {
-  if (digestHour < 0) return false;
-  const daysSince = last ? (now.getTime() - Date.parse(last)) / 86_400_000 : Infinity;
-  return daysSince >= HYGIENE_EVERY_DAYS && now.getHours() >= digestHour;
+// Rides the dream slot (src/dream.ts), not the digest hour: gating on digestHour meant that turning
+// the morning message off (CHRONOS_DIGEST_HOUR=-1) turned memory maintenance off with it, silently,
+// from 2026-08-31 on. It fires at the first slot on a calendar day ≥6 days after the last run's —
+// or on the first tick after that slot if the Mac slept through it.
+//
+// Weekly, not every slot: the compaction job re-fires on any memo still over needsCompaction's bar,
+// and the promotion card and stow nudges are Telegram messages — twice a day would be nagging.
+//
+// Returns the slot to record, or null. `last` is that slot key, or an ISO timestamp from before the
+// slot existed (read as its local day).
+export function hygieneDue(last: string | undefined, now = new Date(), hours = CONFIG.dreamHours): string | null {
+  const slot = latestSlot(now, hours);
+  if (!slot) return null;
+  if (!last) return slot;
+  const lastDay = last.includes("@") ? slotDay(last) : new Date(new Date(last).setHours(0, 0, 0, 0));
+  if (Number.isNaN(lastDay.getTime())) return slot;
+  const days = Math.round((slotDay(slot).getTime() - lastDay.getTime()) / 86_400_000);
+  return days >= HYGIENE_EVERY_DAYS ? slot : null;
 }
 
 export async function maybeHygiene() {
-  if (!hygieneDue(kv.get(HYGIENE_KV))) return;
-  kv.set(HYGIENE_KV, new Date().toISOString());
+  const slot = hygieneDue(kv.get(HYGIENE_KV));
+  if (!slot) return;
+  kv.set(HYGIENE_KV, slot);
 
   // Retire rules that stopped meaning anything before compacting anything else — a lesson vault
   // that only ever grows is a prompt tax, and a rule nobody's code matches any more is noise.
