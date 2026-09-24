@@ -46,8 +46,8 @@ let hostLink: InstanceType<typeof HostLink>;
 let terminals: InstanceType<typeof HostTerminals>;
 let stopRemote: () => void;
 const cred = mintHostCredential();
-const ws = workspaces.create({ slug: "itest", name: "ITest", config_dir: "/Users/brain-only/.claude-itest" });
-const other = workspaces.create({ slug: "other", name: "Other", config_dir: "/tmp/other" });
+const ws = workspaces.create({ slug: "itest", name: "ITest", config_dir: "/Users/brain-only/.claude-itest", sandbox_mode: "off" });
+const other = workspaces.create({ slug: "other", name: "Other", config_dir: "/tmp/other", sandbox_mode: "off" });
 
 function waitFor(cond: () => boolean, what: string, ms = 8000): Promise<void> {
   const start = Date.now();
