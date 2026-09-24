@@ -85,6 +85,7 @@ import { report as memoryReport } from "./memory-budget.js";
 import * as briefs from "./briefs.js";
 import * as worklog from "./worklog.js";
 import { isInternalJob } from "./job-name.js";
+import { jobsBoard, runsFeed, type JobKind } from "./jobs-board.js";
 import { storyFromEvents } from "./run-story.js";
 import { installSlackMcp, slackStatus, ensureTriageJob } from "./slack.js";
 import { syncWorkspace, pushComment, pushStatus, pushHours, pushClose } from "./connectors/index.js";
@@ -136,7 +137,7 @@ import {
   AgentNameSchema, AgentReportSchema, AgentWaitSchema,
   NewNoteSchema, PatchNoteSchema, LearnSchema, RememberSchema, ProseSampleSchema, ProseGuideSchema, AgentMemoryAppendSchema, BriefAppendSchema, BriefRewriteSchema, AgentMemoryRewriteSchema, StowSchema,
   WorklogEntrySchema, WorklogBackfillSchema,
-  NewJobSchema, PatchJobSchema,
+  NewJobSchema, PatchJobSchema, BulkJobsSchema,
   NewTriggerSchema, PatchTriggerSchema,
   NewWatchSchema, PatchWatchSchema,
   NewWorkspaceSchema, PatchWorkspaceSchema, SlackConfigSchema, EgressSchema,
@@ -2179,6 +2180,51 @@ export function startServer() {
     const job = jobs.create(req.body);
     reloadSchedules();
     res.status(201).json(job);
+  });
+
+  // The Jobs page (Desk → ⏱ Jobs): every job with its run strip and health, plus the fleet's days.
+  const boardKind = (q: unknown): JobKind => (q === "internal" || q === "all" ? q : "operator");
+  api.get("/jobs/board", (req, res) => {
+    const scope = callerScope(req);
+    if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    const b = jobsBoard({
+      ws: scope.ws, kind: boardKind(req.query.kind), days: Number(req.query.days) || undefined,
+      strip: Number(req.query.strip) || undefined, tzOffsetMin: Number(req.query.tz) || 0,
+    });
+    res.json({ ...b, jobs: b.jobs.map((j) => ({ ...j, next_run: nextRun(j.id) })) });
+  });
+  api.get("/jobs/runs", (req, res) => {
+    const scope = callerScope(req);
+    if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    res.json(runsFeed({
+      ws: scope.ws, kind: boardKind(req.query.kind), status: req.query.status ? String(req.query.status) : undefined,
+      days: Number(req.query.days) || undefined, limit: Number(req.query.limit) || undefined,
+    }));
+  });
+  // Many jobs at once — pause a client's whole schedule, rerun every failed one. One schedule reload.
+  api.post("/jobs/bulk", validate(BulkJobsSchema), (req, res) => {
+    const scope = callerScope(req);
+    if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    const { ids, action } = req.body as { ids: string[]; action: "enable" | "disable" | "run" | "delete" };
+    const results: Array<{ id: string; ok: boolean; error?: string; run_id?: string }> = [];
+    for (const id of ids) {
+      const j = jobs.get(id);
+      if (!j) { results.push({ id, ok: false, error: "not found" }); continue; }
+      if (scope.ws !== null && j.workspace_id !== scope.ws) { results.push({ id, ok: false, error: "forbidden" }); continue; }
+      if (action === "enable" || action === "disable") {
+        jobs.update(id, { enabled: action === "enable" } as any);
+        results.push({ id, ok: true });
+      } else if (action === "delete") {
+        jobs.remove(id);
+        results.push({ id, ok: true });
+      } else {
+        const r = dispatch(id, "manual");
+        results.push("error" in r ? { id, ok: false, error: String(r.error) } : { id, ok: true, run_id: (r as { run_id?: string }).run_id });
+      }
+    }
+    if (action !== "run") reloadSchedules();
+    for (const r of results) if (r.ok && action !== "run") bus.publish({ topic: "job.updated", job_id: r.id });
+    res.json({ ok: results.every((r) => r.ok), results });
   });
 
   api.get("/jobs/:id", (req, res) => {

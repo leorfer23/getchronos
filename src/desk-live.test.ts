@@ -106,13 +106,19 @@ test("Robert on the Desk: markdown bubbles, terminal chips, select directives, t
   assert.match(html, /api\("\/agents\/robert\/memory", \{ method: "PUT"/);
 });
 
-test("jobs: the dialog is the surface — list of operator jobs, one job's tabs, runs with story, live updates", () => {
+test("jobs: a full-screen page — board by client with run strips, runs feed, upcoming, one job in the drawer", () => {
   assert.match(html, /<dialog id="dlg-jobs">/);
-  assert.match(html, /api\("\/jobs\?kind=operator"\)/, "the fleet's own ticket/review runs are not jobs");
+  assert.match(html, /#dlg-jobs \{ width:100vw; height:100vh;/, "full screen, not a modal box");
+  assert.match(html, /api\(`\/jobs\/board\?kind=\$\{jobKind\(\)\}/, "one round trip for the whole board");
+  assert.match(html, /const jobKind = \(\) => \(J\.sys \? "all" : "operator"\);/, "the fleet's own ticket/review runs are not jobs unless asked for");
+  assert.match(html, /api\(`\/jobs\/runs\?kind=/, "every run across jobs");
+  assert.match(html, /api\("\/jobs\/bulk", \{ method: "POST"/, "many jobs at once");
   for (const t of ["overview", "instructions", "agent", "triggers", "runs"]) assert.match(html, new RegExp(`data-pane="${t}"`));
   assert.match(html, /api\("\/runs\/" \+ id \+ "\/story"\)/);
   assert.match(html, /"run\.started", "run\.ended", "job\.updated",/);
   assert.match(html, /run_at: t === "once" && v\("run_at"\) \? new Date\(v\("run_at"\)\)\.toISOString\(\) : null,/, "one-timers send an ISO time, in the operator's zone");
   assert.match(html, /if \(a\.op === "jobs"\) \{ openJobs\(a\.id \? String\(a\.id\) : null\); continue; \}/, "Robert can put a job on the screen");
   assert.match(html, /api\("\/runs\/" \+ r\.id \+ "\/continue"/, "a run reopens as a live terminal");
+  assert.match(html, /if \(location\.hash === "#jobs"\) return openJobs\(\);/, "/desk#jobs opens straight to it");
+  assert.match(html, /if \(e\.key === "Escape"\) \{ e\.preventDefault\(\); e\.stopPropagation\(\); return jobsBack\(\); \}/, "esc walks back one step at a time");
 });

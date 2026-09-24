@@ -316,6 +316,10 @@ const jobFields = {
 };
 export const NewJobSchema = z.object(jobFields);
 export const PatchJobSchema = z.object(jobFields).partial();
+export const BulkJobsSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(500),
+  action: z.enum(["enable", "disable", "run", "delete"]),
+});
 
 // ───────────────────────────── triggers ─────────────────────────────
 const triggerConditionSchema = z.object({
