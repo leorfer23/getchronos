@@ -944,6 +944,12 @@
   .hcmd button { position:absolute; top:7px; right:7px; border:1px solid rgba(255,255,255,.18); background:transparent; color:var(--term-ink); border-radius:6px; font-size:12px; padding:2px 8px; }
   .hwait { display:flex; align-items:center; gap:8px; font-size:14px; color:var(--muted); margin-top:12px; }
   .hwait.ok { color:var(--ok); font-weight:600; }
+  /* Phase 6: version + update, and the + Add prerequisites. */
+  .hupd { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; font-size:13.5px; }
+  .hupd .st { color:var(--muted); } .hupd .st.bad { color:var(--danger); } .hupd .st.good { color:var(--ok); }
+  .hupd-dot { color:var(--accent); font-weight:700; }
+  .hpre { margin:0 0 12px; padding-left:18px; font-size:13px; color:var(--muted); line-height:1.6; }
+  .hpre code { font:12px ui-monospace,"SF Mono",Menlo,monospace; }
   body.blink .hwait:not(.ok) .dot { opacity:.4; }
   #q-host { max-width:96px; }
   .bub.queued { opacity:.6; border:1px dashed var(--accent); background:transparent; color:var(--ink); }
@@ -1306,7 +1312,7 @@
   <div class="dlg">
     <div class="jobs">
       <aside class="jlist">
-        <div class="jl-head"><strong>Computers</strong><button class="btn primary" id="host-add">+ Add</button><button class="icon" id="hosts-close" title="Close">✕</button></div>
+        <div class="jl-head"><strong>Computers</strong><button class="btn ghost" id="host-updall" hidden>Update all</button><button class="btn primary" id="host-add">+ Add</button><button class="icon" id="hosts-close" title="Close">✕</button></div>
         <div class="jrows" id="host-rows"></div>
       </aside>
       <section class="jmain" id="hmain"></section>
@@ -6009,9 +6015,11 @@ function renderHosts() {
     const sub = h.connected
       ? [h.live_sessions ? h.live_sessions + " terminal" + (h.live_sessions === 1 ? "" : "s") : "", l.cpu != null ? `CPU ${mPct(l.cpu)} · RAM ${mPct(l.ram)}` : ""].filter(Boolean).join(" · ") || st.word
       : st.word + (h.last_seen_at ? " · seen " + age(h.last_seen_at) + " ago" : "");
-    return `<div class="jrow${!H.add && h.id === H.sel ? " on" : ""}${h.connected ? "" : " off"}" data-host="${esc(h.id)}"><span class="dot ${st.dot}"></span><div style="min-width:0"><div class="t">${esc(hLabel(h))}${h.is_brain && hLabel(h) !== "This Mac" ? ' <span class="hint" style="font-weight:500;color:var(--faint)">this Mac</span>' : ""}</div><div class="l">${esc(sub)}</div></div><span class="age">${esc(h.platform === "darwin" ? "" : h.platform)}</span></div>`;
+    const upd = h.update?.available ? ' <span class="hupd-dot" title="update available">↑</span>' : "";
+    return `<div class="jrow${!H.add && h.id === H.sel ? " on" : ""}${h.connected ? "" : " off"}" data-host="${esc(h.id)}"><span class="dot ${st.dot}"></span><div style="min-width:0"><div class="t">${esc(hLabel(h))}${upd}${h.is_brain && hLabel(h) !== "This Mac" ? ' <span class="hint" style="font-weight:500;color:var(--faint)">this Mac</span>' : ""}</div><div class="l">${esc(sub)}</div></div><span class="age">${esc(h.platform === "darwin" ? "" : h.platform)}</span></div>`;
   }).join("");
   for (const r of qsa("#host-rows .jrow")) r.onclick = () => { H.add = null; H.sel = r.dataset.host; renderHosts(); };
+  hUpdAllBtn();
   if (H.add) return renderAdd();
   const h = hById(H.sel) || H.list[0];
   if (!h) return;
@@ -6029,7 +6037,7 @@ function renderHosts() {
   const clis = ck.clis.map((c) => `<span class="ck ${c.ok ? "ok" : "no"}" title="${esc(c.version || "")}">${esc(c.name)}</span>`).join("") || '<span class="hint">not reported yet</span>';
   const meta = h.is_brain
     ? "The brain — the daemon, the Desk and Robert run here."
-    : [h.platform, h.version ? "chronos " + h.version : "", h.link ? (h.link.via === "lan" ? "on this network" : "through the tunnel") : "", ck.veto.length ? "vetoes " + ck.veto.join(", ") : ""].filter(Boolean).join(" · ");
+    : [h.platform, h.version ? "chronos " + h.version + (h.commit ? " @ " + h.commit.slice(0, 7) : "") : "", h.link ? (h.link.via === "lan" ? "on this network" : "through the tunnel") : "", ck.veto.length ? "vetoes " + ck.veto.join(", ") : ""].filter(Boolean).join(" · ");
   const takes = h.status !== "draining" && h.status !== "disabled";
   qs("#hmain").innerHTML = `
     <div class="jhead"><span class="dot ${st.dot}"></span><input class="name" id="h-name" value="${esc(hLabel(h))}" maxlength="64" spellcheck="false" title="Rename"><span class="hint" style="color:var(--muted);font-size:13px">${esc(st.word)}${h.live_sessions ? " · " + h.live_sessions + " terminal" + (h.live_sessions === 1 ? "" : "s") : ""}</span>
@@ -6038,6 +6046,7 @@ function renderHosts() {
       <div class="hsec"><h4>Now</h4>${hVitals(h)}${h.connected && h.admission && !h.admission.ok ? `<div class="hint" style="margin-top:6px;color:var(--danger)">${esc(h.admission.reason)}</div>` : ""}</div>
       <div class="hsec"><h4>Clients <span class="hint">${h.is_brain ? "— profiles and repos on this Mac" : "— which may run here, and what they need on that Mac"}</span></h4>${wsRows || '<span class="hint">no clients yet</span>'}</div>
       <div class="hsec"><h4>Tools</h4><div class="hclis">${clis}</div></div>
+      ${hUpdateSec(h)}
       <div class="hint" style="font-size:12.5px;color:var(--faint)">${esc(meta)}</div>
     </div>
     ${h.is_brain ? "" : `<div class="jfoot"><span class="sp"></span><button class="btn ghost" id="h-revoke" style="color:var(--danger)">Remove this computer</button></div>`}`;
@@ -6053,6 +6062,10 @@ function renderHosts() {
     if (sw.classList.contains("on")) deny.add(ws);
     hPatch(h.id, { policy: { deny: [...deny] } });
   };
+  const ub = qs("#h-update");
+  if (ub) ub.onclick = () => arm(ub, h.live_sessions ? `Update — ${h.live_sessions} terminal${h.live_sessions === 1 ? "" : "s"} restart` : "Update — click again", () => hUpdate(h.id), 4000);
+  const mc = qs("#h-mcopy");
+  if (mc) mc.onclick = () => copyText(h.update.manual, "command");
   const rv = qs("#h-revoke");
   if (rv) rv.onclick = () => arm(rv, "Remove — its token stops working now", async () => {
     try { await api("/hosts/" + encodeURIComponent(h.id), { method: "DELETE" }); H.sel = "local"; toast(h.name + " removed"); await loadHosts(); } catch (e) { toast(errMsg(e)); }
@@ -6066,6 +6079,62 @@ async function hPatch(id, body) {
   } catch (e) { toast(errMsg(e)); renderHosts(); }
 }
 
+// Version + update (HOSTS.md phase 6). The host builds the new version beside the running one and
+// only swaps and restarts once it has installed and passed its own checks; a failure leaves it as it
+// was. A restart ends its terminals, and the Desk brings each back with --resume on that computer.
+const H_UPD_NOTE = "Its terminals stop while it restarts and come back by themselves (--resume, on the same computer). If anything fails before the restart, it keeps running the version it has.";
+function hUpdStatus(u) {
+  const s = u?.status;
+  if (!s) return "";
+  if (s.state === "requested") return `<span class="st">asked — waiting for it…</span>`;
+  if (s.state === "running") return `<span class="st">updating — ${esc(s.step || "working")}…</span>`;
+  if (s.state === "restarting") return `<span class="st">restarting into the new version…</span>`;
+  if (s.state === "done") { const a = age(new Date(s.at).toISOString()); return `<span class="st good">✓ updated ${a && a !== "now" ? esc(a) + " ago" : "just now"}</span>`; }
+  if (s.state === "current") return `<span class="st good">✓ already up to date</span>`;
+  return `<span class="st bad" title="${esc(s.error || "")}">✗ update failed — ${esc(s.error || "no reason given")}</span>`;
+}
+function hUpdateSec(h) {
+  const u = h.update;
+  if (h.is_brain || !u || (!u.available && !u.status)) return "";
+  const busy = u.status && ["requested", "running", "restarting"].includes(u.status.state);
+  const to = "chronos " + esc(u.target.version) + (u.target.commit ? " @ " + esc(u.target.commit.slice(0, 7)) : "");
+  let body;
+  if (u.supported) {
+    body = `<div class="hupd">${u.available ? `<span>Update available → ${to}</span>` : ""}${hUpdStatus(u)}${u.available && !busy ? `<button class="btn" id="h-update">Update</button>` : ""}</div>`
+      + (u.available && !busy ? `<div class="hint" style="margin-top:6px">${esc(H_UPD_NOTE)}</div>` : "");
+  } else if (u.manual) {
+    body = `<div class="hint" style="margin-bottom:6px">This computer runs a Chronos from before self-update. Paste this once in Terminal on it; after that, updates are a button here.</div><pre class="hcmd">${esc(u.manual)}<button type="button" id="h-mcopy">Copy</button></pre>`;
+  } else {
+    body = `<div class="hupd"><span>Update available → ${to}</span><span class="st">${h.install === "dev" ? "it runs from a developer checkout — update it there" : h.connected ? "" : "when it is back online"}</span>${hUpdStatus(u)}</div>`;
+  }
+  return `<div class="hsec"><h4>Version</h4>${body}</div>`;
+}
+async function hUpdate(id) {
+  try {
+    const r = await api("/hosts/" + encodeURIComponent(id) + "/update", { method: "POST", body: "{}" });
+    if (r?.host && H.list) H.list = H.list.map((x) => (x.id === id ? r.host : x));
+    renderHosts();
+  } catch (e) { toast(errMsg(e)); }
+}
+// "Update all": every connected computer the Desk can update that is behind this one.
+function hUpdAllBtn() {
+  const b = qs("#host-updall");
+  const n = hRemote().filter((h) => h.connected && h.update?.available && h.update?.supported && !["requested", "running", "restarting"].includes(h.update?.status?.state)).length;
+  b.hidden = !n;
+  if (!b.dataset.armed) b.textContent = `Update all (${n})`;
+}
+qs("#host-updall").onclick = () => {
+  const b = qs("#host-updall");
+  arm(b, "Update all — their terminals restart", async () => {
+    try {
+      const r = await api("/hosts/update-all", { method: "POST", body: "{}" });
+      toast(r.started.length ? `updating ${r.started.length} computer${r.started.length === 1 ? "" : "s"}` : "nothing to update");
+      for (const sk of r.skipped || []) toast(sk.name + ": " + sk.reason);
+    } catch (e) { toast(errMsg(e)); }
+    loadHosts();
+  }, 4000);
+};
+
 // + Add: name it, get the command, paste it on that Mac. The row flips to ✓ when it says hello.
 function renderAdd() {
   const a = H.add;
@@ -6074,7 +6143,13 @@ function renderAdd() {
       <div class="jhead"><strong style="font-size:16px">Add a computer</strong></div>
       <div class="jbody"><form id="h-addf">
         <div class="f"><span>Name <span class="hint">— how the Desk will call it</span></span><input id="h-addname" placeholder="m2" maxlength="64" autocomplete="off" spellcheck="false"></div>
-        <div class="hint" style="font-size:13px;color:var(--muted);line-height:1.5;margin-bottom:12px">You get one command to paste in Terminal on that Mac. It needs git, Node 22+ and the Xcode command-line tools. The code in it works once, for 15 minutes.</div>
+        <div class="hint" style="font-size:13px;color:var(--muted);line-height:1.5;margin-bottom:6px">You get one command to paste in Terminal on that Mac. The code in it works once, for 15 minutes. That Mac needs:</div>
+        <ul class="hpre">
+          <li>Node 22–26 — <code>node -v</code>; if not: <code>brew install node@24</code></li>
+          <li>Xcode command-line tools (git) — <code>xcode-select --install</code></li>
+          <li>Each client that may run there logged in: <code>CLAUDE_CONFIG_DIR="$HOME/.claude-&lt;client&gt;" claude</code> — only those</li>
+          <li><code>gh auth login</code> for its GitHub account; another account with <code>GH_CONFIG_DIR="$HOME/.gh-&lt;client&gt;"</code></li>
+        </ul>
         <button class="btn primary">Get the command</button>
       </form></div>`;
     qs("#h-addf").onsubmit = async (e) => {

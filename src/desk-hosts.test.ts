@@ -47,3 +47,22 @@ test("+ Terminal: the computer picker shows only with a remote computer online, 
 test("the dialog never repaints under a field being typed in", () => {
   assert.match(html, /if \(d\.open && !\(a && a\.tagName === "INPUT" && d\.contains\(a\)\)\) renderHosts\(\);/);
 });
+
+test("phase 6: a computer behind the brain shows Update (armed, says terminals restart and resume) and Update all", () => {
+  assert.match(html, /<button class="btn ghost" id="host-updall" hidden>Update all<\/button>/);
+  assert.match(html, /api\("\/hosts\/" \+ encodeURIComponent\(id\) \+ "\/update", \{ method: "POST"/);
+  assert.match(html, /api\("\/hosts\/update-all", \{ method: "POST"/);
+  // Never confirm() (WKWebView answers false): armed, and the note names --resume on the same computer.
+  assert.match(html, /arm\(ub, h\.live_sessions \? `Update — \$\{h\.live_sessions\} terminal/);
+  assert.match(html, /arm\(b, "Update all — their terminals restart"/);
+  assert.match(html, /const H_UPD_NOTE = "Its terminals stop while it restarts and come back by themselves \(--resume, on the same computer\)\./);
+  // A pre-phase-6 host gets the one line to paste, not a button that cannot work.
+  assert.match(html, /\} else if \(u\.manual\) \{/);
+});
+
+test("+ Add lists what the new Mac needs: node 22–26, the command-line tools, logged-in profiles, gh per account", () => {
+  assert.match(html, /<li>Node 22–26 — <code>node -v<\/code>/);
+  assert.match(html, /xcode-select --install/);
+  assert.match(html, /CLAUDE_CONFIG_DIR="\$HOME\/\.claude-&lt;client&gt;" claude/);
+  assert.match(html, /GH_CONFIG_DIR=/);
+});
