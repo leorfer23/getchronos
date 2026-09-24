@@ -62,7 +62,7 @@ import { sessionArtifacts } from "./session-artifacts.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
 import { cloudRunFor, cloudSessionState, cloudVisibleRepos, followUpCloudSession, openCloudSession, wantsCloudBackend } from "./desk-cloud.js";
-import { assertRemotePlacement, openSession, resumeOpts, promoteToLead, leadPromotionError, attach, refreshClient, writeTo, resize, killSession, closeOutSession, focusEvents, isLive, sendInput, sessionActivity, sessionPrompt, sessionScreen, setClientRate, continueFromRun } from "./terminal.js";
+import { openSession, resumeOpts, promoteToLead, leadPromotionError, attach, refreshClient, writeTo, resize, killSession, closeOutSession, focusEvents, isLive, sendInput, sessionActivity, sessionPrompt, sessionScreen, setClientRate, continueFromRun } from "./terminal.js";
 import { sessionUsage, snapshotUsage } from "./session-usage.js";
 import { applyHook, declare as declareStatus, sessionGoalReached, setProgress, statusOf } from "./term-status.js";
 import { parseEvery, watchView } from "./desk-watch.js";
@@ -158,7 +158,8 @@ import {
   BuildGraphifySchema, QueryGraphifySchema } from "./validation.js";
 import { pressureWord, swapPctOf } from "./machine.js";
 import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
-import { HOST_PATH, brainLink, hostRoutes } from "./hostlink/brain-link.js";
+import { HOST_PATH, brainLink, forwardedHost, hostRoutes } from "./hostlink/brain-link.js";
+import { PlacementError } from "./hosts/candidates.js";
 import { kv } from "./store/kv.js";
 import { noteClaudeStatusline, usageSnapshot } from "./usage-meter.js";
 import { defaultQuickActions, QUICK_ACTIONS_KV, type QuickAction } from "./quick-actions.js";
@@ -507,21 +508,17 @@ export function startServer() {
         created_by: req.body?.created_by || "operator",
         ...spawnLeadFields(lead),
       };
-      // Pinned to another computer (HOSTS.md phase 3: pinned + sticky only). By id or name; checked
-      // here — connected, workspace not denied there (brain lock #1) — and again inside openSession.
+      // Which computer (HOSTS.md → Placement). A pin names one, by id or name; Auto (no host_id)
+      // leaves it to place() inside openSession — the same function every other open goes through
+      // (mc session new, Robert, Leads, failover stand-ins, revives). A pin is checked there too:
+      // connected, allowed (brain lock #1), able to run it; a refusal carries its own status below.
       if (body?.host_id && body.host_id !== LOCAL_HOST_ID) {
         const hid = resolveHostRef(String(body.host_id));
         if (!hid) return res.status(404).json({ error: `no host \`${body.host_id}\` has connected to this brain` });
         if (wantsCloudBackend(body?.backend)) return res.status(400).json({ error: "a cloud terminal runs on its provider's VM, not on a host" });
-        try {
-          assertRemotePlacement(hid, openOpts.workspace_id ?? null, body?.backend ?? null, null);
-        } catch (e: any) {
-          const msg = String(e?.message ?? e);
-          return res.status(/not allowed/.test(msg) ? 403 : 409).json({ error: msg });
-        }
         openOpts.host_id = hid;
       } else {
-        openOpts.host_id = null;
+        openOpts.host_id = body?.host_id === LOCAL_HOST_ID ? LOCAL_HOST_ID : null;
       }
       // A cloud terminal has no pty: it is a dispatched run on someone else's VM, not a spawned
       // process (see src/desk-cloud.ts). Routed on the NAME, not just isCloudBackend(getBackend()) —
@@ -535,7 +532,9 @@ export function startServer() {
       if (lead && slice) leadSlices.patch(lead.leadId, slice, { session_id: s.id, status: "doing" });
       res.status(201).json(s);
     } catch (e: any) {
-      res.status(400).json({ error: String(e?.message ?? e) });
+      // A placement refusal knows its status: 403 for a workspace a computer may not run, 409 for a
+      // computer that cannot take it now, 400 for "every computer is full" (as a saturated brain was).
+      res.status(e instanceof PlacementError ? e.status : 400).json({ error: String(e?.message ?? e) });
     }
   });
   // Desk wall: retitle a terminal or set/clear/tick its goal. The goal is the terminal's reason to
@@ -1887,11 +1886,19 @@ export function startServer() {
   // on it (the operator always is). Read-only and machine-wide, so it is scoped only to the extent
   // every read is: a valid token, no workspace to compare against.
   //
-  // "The Mac" is the brain's own host (HOSTS.md). Per-host vitals and a chip per computer arrive with
-  // the hosts themselves in phase 2; until then this reads exactly what it always has.
+  // "The Mac" is the computer the CALLER runs on (HOSTS.md phase 4): the brain for the Desk and every
+  // local agent, and — for an `mc machine` / `mc heavy` forwarded from a host — that host, judged on
+  // its own vitals with its own core count. The forwarded host id is the brain's own stamp
+  // (forwardedHost: set by the link, never by the caller), and forwardedGate has already held the
+  // request to a live session on that host.
+  const callerHost = (req: express.Request) => {
+    const fh = forwardedHost(req);
+    return fh ? findHost(fh) ?? null : hostById(LOCAL_HOST_ID);
+  };
   api.get("/machine", (req, res) => {
     if (!checkScope(req, res, null)) return;
-    const host = hostById(LOCAL_HOST_ID);
+    const host = callerHost(req);
+    if (!host) return res.status(409).json({ error: "the forwarding host is not registered on this brain" });
     const { load, admission, samples } = host.vitals();
     res.json({
       ...load,
@@ -1900,15 +1907,24 @@ export function startServer() {
       admission,
       heavy: { slots: host.slots.size(), holders: host.slots.holders(), waiting: host.slots.waiting() },
       vitals: samples,
+      ...(host.id !== LOCAL_HOST_ID ? { host_id: host.id } : {}),
     });
   });
-  // Heavy slots: `mc heavy -- <cmd>` long-polls here for one of N machine-wide permits, so five
-  // agents cannot each start a full vitest pool in the same minute. In-memory on purpose — a slot
-  // outliving a daemon restart would be a permit nobody can release. The pool is per host; every
-  // `mc heavy` runs on the brain until hosts forward their own (HOSTS.md phase 4).
-  const heavySlots = hostById(LOCAL_HOST_ID).slots;
+  // Heavy slots: `mc heavy -- <cmd>` long-polls here for one of N permits on ITS OWN machine, so five
+  // agents cannot each start a full vitest pool in the same minute on one Mac — and two suites on two
+  // Macs never wait for each other (HOSTS.md → "Heavy slots are per host"). An agent on a host reaches
+  // here through that host's forwarder, and gets that host's pool (`ncpu / 6` of that machine). All
+  // pools live on the brain, in memory on purpose — a slot outliving a daemon restart would be a
+  // permit nobody can release — and a terminal's slots are freed when it ends (machine.ts).
+  const slotsFor = (req: express.Request, res: express.Response) => {
+    const host = callerHost(req);
+    if (!host) res.status(409).json({ error: "the forwarding host is not registered on this brain" });
+    return host?.slots ?? null;
+  };
   api.post("/machine/slots", validate(HeavySlotSchema), async (req, res) => {
     if (!checkScope(req, res, null)) return;
+    const heavySlots = slotsFor(req, res);
+    if (!heavySlots) return;
     // The ticket is minted HERE, before the await, so the hang-up handler below can name this exact
     // place in line. `mc heavy` echoes it back on its next poll and keeps the place it already has.
     const ticket = req.body.ticket || randomUUID();
@@ -1924,11 +1940,15 @@ export function startServer() {
   });
   api.put("/machine/slots/:id", (req, res) => {
     if (!checkScope(req, res, null)) return;
+    const heavySlots = slotsFor(req, res);
+    if (!heavySlots) return;
     if (!heavySlots.beat(req.params.id)) return res.status(404).json({ error: "slot not held (reclaimed?)" });
     res.json({ ok: true });
   });
   api.delete("/machine/slots/:id", (req, res) => {
     if (!checkScope(req, res, null)) return;
+    const heavySlots = slotsFor(req, res);
+    if (!heavySlots) return;
     res.json({ released: heavySlots.release(req.params.id) });
   });
 
@@ -4569,6 +4589,9 @@ export function startServer() {
       try { ws.ping(); } catch {}
     }
   }, HEARTBEAT_MS);
+  // Unref'd: the listening server is what keeps the daemon alive, and a test that boots the API and
+  // closes it must be able to exit.
+  wsHeartbeat.unref?.();
   wss.on("close", () => clearInterval(wsHeartbeat));
 
   // Terminal IO: one socket per attached PTY session. Server→client frames are raw pty output;
@@ -4599,6 +4622,7 @@ export function startServer() {
       try { ws.ping(); } catch {}
     }
   }, HEARTBEAT_MS);
+  heartbeat.unref?.();
   termWss.on("close", () => clearInterval(heartbeat));
 
   // Loopback-only: LAN/remote access goes through the relay (outbound-only, token+HMAC'd), never

@@ -1,8 +1,8 @@
 # Hosts — one Desk, N computers
 
 > Status: **being built.** Phase 1 (the seam: `src/hosts/`, migration 134), phase 2 (link, join,
-> host process, the hosts registry and the Desk's Computers panel) and phase 3 (remote terminals,
-> pinned + sticky) have landed; see *Phases*. This is the plan the implementation PRs
+> host process, the hosts registry and the Desk's Computers panel), phase 3 (remote terminals,
+> pinned + sticky) and phase 4 (placement and the per-host governor) have landed; see *Phases*. This is the plan the implementation PRs
 > follow; each phase at the end is one PR (or a short series) and updates this file when it lands.
 
 ## The gap
@@ -508,6 +508,73 @@ it was.
      reported for that row (or the terminal it stands in for).
 4. **Placement and governor.** `place()` with policy, veto, capabilities and headroom; per-host
    admission and heavy slots; brain reserve; drain; refusal reasons across hosts.
+   - **Landed:**
+     - **`place()`** (`src/hosts/placement.ts`, pure, unit-tested like `admission()`): eligibility
+       (online; not `disabled`, nor `draining` for fresh work; workspace not denied by brain policy
+       nor by the host's reported veto — a pin or sticky row refused for policy is a 403 and a
+       `host.policy_violation`; not a cloud backend; not egress-locked; macOS with sandbox-exec when
+       sandboxed; the backend's CLI on the host's PATH; the workspace's profile NAME reported, and
+       logged-in (`exists`) for claude-code; the repo in `repo_checkouts` for that host, or the host
+       reports `auto_clone`; a repo with no git remote cannot go to a host). Then sticky → pinned →
+       most headroom → nobody has room, exactly as above. The brain is always eligible: every guard it
+       has always had still runs in `openSession`.
+     - **Score** (`headroom()`, 0–100): `50·clamp(1 − loadPerCore / CHRONOS_MAX_LOAD_PER_CORE) +
+       50·(1 − RAM used %)` (unknown RAM = half), then −25 for pressure *warning*, −50 for
+       *critical*, and −10 more when swap is past `CHRONOS_MAX_SWAP_USED_PCT` under pressure (swap
+       alone is a calm Mac's resting state, as `admission()` already holds). No fresh reading = 0 and
+       ranked last. Candidates must first pass `admission()` on their own numbers; among those the
+       best score wins, ties broken host-before-brain, then name, then id. `CHRONOS_BRAIN_RESERVE`
+       (default **25**) comes off the brain's score: an idle brain (~70) loses to a host until that
+       host is a quarter of the scale busier (~45), so hosts fill first and the brain takes overflow.
+     - **Sticky** (`src/hosts/candidates.ts` `stickyFor`): a resume or revive → the row's host; a
+       continue-from-headless → its row's host, else the brain (runs are brain-only until phase 5);
+       a failover stand-in → the walled terminal's host (and admission-exempt); a ticket → the brain
+       if its worktree directory exists there, else the host of the last terminal that worked it
+       (while that host is still joined); an explicit `cwd` with no pin → the brain (it is a brain
+       path). A pin that disagrees with a sticky host is refused, not obeyed.
+     - **One door:** `openSession` calls `placeTerminal()` before any row is written, replacing the
+       brain-only admission check; `assertRemotePlacement` still re-checks lock #1 right before a
+       remote spawn. So the Desk's Auto (`POST /sessions` with no `host_id`), `mc session new`,
+       Robert, Leads, failover stand-ins and revives all place the same way. `POST /sessions`
+       answers a refusal with its status (403 policy, 409 unavailable, 400 full — what a saturated
+       brain always answered). Opens that read a brain file are pinned `local`: the login terminal a
+       headless job opens (`runner.ts promptLogin`) and the next-day planner (its brief is a brain
+       path).
+     - **Kill switch** `CHRONOS_PLACEMENT=auto|pinned|local` (default `auto`): `pinned` is phase 3
+       (only pins and sticky rows leave the brain), `local` refuses pins elsewhere too. Sticky rows
+       reopen on their host in every mode — the switch stops new work flowing out, it does not strand
+       a terminal whose transcript is on another disk.
+     - **Visibility:** when there was a choice (more than one computer in play) or the pick is
+       remote, `sessions.placement` (migration 135) holds the reason ("most headroom (m2 62 · local
+       70−25)", "pinned", "sticky — …"), the log gets one `[placement]` line, and the bus
+       `session.placed {session_id, host_id, reason}`. The Desk's host tag / stage chip tooltip shows
+       it. With one computer nothing is written: the column stays null.
+     - **Per-host governor:** vitals frames carry `ncpu`, `load1`, `swapUsedMb`, `swapTotalMb`
+       (protocol **1.2**, additive; a 1.1 host still works with its ratios, `ncpu` read as 1), and
+       hello carries `capabilities.auto_clone`. `RemoteHost.vitals()` runs `machine.ts admission()` on
+       them (`loadFromVitals`) — the Desk's Computers view reads the same verdict — and vitals older
+       than six frames (30 s, by the brain's receive time, not the host's clock) are no reading.
+     - **Per-host heavy slots:** `machine.ts`'s slot queue became a `HeavyPool` class; the brain keeps
+       one per host (`heavyPoolFor(id, size)`), the brain's own under the old function names.
+       `RemoteHost.slots` is its host's pool, sized `max(1, floor(ncpu / 6))` of that machine on every
+       grant. `GET /machine` and `/machine/slots*` serve the caller's computer: `forwardedHost(req)`
+       (the brain's own stamp, behind `forwardedGate`) → that host, else the brain. A terminal's slots
+       are released on `session.ended` whichever pool holds them.
+   - **Deferred:** a remote spawn that fails after an Auto placement (the host refuses, a profile
+     turns out not to be logged in) is not retried on the next computer — the open fails with the
+     host's message; the brain reserve is one knob (`hosts.reserve_json` is stored and pushed to hosts
+     but not read by placement); the dispatcher's headless runs and the `placement: hosts | hosts+cloud`
+     workspace setting wait for phase 5; per-host `mc heavy` is keyed by the forwarding host only (an
+     `x-mc-session` alone, without the forwarder's stamp, is the brain's own agent); the full ⇧N
+     dialog still has no computer picker.
+   - **Deviations:** the brain is not subject to eligibility checks (its own guards run in
+     `openSession`, and a single-machine install must place exactly as before); `local` cannot be
+     drained (the API refuses, as in phase 2), so "drain" applies to hosts. A ticket's worktree is
+     sticky by record (the brain's directory, or the last session's host) rather than by asking hosts
+     what they have. Refusal wording with one computer in play is today's, word for word
+     (`machine saturated — …`); with several it is `no computer has room — m2: …; m5: offline; local:
+     …`. The two Desk heartbeats in `startServer` are `unref`'d so a test can boot the real API and
+     exit.
 5. **Headless runs and the ship pipeline.** `spawn_proc`, `host.exec()` for gates, reviews and
    delivery; `gh` capability; the verifier on the host; egress proxy and CA on the host.
 6. **Onboarding polish.** `npx getchronos host join` published, `chronos host doctor`,

@@ -312,6 +312,9 @@ export async function planNextDay(opts: PlanOpts = {}, deps: PlanDeps = defaultD
         backend: ws.default_backend ?? undefined,
         created_by: opts.created_by ?? "operator",
         role: "human",
+        // The brief it must read is a file on the brain's disk (briefPath): placement may not send it
+        // to another computer, where that path does not exist.
+        host_id: "local",
       } as any);
       out.planned.push({ workspace_id: ws.id, slug: ws.slug, session_id: s.id, brief_path: fp, replaced });
     } catch (e: any) {

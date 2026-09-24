@@ -94,7 +94,8 @@ before(async () => {
     fp: null,
     hello: async () => ({
       t: "hello", proto: PROTOCOL_VERSION, version: "0.1.0", host_id: cred.host_id, name: "m2", platform: "darwin", arch: "arm64",
-      capabilities: { clis: [], node: process.version, sandbox: true }, profiles: [], checkouts: [], deny: ["denied-here"],
+      // What this host can run, as a real one reports it: placement (phase 4) checks a pin against it.
+      capabilities: { clis: [], node: process.version, sandbox: true }, profiles: [{ name: "claude-itest", dir: profileDir, exists: true }], checkouts: [], deny: ["denied-here"],
       live: terminals.live(),
     }),
     vitals: async () => ({ at: Date.now(), cpu: 1, ram: 1, gpu: 0, loadPerCore: 0.1, pressure: 1, swapPct: 0 }),

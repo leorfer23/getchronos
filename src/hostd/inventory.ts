@@ -131,7 +131,11 @@ export async function buildHello(hostId: string, name = os.hostname().replace(/\
     name,
     platform: process.platform,
     arch: process.arch,
-    capabilities: { clis, node: process.version, sandbox: fs.existsSync("/usr/bin/sandbox-exec") },
+    capabilities: {
+      clis, node: process.version, sandbox: fs.existsSync("/usr/bin/sandbox-exec"),
+      // Placement (HOSTS.md phase 4) may only send a repo this Mac has not cloned when it said so.
+      auto_clone: process.env.CHRONOS_HOST_AUTO_CLONE === "1",
+    },
     profiles: profiles(),
     checkouts,
     deny: hostDeny(),
@@ -151,6 +155,10 @@ export async function sampleHostVitals(): Promise<HostVitals> {
     loadPerCore: load.loadPerCore,
     pressure: load.pressureLevel,
     swapPct: swap == null ? null : Math.round(swap * 10) / 10,
+    ncpu: load.ncpu,
+    load1: Math.round(load.load1 * 100) / 100,
+    swapUsedMb: load.swapUsedMb == null ? null : Math.round(load.swapUsedMb),
+    swapTotalMb: load.swapTotalMb == null ? null : Math.round(load.swapTotalMb),
   };
 }
 

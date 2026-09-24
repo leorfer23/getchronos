@@ -19,9 +19,11 @@
  * and accepts any minor (a newer minor only adds optional fields or frame kinds the other side
  * ignores). Bump major only when an existing frame changes meaning.
  */
-export const PROTOCOL_VERSION = "1.1";
+export const PROTOCOL_VERSION = "1.2";
 // 1.1 (phase 3): hello.live[] carries `exit`/`transcript_offset`; `transcript` carries `offset`/`reset`;
 // brain → host `attach` and `release`. All additive: a 1.0 peer ignores what it does not know.
+// 1.2 (phase 4): vitals carry `ncpu`/`load1`/`swapUsedMb`/`swapTotalMb` (the brain runs the governor's
+// own admission() on a host's numbers and sizes its heavy-slot pool); capabilities carry `auto_clone`.
 
 /** Binary data frame header: magic(1) kind(1) ch(u32) seq(u64). */
 export const DATA_HEADER_BYTES = 14;
@@ -73,8 +75,23 @@ export type HostVitals = {
   loadPerCore: number;
   pressure: 1 | 2 | 4 | null;
   swapPct: number | null;
+  /**
+   * Protocol 1.2. The raw numbers behind `loadPerCore` and `swapPct`, so the brain can run the
+   * governor's own `admission()` on them (its reasons name "load 14.2 on 12 cores") and size the
+   * host's heavy-slot pool (`ncpu / 6`). Optional: a 1.1 host still reports the ratios alone.
+   */
+  ncpu?: number;
+  load1?: number;
+  swapUsedMb?: number | null;
+  swapTotalMb?: number | null;
 };
-export type Capabilities = { clis: CliInfo[]; node: string; sandbox: boolean };
+export type Capabilities = {
+  clis: CliInfo[];
+  node: string;
+  sandbox: boolean;
+  /** Protocol 1.2: CHRONOS_HOST_AUTO_CLONE=1 — placement may send a repo this host has not cloned yet. */
+  auto_clone?: boolean;
+};
 
 export type Hello = {
   t: "hello";

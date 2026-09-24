@@ -28,6 +28,8 @@ export type HostCapabilities = {
   hostname: string;
   node: string;
   sandbox: boolean;
+  /** The host clones a missing repo on first placement (CHRONOS_HOST_AUTO_CLONE=1). */
+  auto_clone?: boolean;
   clis: CliInfo[];
   profiles: ProfileInfo[];
   checkouts: CheckoutInfo[];
@@ -107,6 +109,7 @@ export class HostRegistry {
       hostname: String(h.name ?? ""),
       node: String(h.capabilities?.node ?? ""),
       sandbox: !!h.capabilities?.sandbox,
+      auto_clone: !!h.capabilities?.auto_clone,
       clis: Array.isArray(h.capabilities?.clis) ? h.capabilities.clis : [],
       profiles: Array.isArray(h.profiles) ? h.profiles : [],
       checkouts: Array.isArray(h.checkouts) ? h.checkouts : [],

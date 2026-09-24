@@ -11,7 +11,7 @@ import { CONFIG } from "../config.js";
 import { hosts, repoCheckouts, workspaces, repos, LOCAL_HOST_ID } from "../store.js";
 import { hostById } from "../hosts/index.js";
 import { which, CLI_NAMES } from "../hostd/inventory.js";
-import { swapPctOf, type Admission } from "../machine.js";
+import { admission, loadFromVitals, swapPctOf, type Admission } from "../machine.js";
 import type { HostRow } from "../types.js";
 import type { HostVitals } from "./wire.js";
 import { parseCapabilities, parsePolicy, type HostCapabilities, type HostPolicy } from "./registry.js";
@@ -61,16 +61,15 @@ export type Checklist = {
   reported_at: string | null;
 };
 
-/** Pressure / swap / load thresholds are machine.ts's own; a remote host reports its per-core load directly. */
+/**
+ * Would an agent be admitted onto this host now? The governor's own `admission()` on the host's
+ * reported numbers and its own core count (HOSTS.md phase 4) — the verdict placement acts on, not a
+ * display-only approximation of it.
+ */
 export function remoteAdmission(v: HostVitals | null, cfg = CONFIG.machine): Admission {
   if (!cfg.enabled) return { ok: true };
   if (!v) return { ok: false, reason: "no vitals from this host yet" };
-  const overLoad = v.loadPerCore > cfg.maxLoadPerCore;
-  const critical = v.pressure === 4;
-  const strained = v.pressure != null && v.pressure >= 2 && v.swapPct != null && v.swapPct > cfg.maxSwapUsedPct;
-  if (!overLoad && !critical && !strained) return { ok: true };
-  const pw = v.pressure === 4 ? "critical" : v.pressure === 2 ? "warning" : v.pressure === 1 ? "normal" : "unknown";
-  return { ok: false, reason: `load ${v.loadPerCore.toFixed(2)}/core, memory pressure ${pw} (swap ${v.swapPct == null ? "unknown" : Math.round(v.swapPct) + "%"})` };
+  return admission(loadFromVitals(v), cfg);
 }
 
 /** `~/.claude-acme` → `claude-acme`: the profile NAME hosts report (config.ts discoverProfiles). */

@@ -2,7 +2,8 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { CONFIG } from "./config.js";
 import {
-  abandonPoll, acquireSlot, admission, beatSlot, cpuBusyPct, machineLoad, niceCommand, parseGpuUtil, parseMemorySysctl, parseVmStat,
+  abandonPoll, acquireSlot, admission, beatSlot, cpuBusyPct, heavyPoolFor, heavySlotsForCpus, loadFromVitals, machineLoad, niceCommand,
+  parseGpuUtil, parseMemorySysctl, parseVmStat,
   releaseForSession, releaseSlot, resetSlots, setSlotClock, slotHolders, slotQueue,
   type MachineLoad,
 } from "./machine.js";
@@ -302,4 +303,49 @@ test("cpu busy % is the non-idle share of the tick delta across all cores", () =
   const t = (user: number, idle: number) => ({ model: "", speed: 0, times: { user, nice: 0, sys: 0, irq: 0, idle } });
   assert.equal(cpuBusyPct([t(0, 0), t(0, 0)], [t(30, 70), t(10, 90)]), 20);
   assert.equal(cpuBusyPct([t(5, 5)], [t(5, 5)]), null);
+});
+
+// ───────────────────────────── per-host pools (HOSTS.md phase 4) ─────────────────────────────
+
+test("each host has its own pool, sized by its own cores: two suites on two Macs never wait for each other", async () => {
+  CONFIG.machine.heavySlots = 1;
+  let cores = 12;
+  const m2 = heavyPoolFor("m2-test", () => heavySlotsForCpus(cores));
+  assert.equal(heavyPoolFor("m2-test", () => 99), m2, "one pool per host, created once");
+  assert.equal((await acquireSlot({ label: "brain suite" }, 0)).granted, true);
+  assert.equal((await acquireSlot({ label: "brain suite 2" }, 0)).granted, false, "the brain's one slot is taken");
+  // …and the host's two are untouched by that.
+  assert.equal(m2.size(), 2);
+  assert.equal((await m2.acquire({ label: "m2 suite", session_id: "on-m2" }, 0)).granted, true);
+  assert.equal((await m2.acquire({ label: "m2 tsc", session_id: "on-m2" }, 0)).granted, true);
+  assert.equal((await m2.acquire({ label: "m2 third" }, 0)).granted, false);
+  assert.deepEqual(slotHolders().map((h) => h.label), ["brain suite"]);
+  // A size read on every grant: a host whose core count arrives later is sized from then on.
+  cores = 24;
+  assert.equal(m2.size(), 4);
+  // A terminal that ends frees its slots on whichever machine it held them.
+  assert.equal(releaseForSession("on-m2"), 2);
+  assert.deepEqual(m2.holders(), []);
+});
+
+test("heavy slots per core count: ncpu/6, never zero, one when unknown", () => {
+  assert.equal(heavySlotsForCpus(12), 2);
+  assert.equal(heavySlotsForCpus(10), 1);
+  assert.equal(heavySlotsForCpus(4), 1);
+  assert.equal(heavySlotsForCpus(null), 1);
+  assert.equal(heavySlotsForCpus(undefined), 1);
+});
+
+test("a host's reported vitals go through the very admission() the brain judges itself by", () => {
+  const v = { loadPerCore: 34.1 / 12, pressure: 2 as const, swapPct: 97, ncpu: 12, load1: 34.1, swapUsedMb: 12902, swapTotalMb: 13312 };
+  const l = loadFromVitals(v);
+  assert.deepEqual(l, { load1: 34.1, ncpu: 12, loadPerCore: 34.1 / 12, swapUsedMb: 12902, swapTotalMb: 13312, pressureLevel: 2 });
+  assert.match((admission(l, CFG) as any).reason, /^load 34\.1 on 12 cores, memory pressure warning \(swap 97% used\)/);
+  // A protocol-1.1 host (ratios only) gets the same verdict, in poorer words.
+  const old = loadFromVitals({ loadPerCore: 34.1 / 12, pressure: 2, swapPct: 97 });
+  assert.equal(old.ncpu, 1);
+  assert.equal(old.swapUsedMb, 97);
+  assert.equal(old.swapTotalMb, 100);
+  assert.equal(admission(old, CFG).ok, false);
+  assert.equal(admission(loadFromVitals({ loadPerCore: 0.2, pressure: 1, swapPct: 97 }), CFG).ok, true, "swap alone never refuses");
 });

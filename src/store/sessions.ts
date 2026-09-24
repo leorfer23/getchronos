@@ -135,6 +135,10 @@ export const sessions = {
   setPid(id: string, pid: number | null) {
     db.prepare("UPDATE sessions SET pid=? WHERE id=?").run(pid, id);
   },
+  /** Why placement put this terminal where it is (HOSTS.md phase 4). */
+  setPlacement(id: string, reason: string | null) {
+    db.prepare("UPDATE sessions SET placement=? WHERE id=?").run(reason, id);
+  },
   /** Unique live agent handle. Cleared automatically on end(). */
   setAgentName(id: string, name: string | null) {
     db.prepare("UPDATE sessions SET agent_name=? WHERE id=?").run(name, id);
