@@ -1871,6 +1871,22 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       db.exec("ALTER TABLE sessions ADD COLUMN placement TEXT");
     },
   },
+  {
+    version: 136,
+    name: "jots.follow_up_* — a parked note can ask for an agent to come back to it at a time",
+    // A note that says "check on this Thursday" used to be a promise nobody kept. follow_up_at is
+    // when the daemon opens a terminal on it (src/jot-followup.ts); follow_up_check is what that
+    // terminal should look at; follow_up_session is the last terminal that did; follow_up_count
+    // bounds how many times agents can keep pushing it forward without the operator.
+    up: (db) => {
+      db.exec("ALTER TABLE jots ADD COLUMN follow_up_at TEXT");
+      db.exec("ALTER TABLE jots ADD COLUMN follow_up_check TEXT");
+      db.exec("ALTER TABLE jots ADD COLUMN follow_up_session TEXT");
+      db.exec("ALTER TABLE jots ADD COLUMN followed_up_at TEXT");
+      db.exec("ALTER TABLE jots ADD COLUMN follow_up_count INTEGER NOT NULL DEFAULT 0");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_jots_follow_up ON jots(follow_up_at) WHERE follow_up_at IS NOT NULL");
+    },
+  },
 
 ];
 

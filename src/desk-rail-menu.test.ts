@@ -23,7 +23,7 @@ test("live terminals, ended ones and parked notes each get their own actions; de
   for (const l of ["✓ Goal reached", "✏️ Rename…", "👁 Have Robert watch it", "🔗 Copy reopen link", "✕ Close terminal", "↻ Reopen", "✕ Remove from the list"]) assert.ok(live.includes(l), l);
   assert.match(live, /armed: "✕ Close\? click again"/);
   const jot = fn("jotActions");
-  for (const l of ["▶ Run in a terminal", "✓ Mark done", "✏️ Edit title…", "📋 Copy text", "✕ Delete"]) assert.ok(jot.includes(l), l);
+  for (const l of ["▶ Run in a terminal", "✓ Mark done", "✏️ Edit…", "⏰ Follow up…", "📋 Copy text", "✕ Delete"]) assert.ok(jot.includes(l), l);
   assert.match(jot, /armed: "✕ Delete\? click again"/);
 });
 

@@ -280,7 +280,20 @@ mc pad list                         # what is parked for this client (id prefix 
 mc pad show <id>                    # one row in full
 mc pad add "<title>" --body "…"     # park a follow-up (body may be piped on stdin)
 mc pad append <id> "<what you learned>"   # add to a row's detail, never replaces it
+mc pad add "<title>" --body "…" --follow +2d --check "did the backfill land?"   # park it AND have an agent come back to it
+mc pad follow <id> <when> [--check "…"]   # schedule (or move) the follow-up on one of your rows; `off` cancels
+mc pad resolve <id> "<why>"         # close a row, keeping the reason on it
+mc pad due                          # this client's scheduled follow-ups
 ```
+
+- **"Check on this later" gets a time.** If the row is waiting on something — a review, CI, a backfill,
+  a reply, a date — add `--follow <when>` (+2d, tomorrow 9:00, monday 10, 2026-10-01 14:00) and a
+  `--check` saying exactly what to look at. At that time Chronos opens a terminal on the row. A row
+  with nothing to wait on needs no follow-up.
+- **If you ARE the follow-up terminal**, your first prompt says so. Find the real state, `mc pad
+  append` a dated `### Follow-up` entry with links, then close the loop with exactly one of `mc pad
+  resolve`, `mc pad follow <id> <when> --check "…"`, or `mc ask`. Agents can schedule at least 30
+  minutes out and at most 8 times per row; after that it is the operator's call.
 
 - **Park, don't drop.** When you find real follow-up work that is out of scope for your goal — a bug
   next door, a cleanup, a question only the operator can settle later — `mc pad add` it before you
@@ -288,8 +301,9 @@ mc pad append <id> "<what you learned>"   # add to a row's detail, never replace
   it matters). Say it in your Summary: `Parked: <title>`.
 - **Append beats a duplicate.** `mc pad list` first; if a row already covers it, `mc pad append` what
   you learned instead of adding a second one.
-- Your rows show as `· agent` on the Desk. Editing, ticking off, deleting and running a row are the
-  operator's (and Robert's) — deciding a parked thought is ready to start is their call.
+- Your rows show as `agent` on the Desk. Editing, deleting and running a row are the operator's (and
+  Robert's) — deciding a parked thought is ready to start is their call. You may schedule and resolve
+  follow-ups only on rows an agent filed, or on the row whose follow-up opened you.
 
 ## Other terminals
 

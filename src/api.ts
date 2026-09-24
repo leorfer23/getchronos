@@ -20,6 +20,7 @@ import { egressCfg, egressPort, syncEgress } from "./egress.js";
 import { createSkill, skillBody, skillRef, patchSkill, appendSkill, setSkillStatus, removeSkill, useSkill } from "./skills.js";
 import { createIdea, promoteIdea, killIdea, killIdeas, dispatchIdeaFeeder } from "./ideas.js";
 import { jotWritePolicy, runJot } from "./jots.js";
+import { fireFollowUp, followUpPolicy, parseFollowUpAt } from "./jot-followup.js";
 import { runLaunch } from "./launches.js";
 import { desktop as desktopNotify } from "./notify.js";
 import { vapidKeys, pushSubs, broadcast } from "./push.js";
@@ -144,7 +145,7 @@ import {
   NewSkillSchema, PatchSkillSchema, ArchiveSkillSchema,
   NewWorkspaceVarSchema, PatchWorkspaceVarSchema,
   NewIdeaSchema, PromoteIdeaSchema, PromoteIdeasSchema, KillIdeasSchema, GenerateIdeasSchema,
-  NewJotSchema, JotPatchSchema, JotAppendSchema, JOT_BODY_MAX, RunJotSchema, ReorderJotsSchema, PlanNextDaySchema,
+  NewJotSchema, JotPatchSchema, JotAppendSchema, JotFollowUpSchema, JotResolveSchema, JOT_BODY_MAX, RunJotSchema, ReorderJotsSchema, PlanNextDaySchema,
   NewTicketSchema, PatchTicketSchema, TicketLinkSchema, TicketNoteSchema, PushCommentSchema, PushStatusSchema, PushHoursSchema,
   DeclareStepsSchema, SetStepSchema, NewAskSchema, AnswerAskSchema, EscalateAskSchema, HoldSchema, WatchSchema, ClipboardSchema, ClaimWorktreeSchema, RemoveWorktreeSchema, NewMessageSchema,
   DispatchTicketSchema, SetPlanSchema, GradeSchema, NewAttachmentSchema,
@@ -3139,6 +3140,17 @@ export function startServer() {
     if (!checkScope(req, res, req.params.id)) return;
     const policy = jotWritePolicy({ admin: isAdminCaller(req), scopedWs: callerScope(req)?.ws }, req.body);
     if (!policy.ok) return res.status(policy.status).json({ error: policy.error });
+    let followAt: string | null = null;
+    if (req.body.follow_up_at) {
+      followAt = parseFollowUpAt(req.body.follow_up_at);
+      if (!followAt) return res.status(400).json({ error: `can't read follow-up time '${req.body.follow_up_at}' — try +2d, tomorrow 9:00, monday, 2026-10-01 14:00` });
+      const fp = followUpPolicy(
+        { admin: isAdminCaller(req), scopedWs: callerScope(req)?.ws, session: req.get("x-mc-session") },
+        { workspace_id: req.params.id, source: policy.source, follow_up_session: null, follow_up_count: 0 },
+        { at: followAt },
+      );
+      if (!fp.ok) return res.status(fp.status).json({ error: fp.error });
+    }
     const row = jots.create({
       workspace_id: req.params.id,
       title: req.body.title,
@@ -3146,6 +3158,8 @@ export function startServer() {
       for_date: req.body.for_date ?? null,
       source: policy.source,
       planned_by: policy.planned_by,
+      follow_up_at: followAt,
+      follow_up_check: followAt ? (req.body.follow_up_check?.trim() || null) : null,
     });
     bus.publish({ topic: "jot.updated", jot_id: row.id, workspace_id: row.workspace_id });
     res.status(201).json(row);
@@ -3175,9 +3189,62 @@ export function startServer() {
     res.json(row);
   });
 
+  // Follow-ups (src/jot-followup.ts): when an agent should come back to this note, and what it should
+  // check. The operator schedules anything; a terminal only on its own client's agent-filed notes, or
+  // the note whose follow-up opened it — so a follow-up terminal can close its own loop.
+  const followCaller = (req: express.Request) => ({ admin: isAdminCaller(req), scopedWs: callerScope(req)?.ws, session: req.get("x-mc-session") });
+  api.post("/jots/:id/follow-up", validate(JotFollowUpSchema), (req, res) => {
+    const j = jots.get(req.params.id);
+    if (!j) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, j.workspace_id)) return;
+    let at: string | null = null;
+    if (req.body.at) {
+      at = parseFollowUpAt(req.body.at);
+      if (!at) return res.status(400).json({ error: `can't read '${req.body.at}' — try +2d, tomorrow 9:00, monday 10, 2026-10-01 14:00` });
+    }
+    const p = followUpPolicy(followCaller(req), j, { at });
+    if (!p.ok) return res.status(p.status).json({ error: p.error });
+    try {
+      const check = req.body.check === undefined ? undefined : (req.body.check?.trim() || null);
+      const row = jots.setFollowUp(j.id, at, check)!;
+      bus.publish({ topic: "jot.updated", jot_id: row.id, workspace_id: row.workspace_id });
+      res.json(row);
+    } catch (e: any) {
+      res.status(409).json({ error: String(e?.message ?? e) });
+    }
+  });
+
+  // "Follow up now": the same terminal the timer would open, without waiting for it.
+  api.post("/jots/:id/follow-up/now", requireAdmin, async (req, res) => {
+    const j = jots.get(req.params.id);
+    if (!j) return res.status(404).json({ error: "not found" });
+    if (j.status === "done") return res.status(409).json({ error: "note is done — reopen it first" });
+    const nowMs = Date.now();
+    jots.setFollowUp(j.id, new Date(nowMs).toISOString());
+    const session = await fireFollowUp(j.id, nowMs);
+    if (!session) return res.status(409).json({ error: "couldn't open a terminal now (seat cap or busy machine) — it will retry in 15 minutes" });
+    res.status(201).json({ jot: jots.get(j.id), session });
+  });
+
+  // Close a note with a reason: the reason is appended so the pad keeps why, then it is marked done.
+  api.post("/jots/:id/resolve", validate(JotResolveSchema), (req, res) => {
+    const j = jots.get(req.params.id);
+    if (!j) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, j.workspace_id)) return;
+    const p = followUpPolicy(followCaller(req), j);
+    if (!p.ok) return res.status(p.status).json({ error: p.error });
+    const note = req.body.note?.trim();
+    if (note) jots.append(j.id, `✓ Resolved ${new Date().toISOString().slice(0, 10)} — ${note}`);
+    const row = jots.update(j.id, { status: "done" })!;
+    bus.publish({ topic: "jot.updated", jot_id: row.id, workspace_id: row.workspace_id });
+    res.json(row);
+  });
+
   api.patch("/jots/:id", requireAdmin, validate(JotPatchSchema), (req, res) => {
     if (!jots.get(req.params.id)) return res.status(404).json({ error: "not found" });
-    res.json(jots.update(req.params.id, req.body));
+    const row = jots.update(req.params.id, req.body)!;
+    bus.publish({ topic: "jot.updated", jot_id: row.id, workspace_id: row.workspace_id });
+    res.json(row);
   });
 
   api.delete("/jots/:id", requireAdmin, (req, res) => {

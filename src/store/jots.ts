@@ -38,6 +38,16 @@ export type Jot = {
   source: JotSource;
   /** The terminal that filed it — the door back to its reasoning. null for operator rows. */
   planned_by: string | null;
+  /** When an agent should come back to this note (ISO), or null. Cleared the moment one does. */
+  follow_up_at: string | null;
+  /** What that agent should look at — the question the note is waiting on. */
+  follow_up_check: string | null;
+  /** The last terminal a follow-up opened on this note: the door to what it found. */
+  follow_up_session: string | null;
+  /** When the last follow-up fired. */
+  followed_up_at: string | null;
+  /** How many follow-ups have fired. Bounds how long agents can keep rescheduling on their own. */
+  follow_up_count: number;
 };
 
 export type JotSource = "operator" | "nextday" | "agent";
@@ -49,9 +59,11 @@ export type NewJot = {
   for_date?: string | null;
   source?: JotSource;
   planned_by?: string | null;
+  follow_up_at?: string | null;
+  follow_up_check?: string | null;
 };
 
-const COLS = `id,workspace_id,title,body,status,pos,session_id,created_at,updated_at,ran_at,done_at,for_date,source,planned_by`;
+const COLS = `id,workspace_id,title,body,status,pos,session_id,created_at,updated_at,ran_at,done_at,for_date,source,planned_by,follow_up_at,follow_up_check,follow_up_session,followed_up_at,follow_up_count`;
 
 export const jots = {
   list(filter: { workspace_id?: string; status?: string; for_date?: string; source?: JotSource } = {}): Jot[] {
@@ -94,9 +106,14 @@ export const jots = {
       for_date: input.for_date ?? null,
       source: input.source ?? "operator",
       planned_by: input.planned_by ?? null,
+      follow_up_at: input.follow_up_at ?? null,
+      follow_up_check: input.follow_up_check ?? null,
+      follow_up_session: null,
+      followed_up_at: null,
+      follow_up_count: 0,
     };
     db.prepare(
-      `INSERT INTO jots (${COLS}) VALUES (@id,@workspace_id,@title,@body,@status,@pos,@session_id,@created_at,@updated_at,@ran_at,@done_at,@for_date,@source,@planned_by)`,
+      `INSERT INTO jots (${COLS}) VALUES (@id,@workspace_id,@title,@body,@status,@pos,@session_id,@created_at,@updated_at,@ran_at,@done_at,@for_date,@source,@planned_by,@follow_up_at,@follow_up_check,@follow_up_session,@followed_up_at,@follow_up_count)`,
     ).run(row);
     return this.get(row.id)!;
   },
@@ -133,6 +150,9 @@ export const jots = {
       // reopening one has to clear it or the row keeps a completion date it no longer has.
       sets.push("done_at=@done_at");
       params.done_at = p.status === "done" ? (this.get(id)?.done_at ?? now()) : null;
+      // A closed note has nothing left to follow up on; a follow-up that fired on it anyway would
+      // open a terminal to chase work that is already finished.
+      if (p.status === "done") sets.push("follow_up_at=NULL");
     }
     if (!sets.length) return this.get(id);
     sets.push("updated_at=@updated_at");
@@ -158,8 +178,64 @@ export const jots = {
    */
   ran(id: string, session_id: string): Jot | undefined {
     db.prepare(
-      "UPDATE jots SET session_id=@session_id, ran_at=@t, updated_at=@t, status='done', done_at=COALESCE(done_at, @t) WHERE id=@id",
+      "UPDATE jots SET session_id=@session_id, ran_at=@t, updated_at=@t, status='done', done_at=COALESCE(done_at, @t), follow_up_at=NULL WHERE id=@id",
     ).run({ id, session_id, t: now() });
+    return this.get(id);
+  },
+
+  /**
+   * Schedule (or, with `at: null`, cancel) the next follow-up. `check` is only touched when given, so
+   * moving the time does not wipe the question; pass null to clear it. Scheduling reopens nothing: a
+   * done note refuses, because following up on finished work is the bug this guards.
+   */
+  setFollowUp(id: string, at: string | null, check?: string | null): Jot | undefined {
+    const j = this.get(id);
+    if (!j) return undefined;
+    if (at && j.status === "done") throw new Error("note is done — reopen it before scheduling a follow-up");
+    const sets = ["follow_up_at=@at", "updated_at=@t"];
+    const params: any = { id, at, t: now() };
+    if (check !== undefined) { sets.push("follow_up_check=@check"); params.check = check; }
+    db.prepare(`UPDATE jots SET ${sets.join(", ")} WHERE id=@id`).run(params);
+    return this.get(id);
+  },
+
+  /** Open notes whose follow-up time has come, oldest first. */
+  dueFollowUps(nowIso: string): Jot[] {
+    return db.prepare(
+      "SELECT * FROM jots WHERE status='open' AND follow_up_at IS NOT NULL AND follow_up_at <= ? ORDER BY follow_up_at",
+    ).all(nowIso) as Jot[];
+  },
+
+  /** The soonest pending follow-up, so the timer can sleep exactly until then. */
+  nextFollowUpAt(): string | null {
+    const r = db.prepare(
+      "SELECT MIN(follow_up_at) AS at FROM jots WHERE status='open' AND follow_up_at IS NOT NULL",
+    ).get() as { at: string | null };
+    return r.at;
+  },
+
+  /**
+   * Take a due follow-up exactly once. Guarded on the time still being set and due, so two sweeps
+   * racing (boot catch-up + timer) cannot both open a terminal. Returns false if someone else won.
+   */
+  claimFollowUp(id: string, nowIso: string): boolean {
+    return db.prepare(
+      `UPDATE jots SET follow_up_at=NULL, followed_up_at=@t, follow_up_count=follow_up_count+1, updated_at=@t
+       WHERE id=@id AND status='open' AND follow_up_at IS NOT NULL AND follow_up_at <= @t`,
+    ).run({ id, t: nowIso }).changes > 0;
+  },
+
+  /** Give a claimed follow-up back (its terminal could not open): a later time, and the claim uncounted. */
+  unclaimFollowUp(id: string, retryIso: string): Jot | undefined {
+    db.prepare(
+      "UPDATE jots SET follow_up_at=@at, follow_up_count=MAX(follow_up_count-1, 0), updated_at=@t WHERE id=@id AND status='open'",
+    ).run({ id, at: retryIso, t: now() });
+    return this.get(id);
+  },
+
+  /** Link the terminal a follow-up opened. */
+  followedUpBy(id: string, session_id: string): Jot | undefined {
+    db.prepare("UPDATE jots SET follow_up_session=@s, updated_at=@t WHERE id=@id").run({ id, s: session_id, t: now() });
     return this.get(id);
   },
 
