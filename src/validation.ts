@@ -566,6 +566,9 @@ export const NewJotSchema = z.object({
   // The session that filed it, when an agent did. The route stamps `source` itself from who is
   // calling — a body may not claim to be the operator.
   planned_by: id.nullable().optional(),
+  // "+2d", "tomorrow 9:00", "monday", an ISO stamp — parsed by the route (src/jot-followup.ts).
+  follow_up_at: z.string().max(80).nullable().optional(),
+  follow_up_check: z.string().max(2000).nullable().optional(),
 });
 // Every field optional: the Desk autosaves one field at a time as you type, and a patch that had to
 // restate the row would overwrite an edit made in another window between load and save.
@@ -575,6 +578,12 @@ export const JotPatchSchema = z.object({
   status: z.enum(["open", "done"]).optional(),
   for_date: dayString.nullable().optional(),
 }).refine((o) => Object.keys(o).length > 0, { message: "nothing to patch" });
+export const JotFollowUpSchema = z.object({
+  /** When to come back — null cancels. Same grammar as `mc pad follow`. */
+  at: z.string().max(80).nullable(),
+  check: z.string().max(2000).nullable().optional(),
+});
+export const JotResolveSchema = z.object({ note: z.string().max(4000).optional() });
 export const JotAppendSchema = z.object({ text: z.string().trim().min(1).max(JOT_BODY_MAX) });
 // "Plan tomorrow": which clients, what the operator wants weighed in (one free-text steer per
 // client, keyed by workspace id), and which day the cards are for (defaults to the next workday).

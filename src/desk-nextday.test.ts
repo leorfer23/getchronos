@@ -20,7 +20,7 @@ test("the bar has the button, the dialog posts to /nextday with a date and per-c
 });
 
 test("the pad groups a day's cards under a Next Day rule and repaints when a planner files one", () => {
-  assert.match(html, /"🌙 Next Day " \+ esc\(j\.for_date\.slice\(5\)\)/);
+  assert.match(html, /"🌙 Next Day " \+ esc\(g\.slice\(9\)\)/);
   assert.match(html, /"jot\.updated", "jot\.ran",/);
   assert.match(html, /e\.topic === "jot\.updated" \|\| e\.topic === "jot\.ran"\) loadSoon\(\)/);
   assert.match(html, /el\.classList\.toggle\("planned", j\.source === "nextday"\)/);

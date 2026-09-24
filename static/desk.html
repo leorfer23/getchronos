@@ -256,6 +256,7 @@
     text-transform:uppercase; color:var(--faint); font-weight:700; cursor:pointer; user-select:none; }
   .rail h3 .rule { flex:1; height:1px; background:var(--line); }
   .rail h3 .n { font-weight:600; }
+  .rail h3 .n.hot { color:var(--warn); }
   .rail h3 .add { border:0; background:none; color:var(--faint); font:inherit; letter-spacing:0; text-transform:none; font-size:13px; padding:0 4px; border-radius:4px; }
   .rail h3 .add:hover { color:var(--accent); background:var(--accent-soft); }
   .rail section.fold .rows { display:none; }
@@ -273,7 +274,36 @@
   .empty { color:var(--faint); padding:26px 10px; text-align:center; font-size:14px; }
   /* Parked: a thought that is not a terminal yet. One line each; the body opens on click. */
   .row.jot .t { font-weight:500; }
-  .row.jot.by-agent .txt::after { content:"  · agent"; font-weight:400; font-size:12px; color:var(--faint); }
+  .row.jot .t .txt { flex:1; min-width:0; }
+  .row.jot.open .t .txt { white-space:normal; }
+  .row.jot .meta { font-size:12px; color:var(--faint); margin-top:1px; font-variant-numeric:tabular-nums; }
+  /* When an agent comes back to this note (src/jot-followup.ts): quiet when scheduled, amber when
+     due, green while the follow-up terminal is working on it. */
+  .row.jot .fu { flex:none; font:inherit; font-size:12px; font-weight:650; color:var(--accent); background:var(--accent-soft); border:0;
+    border-radius:999px; padding:0 8px; line-height:18px; cursor:pointer; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .row.jot .fu.due { color:var(--warn); background:color-mix(in srgb, var(--warn) 15%, transparent); }
+  .row.jot .fu.live { color:var(--ok); background:color-mix(in srgb, var(--ok) 15%, transparent); }
+  .row.jot:not(.open) .jot-more { display:none; }
+  .jot-check { margin:6px 0 0; font-size:12.5px; line-height:1.4; color:var(--muted); }
+  .jot-check b { color:var(--faint); font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.03em; margin-right:5px; }
+  .jot-bar { display:flex; gap:4px; margin-top:8px; flex-wrap:wrap; }
+  .jot-bar button { border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:7px; padding:2px 9px;
+    font:inherit; font-size:12.5px; font-weight:600; cursor:pointer; }
+  .jot-bar button:hover { color:var(--accent); border-color:var(--accent); }
+  .row.jot.editing .jot-view, .row.jot.editing .jot-check, .row.jot.editing .jot-bar { display:none; }
+  .jot-edit { display:flex; flex-direction:column; gap:6px; margin-top:6px; cursor:auto; }
+  .jot-edit input, .jot-edit textarea { font:inherit; font-size:13.5px; color:var(--ink); background:var(--bg); border:1px solid var(--accent);
+    border-radius:7px; padding:6px 8px; }
+  .jot-edit textarea { min-height:140px; resize:vertical; line-height:1.45; }
+  .jot-edit .row-btns { display:flex; gap:6px; justify-content:flex-end; align-items:center; }
+  .jot-edit .row-btns .hint { margin-right:auto; font-size:11.5px; color:var(--faint); }
+  .parked-q { display:block; width:calc(100% - 8px); margin:0 4px 6px; border:1px solid var(--line); background:var(--surface); color:var(--ink);
+    border-radius:8px; padding:5px 9px; font:inherit; font-size:13.5px; }
+  .rail section.fold .parked-q, .parked-q[hidden] { display:none; }
+  .fu-presets { display:flex; flex-wrap:wrap; gap:6px; }
+  .fu-presets button { border:1px solid var(--line); background:var(--bg); color:var(--ink); border-radius:999px; padding:4px 12px;
+    font:inherit; font-size:14px; cursor:pointer; }
+  .fu-presets button.on { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
   .row.jot .acts { display:none; gap:2px; }
   .row.jot:hover .acts { display:flex; }
   .row.jot .acts button { border:0; background:none; color:var(--muted); font-size:12.5px; padding:0 5px; border-radius:4px; }
@@ -285,6 +315,7 @@
   .jot-view a { color:var(--accent); text-decoration:none; }
   .jot-view code { font:12.5px ui-monospace,Menlo,monospace; background:var(--surface-2); padding:0 3px; border-radius:3px; }
   .row.jot:not(.open) .jot-view { display:none; }
+  .jot-day[hidden] { display:none; }
   .jot-day { margin:8px 6px 2px; font-size:12px; font-weight:600; color:var(--muted); display:flex; align-items:center; gap:8px; }
   .jot-day .rule { flex:1; height:1px; background:var(--line); }
 
@@ -989,7 +1020,7 @@
     <form class="quick" id="quick"><select id="q-ws" title="Client"></select><select id="q-backend" class="cli" title="CLI — Claude, Cursor, Grok…"></select><select id="q-model" class="model" title="Model for that CLI"></select><select id="q-host" title="Which computer it runs on" hidden></select><input id="q-goal" placeholder="what should it do? · ⏎ · empty ⏎ = blank" autocomplete="off" spellcheck="false"><button type="button" class="icon" id="q-focus" title="Focus only — story and composer, no live terminal">◎</button><button type="button" class="icon" id="q-lead" title="Open as a Lead — it opens and drives its own terminals for this goal">◆</button><button type="button" class="icon" id="q-more" title="With a brief, cwd… (⇧N)">⋯</button></form>
     <div class="rows" id="rows"></div>
     <div class="empty" id="rail-empty" hidden>no open terminals</div>
-    <section id="sec-parked" class="fold"><h3><span>Parked</span><span class="n" id="parked-n"></span><span class="rule"></span><button class="add" id="btn-note" title="Park a thought">+ note</button></h3><div class="rows" id="parked"></div></section>
+    <section id="sec-parked" class="fold"><h3><span>Notes</span><span class="n" id="parked-n"></span><span class="rule"></span><button class="add" id="btn-note" title="Park a thought">+ note</button></h3><input class="parked-q" id="parked-q" type="search" placeholder="Filter notes…" autocomplete="off" hidden><div class="rows" id="parked"></div></section>
     <!-- The terminals that have ended, newest first. Not triage — the rail stays live-only — but the
          20 you most likely want to reread or reopen, folded away until you ask for them. -->
     <section id="sec-recent" class="fold"><h3><span>Recent</span><span class="n" id="recent-n"></span><span class="rule"></span></h3><div class="rows" id="recent"></div></section>
@@ -1129,7 +1160,23 @@
     <label>What is it? <input name="title" required autocomplete="off"></label>
     <label>Everything you know so far <span class="hint">— handed to the agent as its first prompt when you run it</span>
       <textarea name="body" rows="4"></textarea></label>
+    <label>Follow up <span class="hint">— an agent opens a terminal on it then, checks, and writes back</span>
+      <select name="follow" id="n-follow"></select></label>
+    <label id="n-check-l" hidden>What should it check? <span class="hint">— optional</span><input name="check" autocomplete="off"></label>
     <div class="actions"><button class="btn" type="button" id="n-cancel">Cancel</button><button class="btn primary" value="ok">Park</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-follow">
+  <form class="dlg" method="dialog" id="form-follow">
+    <h3>⏰ Follow up</h3>
+    <div class="hint" id="fu-title" style="margin-top:-6px;font-size:14px"></div>
+    <div class="fu-presets" id="fu-presets"></div>
+    <label>When <input type="datetime-local" name="at" id="fu-at" required></label>
+    <label>What should the agent check? <span class="hint">— optional; otherwise: is it still open, what changed, what's next</span>
+      <textarea name="check" rows="3" id="fu-check"></textarea></label>
+    <div class="hint" style="font-size:13px">At that time Chronos opens a terminal on this note. It writes what it found back onto the note, then resolves it, schedules the next look, or asks you.</div>
+    <div class="actions"><button class="btn danger" type="button" id="fu-clear">Cancel follow-up</button><button class="btn" type="button" id="fu-now" title="Open the follow-up terminal right now">▶ Now</button><button class="btn" type="button" id="fu-close">Close</button><button class="btn primary" value="ok">Schedule</button></div>
   </form>
 </dialog>
 
@@ -3243,20 +3290,93 @@ function mdLite(md) {
     return line.trim() === "" ? "" : inline(line) + "\n";
   }).join("");
 }
+// ── notes (jots) ─────────────────────────────────────────────────────────────────────────────
+// A note is a thought parked against a client. It can carry a follow-up: at that time the daemon
+// opens a terminal on it (src/jot-followup.ts) that writes back what it found. The chip on the row
+// says when; the expanded row is where you read it, edit it, and schedule it.
+const liveSession = (id) => !!id && S.sessions.some((x) => x.id === id && x.live);
+function fuWhen(iso) {
+  const d = new Date(iso), now = new Date();
+  const t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(d) - day(now)) / 86400000);
+  if (diff === 0) return t;
+  if (diff === 1) return "tmrw " + t;
+  if (diff > 1 && diff < 7) return d.toLocaleDateString([], { weekday: "short" }) + " " + t;
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+function jotFollowState(j) {
+  if (!j.follow_up_at && liveSession(j.follow_up_session)) return "live";
+  if (!j.follow_up_at) return "";
+  return Date.parse(j.follow_up_at) <= Date.now() ? "due" : "set";
+}
+async function runJotNow(j, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "opening…"; }
+  try { const { session } = await api("/jots/" + j.id + "/run", { method: "POST", body: JSON.stringify({}) }); await load(); select(session.id); }
+  catch (e) { toast("run failed: " + e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || "▶ run"; } }
+}
+async function patchJot(id, body) {
+  try { await api("/jots/" + id, { method: "PATCH", body: JSON.stringify(body) }); } catch (e) { toast(e.message); }
+  load();
+}
+function editJot(el, j) {
+  if (el.classList.contains("editing")) return;
+  S.jotOpen.add(j.id); el.classList.add("open", "editing");
+  const f = document.createElement("div");
+  f.className = "jot-edit";
+  f.innerHTML = '<input class="et" maxlength="400"><textarea class="eb" placeholder="Everything you know so far — handed to the agent as its brief"></textarea>' +
+    '<div class="row-btns"><span class="hint">⌘↵ save · esc cancel</span><button class="btn" type="button" data-e="cancel">Cancel</button><button class="btn primary" type="button" data-e="save">Save</button></div>';
+  qs(".et", f).value = j.title; qs(".eb", f).value = j.body || "";
+  qs(".jot-more", el).appendChild(f);
+  const close = () => { f.remove(); el.classList.remove("editing"); };
+  const save = async () => {
+    const title = qs(".et", f).value.trim(), body = qs(".eb", f).value.trim();
+    if (!title) return toast("a note needs a title");
+    const patch = {};
+    if (title !== j.title) patch.title = title;
+    if (body !== (j.body || "").trim()) patch.body = body || null;
+    close();
+    if (Object.keys(patch).length) patchJot(j.id, patch);
+  };
+  qs('[data-e="cancel"]', f).onclick = close;
+  qs('[data-e="save"]', f).onclick = save;
+  f.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
+  });
+  setTimeout(() => qs(".eb", f).focus(), 20);
+}
 function jotEl(j) {
   const el = document.createElement("div");
   el.className = "row jot"; el.dataset.sid = j.id;
-  el.innerHTML = '<span class="stripe"></span><div class="main"><div class="t"><span class="ws"></span><span class="txt"></span></div><div class="jot-view"></div></div>' +
-    '<span class="acts"><button class="run" title="Open a terminal on this">▶ run</button><button class="ok" title="Mark done">✓</button><button class="del" title="Delete (click twice)">✕</button></span>';
-  el.onclick = (e) => { if (e.target.closest(".acts, a")) return; S.jotOpen.has(j.id) ? S.jotOpen.delete(j.id) : S.jotOpen.add(j.id); el.classList.toggle("open", S.jotOpen.has(j.id)); };
-  qs(".run", el).onclick = async () => {
-    const b = qs(".run", el); b.disabled = true; b.textContent = "opening…";
-    try { const { session } = await api("/jots/" + j.id + "/run", { method: "POST", body: JSON.stringify({}) }); await load(); select(session.id); }
-    catch (e) { toast("run failed: " + e.message); }
-    finally { b.disabled = false; b.textContent = "▶ run"; }
+  el.innerHTML = '<span class="stripe"></span><div class="main"><div class="t"><span class="ws"></span><span class="txt"></span><button class="fu" hidden></button></div>' +
+    '<div class="meta"></div><div class="jot-more"><div class="jot-view"></div><div class="jot-check" hidden></div>' +
+    '<div class="jot-bar"><button data-a="edit">✏️ Edit</button><button data-a="follow">⏰ Follow up…</button><button data-a="run" data-label="▶ Run">▶ Run</button><button data-a="done">✓ Done</button></div></div></div>' +
+    '<span class="acts"><button class="fub" title="Follow up…">⏰</button><button class="run" title="Open a terminal on this">▶ run</button><button class="ok" title="Mark done">✓</button><button class="del" title="Delete (click twice)">✕</button></span>';
+  const cur = () => S.jots.find((x) => x.id === j.id) || j;
+  el.onclick = (e) => {
+    if (e.target.closest(".acts, a, .jot-bar, .jot-edit, .fu")) return;
+    if (el.classList.contains("editing")) return;
+    S.jotOpen.has(j.id) ? S.jotOpen.delete(j.id) : S.jotOpen.add(j.id); el.classList.toggle("open", S.jotOpen.has(j.id));
   };
-  qs(".ok", el).onclick = async () => { try { await api("/jots/" + j.id, { method: "PATCH", body: JSON.stringify({ status: "done" }) }); } catch (e) { toast(e.message); } load(); };
+  qs(".fu", el).onclick = () => {
+    const x = cur();
+    if (jotFollowState(x) === "live") return select(x.follow_up_session);
+    openFollow(x);
+  };
+  qs(".fub", el).onclick = () => openFollow(cur());
+  qs(".run", el).onclick = () => runJotNow(cur(), qs(".run", el));
+  qs(".ok", el).onclick = () => patchJot(j.id, { status: "done" });
   qs(".del", el).onclick = () => arm(qs(".del", el), "sure?", async () => { try { await api("/jots/" + j.id, { method: "DELETE" }); } catch (e) { toast(e.message); } load(); });
+  qs(".jot-bar", el).onclick = (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    const x = cur();
+    if (b.dataset.a === "edit") editJot(el, x);
+    if (b.dataset.a === "follow") openFollow(x);
+    if (b.dataset.a === "run") runJotNow(x, b);
+    if (b.dataset.a === "done") patchJot(x.id, { status: "done" });
+  };
   return el;
 }
 function paintJot(el, j) {
@@ -3267,31 +3387,136 @@ function paintJot(el, j) {
   el.style.setProperty("--ws", wsColor(j.workspace_id));
   qs(".ws", el).textContent = wsName(j.workspace_id);
   qs(".txt", el).textContent = j.title;
+  const st = jotFollowState(j), fu = qs(".fu", el);
+  fu.hidden = !st;
+  fu.className = "fu" + (st === "due" ? " due" : st === "live" ? " live" : "");
+  fu.textContent = st === "live" ? "🔄 following up" : st === "due" ? "⏰ due" : st ? "⏰ " + fuWhen(j.follow_up_at) : "";
+  fu.title = st === "live" ? "A follow-up terminal is on it — open it" : st ? "Follow-up " + new Date(j.follow_up_at).toLocaleString() + (j.follow_up_check ? "\nCheck: " + j.follow_up_check : "") : "";
+  const meta = [j.source === "agent" ? "agent" : j.source === "nextday" ? "planned" : "", age(j.created_at)];
+  if (j.follow_up_count) meta.push(j.follow_up_count === 1 ? "followed up once" : "followed up " + j.follow_up_count + "×");
+  qs(".meta", el).textContent = meta.filter(Boolean).join(" · ");
+  qs('.jot-bar [data-a="follow"]', el).textContent = st === "due" ? "⏰ Due — reschedule…" : j.follow_up_at ? "⏰ " + fuWhen(j.follow_up_at) + "…" : "⏰ Follow up…";
+  if (el.classList.contains("editing")) return; // never repaint under the operator's typing
   const view = qs(".jot-view", el);
   const html = j.body ? mdLite(j.body) : "";
   if (view.innerHTML !== html) view.innerHTML = html;
   view.hidden = !j.body;
+  const chk = qs(".jot-check", el);
+  chk.hidden = !(j.follow_up_at && j.follow_up_check);
+  chk.innerHTML = chk.hidden ? "" : "<b>Check</b>" + esc(j.follow_up_check);
+}
+// Follow-ups first (soonest first; one being worked on at the very top), then plain notes newest
+// first, then the plan-tomorrow day blocks. A rule labels each block once there is more than one.
+function jotGroup(j) {
+  const st = jotFollowState(j);
+  if (st) return "fu";
+  return j.for_date ? "day:" + j.for_date : "notes";
 }
 function renderParked() {
-  const rows = S.jots.filter((j) => j.status === "open").sort((a, b) => (a.for_date || "").localeCompare(b.for_date || "") || (a.created_at || "").localeCompare(b.created_at || ""));
+  const q = (qs("#parked-q").value || "").trim().toLowerCase();
+  const all = S.jots.filter((j) => j.status === "open");
+  const rows = all
+    .filter((j) => !q || (j.title + "\n" + (j.body || "") + "\n" + wsName(j.workspace_id)).toLowerCase().includes(q))
+    .sort((a, b) => {
+      const ga = jotGroup(a), gb = jotGroup(b);
+      const rank = (g) => (g === "fu" ? 0 : g === "notes" ? 1 : 2);
+      if (rank(ga) !== rank(gb)) return rank(ga) - rank(gb);
+      if (ga === "fu") {
+        const k = (j) => (jotFollowState(j) === "live" ? "" : j.follow_up_at || "");
+        return k(a).localeCompare(k(b));
+      }
+      if (ga !== gb) return ga.localeCompare(gb);
+      return (b.created_at || "").localeCompare(a.created_at || "");
+    });
   const sec = qs("#sec-parked");
-  sec.hidden = rows.length === 0 && !S.workspaces.length;
+  sec.hidden = all.length === 0 && !S.workspaces.length;
   sec.classList.toggle("fold", !!S.fold.parked);
-  qs("#parked-n").textContent = rows.length ? String(rows.length) : "";
+  const nFu = all.filter((j) => jotFollowState(j)).length, nDue = all.filter((j) => jotFollowState(j) === "due").length;
+  qs("#parked-n").textContent = all.length ? String(all.length) + (nFu ? " · ⏰" + nFu : "") : "";
+  qs("#parked-n").classList.toggle("hot", nDue > 0);
+  qs("#parked-q").hidden = all.length < 7 && !q;
   const host = qs("#parked");
   reconcile(host, rows, jotEl, paintJot);
-  // Dated cards sit under one "Next Day" rule per day, ahead of the first card of that day.
-  const days = new Set();
+  // Rows take the odd slots so each block's rule (even slot) sits just ahead of its first row.
+  rows.forEach((j, i) => { const el = qs('[data-sid="' + j.id + '"]', host); if (el) el.style.order = String(2 * i + 1); });
+  const groups = new Set(rows.map(jotGroup));
+  const labelled = new Set();
   rows.forEach((j, i) => {
-    if (!j.for_date || days.has(j.for_date)) return;
-    days.add(j.for_date);
-    let rule = qs('[data-day="' + j.for_date + '"]', host);
-    if (!rule) { rule = document.createElement("div"); rule.className = "jot-day"; rule.dataset.day = j.for_date; host.appendChild(rule); }
-    rule.innerHTML = "🌙 Next Day " + esc(j.for_date.slice(5)) + '<span class="rule"></span>';
-    rule.style.order = String(i);
+    const g = jotGroup(j);
+    if (labelled.has(g)) return;
+    labelled.add(g);
+    let rule = qs('[data-day="' + g + '"]', host);
+    if (!rule) { rule = document.createElement("div"); rule.className = "jot-day"; rule.dataset.day = g; host.appendChild(rule); }
+    const label = g === "fu" ? "⏰ Follow-ups" : g === "notes" ? "📝 Notes" : "🌙 Next Day " + esc(g.slice(9));
+    rule.innerHTML = label + '<span class="rule"></span>';
+    rule.hidden = groups.size < 2;
+    rule.style.order = String(2 * i);
   });
-  for (const el of [...host.children]) if (el.dataset.day && !days.has(el.dataset.day)) el.remove();
+  for (const el of [...host.children]) if (el.dataset.day && !labelled.has(el.dataset.day)) el.remove();
+  if (q && !rows.length && !qs(".empty", host)) host.insertAdjacentHTML("beforeend", '<div class="empty">No note matches.</div>');
+  if (!(q && !rows.length)) qs(".empty", host)?.remove();
 }
+qs("#parked-q").addEventListener("input", () => renderParked());
+qs("#parked-q").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.target.value = ""; renderParked(); } });
+
+// ── follow-up dialog ─────────────────────────────────────────────────────────────────────────
+let fuJot = null;
+const pad2 = (n) => String(n).padStart(2, "0");
+const toLocalInput = (d) => d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + "T" + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+function fuPresets() {
+  const now = new Date(), at = (days, h, m = 0) => { const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(h, m, 0, 0); return d; };
+  const monday = (() => { const ahead = ((1 - now.getDay() + 7) % 7) || 7; return at(ahead, 9); })();
+  const out = [["In 1 hour", new Date(now.getTime() + 3600000)]];
+  if (now.getHours() < 17) out.push(["This evening", at(0, 18)]);
+  out.push(["Tomorrow 9:00", at(1, 9)], ["Monday 9:00", monday], ["In 3 days", at(3, 9)], ["In a week", at(7, 9)]);
+  return out;
+}
+function openFollow(j) {
+  fuJot = j;
+  qs("#fu-title").textContent = j.title;
+  const at = qs("#fu-at");
+  at.value = j.follow_up_at ? toLocalInput(new Date(j.follow_up_at)) : "";
+  at.min = toLocalInput(new Date());
+  qs("#fu-check").value = j.follow_up_check || "";
+  qs("#fu-clear").hidden = !j.follow_up_at;
+  const host = qs("#fu-presets");
+  host.innerHTML = "";
+  for (const [label, d] of fuPresets()) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label; b.dataset.v = toLocalInput(d);
+    b.onclick = () => { at.value = b.dataset.v; qsa("button", host).forEach((x) => x.classList.toggle("on", x === b)); };
+    host.appendChild(b);
+  }
+  qs("#dlg-follow").showModal();
+}
+async function sendFollow(at) {
+  const j = fuJot; if (!j) return;
+  const check = qs("#fu-check").value.trim();
+  try {
+    await api("/jots/" + j.id + "/follow-up", { method: "POST", body: JSON.stringify({ at, check: check || null }) });
+    toast(at ? "⏰ follow-up " + fuWhen(at) : "follow-up cancelled");
+  } catch (e) { toast("couldn't schedule: " + e.message); }
+  load();
+}
+qs("#fu-close").onclick = () => qs("#dlg-follow").close("cancel");
+qs("#fu-clear").onclick = () => { qs("#dlg-follow").close("cancel"); sendFollow(null); };
+qs("#fu-now").onclick = async () => {
+  const j = fuJot; if (!j) return;
+  qs("#dlg-follow").close("cancel");
+  const check = qs("#fu-check").value.trim();
+  try {
+    if (check !== (j.follow_up_check || "")) await api("/jots/" + j.id + "/follow-up", { method: "POST", body: JSON.stringify({ at: null, check: check || null }) });
+    const { session } = await api("/jots/" + j.id + "/follow-up/now", { method: "POST", body: JSON.stringify({}) });
+    await load(); select(session.id);
+  } catch (e) { toast("follow-up failed: " + e.message); load(); }
+};
+qs("#form-follow").addEventListener("submit", (e) => {
+  const v = qs("#fu-at").value;
+  if (!v) return;
+  const d = new Date(v);
+  if (d.getTime() <= Date.now()) { e.preventDefault(); return toast("pick a time in the future — or ▶ Now"); }
+  sendFollow(d.toISOString());
+});
 qs("#sec-parked h3").onclick = (e) => {
   if (e.target.closest("button")) return;
   S.fold.parked = !S.fold.parked; localStorage.setItem("desk-fold", JSON.stringify(S.fold)); render();
@@ -3340,15 +3565,24 @@ qs("#btn-note").onclick = () => {
   sel.innerHTML = S.workspaces.map((w) => '<option value="' + w.id + '">' + esc(w.name) + "</option>").join("");
   sel.value = byId(S.active)?.workspace_id || S.workspaces[0]?.id || "";
   qs("#form-note").reset(); sel.value = sel.value || S.workspaces[0]?.id || "";
+  qs("#n-check-l").hidden = true;
+  // The same presets as the ⏰ dialog, resolved here so "In 3 days" means the same 9:00 in both places.
+  qs("#n-follow").innerHTML = '<option value="">No — just park it</option>' +
+    fuPresets().map(([label, d]) => '<option value="' + d.toISOString() + '">' + esc(label) + "</option>").join("");
   qs("#dlg-note").showModal();
   setTimeout(() => qs('#form-note [name="title"]').focus(), 40);
 };
 qs("#n-cancel").onclick = () => qs("#dlg-note").close("cancel");
+qs("#n-follow").onchange = (e) => { qs("#n-check-l").hidden = !e.target.value; };
 qs("#form-note").addEventListener("submit", async (e) => {
   const f = new FormData(e.target);
   const t = String(f.get("title") || "").trim(); if (!t) return;
   try {
-    await api("/workspaces/" + f.get("workspace_id") + "/jots", { method: "POST", body: JSON.stringify({ title: t, body: String(f.get("body") || "").trim() || null }) });
+    const follow = String(f.get("follow") || "");
+    await api("/workspaces/" + f.get("workspace_id") + "/jots", { method: "POST", body: JSON.stringify({
+      title: t, body: String(f.get("body") || "").trim() || null,
+      ...(follow ? { follow_up_at: follow, follow_up_check: String(f.get("check") || "").trim() || null } : {}),
+    }) });
     S.fold.parked = false; localStorage.setItem("desk-fold", JSON.stringify(S.fold));
     await load();
   } catch (err) { toast("couldn't save: " + err.message); }
@@ -3495,9 +3729,10 @@ function jotActions(id) {
   if (!j) return [];
   const patch = async (body) => { try { await api("/jots/" + j.id, { method: "PATCH", body: JSON.stringify(body) }); } catch (err) { toast(err.message); } load(); };
   return [
-    { label: "▶ Run in a terminal", run: async () => { try { const { session } = await api("/jots/" + j.id + "/run", { method: "POST", body: JSON.stringify({}) }); await load(); select(session.id); } catch (err) { toast("run failed: " + err.message); } } },
+    { label: "▶ Run in a terminal", run: () => runJotNow(j) },
+    { label: j.follow_up_at ? "⏰ Follow-up " + fuWhen(j.follow_up_at) + "…" : "⏰ Follow up…", run: () => openFollow(j) },
     { label: "✓ Mark done", run: () => patch({ status: "done" }) },
-    { label: "✏️ Edit title…", run: () => { const t = prompt("Title", j.title); if (t != null && t.trim() && t.trim() !== j.title) patch({ title: t.trim() }); } },
+    { label: "✏️ Edit…", run: () => { const el = qs('#parked [data-sid="' + j.id + '"]'); if (el) editJot(el, j); } },
     { label: "📋 Copy text", run: () => copyText(j.body ? j.title + "\n\n" + j.body : j.title, "text") },
     "-",
     { label: "✕ Delete", danger: true, armed: "✕ Delete? click again", run: async () => { try { await api("/jots/" + j.id, { method: "DELETE" }); } catch (err) { toast(err.message); } load(); } },
@@ -5421,7 +5656,7 @@ const BUS_TOPICS = [
   "session.activity", "agent.state", "session.usage", "focus.event", "session.status",
   "agent.delta", "agent.asked", "agent.push", "agent.step", "agent.turn.done", "session.input",
   "session.started", "session.ended", "session.updated",
-  "jot.updated", "jot.ran", "launch.updated", "launch.ran",
+  "jot.updated", "jot.ran", "jot.followup", "launch.updated", "launch.ran",
   "run.started", "run.ended", "job.updated",
   "host.online", "host.offline", "host.updated",
 ].join(",");
@@ -5533,6 +5768,7 @@ function connectBus() {
     if (e.topic === "agent.turn.done") return ovWork(OV.busy || OV.queue.length > 0, "wrapping up…");
     if (e.topic === "session.started" || e.topic === "session.ended" || e.topic === "session.updated") loadSoon();
     if (e.topic === "jot.updated" || e.topic === "jot.ran") loadSoon();
+    if (e.topic === "jot.followup") { const j = S.jots.find((x) => x.id === e.jot_id); toast("⏰ follow-up opened" + (j ? ": " + j.title.slice(0, 60) : "")); loadSoon(); }
     if (e.topic === "launch.updated" || e.topic === "launch.ran") loadSoon();
     if (e.topic === "run.started" || e.topic === "run.ended" || e.topic === "job.updated") onJobEvent(e);
   };

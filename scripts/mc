@@ -208,7 +208,11 @@ const HELP = `mc — Mission Control backlog CLI
   (new/patched skills land 'pending' for human approval unless the workspace auto-publishes)
   mc pad list [--status open|done] [--workspace ID]   the client's parked rows (decided, not started)
   mc pad show <id>                   one row in full — its title, status, and everything written on it
-  mc pad add "<title>" [--body "..."]   park a thought (body may be piped on stdin) — any terminal, own client
+  mc pad add "<title>" [--body "..."] [--follow <when> [--check "..."]]   park a thought (body may be piped on stdin) — any terminal, own client
+  mc pad follow <id> <when> [--check "what to look at"]   an agent opens a terminal on this row at <when>: +2d, tomorrow 9:00, monday 10, 2026-10-01 14:00
+  mc pad follow <id> off             cancel the follow-up
+  mc pad resolve <id> ["why"]        close the row, keeping the reason on it (a follow-up terminal's usual last step)
+  mc pad due                         this client's scheduled follow-ups, soonest first
   mc pad append <id> "<text>"        ADD to a row's detail without replacing it — the usual one; any terminal
   mc pad edit <id> [--title t] [--body b]   replace a field outright
   mc pad done|reopen <id>            tick it off, or put it back
@@ -1370,6 +1374,8 @@ async function heavy(argv) {
       // stamped `agent` rather than passing for the operator's own. Robert (no MC_SESSION) writes as admin.
       const padAuth = () => (process.env.MC_SESSION && process.env.MC_WORKSPACE_TOKEN) ? {} : adminToken() ? adminHeaders() : {};
 
+      const padWhen = (iso) => iso ? new Date(iso).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+
       // Rows are addressed by id prefix, because nobody is going to type a UUID. Ambiguity is an
       // error rather than a guess: picking the wrong row silently is worse than asking again.
       const findPad = async (ref) => {
@@ -1387,16 +1393,20 @@ async function heavy(argv) {
         const rows = await req("GET", "/workspaces/" + wsId + "/jots" + (opt.status ? "?status=" + opt.status : ""));
         if (!rows.length) return console.log("(nothing parked)");
         return console.log(rows.map((j) => {
-          const mark = j.status === "done" ? "✓" : j.session_id ? "▶" : "·";
+          const mark = j.status === "done" ? "✓" : j.follow_up_at ? "⏰" : j.session_id ? "▶" : "·";
           const detail = (j.body || "").replace(/\s+/g, " ").trim();
-          return `${mark} ${j.id.slice(0, 8)}\t${j.title}${detail ? "\t— " + detail.slice(0, 70) : ""}`;
+          const due = j.status !== "done" && j.follow_up_at ? ` [follow-up ${padWhen(j.follow_up_at)}]` : "";
+          return `${mark} ${j.id.slice(0, 8)}\t${j.title}${due}${detail ? "\t— " + detail.slice(0, 70) : ""}`;
         }).join("\n"));
       }
 
       if (sub === "show") {
         const j = await findPad(pos[2]);
         return console.log(
-          `${j.id}\n${j.title}\nstatus: ${j.status}${j.session_id ? ` · ran as terminal ${j.session_id.slice(0, 8)}` : ""}\n\n${j.body || "(no detail yet)"}`,
+          `${j.id}\n${j.title}\nstatus: ${j.status}${j.session_id ? ` · ran as terminal ${j.session_id.slice(0, 8)}` : ""}` +
+          (j.follow_up_at ? `\nfollow-up: ${padWhen(j.follow_up_at)}${j.follow_up_check ? ` — check: ${j.follow_up_check}` : ""}` : "") +
+          (j.follow_up_count ? `\nfollowed up ${j.follow_up_count}× · last ${padWhen(j.followed_up_at)}${j.follow_up_session ? ` by terminal ${j.follow_up_session.slice(0, 8)}` : ""}` : "") +
+          `\n\n${j.body || "(no detail yet)"}`,
         );
       }
 
@@ -1408,8 +1418,9 @@ async function heavy(argv) {
         const body = opt.body || (await readStdin()).trim() || null;
         const j = await req("POST", "/workspaces/" + wsId + "/jots", {
           title, body, ...(process.env.MC_SESSION ? { planned_by: process.env.MC_SESSION } : {}),
+          ...(opt.follow ? { follow_up_at: opt.follow, follow_up_check: opt.check || null } : {}),
         }, padAuth());
-        return console.log(`parked ${j.id.slice(0, 8)} — ${j.title}`);
+        return console.log(`parked ${j.id.slice(0, 8)} — ${j.title}${j.follow_up_at ? ` · follow-up ${padWhen(j.follow_up_at)}` : ""}`);
       }
 
       // The one an agent reaches for most: you learned something about a parked thought, so add it to
@@ -1420,6 +1431,33 @@ async function heavy(argv) {
         if (!text) die('pad append needs text: mc pad append <id> "what you just learned"');
         await req("POST", "/jots/" + j.id + "/append", { text }, padAuth());
         return console.log(`appended to ${j.id.slice(0, 8)} — ${j.title}`);
+      }
+
+      // A time on a row: at <when> the daemon opens a terminal that checks on it and writes back.
+      if (sub === "follow") {
+        const j = await findPad(pos[2]);
+        const when = pos.slice(3).join(" ").trim() || opt.at;
+        if (!when) die('pad follow needs a time: mc pad follow <id> +2d [--check "what to look at"]  (or `off`)');
+        const off = /^(off|none|cancel|clear)$/i.test(when);
+        const r = await req("POST", "/jots/" + j.id + "/follow-up", {
+          at: off ? null : when, ...(opt.check !== undefined ? { check: opt.check } : {}),
+        }, padAuth());
+        return console.log(off ? `${j.id.slice(0, 8)} — follow-up cancelled` : `${j.id.slice(0, 8)} — follow-up ${padWhen(r.follow_up_at)}${r.follow_up_check ? ` · check: ${r.follow_up_check}` : ""}`);
+      }
+
+      if (sub === "resolve") {
+        const j = await findPad(pos[2]);
+        const note = pos.slice(3).join(" ").trim() || opt.body || "";
+        await req("POST", "/jots/" + j.id + "/resolve", note ? { note } : {}, padAuth());
+        return console.log(`${j.id.slice(0, 8)} — ${j.title} → resolved`);
+      }
+
+      if (sub === "due") {
+        if (!wsId) die("pad needs --workspace or MC_WORKSPACE");
+        const rows = (await req("GET", "/workspaces/" + wsId + "/jots?status=open")).filter((j) => j.follow_up_at)
+          .sort((a, b) => a.follow_up_at.localeCompare(b.follow_up_at));
+        if (!rows.length) return console.log("(no follow-ups scheduled)");
+        return console.log(rows.map((j) => `⏰ ${padWhen(j.follow_up_at)}\t${j.id.slice(0, 8)}\t${j.title}${j.follow_up_check ? "\t— " + j.follow_up_check.slice(0, 70) : ""}`).join("\n"));
       }
 
       if (sub === "edit") {
@@ -1456,7 +1494,7 @@ async function heavy(argv) {
         return console.log(`running ${j.title} → terminal ${r.session.id.slice(0, 8)} (mc desk to watch it)`);
       }
 
-      die(`unknown: mc pad ${sub} (list|show|add|append|edit|done|reopen|rm|run)`);
+      die(`unknown: mc pad ${sub} (list|show|add|append|follow|resolve|due|edit|done|reopen|rm|run)`);
     }
     if (cmd === "idea") {
       const wsId = opt.workspace || process.env.MC_WORKSPACE;
