@@ -59,15 +59,33 @@
   .mchip { display:flex; align-items:center; gap:10px; border:1px solid var(--line); background:none; border-radius:8px;
     padding:4px 9px; font:inherit; font-size:14px; color:var(--muted); cursor:pointer; font-variant-numeric:tabular-nums; }
   .mchip:hover { background:var(--surface-2); }
-  .mchip .mv { display:flex; align-items:center; gap:5px; color:var(--ok); }
-  .mchip .mv span { color:var(--muted); }
-  .mchip .mv b { font-weight:700; color:var(--ink); min-width:3ch; text-align:right; }
-  .mchip .mv svg { display:block; overflow:visible; }
-  .mchip .mv.warn, .mchip .mv.warn b { color:var(--warn); }
-  .mchip .mv.crit, .mchip .mv.crit b { color:var(--danger); }
+  .mchip .mv, .hmv .mv { display:flex; align-items:center; gap:5px; color:var(--ok); }
+  .mchip .mv span, .hmv .mv span { color:var(--muted); }
+  .mchip .mv b, .hmv .mv b { font-weight:700; color:var(--ink); min-width:3ch; text-align:right; }
+  .mchip .mv svg, .hmv .mv svg { display:block; overflow:visible; }
+  .mchip .mv.warn, .mchip .mv.warn b, .hmv .mv.warn, .hmv .mv.warn b { color:var(--warn); }
+  .mchip .mv.crit, .mchip .mv.crit b, .hmv .mv.crit, .hmv .mv.crit b { color:var(--danger); }
   .mchip .mp { font-weight:700; color:var(--danger); }
   .mchip.held { border-color:var(--danger); background:var(--danger-soft); }
   .mpop .ur .w.warn { color:var(--warn); } .mpop .ur .w.crit { color:var(--danger); }
+  /* ── computers (HOSTS.md): with more than one Mac the chip is the fleet — one bar per connected
+     computer, its height the busier of CPU and RAM — and the popover is one row per computer. ── */
+  .mchip .hn { color:var(--muted); } .mchip .hn b { font-weight:700; color:var(--ink); }
+  .mchip .hbars { display:flex; align-items:flex-end; gap:2px; height:14px; }
+  .mchip .hbars i { display:block; width:5px; min-height:2px; border-radius:1.5px; background:var(--ok); }
+  .mchip .hbars i.warn { background:var(--warn); } .mchip .hbars i.crit { background:var(--danger); }
+  .hmv { display:flex; gap:12px; font-size:13.5px; font-variant-numeric:tabular-nums; }
+  .mpop .hr { display:grid; grid-template-columns:auto 1fr auto; column-gap:8px; row-gap:3px; align-items:center; padding:8px 4px;
+    border:0; border-bottom:1px solid var(--line); background:none; width:100%; text-align:left; font:inherit; font-size:14.5px; color:var(--ink); border-radius:0; }
+  .mpop .hr:hover { background:var(--surface-2); }
+  .mpop .hr .n { font-weight:700; }
+  .mpop .hr .w { color:var(--muted); font-size:13px; text-align:right; }
+  .mpop .hr .w.crit { color:var(--danger); font-weight:700; } .mpop .hr .w.warn { color:var(--warn); font-weight:700; }
+  .mpop .hr .hmv { grid-column:2 / -1; }
+  .mpop .hr.off { opacity:.5; }
+  .mpop .hr .dot { align-self:center; }
+  .mpop .hfoot { display:flex; justify-content:flex-end; padding:6px 2px 0; }
+  .dot.on { background:var(--ok); } .dot.drain { background:var(--warn); } .dot.off { background:var(--faint); } .dot.dis { background:var(--danger); }
   /* ── usage: how much of each subscription is spent, as the vendor says (usage-meter.ts) ──── */
   .usage { display:flex; gap:6px; align-items:center; }
   .uchip { display:flex; align-items:center; gap:7px; border:1px solid var(--line); background:none; border-radius:8px;
@@ -163,6 +181,10 @@
   .row.lead:hover .x { visibility:visible; }
   .row.child .t { font-size:14.5px; }
   .row .age { font-size:13px; color:var(--faint); font-variant-numeric:tabular-nums; }
+  /* Where a terminal runs, when it is not this Mac: "m2". Its computer offline dims the row. */
+  .row .side .htag { font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:0 7px; line-height:17px; margin-right:3px; white-space:nowrap; }
+  .row.hoff .main { opacity:.55; }
+  .row.hoff .side .htag { color:var(--warn); border-color:var(--warn); }
   .row .x { display:none; border:0; background:none; color:var(--faint); font-size:13px; padding:0 3px; border-radius:4px; line-height:1.2; }
   .row:hover .x { display:inline-block; }
   .row .x:hover { color:var(--danger); background:var(--danger-soft); }
@@ -863,6 +885,28 @@
   .jfoot { display:flex; gap:8px; align-items:center; padding:10px 14px; border-top:1px solid var(--line); }
   .jfoot .sp { flex:1; }
   .jempty { color:var(--faint); padding:40px; text-align:center; }
+  /* Computers: the Jobs layout — every computer on the left, one on the right. */
+  #dlg-hosts { width:min(980px,96vw); }
+  #dlg-hosts .dlg { padding:0; gap:0; height:min(80vh, 760px); }
+  .hsec { margin-bottom:18px; }
+  .hsec > h4 { margin:0 0 7px; font-size:11.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); font-weight:700; }
+  .hsec .hint { font-size:12.5px; color:var(--faint); font-weight:500; }
+  .hws { display:grid; grid-template-columns:auto 1fr; column-gap:12px; align-items:start; padding:7px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .hws:last-child { border-bottom:0; }
+  .hws.plain { grid-template-columns:1fr; } .hws.plain .sub { grid-column:1; }
+  .hws .nm { font-weight:600; }
+  .hws .sub { grid-column:2; font-size:12.5px; color:var(--muted); display:flex; flex-wrap:wrap; gap:3px 10px; }
+  .hws.denied .nm { color:var(--muted); }
+  .hws .switch.lock { cursor:not-allowed; opacity:.6; }
+  .ck { white-space:nowrap; } .ck.ok::before { content:"✓ "; color:var(--ok); } .ck.no::before { content:"✗ "; color:var(--danger); } .ck.no { color:var(--faint); }
+  .hclis { display:flex; flex-wrap:wrap; gap:4px 14px; font-size:13.5px; }
+  .hcmd { position:relative; margin:0; padding:12px 70px 12px 12px; border-radius:10px; background:var(--term-bg); color:var(--term-ink);
+    font:12.5px/1.55 ui-monospace,"SF Mono",Menlo,monospace; white-space:pre-wrap; word-break:break-all; }
+  .hcmd button { position:absolute; top:7px; right:7px; border:1px solid rgba(255,255,255,.18); background:transparent; color:var(--term-ink); border-radius:6px; font-size:12px; padding:2px 8px; }
+  .hwait { display:flex; align-items:center; gap:8px; font-size:14px; color:var(--muted); margin-top:12px; }
+  .hwait.ok { color:var(--ok); font-weight:600; }
+  body.blink .hwait:not(.ok) .dot { opacity:.4; }
+  #q-host { max-width:96px; }
   .bub.queued { opacity:.6; border:1px dashed var(--accent); background:transparent; color:var(--ink); }
   /* `display:flex` on the class beats the UA's [hidden]{display:none} — without this line the strip
      never hides, and Robert reads "working…" forever. */
@@ -942,7 +986,7 @@
 
 <div class="desk">
   <aside class="rail" id="rail">
-    <form class="quick" id="quick"><select id="q-ws" title="Client"></select><select id="q-backend" class="cli" title="CLI — Claude, Cursor, Grok…"></select><select id="q-model" class="model" title="Model for that CLI"></select><input id="q-goal" placeholder="what should it do? · ⏎ · empty ⏎ = blank" autocomplete="off" spellcheck="false"><button type="button" class="icon" id="q-focus" title="Focus only — story and composer, no live terminal">◎</button><button type="button" class="icon" id="q-lead" title="Open as a Lead — it opens and drives its own terminals for this goal">◆</button><button type="button" class="icon" id="q-more" title="With a brief, cwd… (⇧N)">⋯</button></form>
+    <form class="quick" id="quick"><select id="q-ws" title="Client"></select><select id="q-backend" class="cli" title="CLI — Claude, Cursor, Grok…"></select><select id="q-model" class="model" title="Model for that CLI"></select><select id="q-host" title="Which computer it runs on" hidden></select><input id="q-goal" placeholder="what should it do? · ⏎ · empty ⏎ = blank" autocomplete="off" spellcheck="false"><button type="button" class="icon" id="q-focus" title="Focus only — story and composer, no live terminal">◎</button><button type="button" class="icon" id="q-lead" title="Open as a Lead — it opens and drives its own terminals for this goal">◆</button><button type="button" class="icon" id="q-more" title="With a brief, cwd… (⇧N)">⋯</button></form>
     <div class="rows" id="rows"></div>
     <div class="empty" id="rail-empty" hidden>no open terminals</div>
     <section id="sec-parked" class="fold"><h3><span>Parked</span><span class="n" id="parked-n"></span><span class="rule"></span><button class="add" id="btn-note" title="Park a thought">+ note</button></h3><div class="rows" id="parked"></div></section>
@@ -1032,6 +1076,7 @@
   <a href="/altitude">📊 Altitude</a>
   <div class="sep"></div>
   <button id="btn-jobs">⏱ Jobs</button>
+  <button id="btn-hosts">🖥 Computers</button>
   <button id="btn-briefs">📋 Briefs</button>
   <button id="btn-memory">🧠 Memory</button>
   <button id="btn-keys">Keys <kbd>?</kbd></button>
@@ -1199,6 +1244,21 @@
   </div>
 </dialog>
 
+<!-- Computers (HOSTS.md): every Mac that runs agents for this Desk. Left: this Mac first, then each
+     joined computer with its state. Right: one computer — vitals, which clients may run there, what
+     it has installed and cloned — or "+ Add": a one-time code and the one command to paste. -->
+<dialog id="dlg-hosts">
+  <div class="dlg">
+    <div class="jobs">
+      <aside class="jlist">
+        <div class="jl-head"><strong>Computers</strong><button class="btn primary" id="host-add">+ Add</button><button class="icon" id="hosts-close" title="Close">✕</button></div>
+        <div class="jrows" id="host-rows"></div>
+      </aside>
+      <section class="jmain" id="hmain"></section>
+    </div>
+  </div>
+</dialog>
+
 <dialog id="dlg-memory">
   <div class="dlg">
     <h3>Memory <span class="hint" id="mem-when"></span></h3>
@@ -1287,6 +1347,19 @@ function toast(msg) {
   clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 2600);
 }
 const errMsg = (e) => { try { return JSON.parse(e.message).error || e.message; } catch { return e.message; } };
+// Computers (HOSTS.md) — state here because the rail paints host tags; the rest sits by the Mac chip.
+const H = { list: null, sel: null, add: null, t: 0 };
+const hRemote = () => (H.list || []).filter((h) => !h.is_brain);
+// The brain's row is called "local" until someone renames it; on the Desk that reads "This Mac".
+const hLabel = (h) => (h.is_brain && h.name === "local" ? "This Mac" : h.name);
+const hById = (id) => (H.list || []).find((h) => h.id === id) || null;
+// A terminal on another computer: the name for its tag, and whether that computer is gone.
+function hostOf(s) {
+  const id = s.host_id || "local";
+  if (id === "local") return null;
+  const h = hById(id);
+  return { id, name: h?.name || id, off: !h || !h.connected };
+}
 
 // ── state ────────────────────────────────────────────────────────────────────────────────────
 // One colour per client, stable across reloads (index in the workspace list). Both themes get a value.
@@ -1490,7 +1563,7 @@ function rowEl(s) {
   const el = document.createElement("div");
   el.className = "row"; el.dataset.sid = s.id;
   el.innerHTML = '<span class="stripe"></span><div class="main"><div class="t"><span class="dot"></span><span class="ws"></span><span class="txt"></span></div><div class="l"></div></div>' +
-    '<span class="side"><span class="eye" hidden></span><span class="board" hidden></span><span class="workers" hidden></span><button type="button" class="fold" hidden></button><span class="age"></span><button class="x" title="Remove from the list">✕</button></span>';
+    '<span class="side"><span class="htag" hidden></span><span class="eye" hidden></span><span class="board" hidden></span><span class="workers" hidden></span><button type="button" class="fold" hidden></button><span class="age"></span><button class="x" title="Remove from the list">✕</button></span>';
   el.onclick = (e) => { if (e.target.closest(".x, .fold")) return; select(s.id); };
   qs(".fold", el).onclick = () => toggleLead(s.id);
   qs(".x", el).onclick = () => (byId(s.id)?.live ? kill(s.id, qs(".x", el)) : dismiss(s.id));
@@ -1499,7 +1572,11 @@ function rowEl(s) {
 function paintRow(el, s) {
   const ph = phaseOf(s);
   const child = s.live && !!s.lead_id && !!byId(s.lead_id)?.live && !S.dismissed.has(s.lead_id);
-  el.className = "row" + (s.live ? "" : " ended") + (ph === "review" && s.live ? " done" : "") + (S.active === s.id ? " on" : "") + (s.role === "lead" ? " lead" : "") + (child ? " child" : "");
+  const ho = hostOf(s);
+  el.className = "row" + (s.live ? "" : " ended") + (ph === "review" && s.live ? " done" : "") + (S.active === s.id ? " on" : "") + (s.role === "lead" ? " lead" : "") + (child ? " child" : "") + (ho?.off && s.live ? " hoff" : "");
+  const ht = qs(".htag", el);
+  ht.hidden = !ho;
+  if (ho) { ht.textContent = ho.off && s.live ? ho.name + " offline" : ho.name; ht.title = ho.off && s.live ? `Its computer (${ho.name}) is offline — the terminal keeps running there and comes back when it reconnects` : "Runs on " + ho.name; }
   el.style.setProperty("--ws", wsColor(s.workspace_id));
   qs(".dot", el).className = "dot " + (s.live ? s.state : "ended");
   const wsEl = qs(".ws", el);
@@ -1694,6 +1771,8 @@ function renderStage() {
   if (s.role === "lead") bits.push(`◆ Lead${s.workers ? ` · ${s.workers} worker${s.workers === 1 ? "" : "s"}` : ""}`);
   if (s.lead_id) bits.push(`<button type="button" class="bit-lead" data-lead="${esc(s.lead_id)}">↳ Lead ${esc(s.lead_id.slice(0, 8))}</button>`);
   bits.push(esc([s.backend.replace("-code", ""), s.model].filter(Boolean).join(" ")));
+  const ho = hostOf(s);
+  if (ho) bits.push(ho.off && s.live ? `<span style="color:var(--warn)" title="Its computer is offline — the terminal keeps running there">${esc(ho.name)} offline</span>` : `<span title="Runs on this computer">on ${esc(ho.name)}</span>`);
   if (s.goals_total > 1) bits.push(`<span title="this terminal was given ${s.goals_total} goals — it is on number ${Math.min(s.goals_done + 1, s.goals_total)}">🎯 ${s.goals_done}/${s.goals_total}</span>`);
   if (s.goal_kind) bits.push(`<span title="${esc(KIND_TIP[s.goal_kind] || "")}">${esc(s.goal_kind === "investigation" ? "dig" : s.goal_kind)}</span>`);
   if (s.cloud_agent_id) bits.push(s.cloud_url ? `<a href="${esc(s.cloud_url)}" target="_blank" rel="noopener" title="Open this run on Cursor">☁ cloud</a>` : `<span title="Running on Cursor's cloud — no live terminal">☁ cloud</span>`);
@@ -3549,6 +3628,7 @@ function quickSyncCli() {
   const wsId = qs("#q-ws").value;
   fillBackendSelect(qs("#q-backend"), wsId);
   fillModelSelect(qs("#q-model"), qs("#q-backend").value);
+  fillHostSelect();
 }
 function quickOpen(lead) {
   const sel = qs("#q-ws");
@@ -3568,7 +3648,10 @@ function quickSpawnBody(wsId) {
   const focus = qs("#q-focus").classList.contains("on");
   if (wsId && backend) localStorage.setItem("desk-backend:" + wsId, backend);
   if (backend) localStorage.setItem("desk-model:" + backend, model || "");
-  return { ...blankBody(wsId), backend, model, ...(focus ? { focus_only: true } : {}) };
+  const hostSel = qs("#q-host");
+  const host_id = !hostSel.hidden && hostSel.value ? hostSel.value : null;
+  if (!hostSel.hidden) localStorage.setItem("desk-quick-host", hostSel.value);
+  return { ...blankBody(wsId), backend, model, ...(focus ? { focus_only: true } : {}), ...(host_id ? { host_id } : {}) };
 }
 qs("#q-ws").onchange = quickSyncCli;
 qs("#q-backend").onchange = () => fillModelSelect(qs("#q-model"), qs("#q-backend").value);
@@ -5340,6 +5423,7 @@ const BUS_TOPICS = [
   "session.started", "session.ended", "session.updated",
   "jot.updated", "jot.ran", "launch.updated", "launch.ran",
   "run.started", "run.ended", "job.updated",
+  "host.online", "host.offline", "host.updated",
 ].join(",");
 function connectBus() {
   if (!TOKEN) return;
@@ -5348,6 +5432,7 @@ function connectBus() {
   ws.onmessage = (ev) => {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     if (DW.topics.has(e.topic)) dwBus(e.topic);
+    if (e.topic === "host.online" || e.topic === "host.offline" || e.topic === "host.updated") return loadHostsSoon();
     if (e.topic === "session.activity") {
       const s = byId(e.session_id);
       if (!s || s.state === "done" || s.state === "blocked") return;
@@ -5588,6 +5673,212 @@ async function loadUsage() { try { U.snap = await api("/usage"); renderUsage(); 
 loadUsage();
 setInterval(loadUsage, 30000);
 
+// ── computers (HOSTS.md): every Mac that runs agents for this Desk (GET /api/hosts) ──
+// One Mac = none of this shows: the chip above is exactly the old one, the rail has no tags and
+// "+ Terminal" has no picker. It all appears with the first joined computer.
+const hState = (h) =>
+  h.status === "disabled" ? { dot: "dis", word: "paused" }
+  : !h.connected ? { dot: "off", word: "offline" }
+  : h.status === "draining" ? { dot: "drain", word: "draining" }
+  : { dot: "on", word: h.admission?.ok === false ? "busy" : "online" };
+const hLast = (h) => { const x = h.vitals?.history || []; return x[x.length - 1] || {}; };
+const hLevel = (h) => { const l = hLast(h); return mLevel(Math.max(l.cpu ?? 0, l.ram ?? 0)) || mPressLevel(h.vitals?.pressure); };
+function hVitals(h) {
+  const hist = h.vitals?.history || [], last = hLast(h);
+  if (!hist.length) return `<span class="hmv"><span class="mv"><span>${h.connected ? "no vitals yet" : "last seen " + esc(age(h.last_seen_at) || "never")}</span></span></span>`;
+  const seg = (k, label, lv) => `<span class="mv ${lv}"><span>${label}</span><b>${mPct(last[k])}</b>${mSpark(hist.map((x) => x[k]))}</span>`;
+  return `<span class="hmv">${seg("cpu", "CPU", mLevel(last.cpu))}${seg("ram", "RAM", mPressLevel(h.vitals.pressure))}${last.gpu == null ? "" : seg("gpu", "GPU", mLevel(last.gpu))}</span>`;
+}
+async function loadHosts() {
+  try { H.list = (await api("/hosts")).hosts; } catch { return; }
+  H.t = Date.now();
+  renderMac();
+  if (hRemote().length) { renderRail(); if (S.active && byId(S.active)) renderStage(); }
+  if (H.add) hAddTick();
+  hRepaint();
+}
+// A poll must never repaint the dialog under a field being typed in (rename, the new computer's name).
+function hRepaint() {
+  const d = qs("#dlg-hosts"), a = document.activeElement;
+  if (d.open && !(a && a.tagName === "INPUT" && d.contains(a))) renderHosts();
+}
+let hLoadT = 0;
+const loadHostsSoon = () => { clearTimeout(hLoadT); hLoadT = setTimeout(loadHosts, 250); };
+
+// The chip with more than one computer: "2 computers" (or "2/3" when one is away) and one bar per
+// connected computer. The popover is where the numbers are.
+function renderFleetChip(el, s) {
+  const all = H.list.filter((h) => h.status !== "disabled");
+  const up = all.filter((h) => h.connected);
+  const held = s?.admission && !s.admission.ok;
+  el.hidden = false;
+  el.className = "mchip" + (held ? " held" : "");
+  el.title = up.map((h) => `${hLabel(h)}: CPU ${mPct(hLast(h).cpu)} · RAM ${mPct(hLast(h).ram)}`).join("\n") + (held ? "\nAgents can't open terminals on this Mac — " + s.admission.reason : "");
+  const bars = up.map((h) => `<i class="${hLevel(h)}" style="height:${Math.max(2, Math.min(100, Math.max(hLast(h).cpu ?? 0, hLast(h).ram ?? 0)) * 0.14).toFixed(1)}px"></i>`).join("");
+  el.innerHTML = `<span class="hn"><b>${up.length < all.length ? up.length + "/" + all.length : up.length}</b> computers</span><span class="hbars">${bars}</span>` + (held ? `<span class="mp">⏸ agents</span>` : "");
+}
+function openFleet(anchor) {
+  const m = qs("#menu-mac");
+  const rows = H.list.filter((h) => h.status !== "disabled").map((h) => {
+    const st = hState(h);
+    const adm = h.connected && h.admission && !h.admission.ok && h.status !== "draining";
+    const here = hLabel(h) === "This Mac" ? "" : "this Mac";
+    const right = h.is_brain ? [here, h.admission.ok ? "" : "agents held"].filter(Boolean).join(" · ") || "online" : adm ? "agents held" : st.word;
+    const n = h.live_sessions ? ` · ${h.live_sessions} terminal${h.live_sessions === 1 ? "" : "s"}` : "";
+    return `<button class="hr${h.connected ? "" : " off"}" data-host="${esc(h.id)}" title="${esc(adm ? h.admission.reason : "")}"><span class="dot ${st.dot}"></span><span class="n">${esc(hLabel(h))}</span><span class="w${adm || (h.is_brain && !h.admission.ok) ? " crit" : ""}">${esc(right + n)}</span>${hVitals(h)}</button>`;
+  }).join("");
+  m.innerHTML = rows + `<div class="hfoot"><button class="btn ghost" data-host="">Computers…</button></div>`;
+  m.onclick = (e) => { const b = e.target.closest("[data-host]"); if (b) openHosts(b.dataset.host || null); };
+  openMenu(m, anchor);
+}
+
+// ── the Computers dialog ──
+function openHosts(id) {
+  H.sel = id || H.sel || "local";
+  if (!qs("#dlg-hosts").open) qs("#dlg-hosts").showModal();
+  renderHosts();
+  loadHosts();
+}
+function renderHosts() {
+  if (!H.list) { qs("#hmain").innerHTML = '<div class="jempty">loading…</div>'; return; }
+  const live = H.list.filter((h) => h.status !== "disabled" || h.id === H.sel);
+  qs("#host-rows").innerHTML = live.map((h) => {
+    const st = hState(h), l = hLast(h);
+    const sub = h.connected
+      ? [h.live_sessions ? h.live_sessions + " terminal" + (h.live_sessions === 1 ? "" : "s") : "", l.cpu != null ? `CPU ${mPct(l.cpu)} · RAM ${mPct(l.ram)}` : ""].filter(Boolean).join(" · ") || st.word
+      : st.word + (h.last_seen_at ? " · seen " + age(h.last_seen_at) + " ago" : "");
+    return `<div class="jrow${!H.add && h.id === H.sel ? " on" : ""}${h.connected ? "" : " off"}" data-host="${esc(h.id)}"><span class="dot ${st.dot}"></span><div style="min-width:0"><div class="t">${esc(hLabel(h))}${h.is_brain && hLabel(h) !== "This Mac" ? ' <span class="hint" style="font-weight:500;color:var(--faint)">this Mac</span>' : ""}</div><div class="l">${esc(sub)}</div></div><span class="age">${esc(h.platform === "darwin" ? "" : h.platform)}</span></div>`;
+  }).join("");
+  for (const r of qsa("#host-rows .jrow")) r.onclick = () => { H.add = null; H.sel = r.dataset.host; renderHosts(); };
+  if (H.add) return renderAdd();
+  const h = hById(H.sel) || H.list[0];
+  if (!h) return;
+  H.sel = h.id;
+  const st = hState(h);
+  const ck = h.checklist;
+  const wsRows = ck.workspaces.map((w) => {
+    const veto = w.denied_by === "veto";
+    const on = w.allowed;
+    const repos = w.repos.map((r) => `<span class="ck ${r.path ? "ok" : "no"}" title="${esc(r.path || "not cloned on this computer")}">${esc(r.name)}</span>`).join("");
+    const prof = w.profile ? `<span class="ck ${w.profile.ok ? "ok" : "no"}" title="${w.profile.ok ? "logged in" : "log in on that Mac: CLAUDE_CONFIG_DIR=~/." + esc(w.profile.name) + " claude"}">${esc(w.profile.name)}</span>` : "";
+    const toggle = h.is_brain ? "" : `<span class="switch${on ? " on" : ""}${veto ? " lock" : ""}" data-ws="${esc(w.id)}" title="${veto ? "That Mac refuses this client itself (CHRONOS_HOST_DENY) — change it there" : on ? "Allowed here — click to keep this client off this computer" : "Kept off this computer — click to allow"}"><i></i></span>`;
+    return `<div class="hws${on ? "" : " denied"}${toggle ? "" : " plain"}">${toggle}<span class="nm">${esc(w.name)}${veto ? ' <span class="hint">· vetoed on that Mac</span>' : ""}</span><span class="sub">${prof}${repos || (w.repos.length ? "" : '<span class="hint">no repos</span>')}</span></div>`;
+  }).join("");
+  const clis = ck.clis.map((c) => `<span class="ck ${c.ok ? "ok" : "no"}" title="${esc(c.version || "")}">${esc(c.name)}</span>`).join("") || '<span class="hint">not reported yet</span>';
+  const meta = h.is_brain
+    ? "The brain — the daemon, the Desk and Robert run here."
+    : [h.platform, h.version ? "chronos " + h.version : "", h.link ? (h.link.via === "lan" ? "on this network" : "through the tunnel") : "", ck.veto.length ? "vetoes " + ck.veto.join(", ") : ""].filter(Boolean).join(" · ");
+  const takes = h.status !== "draining" && h.status !== "disabled";
+  qs("#hmain").innerHTML = `
+    <div class="jhead"><span class="dot ${st.dot}"></span><input class="name" id="h-name" value="${esc(hLabel(h))}" maxlength="64" spellcheck="false" title="Rename"><span class="hint" style="color:var(--muted);font-size:13px">${esc(st.word)}${h.live_sessions ? " · " + h.live_sessions + " terminal" + (h.live_sessions === 1 ? "" : "s") : ""}</span>
+      ${h.is_brain ? "" : `<span class="switch${takes ? " on" : ""}" id="h-takes" title="${takes ? "Takes new terminals — click to drain: what runs keeps running, nothing new lands here" : "Draining — click to take new terminals again"}"><i></i>takes work</span>`}</div>
+    <div class="jbody">
+      <div class="hsec"><h4>Now</h4>${hVitals(h)}${h.connected && h.admission && !h.admission.ok ? `<div class="hint" style="margin-top:6px;color:var(--danger)">${esc(h.admission.reason)}</div>` : ""}</div>
+      <div class="hsec"><h4>Clients <span class="hint">${h.is_brain ? "— profiles and repos on this Mac" : "— which may run here, and what they need on that Mac"}</span></h4>${wsRows || '<span class="hint">no clients yet</span>'}</div>
+      <div class="hsec"><h4>Tools</h4><div class="hclis">${clis}</div></div>
+      <div class="hint" style="font-size:12.5px;color:var(--faint)">${esc(meta)}</div>
+    </div>
+    ${h.is_brain ? "" : `<div class="jfoot"><span class="sp"></span><button class="btn ghost" id="h-revoke" style="color:var(--danger)">Remove this computer</button></div>`}`;
+  const name = qs("#h-name");
+  name.onkeydown = (e) => { if (e.key === "Enter") name.blur(); if (e.key === "Escape") { name.value = hLabel(h); name.blur(); } };
+  name.onchange = () => { const v = name.value.trim(); if (v && v !== hLabel(h)) hPatch(h.id, { name: v }); else name.value = hLabel(h); };
+  const takesEl = qs("#h-takes");
+  if (takesEl) takesEl.onclick = () => hPatch(h.id, { status: takes ? "draining" : "online" });
+  for (const sw of qsa("#hmain .switch[data-ws]")) sw.onclick = () => {
+    if (sw.classList.contains("lock")) return toast("that Mac refuses this client itself — change CHRONOS_HOST_DENY there");
+    const ws = sw.dataset.ws;
+    const deny = new Set(h.policy.deny.filter((d) => d !== ws && d !== (S.workspaces.find((w) => w.id === ws)?.slug)));
+    if (sw.classList.contains("on")) deny.add(ws);
+    hPatch(h.id, { policy: { deny: [...deny] } });
+  };
+  const rv = qs("#h-revoke");
+  if (rv) rv.onclick = () => arm(rv, "Remove — its token stops working now", async () => {
+    try { await api("/hosts/" + encodeURIComponent(h.id), { method: "DELETE" }); H.sel = "local"; toast(h.name + " removed"); await loadHosts(); } catch (e) { toast(errMsg(e)); }
+  }, 4000);
+}
+async function hPatch(id, body) {
+  try {
+    const h = await api("/hosts/" + encodeURIComponent(id), { method: "PATCH", body: JSON.stringify(body) });
+    if (h && H.list) H.list = H.list.map((x) => (x.id === id ? h : x));
+    renderHosts(); renderMac();
+  } catch (e) { toast(errMsg(e)); renderHosts(); }
+}
+
+// + Add: name it, get the command, paste it on that Mac. The row flips to ✓ when it says hello.
+function renderAdd() {
+  const a = H.add;
+  if (!a.minted) {
+    qs("#hmain").innerHTML = `
+      <div class="jhead"><strong style="font-size:16px">Add a computer</strong></div>
+      <div class="jbody"><form id="h-addf">
+        <div class="f"><span>Name <span class="hint">— how the Desk will call it</span></span><input id="h-addname" placeholder="m2" maxlength="64" autocomplete="off" spellcheck="false"></div>
+        <div class="hint" style="font-size:13px;color:var(--muted);line-height:1.5;margin-bottom:12px">You get one command to paste in Terminal on that Mac. It needs git, Node 22+ and the Xcode command-line tools. The code in it works once, for 15 minutes.</div>
+        <button class="btn primary">Get the command</button>
+      </form></div>`;
+    qs("#h-addf").onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        a.before = new Set((H.list || []).map((h) => h.id));
+        a.minted = await api("/hosts/join-codes", { method: "POST", body: JSON.stringify({ name: qs("#h-addname").value.trim() || undefined }) });
+        a.via = a.minted.commands?.lan ? "lan" : "tunnel";
+        renderAdd();
+      } catch (err) { toast(errMsg(err)); }
+    };
+    setTimeout(() => qs("#h-addname")?.focus(), 0);
+    return;
+  }
+  const c = a.minted.commands || {};
+  const both = c.lan && c.tunnel;
+  const cmd = (a.via === "lan" ? c.lan : c.tunnel) || a.minted.command;
+  const none = !c.lan && !c.tunnel;
+  const mins = Math.max(0, Math.round((a.minted.expires_at - Date.now()) / 60000));
+  const joined = a.joined ? hById(a.joined) : null;
+  const wait = joined?.connected
+    ? `<div class="hwait ok">✓ ${esc(joined.name)} is connected</div>`
+    : joined
+      ? `<div class="hwait"><span class="dot drain"></span>${esc(joined.name)} joined — waiting for it to connect…</div>`
+      : `<div class="hwait"><span class="dot on"></span>Waiting for it to connect… <span class="hint">code expires in ${mins} min</span></div>`;
+  qs("#hmain").innerHTML = `
+    <div class="jhead"><strong style="font-size:16px">Add a computer</strong></div>
+    <div class="jbody">
+      ${both ? `<div class="tabs" style="margin-bottom:10px"><button data-via="lan" class="${a.via === "lan" ? "on" : ""}">Same network</button><button data-via="tunnel" class="${a.via === "tunnel" ? "on" : ""}">Anywhere</button></div>` : ""}
+      <div class="hint" style="font-size:13px;color:var(--muted);margin-bottom:8px">Paste this in Terminal on the new Mac:</div>
+      <pre class="hcmd" id="h-cmd">${esc(cmd)}<button type="button" id="h-copy">Copy</button></pre>
+      ${none ? `<div class="hint" style="font-size:13px;color:var(--warn);margin-top:10px;line-height:1.5">This Desk has no address a computer can reach yet. Set <code>CHRONOS_HOST_LISTEN=0.0.0.0:7779</code> (same network) or <code>CHRONOS_HOST_PUBLIC_URL</code> (your tunnel) in <code>.secrets</code>, deploy, and add it again.</div>` : ""}
+      ${wait}
+    </div>
+    <div class="jfoot"><span class="sp"></span><button class="btn" id="h-adddone">${joined?.connected ? "Done" : "Close"}</button></div>`;
+  qs("#h-copy").onclick = () => copyText(cmd, "command");
+  for (const b of qsa("#hmain [data-via]")) b.onclick = () => { a.via = b.dataset.via; renderAdd(); };
+  qs("#h-adddone").onclick = () => { const j = a.joined; H.add = null; if (j) H.sel = j; renderHosts(); };
+}
+function hAddTick() {
+  const a = H.add; if (!a?.minted) return;
+  if (!a.joined) a.joined = (H.list || []).find((h) => !a.before.has(h.id))?.id || null;
+}
+qs("#btn-hosts").onclick = () => openHosts();
+qs("#host-add").onclick = () => { H.add = { minted: null }; renderHosts(); };
+qs("#hosts-close").onclick = () => qs("#dlg-hosts").close();
+qs("#dlg-hosts").addEventListener("close", () => { H.add = null; });
+// The picker in "+ Terminal": only with a second computer online. "Auto" leaves it to the daemon.
+function fillHostSelect() {
+  const sel = qs("#q-host");
+  const up = (H.list || []).filter((h) => h.connected && h.status !== "disabled");
+  const show = up.some((h) => !h.is_brain);
+  sel.hidden = !show;
+  if (!show) { sel.innerHTML = ""; return; }
+  const wsId = qs("#q-ws").value;
+  const was = sel.value || localStorage.getItem("desk-quick-host") || "";
+  sel.innerHTML = '<option value="">Auto</option>' + up.map((h) => {
+    const w = h.checklist.workspaces.find((x) => x.id === wsId);
+    const why = h.status === "draining" ? "draining" : w && !w.allowed ? (w.denied_by === "veto" ? "refuses this client" : "not for this client") : "";
+    return `<option value="${esc(h.id)}"${why ? " disabled" : ""}>${esc(h.is_brain ? "This Mac" : h.name)}${why ? " — " + why : ""}</option>`;
+  }).join("");
+  sel.value = [...sel.options].some((o) => o.value === was && !o.disabled) ? was : "";
+}
+setInterval(() => { if (!document.hidden && (hRemote().length || qs("#dlg-hosts").open)) loadHosts(); }, 5000);
+loadHosts();
+
 // ── mac: CPU / RAM / GPU of this Mac + whether agents may open terminals (GET /machine) ──
 // RAM is coloured by macOS memory PRESSURE, not by %: a Mac at 90% used with pressure normal is fine.
 const M = { snap: null };
@@ -5603,6 +5894,7 @@ function mSpark(vals) {
 const mPct = (v) => (v == null ? "—" : Math.round(v) + "%");
 function renderMac() {
   const s = M.snap, el = qs("#mac");
+  if (hRemote().length) return renderFleetChip(el, s);
   const hist = s?.vitals?.history || [];
   if (!hist.length) { el.hidden = true; return; }
   const last = hist[hist.length - 1];
@@ -5614,6 +5906,7 @@ function renderMac() {
   el.innerHTML = seg("cpu", "CPU", mLevel(last.cpu)) + seg("ram", "RAM", mPressLevel(s.pressureLevel)) + (last.gpu == null ? "" : seg("gpu", "GPU", mLevel(last.gpu))) + (held ? `<span class="mp">⏸ agents</span>` : "");
 }
 function openMac(anchor) {
+  if (hRemote().length) return openFleet(anchor);
   const s = M.snap; if (!s) return;
   const ram = s.vitals?.ram, last = s.vitals.history[s.vitals.history.length - 1] || {};
   const gb = (mb) => (mb / 1024).toFixed(1);
