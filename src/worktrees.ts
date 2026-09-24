@@ -155,6 +155,21 @@ export async function ensureSessionWorktree(
   }
 }
 
+/**
+ * The branch a terminal on ANOTHER host (HOSTS.md) should claim — the naming half of
+ * ensureSessionWorktree, which the host cannot do (it has no store to see other terminals' claims).
+ * The worktree itself is created there, under that host's own checkout.
+ */
+export async function remoteWorktreeBranch(
+  sess: Pick<Session, "id" | "workspace_id" | "goal" | "spawn_goal" | "title" | "worktree_branch">,
+  as?: string | null,
+): Promise<string> {
+  if (sess.worktree_branch) return sess.worktree_branch;
+  const wanted = deskBranchName(sess, as);
+  const claimedByOther = !!db.prepare("SELECT 1 FROM sessions WHERE worktree_branch = ? AND id <> ? LIMIT 1").get(wanted, sess.id);
+  return claimedByOther ? `${wanted}-${sess.id.slice(0, 4)}` : wanted;
+}
+
 /** What a worktree is holding that removing it would destroy. */
 export type WorktreeState = {
   path: string;

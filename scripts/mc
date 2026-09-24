@@ -25,6 +25,10 @@ const WS_TOKEN_HEADERS = process.env.MC_WORKSPACE_TOKEN ? { "x-mc-workspace-toke
 // Lead instead of Robert, and only that Lead may type into it. Never sent from a worker; only a Lead's
 // env carries MC_LEAD_TOKEN.
 const LEAD_HEADERS = process.env.MC_LEAD_TOKEN ? { "x-mc-lead": process.env.MC_LEAD_TOKEN } : {};
+// Which terminal is calling. On the brain's own Mac it is informational; from a terminal on another
+// host (HOSTS.md) the brain checks it: the session must run on the host the request came through and
+// belong to the token's workspace, so one agent cannot speak for another machine's terminal.
+const SESSION_HEADERS = process.env.MC_SESSION ? { "x-mc-session": process.env.MC_SESSION } : {};
 
 function parse(argv) {
   const pos = [], opt = {}, multi = {};
@@ -44,7 +48,7 @@ function parse(argv) {
 async function req(method, path, body, headers) {
   const r = await fetch(API + path, {
     method,
-    headers: { ...(body ? { "content-type": "application/json" } : {}), ...WS_TOKEN_HEADERS, ...headers },
+    headers: { ...(body ? { "content-type": "application/json" } : {}), ...WS_TOKEN_HEADERS, ...SESSION_HEADERS, ...headers },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await r.text();
@@ -252,7 +256,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc statusline claude        (Claude's statusLine — reports usage-limit %, prints "5h 34% · week 71%")
   mc usage                    subscription usage per CLI/profile (Claude 5h/week, Grok week, Cursor —)
   mc session list [--workspace ID]   live terminals + their tickets
-  mc session new [--ticket KEY] [--backend b] [--model m] [--workspace ID] [--cwd p] [--title t]
+  mc session new [--ticket KEY] [--backend b] [--model m] [--workspace ID] [--cwd p] [--title t] [--host id|name]
                  [--goal "what it's for"] [--kind pr|investigation|qa] [--description "the brief"]
                  (--goal repeats: --goal "open the PR" --goal "update the runbook" = one terminal,
                   two finish lines, worked in order)
@@ -1742,6 +1746,8 @@ async function heavy(argv) {
         ticket_id: ticketId, workspace_id: ws || null, repo_id: repo || null,
         backend: opt.backend, model: opt.model, role: opt.role || "worker",
         cwd: opt.cwd, title: opt.title, goal: opt.goal,
+        // Pin to another computer (HOSTS.md): a host id or its name. Unset = wherever it runs today.
+        host_id: opt.host,
         // `--goal a --goal b --goal c` opens ONE terminal with three finish lines, worked in order.
         // With a single --goal the list is left empty and the terminal is the one-goal card it
         // always was.

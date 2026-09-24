@@ -170,7 +170,9 @@ export function buildRemoteSpawnSpec(i: RemoteSpecInput): { spec: SpawnSpec; dro
     repos: i.wsRepos.map(withRemote).filter((r): r is { id: string; git_remote: string } => !!r),
     worktree: repo ? i.worktree : null,
     resume_cwd: i.resume ? i.resumeCwd : null,
-    cwd_hint: i.resume && i.resumeCwd ? "home" : repo && i.worktree ? "worktree" : repo ? "repo" : "landing",
+    // Where to land when there is no (usable) resume_cwd. The host reads the fields themselves; the
+    // hint is what the Desk and logs show.
+    cwd_hint: repo && i.worktree ? "worktree" : repo ? "repo" : "landing",
     profile: i.profile,
     sandbox: { mode: i.sandbox.mode, allow, egress_locked: i.sandbox.egressLocked },
     system: i.system,

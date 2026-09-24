@@ -62,12 +62,12 @@ import { sessionArtifacts } from "./session-artifacts.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
 import { cloudRunFor, cloudSessionState, cloudVisibleRepos, followUpCloudSession, openCloudSession, wantsCloudBackend } from "./desk-cloud.js";
-import { openSession, resumeOpts, promoteToLead, leadPromotionError, attach, refreshClient, writeTo, resize, killSession, closeOutSession, focusEvents, isLive, sendInput, sessionActivity, sessionPrompt, sessionScreen, setClientRate, continueFromRun } from "./terminal.js";
+import { assertRemotePlacement, openSession, resumeOpts, promoteToLead, leadPromotionError, attach, refreshClient, writeTo, resize, killSession, closeOutSession, focusEvents, isLive, sendInput, sessionActivity, sessionPrompt, sessionScreen, setClientRate, continueFromRun } from "./terminal.js";
 import { sessionUsage, snapshotUsage } from "./session-usage.js";
 import { applyHook, declare as declareStatus, sessionGoalReached, setProgress, statusOf } from "./term-status.js";
 import { parseEvery, watchView } from "./desk-watch.js";
 import { clipboardEnabled, readClipboard, writeClipboard } from "./clipboard.js";
-import { ensureSessionWorktree, listAllWorktrees, removeWorktreeAs } from "./worktrees.js";
+import { ensureSessionWorktree, listAllWorktrees, remoteWorktreeBranch, removeWorktreeAs } from "./worktrees.js";
 import { askRobertEnabled, askerLabel, escalateAsk } from "./ask-robert.js";
 import * as noteSvc from "./notes.js";
 import { forgetMemorySeen, markMemorySeen, memoryNotice, rememberFact } from "./memory-tree.js";
@@ -124,7 +124,10 @@ import { ensureIntakeJob } from "./intake.js";
 import { RepoGitError, resolveRepoGitFields } from "./repo-git.js";
 import type { GoalKind, LessonState, Session } from "./types.js";
 import { redactConnectorConfig, publicTrigger } from "./redact.js";
-import { tokenOk, callerScope, checkScope, leadMayType, leadScope, type LeadScope } from "./authz.js";
+import { tokenOk, callerScope, checkScope, forwardedGate, leadMayType, leadScope, type LeadScope } from "./authz.js";
+import { findHost, hostOnline } from "./hosts/index.js";
+import { RemoteHost } from "./hosts/remote.js";
+import { resolveHostRef, sessionHostOffline } from "./remote-terminals.js";
 import { invalidateWatchCache, prepareWatch } from "./watches.js";
 import {
   validate,
@@ -168,6 +171,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * pending line — the same merge that made every keystroke to a Lead pace itself (LEAD_GAP_MS).
  */
 const BROADCAST_GAP_MS = 300;
+
+/** Largest drop forwarded to a remote host: it travels base64 in one control frame (cap 24 MB). */
+const REMOTE_DROP_MAX = 16 * 1024 * 1024;
 
 /**
  * The Desk footer's quick actions as stored, or the shipped set when nothing is stored — and also
@@ -412,6 +418,9 @@ export function startServer() {
   app.use(express.json({ limit: "16mb" }));
 
   const api = express.Router();
+  // Requests an agent on another computer made through its host (HOSTS.md): remote, never loopback-
+  // trusted, and bound to their own session and host. A no-op for everything else.
+  api.use(forwardedGate);
 
   api.get("/backends", (_req, res) => {
     res.json(listBackends());
@@ -473,7 +482,7 @@ export function startServer() {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
-    res.json(s);
+    res.json({ ...s, host_offline: sessionHostOffline(s) });
   });
   api.post("/sessions", validate(OpenSessionSchema), async (req, res) => {
     const scope = callerScope(req);
@@ -498,6 +507,22 @@ export function startServer() {
         created_by: req.body?.created_by || "operator",
         ...spawnLeadFields(lead),
       };
+      // Pinned to another computer (HOSTS.md phase 3: pinned + sticky only). By id or name; checked
+      // here — connected, workspace not denied there (brain lock #1) — and again inside openSession.
+      if (body?.host_id && body.host_id !== LOCAL_HOST_ID) {
+        const hid = resolveHostRef(String(body.host_id));
+        if (!hid) return res.status(404).json({ error: `no host \`${body.host_id}\` has connected to this brain` });
+        if (wantsCloudBackend(body?.backend)) return res.status(400).json({ error: "a cloud terminal runs on its provider's VM, not on a host" });
+        try {
+          assertRemotePlacement(hid, openOpts.workspace_id ?? null, body?.backend ?? null, null);
+        } catch (e: any) {
+          const msg = String(e?.message ?? e);
+          return res.status(/not allowed/.test(msg) ? 403 : 409).json({ error: msg });
+        }
+        openOpts.host_id = hid;
+      } else {
+        openOpts.host_id = null;
+      }
       // A cloud terminal has no pty: it is a dispatched run on someone else's VM, not a spawned
       // process (see src/desk-cloud.ts). Routed on the NAME, not just isCloudBackend(getBackend()) —
       // a caller asking for "cursor-cloud" before its module is registered must fail closed here
@@ -619,7 +644,7 @@ export function startServer() {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
-    res.json(statusOf(s.id));
+    res.json({ ...statusOf(s.id), host_offline: sessionHostOffline(s) });
   });
   api.post("/sessions/:id/status", validate(SessionStatusSchema), (req, res) => {
     const s = sessions.get(req.params.id);
@@ -702,11 +727,32 @@ export function startServer() {
   api.post(
     "/sessions/:id/drop",
     express.raw({ type: () => true, limit: MAX_DROP_BYTES }),
-    (req, res) => {
+    async (req, res) => {
       if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken))
         return res.status(403).json({ error: "dropping a file on a terminal is admin-gated (x-mc-admin)" });
       const s = sessions.get(req.params.id);
       if (!s) return res.status(404).json({ error: "not found" });
+      // A terminal on another host reads files from ITS disk: the bytes go over the link, the host
+      // writes them into its own ~/.mc/drops/<session>, and that path is what gets typed in.
+      if (s.host_id && s.host_id !== LOCAL_HOST_ID) {
+        const h = findHost(s.host_id);
+        if (!(h instanceof RemoteHost) || !h.online) return res.status(409).json({ error: "this terminal's host is offline" });
+        const buf = req.body as Buffer;
+        if (!buf?.length) return res.status(400).json({ error: "empty file" });
+        // One control frame carries it (base64, ×4/3) and the link caps a frame at 24 MB.
+        if (buf.length > REMOTE_DROP_MAX) return res.status(413).json({ error: `a file dropped on a terminal on another host is capped at ${REMOTE_DROP_MAX / 1024 / 1024}MB` });
+        try {
+          const d = await h.drop({
+            session_id: s.id,
+            filename: String(req.get("x-filename") || req.query.filename || "drop"),
+            mime: String(req.get("content-type") || ""),
+            b64: buf.toString("base64"),
+          });
+          return res.status(201).json(d);
+        } catch (e: any) {
+          return res.status(400).json({ error: String(e?.message ?? e) });
+        }
+      }
       try {
         res.status(201).json(
           saveDrop({
@@ -743,6 +789,22 @@ export function startServer() {
         error: `no repo matching "${ref}" in this workspace`,
         available: candidates.map((r) => r.name),
       });
+    // A terminal on another host claims its worktree THERE, under that host's own checkout of the
+    // repo (found by git remote). The brain only picks the branch name, exactly as it would here.
+    if (sess.host_id && sess.host_id !== LOCAL_HOST_ID) {
+      const h = findHost(sess.host_id);
+      if (!(h instanceof RemoteHost) || !h.online) return res.status(409).json({ error: "this terminal's host is offline" });
+      if (!repo.git_remote) return res.status(409).json({ error: `${repo.name} has no git remote, so its host cannot find its checkout` });
+      const branch = await remoteWorktreeBranch(sess, req.body.as);
+      try {
+        const got = await h.claimWorktree({ session_id: sess.id, git_remote: repo.git_remote, branch, base: repo.default_branch });
+        const updated = sessions.setWorktree(sess.id, { path: got.path, branch, repo_id: repo.id });
+        bus.publish({ topic: "session.updated", session_id: sess.id });
+        return res.status(201).json({ path: got.path, branch, repo: repo.name, session: updated });
+      } catch (e: any) {
+        return res.status(409).json({ error: String(e?.message ?? e) });
+      }
+    }
     const wt = await ensureSessionWorktree(repo, sess, req.body.as);
     if (!wt)
       return res.status(409).json({ error: `could not create a worktree in ${repo.name} (not a git repo, or the branch is checked out elsewhere)` });
@@ -1163,7 +1225,11 @@ export function startServer() {
         const act = sessionActivity(s.id);
         const agent = s.cloud_agent_id ? undefined : getAgent(s.id);
         const cloudRun = cloudRunFor(s);
-        const live = s.cloud_agent_id ? s.status === "live" : act.live;
+        // A terminal on another host whose link is down (or not back yet after a brain restart) is
+        // still running over there: its row, not this brain's pty registry, says whether it is live.
+        const remote = !!s.host_id && s.host_id !== LOCAL_HOST_ID;
+        const host_offline = remote && s.status === "live" && !hostOnline(s.host_id);
+        const live = s.cloud_agent_id ? s.status === "live" : act.live || (remote && s.status === "live");
         // Precedence: an agent that reported `blocked` (mc state) outranks byte-level silence, and a
         // ticked goal outranks both — for as long as the tick still describes it (goalReachedStands:
         // a terminal you gave more work to is not done, whatever it said ten minutes ago).
@@ -1187,6 +1253,9 @@ export function startServer() {
           lead_id,
           // Live worker count, only meaningful for role === "lead".
           workers,
+          // HOSTS.md: the computer this terminal runs on is not connected right now. Not ended —
+          // it keeps running there and re-attaches when the host reconnects.
+          host_offline,
           // `{ done, total }` of this Lead's plan, or null when it has not written one.
           board,
           // `state` is what the operator should FEEL about this terminal; `live` is whether the work
