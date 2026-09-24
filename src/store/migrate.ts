@@ -1887,6 +1887,23 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       db.exec("CREATE INDEX IF NOT EXISTS idx_jots_follow_up ON jots(follow_up_at) WHERE follow_up_at IS NOT NULL");
     },
   },
+  {
+    version: 137,
+    name: "headless runs on hosts — jobs.host_id, runs.cwd/placement, workspaces.placement",
+    // HOSTS.md phase 5. A run's directory belongs to a computer, like a session's:
+    //  - jobs.host_id: the job is PINNED to that host and its `cwd` is a path THERE (a ticket worktree
+    //    the host created). Null = placed at dispatch, and `cwd` is a brain path as it always was.
+    //  - runs.cwd: where the run actually ran, on runs.host_id, as that host reported it — what the ship
+    //    pipeline (gates, review diff, merge) works in afterwards. Null = the job's cwd.
+    //  - runs.placement: why it runs where it runs, when there was a choice (like sessions.placement).
+    //  - workspaces.placement: 'brain' | 'hosts' — a workspace's own kill switch for moving its jobs.
+    up: (db) => {
+      db.exec("ALTER TABLE jobs ADD COLUMN host_id TEXT");
+      db.exec("ALTER TABLE runs ADD COLUMN cwd TEXT");
+      db.exec("ALTER TABLE runs ADD COLUMN placement TEXT");
+      db.exec("ALTER TABLE workspaces ADD COLUMN placement TEXT");
+    },
+  },
 
 ];
 

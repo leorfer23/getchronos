@@ -1,5 +1,6 @@
 import type { Readable, Writable } from "node:stream";
 import type { SpawnSpec } from "./spawn-spec.js";
+import type { ProcSpec } from "./proc-spec.js";
 import type { Admission, MachineLoad, SlotGrant, SlotHolder, vitalsSnapshot } from "../machine.js";
 
 // The seam between the brain and the computers its agents run on (HOSTS.md, "The seam: Host").
@@ -52,6 +53,13 @@ export interface ProcHandle {
   onClose(listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
   /** The process could not be spawned, or could not be signalled. */
   onError(listener: (err: Error) => void): void;
+  // Phase 5 — set only by a remote handle (hosts/remote.ts RemoteProc):
+  /** Where the run runs, as a path on ITS host (the host resolved it from the ProcSpec). */
+  readonly cwd?: string;
+  /** The HOST's watchdog ended it: past its timeout with no word from the brain. */
+  readonly timedOut?: boolean;
+  /** Set when the process vanished with its host (a host restart) — why, naming the host. */
+  readonly lost?: string | null;
 }
 
 /**
@@ -116,7 +124,8 @@ export interface Host {
   // ── processes ──
   /** `local` takes a built command line (PtySpawn); a remote host takes intent (SpawnSpec). */
   spawnPty(spec: PtySpawn | SpawnSpec): Promise<PtyHandle>;
-  spawnProcess(spec: ProcSpawn): Promise<ProcHandle>;
+  /** `local` takes a built command line (ProcSpawn); a remote host takes intent (ProcSpec, phase 5). */
+  spawnProcess(spec: ProcSpawn | ProcSpec): Promise<ProcHandle>;
   /**
    * Signal a process this host is running, by pid, synchronously. Throws when there is no such
    * process, like `process.kill` — callers (stopRun, continueFromRun) decide what that means.
@@ -131,7 +140,7 @@ export interface Host {
   readonly slots: HeavySlotPool;
 
   // Phase 3 does checkout/worktree/prepare/transcript INSIDE a remote spawn (the host resolves them
-  // from the SpawnSpec) rather than as separate verbs: nothing on the brain needs them on their own
-  // yet. They become verbs when the ship pipeline moves to hosts (phase 5).
-  // TODO(phase 5): exec(cmd) — gates, reviews and delivery still call execFileSync in the worktree.
+  // from the SpawnSpec) rather than as separate verbs. Phase 5 adds the ship pipeline's verbs —
+  // exec / oneshot / worktreeEnsure — on RemoteHost only: on the brain they are the execFile calls
+  // gates/reviews/verifier always made, and hosts/workdir.ts picks one or the other by host id.
 }

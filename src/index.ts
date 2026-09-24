@@ -11,6 +11,7 @@ import { startCalendar } from "./calendar.js";
 import { startReminders } from "./reminders.js";
 import { startTerminals } from "./terminal.js";
 import { startRemoteTerminals } from "./remote-terminals.js";
+import { startRemoteRuns } from "./remote-runs.js";
 import { startConnectorSync } from "./connectors/index.js";
 import { startRepoScan } from "./repo-scan.js";
 import { startMonitor } from "./monitor.js";
@@ -101,6 +102,9 @@ void startTerminals();
 // Terminals on other computers (HOSTS.md phase 3): re-attached when their host says hello, never
 // reaped or revived at boot like local ones — they did not die with this daemon.
 startRemoteTerminals();
+// Headless runs on other computers (phase 5): egress records from host proxies, and a removed host's
+// runs marked interrupted. The per-hello reconcile rides the terminals' subscription above.
+startRemoteRuns();
 startConnectorSync();
 startRepoScan();
 startMonitor();

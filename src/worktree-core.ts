@@ -109,3 +109,20 @@ export async function ensureBranchWorktree(repoPath: string, defaultBranch: stri
     return null; // e.g. branch already checked out in the main tree — fall back to repo path
   }
 }
+
+// Sandbox dir adjustments for a ticket that builds in an ISOLATED worktree (job.cwd) of `repoPath`.
+// The shared main checkout must be WRITE-denied (guard is allow-by-default) so the agent — handed
+// absolute repo paths in its context — can't edit it, `cd` there, and `git add -A && commit`, sweeping
+// other concurrent builds' work onto main (the PER-36 incident). It stays READ-allowed: a linked
+// worktree's git must read the main checkout (commondir) to operate, and blocking reads breaks git
+// entirely. Two sub-paths are re-granted WRITE via addDirs: `.git` (shared objectstore/refs the
+// worktree commits through) and `.mc` (gitignored runtime ticket store, absent from the worktree, that
+// the agent reads + logs to). allow-own runs after the write-deny, so these narrower grants win.
+// Empty when there's no repo or the run isn't in a worktree. (`mc` CLI lives at ~/.mc/bin, outside repo.)
+export function worktreeSandboxDirs(
+  repoPath: string | undefined | null,
+  cwd: string,
+): { readonly: string[]; grant: string[] } {
+  if (!repoPath || path.resolve(repoPath) === path.resolve(cwd)) return { readonly: [], grant: [] };
+  return { readonly: [repoPath], grant: [path.join(repoPath, ".git"), path.join(repoPath, ".mc")] };
+}

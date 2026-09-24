@@ -18,7 +18,7 @@ import { lastActivityState, reviveSeedFor } from "./revive.js";
 import { childEnv } from "./child-env.js";
 import { sanitizeCwd } from "./spawn-guard.js";
 import { ensureTicketWorktree, cleanupWorktree } from "./worktrees.js";
-import { egressEnv, egressLocked } from "./egress.js";
+import { egressBrokered, egressEnforced, egressEnv, egressLocked, egressPolicy } from "./egress.js";
 import { niceWrap } from "./machine.js";
 import { findHost, hostFor, LOCAL_HOST_ID, type PtyHandle } from "./hosts/index.js";
 import { brainPathsIn, buildRemoteSpawnSpec, profileNameFor } from "./hosts/spawn-spec.js";
@@ -366,7 +366,7 @@ function hostReportedCwd(asked: string | null | undefined, resumed: Session | nu
 }
 
 /** `workspaces.sandbox_allow` as the raw entries (a SpawnSpec re-resolves them on the host's home). */
-function parseAllowRaw(raw: string | null | undefined): string[] {
+export function parseAllowRaw(raw: string | null | undefined): string[] {
   if (!raw) return [];
   try {
     const v = JSON.parse(raw);
@@ -399,7 +399,10 @@ export function assertRemotePlacement(hostId: string, workspaceId: string | null
   }
   const b = getBackend(backendName);
   if (b.kind === "cloud") throw new Error(`${b.name} runs on its provider's VM, not on a host`);
-  if (egressLocked(workspaceId)) throw new Error("this workspace's egress is locked, and hosts do not run the egress proxy yet (HOSTS.md phase 5)");
+  // Phase 5: a host runs the workspace's egress proxy itself — but never one that brokers credentials
+  // (the secret stays with the brain's proxy), and only a host that says it can (protocol 1.3).
+  if (egressBrokered(workspaceId)) throw new Error("this workspace's egress brokers credentials, which only the brain's proxy may hold — it runs on the brain");
+  if (egressEnforced(workspaceId) && !h.hello?.capabilities?.egress) throw new Error(`this workspace's egress is locked, and host ${h.hello?.name ?? hostId} runs no egress proxy (update it)`);
   if (h.hello && h.hello.platform !== "darwin") throw new Error(`host ${h.hello.name} is ${h.hello.platform}; terminals need a macOS host (Seatbelt)`);
   const mode = ws?.sandbox_mode ?? CONFIG.sandbox.defaultMode;
   if (mode !== "off" && h.hello && !h.hello.capabilities?.sandbox) throw new Error(`host ${h.hello.name} cannot sandbox (${mode}) — no sandbox-exec there`);
@@ -773,6 +776,10 @@ export async function openSession(
     remoteSeed = composeSeed();
     const t = row.ticket_id ? tickets.get(row.ticket_id) : undefined;
     const repo = (row.repo_id ? repos.get(row.repo_id) : undefined) ?? (t?.repo_id ? repos.get(t.repo_id) : undefined);
+    // Continuing a headless run that ran on this host: claude files its transcript per cwd, so the
+    // terminal must start where that run ran — the directory the host reported for it (runs.cwd).
+    const fromRun = opts.agentSessionId && opts.resumeAgent ? runs.bySession(opts.agentSessionId) : undefined;
+    const runCwd = fromRun && fromRun.host_id === targetHost ? fromRun.cwd ?? null : null;
     const { spec, dropped } = buildRemoteSpawnSpec({
       sessionId: row.id,
       workspace: ws ? { id: ws.id, slug: ws.slug } : null,
@@ -786,9 +793,11 @@ export async function openSession(
       worktree: t && repo ? { branch: ticketBranch(t.key), base: repo.default_branch } : null,
       // Only a path the HOST reported: this row's cwd or claimed worktree (a resume), or those of the
       // terminal this one stands in for on the same host (failover). Never a brain-chosen directory.
-      resumeCwd: hostReportedCwd(opts.cwd, doResume ? row : null, opts.replaces ? sessions.get(opts.replaces) : undefined, targetHost),
+      resumeCwd: hostReportedCwd(opts.cwd, doResume ? row : null, opts.replaces ? sessions.get(opts.replaces) : undefined, targetHost) || runCwd,
       profile: profileNameFor(ws?.config_dir, CONFIG.profiles, CONFIG.defaultProfile),
-      sandbox: { mode, allowRaw: parseAllowRaw(ws?.sandbox_allow), egressLocked: egressLocked(opts.workspace_id) },
+      // The host locks to ITS proxy (phase 5): the workspace's mode decides, not the brain's listener.
+      sandbox: { mode, allowRaw: parseAllowRaw(ws?.sandbox_allow), egressLocked: egressEnforced(opts.workspace_id) },
+      egress: egressPolicy(opts.workspace_id),
       system: sysArg,
       env,
       nice: CONFIG.agentNice,
@@ -971,7 +980,10 @@ export async function continueFromRun(
   // Headless process holds the CLI session — stop it so we can resume interactively. Signalled on
   // the run's own host: its pid means nothing anywhere else.
   if (run.status === "running" || run.status === "queued") {
-    if (run.pid) {
+    if (run.host_id && run.host_id !== LOCAL_HOST_ID) {
+      // A run on another computer (phase 5) is stopped through its channel, not by pid.
+      (findHost(run.host_id) as RemoteHost | undefined)?.killRun?.(runId, "SIGTERM");
+    } else if (run.pid) {
       const host = hostFor(run);
       try {
         host.signal(run.pid, "SIGTERM");

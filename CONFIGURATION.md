@@ -447,12 +447,35 @@ the Desk's "Auto", `mc session new`, Robert, Leads, failover stand-ins, revives 
 revive, a stand-in, a ticket whose worktree is on one Mac, a `cwd` on the brain), or is refused with
 the reason — never moved silently. Otherwise each eligible computer (online, not draining, workspace
 allowed by policy and by its veto, the CLI installed, the workspace's profile present, the repo
-cloned or `CHRONOS_HOST_AUTO_CLONE=1`, not egress-locked) is judged by the governor on its own vitals
+cloned or `CHRONOS_HOST_AUTO_CLONE=1`, an egress lock only onto a host that runs the proxy itself,
+never a workspace whose egress brokers credentials) is judged by the governor on its own vitals
 and scored by free capacity; the brain's score has `CHRONOS_BRAIN_RESERVE` taken off, so hosts take
 work first. When nobody has room the operator still gets the least-loaded computer and an agent is
 refused with every computer's reason. The pick and why are on the session (`placement`), in the log
 (`[placement] …`) and on the bus (`session.placed`). `mc heavy` / `mc machine` from an agent on a host
 use that host's own pool (`ncpu / 6` of that Mac) and vitals.
+
+**Headless runs (Phase 5).** Jobs place the same way, at dispatch: a build (`ticket:`), a CI fix, a
+merge gate, a planner, grader, reviewer, distiller or idea miner — and any job whose `cwd` is a
+workspace repo's checkout — goes to the host with the most headroom that can run it (a host that
+reports headless support, the CLI, the profile, the repo, `gh` for work that pushes). A ticket's
+worktree is created on the host its build is placed on, and everything after it — gates, the review
+diff and commit, the mergeability check, the reviewer, the PR, a commit-delivery landing on that
+host's checkout, the verifier — runs there through the host (`exec`), with the host enforcing each
+timeout. Runs never wait or fail for load: when no host has room, or a run cannot move, it runs on the
+brain exactly as before. What always stays on the brain: `intake:` / `prose:` (they read Slack/MCP
+through the brain's profile login), `dream:` (no repo; brain state), cloud hand-offs, unscoped jobs,
+jobs started in any other brain directory, and a job whose goal names a file only the brain has (a
+ticket's attachments, a no-repo ticket's markdown). Each run row carries `host_id`, `cwd` (on that
+host) and `placement` (why, when there was a choice). A run on a host survives a brain restart (it is
+re-adopted when its host says hello) and a link drop (its output is resent once); a run whose host
+restarted is marked `interrupted`, naming the host.
+
+Per workspace, `placement` (`PATCH /api/workspaces/:id {"placement": "brain" | "hosts" | null}`)
+keeps that workspace's jobs on the brain (`brain`) or lets them move (`hosts`, the default while
+`CHRONOS_PLACEMENT=auto`). A workspace's egress proxy runs on the host next to its agents
+(`audit` and `enforce` alike, audit records flow back to the brain's log); a workspace with an
+intercepting broker credential stays on the brain.
 
 On the brain:
 
@@ -464,7 +487,7 @@ On the brain:
 | `CHRONOS_HOST_REPO_URL` | `repository` in package.json, else `https://github.com/leorfer23/getchronos` | what the git join command clones on a new Mac |
 | `CHRONOS_HOST_INSTALL` | `git` | how the join command installs Chronos on a new Mac: `git` (clone + `npm ci` into `$HOME/.chronos-host/app`) or `npm` (`npx -y getchronos@<the brain's version> host join …` — only once the package is published) |
 | `CHRONOS_HOST_TRANSCRIPTS` | `<hostlink dir>/transcripts` | where the brain mirrors remote terminals' CLI transcripts (one `<session>.jsonl` each), which Focus and the usage ledger read |
-| `CHRONOS_PLACEMENT` | `auto` | the kill switch. `auto`: sticky, then pinned, else most headroom. `pinned`: Phase 3 — only a pinned or sticky terminal leaves the brain. `local`: every new terminal opens on the brain and a pin to another computer is refused (409); a terminal that already lives on a host still reopens there |
+| `CHRONOS_PLACEMENT` | `auto` | the kill switch, for terminals AND headless runs. `auto`: sticky, then pinned, else most headroom. `pinned`: Phase 3 — only a pinned or sticky terminal leaves the brain, and no new run does. `local`: every new terminal and run starts on the brain and a pin to another computer is refused (409); work that already lives on a host (a terminal, a ticket worktree, a resumed transcript) still goes back there |
 | `CHRONOS_BRAIN_RESERVE` | `25` | headroom points (0–100 scale: half CPU against `CHRONOS_MAX_LOAD_PER_CORE`, half free RAM, minus 25/50 for memory pressure warning/critical) taken off the brain's score before computers are compared, so the brain — which also runs the daemon, the Desk and Robert — takes overflow, not first pick. `0` = the brain competes as an equal |
 
 Adding a host: Desk → ⋯ → **Computers** → **+ Add**, or with the admin token

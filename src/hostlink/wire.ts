@@ -19,12 +19,16 @@
  * and accepts any minor (a newer minor only adds optional fields or frame kinds the other side
  * ignores). Bump major only when an existing frame changes meaning.
  */
-export const PROTOCOL_VERSION = "1.3";
+export const PROTOCOL_VERSION = "1.4";
 // 1.1 (phase 3): hello.live[] carries `exit`/`transcript_offset`; `transcript` carries `offset`/`reset`;
 // brain → host `attach` and `release`. All additive: a 1.0 peer ignores what it does not know.
 // 1.2 (phase 4): vitals carry `ncpu`/`load1`/`swapUsedMb`/`swapTotalMb` (the brain runs the governor's
 // own admission() on a host's numbers and sizes its heavy-slot pool); capabilities carry `auto_clone`.
 // 1.3 (phase 6): hello carries `commit` / `install`; brain → host `update`, host → brain `update_status`.
+// 1.4 (phase 5): headless runs and the ship pipeline — see the "phase 5" block below. `spawn_proc`
+// is answered, proc channels ride the same data/ack/attach/release frames a pty does, and the rpc ops
+// `exec` / `oneshot` / `worktree_ensure` exist. A host older than 1.4 is simply never sent a run
+// (placement reads `capabilities.procs`).
 
 /** Binary data frame header: magic(1) kind(1) ch(u32) seq(u64). */
 export const DATA_HEADER_BYTES = 14;
@@ -47,6 +51,84 @@ export const MAX_CONTROL_BYTES = 24 * 1024 * 1024;
 
 /** Per-channel unacked output kept by the sender (HOSTS.md: "a 256 KB ring per PTY"). */
 export const RING_BYTES = 256 * 1024;
+
+// ── phase 5: headless procs + exec ──
+// Everything phase 5 adds to the protocol lives in this block (the unions above only name it), so a
+// parallel change to the wire rebases against one hunk. Proc channels reuse the pty frames for what
+// they share — `data` (stdout, one whole line or more per frame), `ack`, `attach`, `release`, `kill`,
+// `exit` (+ `timed_out`) — and add only what a pty does not have.
+
+/** What a host that runs headless jobs says it can do (hello.capabilities, protocol 1.3). */
+export type ProcCapabilities = {
+  /** Answers `spawn_proc` and the `exec` / `oneshot` / `worktree_ensure` ops. */
+  procs?: boolean;
+  /** Runs a workspace's egress proxy itself (spec.egress), so an egress-locked workspace may run here. */
+  egress?: boolean;
+};
+
+export type ProcHostToBrain =
+  /**
+   * A headless run's stderr, as it comes (not sequenced: the brain keeps only a rolling tail for the
+   * run's error message). `replay` = the host's whole kept tail, resent on attach after a reconnect;
+   * a brain that already has stderr for the channel ignores it.
+   */
+  | { t: "stderr"; ch: number; text: string; replay?: boolean }
+  /** One outbound connection the host's egress proxy allowed or denied, for the brain's audit log. */
+  | { t: "egress"; workspace_id: string; host: string; port: number; action: "allow" | "deny" };
+
+export type ProcBrainToHost =
+  /** Steer-mode stdin for a proc channel: NDJSON `bytes`, or `end` to close it (how a steer run ends). */
+  | { t: "stdin"; ch: number; bytes?: string; end?: boolean };
+
+/**
+ * Unacked stdout kept per headless run. Bigger than a pty's ring on purpose: a pty that loses output
+ * to eviction repaints on the next frame, but a run's stdout is its event log — an evicted line is a
+ * lost run event, and the one that matters most (the result, with cost and summary) comes last. Hosts
+ * are the machines with RAM to spare; a few MB per live run is the price of never losing that line.
+ */
+export const PROC_RING_BYTES = 4 * 1024 * 1024;
+
+/**
+ * `exec` rpc (HOSTS.md → The ship pipeline on a host): one command in a directory ON THE HOST, with
+ * the host's own timeout. What gates, reviews, delivery and the verifier used to run with execFile in
+ * a worktree on the brain's disk.
+ */
+export type ExecSpec = {
+  /** Checked against the host's veto before anything runs. */
+  workspace: { id: string; slug: string } | null;
+  /** A directory on the host (it reported it: a checkout or a worktree). */
+  cwd: string;
+  cmd?: string;
+  args?: string[];
+  /**
+   * A shell line instead of cmd/args: the host runs it through `bash -lc` with ITS runtime PATH put
+   * back in front (gates.ts withRuntimePath) — the brain's PATH means nothing on another Mac.
+   */
+  shell?: string;
+  /** Secrets + workspace vars only (spawn-spec.ts portableEnv); the host supplies the base env. */
+  env: Record<string, string>;
+  env_home_relative: string[];
+  /** Enforced by the host: a dropped link cannot leave a runaway gate. */
+  timeout_ms: number;
+  /** Cap per stream; `keep` says which end survives the cut (a diff wants its head, a gate its tail). */
+  max_bytes?: number;
+  keep?: "head" | "tail";
+};
+
+export type ExecResult = {
+  code: number | null;
+  signal: string | null;
+  stdout: string;
+  stderr: string;
+  timed_out: boolean;
+  truncated: boolean;
+  /** Set when nothing ran: `cwd_missing: …`, `outside: …`, `veto: …`, `spawn: …`. */
+  error?: string;
+};
+
+/** Hard ceiling on one exec stream (a control frame is 24 MB; two streams must fit with room). */
+export const EXEC_MAX_BYTES = 8 * 1024 * 1024;
+// ── end phase 5 ──
 
 // ───────────────────────────── control frames ─────────────────────────────
 
@@ -92,7 +174,7 @@ export type Capabilities = {
   sandbox: boolean;
   /** Protocol 1.2: CHRONOS_HOST_AUTO_CLONE=1 — placement may send a repo this host has not cloned yet. */
   auto_clone?: boolean;
-};
+} & ProcCapabilities;
 
 export type Hello = {
   t: "hello";
@@ -117,7 +199,7 @@ export type Hello = {
 export type HostToBrain =
   | Hello
   | ({ t: "vitals" } & HostVitals)
-  | { t: "exit"; ch: number; code: number | null; signal: string | null }
+  | { t: "exit"; ch: number; code: number | null; signal: string | null; timed_out?: boolean }
   /**
    * Raw CLI transcript bytes (JSONL, whole lines only) for one channel. `offset` is where `delta`
    * starts in the host's file, so the brain can write it into its mirror idempotently (a resend after
@@ -130,7 +212,8 @@ export type HostToBrain =
   | { t: "ping"; n: number }
   | { t: "pong"; n: number }
   | { t: "error"; code: string; message: string; id?: string }
-  | UpdateStatus;
+  | UpdateStatus
+  | ProcHostToBrain;
 
 export type BrainToHost =
   | { t: "welcome"; proto: string; host_id: string; ping_ms: number }
@@ -154,7 +237,8 @@ export type BrainToHost =
   | { t: "ping"; n: number }
   | { t: "pong"; n: number }
   | { t: "error"; code: string; message: string; id?: string }
-  | UpdateFrame;
+  | UpdateFrame
+  | ProcBrainToHost;
 
 // ── phase 6: version + update ──
 /**

@@ -68,15 +68,25 @@ ensureLocalHost(db);
 // The same reasoning is why this only touches host_id = 'local' (HOSTS.md, "Reconnect and
 // restarts"): a run on another computer is a child of THAT computer's host process, not of this
 // daemon, and it is still running. Sweeping it here would make every deploy double the fleet once
-// the host re-attaches it. Every run is 'local' today, so this changes nothing yet.
+// the host re-attaches it (remote-runs.ts, when the host says hello).
+//
+// A QUEUED run is swept wherever it was placed: queued means it never spawned, and the queue that
+// held it was this process's memory — no computer is running it, and none ever will.
 {
-  const orphans = db
-    .prepare("SELECT id FROM runs WHERE status IN ('running','queued') AND cloud_agent_id IS NULL AND host_id = 'local'")
-    .all() as Array<{ id: string }>;
+  const where = "cloud_agent_id IS NULL AND (status = 'queued' OR (status = 'running' AND host_id = 'local'))";
+  const orphans = db.prepare(`SELECT id FROM runs WHERE ${where}`).all() as Array<{ id: string }>;
   if (orphans.length) {
     db.prepare(
-      "UPDATE runs SET status='interrupted', ended_at=?, error=COALESCE(error,'daemon restarted while run was active') WHERE status IN ('running','queued') AND cloud_agent_id IS NULL AND host_id = 'local'"
+      `UPDATE runs SET status='interrupted', ended_at=?, error=COALESCE(error,'daemon restarted while run was active') WHERE ${where}`
     ).run(now());
     console.log(`[chronos] reconciled ${orphans.length} orphaned run(s) → interrupted`);
   }
+  // A running run on a host this brain has since removed can never be re-attached: its host is gone.
+  const gone = db
+    .prepare("SELECT r.id, r.host_id FROM runs r LEFT JOIN hosts h ON h.id = r.host_id WHERE r.status = 'running' AND r.cloud_agent_id IS NULL AND r.host_id != 'local' AND (h.id IS NULL OR h.token_hash IS NULL)")
+    .all() as Array<{ id: string; host_id: string }>;
+  for (const r of gone) {
+    db.prepare("UPDATE runs SET status='interrupted', ended_at=?, error=COALESCE(error,?) WHERE id=?").run(now(), `its host ${r.host_id} was removed while the run was active`, r.id);
+  }
+  if (gone.length) console.log(`[chronos] reconciled ${gone.length} run(s) on removed hosts → interrupted`);
 }

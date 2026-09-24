@@ -26,10 +26,19 @@ runs.patch(local.id, { status: "running", started_at: new Date().toISOString() }
 const cloud = runs.create(job.id, "test");
 runs.patch(cloud.id, { status: "running", started_at: new Date().toISOString(), cloud_agent_id: "bc-1", cloud_run_id: "run-1" });
 // A run on another computer (HOSTS.md): a child of that host's process, not of this daemon.
+db.prepare("INSERT INTO hosts (id,name,platform,status,token_hash,created_at) VALUES ('m2','m2','darwin','online','h',?)").run(new Date().toISOString());
+db.prepare("INSERT INTO hosts (id,name,platform,status,token_hash,created_at) VALUES ('m5','m5','darwin','disabled',NULL,?)").run(new Date().toISOString());
 const remote = runs.create(job.id, "test");
 runs.patch(remote.id, { status: "running", started_at: new Date().toISOString() });
 db.prepare("UPDATE runs SET host_id = 'm2' WHERE id = ?").run(remote.id);
-console.log(JSON.stringify({ localId: local.id, cloudId: cloud.id, remoteId: remote.id }));
+// Phase 5: placed on a host but never spawned — the queue that held it was the old process's memory.
+const remoteQueued = runs.create(job.id, "test");
+db.prepare("UPDATE runs SET host_id = 'm2' WHERE id = ?").run(remoteQueued.id);
+// Running on a host that has since been removed (token revoked): nothing will ever re-attach it.
+const revoked = runs.create(job.id, "test");
+runs.patch(revoked.id, { status: "running", started_at: new Date().toISOString() });
+db.prepare("UPDATE runs SET host_id = 'm5' WHERE id = ?").run(revoked.id);
+console.log(JSON.stringify({ localId: local.id, cloudId: cloud.id, remoteId: remote.id, remoteQueuedId: remoteQueued.id, revokedId: revoked.id }));
 `;
 
 const READBACK = `
@@ -39,6 +48,9 @@ console.log(JSON.stringify({
   local: runs.get(ids.localId)?.status,
   cloud: runs.get(ids.cloudId)?.status,
   remote: runs.get(ids.remoteId)?.status,
+  remoteQueued: runs.get(ids.remoteQueuedId)?.status,
+  revoked: runs.get(ids.revokedId)?.status,
+  revokedError: runs.get(ids.revokedId)?.error,
 }));
 `;
 
@@ -64,4 +76,7 @@ test("boot reconciliation: a local run is marked interrupted, a cloud run is lef
   assert.equal(statuses.local, "interrupted", "a local run's process died with the daemon — reconciled");
   assert.equal(statuses.cloud, "running", "a cloud run's process lives on the provider's VM — untouched");
   assert.equal(statuses.remote, "running", "a run on another host did not die with this daemon — untouched");
+  assert.equal(statuses.remoteQueued, "interrupted", "a queued run never spawned anywhere: its queue died with the daemon");
+  assert.equal(statuses.revoked, "interrupted", "a run on a removed host can never be re-attached");
+  assert.match(statuses.revokedError, /its host m5 was removed/);
 });

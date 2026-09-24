@@ -153,11 +153,14 @@ export async function buildHello(hostId: string, name = os.hostname().replace(/\
       clis, node: process.version, sandbox: fs.existsSync("/usr/bin/sandbox-exec"),
       // Placement (HOSTS.md phase 4) may only send a repo this Mac has not cloned when it said so.
       auto_clone: process.env.CHRONOS_HOST_AUTO_CLONE === "1",
+      // Phase 5: this host runs headless jobs + the ship pipeline's exec, and egress proxies itself.
+      procs: true,
+      egress: true,
     },
     profiles: profiles(),
     checkouts,
     deny: hostDeny(),
-    live: [], // Phase 3: PTYs and headless runs that survived a link drop, for re-attach.
+    live: [], // PTYs (phase 3) and headless runs (phase 5) that survived a link drop — filled by index.ts.
     commit: build.commit,
     install: build.install,
   };

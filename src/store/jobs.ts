@@ -26,8 +26,12 @@ export const jobs = {
   create(j: NewJob): Job {
     const id = randomUUID();
     const ts = now();
-    const cwd = sanitizeCwd(j.cwd, j.workspace_id) ?? process.env.HOME ?? ".";
-    const addDirs = sanitizeAddDirs(j.add_dirs, j.workspace_id);
+    // A job pinned to another computer (HOSTS.md phase 5) carries a directory THAT host reported: it
+    // cannot be checked against the brain's disk, and the host holds it to its own checkouts instead
+    // (hostd/procs.ts). Its add-dirs are resolved there too, so none are stored.
+    const remote = !!j.host_id && j.host_id !== "local";
+    const cwd = remote ? String(j.cwd ?? "") : sanitizeCwd(j.cwd, j.workspace_id) ?? process.env.HOME ?? ".";
+    const addDirs = remote ? [] : sanitizeAddDirs(j.add_dirs, j.workspace_id);
     const sandbox = clampSandbox(j.sandbox, j.workspace_id);
     db.prepare(
       `INSERT INTO jobs (id,name,description,goal,append_system,profile,workspace_id,ticket_id,backend,cwd,add_dirs,model,
@@ -69,6 +73,7 @@ export const jobs = {
       created_at: ts,
       updated_at: ts,
     });
+    if (remote) db.prepare("UPDATE jobs SET host_id = ? WHERE id = ?").run(j.host_id, id);
     const created = this.get(id)!;
     searchIndex.indexJob(created);
     return created;

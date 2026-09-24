@@ -1,13 +1,12 @@
-import http from "node:http";
-import net from "node:net";
+import type http from "node:http";
 import { CONFIG } from "./config.js";
 import { workspaces, egressLog } from "./store.js";
 import { bus } from "./bus.js";
 import { notify } from "./telegram/api.js";
-import { isBlockedIp } from "./net-guard.js";
 import { loadBrokerCreds, wsAllowed, type BrokerCred } from "./broker.js";
 import { leafFor, caEnv } from "./egress-ca.js";
 import { interceptConnect } from "./egress-mitm.js";
+import { buildEgressServer, listenLoopback, proxyEnv, type EgressCfg, type EgressMode, type EgressPolicy } from "./egress-core.js";
 import type { Workspace } from "./types.js";
 
 // Per-workspace egress firewall. Each opted-in workspace gets a forward proxy on an ephemeral
@@ -16,9 +15,12 @@ import type { Workspace } from "./types.js";
 // with a Seatbelt rule that denies all direct outbound except localhost — so the agent CANNOT bypass
 // the proxy. The daemon itself is unsandboxed, so it can still reach the real upstream on the agent's
 // behalf. audit = log-only (allow all). off = no proxy, no env, no lockdown (legacy behavior).
+//
+// The proxy itself is store-free in egress-core.ts: a workspace's terminals and runs on ANOTHER
+// computer get the same proxy inside `chronos host` (hostd/egress.ts), fed the policy below and
+// reporting each connection back here (recordRemote) — HOSTS.md phase 5.
 
-export type EgressMode = "off" | "audit" | "enforce";
-export interface EgressCfg { mode: EgressMode; allow: string[]; }
+export type { EgressCfg, EgressMode } from "./egress-core.js";
 
 export function egressCfg(ws?: Workspace): EgressCfg {
   if (!ws?.egress_config) return { mode: "off", allow: [] };
@@ -29,30 +31,6 @@ export function egressCfg(ws?: Workspace): EgressCfg {
   } catch {
     return { mode: "off", allow: [] };
   }
-}
-
-// A host matches an allow entry by exact match, subdomain, or a leading-"*." wildcard.
-function hostMatches(host: string, entry: string): boolean {
-  const h = host.toLowerCase().replace(/\.$/, "");
-  let e = entry.toLowerCase().trim();
-  if (!e) return false;
-  if (e.startsWith("*.")) e = e.slice(2);
-  return h === e || h.endsWith("." + e);
-}
-
-// Hard floor, independent of mode/allowlist: never let a proxied request reach loopback/RFC1918/
-// link-local (incl. cloud metadata @169.254.169.254) by IP literal — that's how a workspace's own
-// egress "allow" list (e.g. a client API host) could otherwise be abused to pivot into the host
-// network. Hostname-based SSRF (DNS rebinding to an allowed name) is a separate, harder problem —
-// not handled here.
-function isBlockedTarget(host: string): boolean {
-  return net.isIP(host) !== 0 && isBlockedIp(host);
-}
-
-function isAllowed(host: string, cfg: EgressCfg): boolean {
-  if (isBlockedTarget(host)) return false;
-  if (cfg.mode === "audit") return true; // audit logs but never blocks
-  return [...CONFIG.egress.baseAllow, ...cfg.allow].some((e) => hostMatches(host, e));
 }
 
 // ---- credential brokering -----------------------------------------------------------------
@@ -130,79 +108,30 @@ function record(wsId: string, host: string, port: number, action: "allow" | "den
 }
 
 function buildServer(wsId: string): http.Server {
-  // Plain-HTTP proxying (absolute-form request). Rare for coding agents (most egress is HTTPS),
-  // handled for completeness. Credential brokering deliberately does NOT happen here: a cred is
-  // an https origin (validateCred rejects intercept + insecure_http), so injecting into a
-  // cleartext request would put the token on the wire in the clear.
-  const server = http.createServer((creq, cres) => {
-    let host = "", port = 80, pathQ = "/";
-    try {
-      const u = new URL(creq.url!.startsWith("http") ? creq.url! : `http://${creq.headers.host}${creq.url}`);
-      host = u.hostname; port = Number(u.port || 80); pathQ = u.pathname + u.search;
-    } catch { cres.writeHead(400); cres.end("bad request"); return; }
-    const cfg = egressCfg(workspaces.get(wsId));
-    if (!isAllowed(host, cfg)) { record(wsId, host, port, "deny"); cres.writeHead(403); cres.end("egress blocked by Chronos"); return; }
-    record(wsId, host, port, "allow");
-    const preq = http.request({ host, port, method: creq.method, path: pathQ, headers: creq.headers }, (pres) => {
-      cres.writeHead(pres.statusCode || 502, pres.headers); pres.pipe(cres);
-    });
-    preq.on("error", () => { try { cres.writeHead(502); cres.end("upstream error"); } catch {} });
-    creq.pipe(preq);
-  });
-
-  // HTTPS (and any TCP) via CONNECT tunnel — the common path. We only see host:port, never plaintext.
-  server.on("connect", (creq, socket, head) => {
-    const [host, portStr] = String(creq.url || "").split(":");
-    const port = Number(portStr || 443);
-    const ws = workspaces.get(wsId);
-    const cfg = egressCfg(ws);
-    if (!host || !isAllowed(host, cfg)) {
-      record(wsId, host || "?", port, "deny");
-      try { socket.write("HTTP/1.1 403 Forbidden\r\n\r\n"); } catch {}
-      socket.destroy();
-      return;
-    }
-    record(wsId, host, port, "allow");
-
+  return buildEgressServer({
+    cfg: () => egressCfg(workspaces.get(wsId)),
+    baseAllow: () => CONFIG.egress.baseAllow,
+    record: (host, port, action) => record(wsId, host, port, action),
     // Opted-in host → terminate TLS here and inject the credential. If the CA can't produce a leaf
     // (no openssl, unwritable dir) we fall through to the plain tunnel: the agent loses the
     // credential, not its network.
-    const cred = interceptCredFor(ws, host, port);
-    if (cred) {
+    intercept: (socket, head, host, port) => {
+      const cred = interceptCredFor(workspaces.get(wsId), host, port);
+      if (!cred) return false;
       const leaf = leafFor(host);
-      if (leaf) {
-        interceptConnect(socket, head, leaf, {
-          host, port, cred,
-          record: (e) => recordBroker(wsId, host, port, e),
-        });
-        return;
-      }
-    }
-
-    const up = net.connect(port, host, () => {
-      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head && head.length) up.write(head);
-      up.pipe(socket);
-      socket.pipe(up);
-    });
-    up.on("error", () => { try { socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n"); } catch {} socket.destroy(); });
-    socket.on("error", () => up.destroy());
+      if (!leaf) return false;
+      interceptConnect(socket, head, leaf, { host, port, cred, record: (e) => recordBroker(wsId, host, port, e) });
+      return true;
+    },
   });
-
-  server.on("clientError", (_e, socket) => { try { socket.destroy(); } catch {} });
-  return server;
 }
 
-function startListener(wsId: string): Promise<Listener | null> {
-  return new Promise((resolve) => {
-    const server = buildServer(wsId);
-    server.on("error", (e) => { console.warn(`[egress] listener error ws=${wsId}:`, (e as any)?.message ?? e); resolve(null); });
-    server.listen(0, "127.0.0.1", () => {
-      const addr = server.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      resolve({ server, port });
-    });
-  });
+async function startListener(wsId: string): Promise<Listener | null> {
+  const server = buildServer(wsId);
+  const port = await listenLoopback(server);
+  if (port == null) { try { server.close(); } catch {} return null; }
+  server.on("error", (e) => console.warn(`[egress] listener error ws=${wsId}:`, (e as any)?.message ?? e));
+  return { server, port };
 }
 
 // Reconcile running listeners against the set of workspaces with egress enabled. Idempotent;
@@ -235,12 +164,7 @@ export function egressPort(wsId?: string | null): number | null {
 export function egressEnv(wsId?: string | null): Record<string, string> {
   const port = egressPort(wsId);
   if (!port) return {};
-  const url = `http://127.0.0.1:${port}`;
-  const noProxy = "localhost,127.0.0.1,::1";
-  const env: Record<string, string> = {
-    HTTP_PROXY: url, HTTPS_PROXY: url, ALL_PROXY: url, NO_PROXY: noProxy,
-    http_proxy: url, https_proxy: url, all_proxy: url, no_proxy: noProxy,
-  };
+  const env: Record<string, string> = proxyEnv(port);
   // Trust the interception CA only where interception can actually happen — a workspace with no
   // intercept credential never sees a certificate of ours, so it has no business trusting one.
   if (hasInterceptCreds(wsId)) Object.assign(env, caEnv());
@@ -253,4 +177,41 @@ export function egressLocked(wsId?: string | null): boolean {
   if (!wsId) return false;
   if (egressCfg(workspaces.get(wsId)).mode !== "enforce") return false;
   return egressPort(wsId) != null;
+}
+
+// ───────────── the proxy on another computer (HOSTS.md phase 5) ─────────────
+
+/**
+ * The policy a host's own proxy enforces for this workspace, or null when its egress is off. Sent in
+ * every remote spawn: the host keeps no copy of its own, so an edit here reaches the next spawn.
+ */
+export function egressPolicy(wsId?: string | null): EgressPolicy | null {
+  const cfg = egressCfg(wsId ? workspaces.get(wsId) : undefined);
+  if (cfg.mode === "off") return null;
+  return { mode: cfg.mode, allow: cfg.allow, base_allow: [...CONFIG.egress.baseAllow] };
+}
+
+/**
+ * Does this workspace's egress need the BRAIN's proxy — i.e. does it broker a credential by
+ * intercepting TLS? A host's proxy does not intercept: the broker's premise is that the secret never
+ * leaves the process that injects it, and shipping it to another Mac (one an employer may manage) is
+ * the opposite of least-credentials. Such a workspace's work stays on the brain.
+ */
+export function egressBrokered(wsId?: string | null): boolean {
+  return egressCfg(wsId ? workspaces.get(wsId) : undefined).mode !== "off" && hasInterceptCreds(wsId);
+}
+
+/**
+ * Must this workspace's spawns be network-locked to their proxy? `enforce`, wherever the proxy runs.
+ * (egressLocked() above additionally requires the BRAIN's listener, because on the brain the lock
+ * without a live proxy would strand the agent; a host checks its own proxy before it locks.)
+ */
+export function egressEnforced(wsId?: string | null): boolean {
+  return egressCfg(wsId ? workspaces.get(wsId) : undefined).mode === "enforce";
+}
+
+/** One connection a host's proxy saw, into the same audit log / bus / alert a local one uses. */
+export function recordRemote(wsId: string, host: string, port: number, action: "allow" | "deny"): void {
+  if (!workspaces.get(wsId)) return;
+  record(wsId, String(host).slice(0, 255), Number(port) || 0, action === "deny" ? "deny" : "allow");
 }

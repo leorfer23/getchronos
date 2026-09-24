@@ -2,6 +2,7 @@ import pty from "node-pty";
 import { spawn, type ChildProcess } from "node:child_process";
 import { admission, currentLoad, heavyPoolFor, heavySlotCount, vitalsSnapshot } from "../machine.js";
 import type { SpawnSpec } from "./spawn-spec.js";
+import type { ProcSpec } from "./proc-spec.js";
 import type { Host, HeavySlotPool, HostVitals, LiveInfo, ProcHandle, ProcSpawn, PtyHandle, PtySpawn } from "./types.js";
 
 // The brain as a host: today's code, behind the Host seam (HOSTS.md phase 1). Every call here is
@@ -77,7 +78,10 @@ class LocalHost implements Host {
     return term;
   }
 
-  async spawnProcess(spec: ProcSpawn): Promise<ProcHandle> {
+  async spawnProcess(spec: ProcSpawn | ProcSpec): Promise<ProcHandle> {
+    // The brain builds its own command lines; a ProcSpec is for a host that resolves its own paths.
+    if ((spec as ProcSpec).kind === "proc") throw new Error("the local host spawns built command lines, not ProcSpecs");
+    spec = spec as ProcSpawn;
     const child = spawn(spec.cmd, spec.args, {
       cwd: spec.cwd,
       env: spec.env,

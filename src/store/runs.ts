@@ -26,6 +26,10 @@ export const runs = {
   },
   // The latest run that owned a session — how a resume dispatch finds the prior run whose event
   // log to replay when the backend can't reopen the session natively (see replay.ts).
+  /** Runs this brain believes are running on another computer (HOSTS.md phase 5 reconcile). */
+  runningOnHost(hostId: string): Run[] {
+    return db.prepare("SELECT * FROM runs WHERE status = 'running' AND host_id = ? ORDER BY rowid").all(hostId) as Run[];
+  },
   bySession(sessionId: string): Run | undefined {
     return db
       .prepare("SELECT * FROM runs WHERE session_id = ? ORDER BY rowid DESC LIMIT 1")

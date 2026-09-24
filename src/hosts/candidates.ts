@@ -8,9 +8,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { CONFIG } from "../config.js";
 import { bus } from "../bus.js";
-import { hosts, repoCheckouts, repos, sessions, tickets, workspaces, LOCAL_HOST_ID } from "../store.js";
+import { db, hosts, repoCheckouts, repos, runs, sessions, tickets, workspaces, LOCAL_HOST_ID } from "../store.js";
 import { getBackend } from "../backends/index.js";
-import { egressLocked } from "../egress.js";
+import { egressBrokered, egressEnforced } from "../egress.js";
 import { currentLoad, loadFromVitals, vitalsSnapshot } from "../machine.js";
 import { parseCapabilities, parsePolicy } from "../hostlink/registry.js";
 import { worktreeRootFor } from "../worktree-core.js";
@@ -70,6 +70,8 @@ export function placementCandidates(now = Date.now()): HostCandidate[] {
       profiles: (hello?.profiles ?? caps?.profiles ?? []).map((p) => ({ name: p.name, exists: !!p.exists })),
       checkouts: repoCheckouts.forHost(id).map((c) => c.repo_id),
       auto_clone: !!(hello?.capabilities?.auto_clone ?? caps?.auto_clone),
+      procs: !!(hello?.capabilities?.procs ?? (caps as any)?.procs),
+      egress: !!(hello?.capabilities?.egress ?? (caps as any)?.egress),
       load: v ? loadFromVitals(v) : null,
       ram_pct: v?.ram ?? null,
     });
@@ -103,8 +105,11 @@ export function stickyFor(o: OpenIntent): { host_id: string; why: string; fresh:
   }
   if (o.agentSessionId && o.resumeAgent) {
     const r = sessions.get(o.agentSessionId);
-    // A headless run's transcript is where the run ran — the brain, until runs move to hosts (phase 5).
-    return { host_id: r?.host_id || LOCAL_HOST_ID, why: r ? "its CLI transcript is on that computer" : "it continues a headless run on the brain", fresh: false };
+    if (r) return { host_id: r.host_id || LOCAL_HOST_ID, why: "its CLI transcript is on that computer", fresh: false };
+    // A headless run's transcript is where the run ran (phase 5: possibly a host).
+    const run = runs.bySession(o.agentSessionId);
+    const h = run?.host_id || LOCAL_HOST_ID;
+    return { host_id: h, why: h === LOCAL_HOST_ID ? "it continues a headless run on the brain" : "it continues a headless run whose transcript is on that computer", fresh: false };
   }
   if (o.replaces) {
     const r = sessions.get(o.replaces);
@@ -115,15 +120,29 @@ export function stickyFor(o: OpenIntent): { host_id: string; why: string; fresh:
   if (t && repo) {
     // The ticket's worktree holds its uncommitted work. On the brain it is a directory we can see;
     // on a host, the last terminal that worked the ticket there is the record of it.
-    const wt = repo.path ? path.join(worktreeRootFor(repo.path), ticketBranch(t.key).replace(/\//g, "-")) : null;
-    if (wt && fs.existsSync(wt)) return { host_id: LOCAL_HOST_ID, why: `${t.key}'s worktree is on that computer`, fresh: true };
-    const prev = sessions.list({ ticket_id: t.id }).find((s) => s.host_id && s.host_id !== LOCAL_HOST_ID);
-    // A host that was removed took its worktree with it: nothing to be sticky to any more.
-    if (prev && hosts.get(prev.host_id)?.token_hash) return { host_id: prev.host_id, why: `${t.key}'s worktree is on that computer`, fresh: true };
+    const h = ticketWorktreeHost(t, repo);
+    if (h) return { host_id: h, why: `${t.key}'s worktree is on that computer`, fresh: true };
   }
   // A directory the caller named (a launch's cwd, a job's, the dialog's) is a path on the brain's disk.
   // A pin wins over it, as it did in phase 3: a remote terminal ignores a brain cwd.
   if (o.cwd && !o.host_id) return { host_id: LOCAL_HOST_ID, why: "it was asked to start in a directory on the brain", fresh: true };
+  return null;
+}
+
+/**
+ * Which computer holds a ticket's worktree, if any: the brain when the directory exists there; else the
+ * host a build job was pinned to (phase 5: tickets.ts creates the worktree on the host it places the
+ * build on), else the host of the last terminal that worked it. A host that was removed took its
+ * worktree with it: nothing to be sticky to any more.
+ */
+export function ticketWorktreeHost(t: { id: string; key: string }, repo: { path: string | null } | undefined): string | null {
+  const wt = repo?.path ? path.join(worktreeRootFor(repo.path), ticketBranch(t.key).replace(/\//g, "-")) : null;
+  if (wt && fs.existsSync(wt)) return LOCAL_HOST_ID;
+  const joined = (id: string | null | undefined) => !!id && id !== LOCAL_HOST_ID && !!hosts.get(id)?.token_hash;
+  const job = db.prepare("SELECT host_id FROM jobs WHERE ticket_id = ? AND host_id IS NOT NULL AND host_id != 'local' ORDER BY created_at DESC, rowid DESC LIMIT 1").get(t.id) as { host_id: string } | undefined;
+  if (joined(job?.host_id)) return job!.host_id;
+  const prev = sessions.list({ ticket_id: t.id }).find((s) => s.host_id && s.host_id !== LOCAL_HOST_ID);
+  if (joined(prev?.host_id)) return prev!.host_id;
   return null;
 }
 
@@ -140,7 +159,13 @@ export function placeRequest(o: OpenIntent, openedBy: string): PlaceRequest {
     backend_kind: backend.kind === "cloud" ? "cloud" : "local",
     profile: profileNameFor(ws?.config_dir, CONFIG.profiles, CONFIG.defaultProfile),
     repo: repo ? { id: repo.id, name: repo.name, git_remote: repo.git_remote } : null,
-    needs: { sandbox: String(ws?.sandbox_mode ?? CONFIG.sandbox.defaultMode), egress_locked: egressLocked(o.workspace_id) },
+    needs: {
+      sandbox: String(ws?.sandbox_mode ?? CONFIG.sandbox.defaultMode),
+      // A host locks to ITS proxy (phase 5): what matters there is the workspace's mode, not whether the
+      // brain's own listener is up.
+      egress_locked: egressEnforced(o.workspace_id),
+      brokered: egressBrokered(o.workspace_id),
+    },
     pinned: o.host_id || null,
     sticky: sticky ? { host_id: sticky.host_id, why: sticky.why } : null,
     // Same rule the brain-only admission check always used: "operator" (or nothing) is the operator.
