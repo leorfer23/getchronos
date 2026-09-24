@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { SandboxMode } from "../sandbox.js";
+import type { EgressPolicy } from "../egress-core.js";
 
 // HOSTS.md → "SpawnSpec: intent, not paths". What the brain sends a remote host to open a terminal.
 //
@@ -41,6 +42,11 @@ export interface SpawnSpec {
   /** Profile NAME (`claude`, `claude-medialab`); the host maps it to its own directory. */
   profile: string;
   sandbox: { mode: SandboxMode; allow: string[]; egress_locked: boolean };
+  /**
+   * Phase 5: the workspace's egress policy, when it has one. The host runs the proxy itself and
+   * points the agent at it; `sandbox.egress_locked` then locks direct outbound to that proxy.
+   */
+  egress?: EgressPolicy | null;
   /** Standing system text for CLIs with a system-prompt channel (content, not paths). */
   system: string | null;
   /**
@@ -120,6 +126,7 @@ export type RemoteSpecInput = {
   resumeCwd: string | null;
   profile: string;
   sandbox: { mode: SandboxMode; allowRaw: string[]; egressLocked: boolean };
+  egress?: EgressPolicy | null;
   system: string | null;
   /** Everything the brain computed for a LOCAL spawn's env; filtered here. */
   env: Record<string, string>;
@@ -139,24 +146,42 @@ export type RemoteSpecInput = {
  * value that is a brain path it cannot translate; returns the dropped KEYS (never values) so the
  * caller can log what a remote terminal will not get.
  */
-export function buildRemoteSpawnSpec(i: RemoteSpecInput): { spec: SpawnSpec; dropped: string[] } {
+/**
+ * The env a brain-built spawn would carry, made fit for another computer: the keys the host supplies
+ * itself (HOST_BASE_ENV) removed, every value under the brain's home rewritten `~/…` (listed in
+ * `rel` so the host expands it against ITS home), and any value still naming a brain-only path
+ * outside the home dropped — by key, reported in `dropped` (never the value: it may be a secret).
+ * Shared by terminals (SpawnSpec), headless runs (ProcSpec) and `exec` (ExecSpec).
+ */
+export function portableEnv(src: Record<string, string>, brainHome: string, brainPaths: string[] = []): { env: Record<string, string>; rel: string[]; dropped: string[] } {
   const env: Record<string, string> = {};
   const rel: string[] = [];
   const dropped: string[] = [];
   const base = new Set<string>(HOST_BASE_ENV);
-  for (const [k, v] of Object.entries(i.env)) {
+  for (const [k, v] of Object.entries(src)) {
     if (base.has(k) || typeof v !== "string") continue;
-    const r = homeRelative(v, i.brainHome);
+    const r = homeRelative(v, brainHome);
     // Still names a brain-only path (under the checkout, say): meaningless on a host — dropped.
-    if ((i.brainPaths ?? []).some((p) => p && !isUnder(p, i.brainHome) && r.value.includes(p))) { dropped.push(k); continue; }
+    if (brainPaths.some((p) => p && !isUnder(p, brainHome) && r.value.includes(p))) { dropped.push(k); continue; }
     env[k] = r.value;
     if (r.changed) rel.push(k);
   }
-  // sandbox_allow is only ever honoured inside $HOME (sandbox.ts workspaceSandboxAllow), so every
-  // entry can travel as `~/…` and be re-resolved against the host's home. Anything else is dropped.
-  const allow = i.sandbox.allowRaw
-    .map((a) => (a.startsWith("~") ? a : homeRelative(a, i.brainHome).changed ? homeRelative(a, i.brainHome).value : null))
+  return { env, rel, dropped };
+}
+
+/**
+ * sandbox_allow is only ever honoured inside $HOME (sandbox.ts workspaceSandboxAllow), so every entry
+ * can travel as `~/…` and be re-resolved against the host's home. Anything else is dropped.
+ */
+export function portableAllow(allowRaw: string[], brainHome: string): string[] {
+  return allowRaw
+    .map((a) => (a.startsWith("~") ? a : homeRelative(a, brainHome).changed ? homeRelative(a, brainHome).value : null))
     .filter((a): a is string => !!a);
+}
+
+export function buildRemoteSpawnSpec(i: RemoteSpecInput): { spec: SpawnSpec; dropped: string[] } {
+  const { env, rel, dropped } = portableEnv(i.env, i.brainHome, i.brainPaths ?? []);
+  const allow = portableAllow(i.sandbox.allowRaw, i.brainHome);
   const withRemote = (r: { id: string; git_remote: string | null }) => (r.git_remote ? { id: r.id, git_remote: r.git_remote } : null);
   const repo = i.repo ? withRemote(i.repo) : null;
   const spec: SpawnSpec = {
@@ -177,6 +202,7 @@ export function buildRemoteSpawnSpec(i: RemoteSpecInput): { spec: SpawnSpec; dro
     cwd_hint: repo && i.worktree ? "worktree" : repo ? "repo" : "landing",
     profile: i.profile,
     sandbox: { mode: i.sandbox.mode, allow, egress_locked: i.sandbox.egressLocked },
+    egress: i.egress ?? null,
     system: i.system,
     env,
     env_home_relative: rel,

@@ -11,6 +11,8 @@ import {
   type BrainToHost, type Hello, type HostToBrain, type HostVitals,
 } from "../hostlink/wire.js";
 import type { HostTerminals } from "./terminals.js";
+import type { HostProcs } from "./procs.js";
+import type { HostEgress } from "./egress.js";
 import { classifyBrainUrl, pinBrain, pinnedTlsOptions } from "../hostlink/pin.js";
 
 export type LinkState = "idle" | "connecting" | "online" | "offline" | "stopped";
@@ -35,6 +37,10 @@ export type HostLinkOptions = {
   rpc?: Record<string, (args: unknown) => Promise<unknown> | unknown>;
   /** The host's PTYs (phase 3). Without it, spawn/write/kill are answered "not here". */
   terminals?: HostTerminals;
+  /** The host's headless runs (phase 5). Without it, `spawn_proc` is answered "not here". */
+  procs?: HostProcs;
+  /** The workspace egress proxies (phase 5): their audit records go to the brain over this link. */
+  egress?: HostEgress;
 };
 
 type Handler = (f: any) => void;
@@ -100,7 +106,14 @@ export class HostLink extends EventEmitter {
     // does not implement yet — those answer with an explicit error so the brain never waits on a
     // silence it cannot tell from a slow host.
     const t = o.terminals;
-    t?.attachLink({ online: () => this.state === "online", send: (f) => this.send(f), sendData: (ch, seq, b) => this.sendData(ch, seq, b) });
+    const pr = o.procs;
+    const port = { online: () => this.state === "online", send: (f: HostToBrain) => this.send(f), sendData: (ch: number, seq: number, b: Buffer) => this.sendData(ch, seq, b) };
+    t?.attachLink(port);
+    pr?.attachLink(port);
+    // Egress audit records are sent only while online; the proxy keeps a bounded backlog otherwise.
+    o.egress?.setSink((e) => this.state === "online" && this.send({ t: "egress", ...e }));
+    // Channel frames go to whoever owns the channel: a run (procs) or a terminal. One number space.
+    const procCh = (ch: number) => !!pr?.owns(ch);
     this.handlers = {
       welcome: (f: Extract<BrainToHost, { t: "welcome" }>) => this.onWelcome(f),
       ping: (f) => this.send({ t: "pong", n: f.n }),
@@ -108,15 +121,18 @@ export class HostLink extends EventEmitter {
       rpc: (f: Extract<BrainToHost, { t: "rpc" }>) => void this.onRpc(f),
       api_result: (f: Extract<BrainToHost, { t: "api_result" }>) => this.onApiResult(f),
       spawn_pty: (f: Extract<BrainToHost, { t: "spawn_pty" }>) => void this.onSpawnPty(f),
-      spawn_proc: (f) => this.send({ t: "rpc_result", id: f.id, ok: false, error: "not yet: headless runs on hosts land in HOSTS.md Phase 5" }),
+      spawn_proc: (f: Extract<BrainToHost, { t: "spawn_proc" }>) => void this.onSpawnProc(f),
+      stdin: (f: Extract<BrainToHost, { t: "stdin" }>) => pr?.stdin(f.ch, f.bytes, f.end),
       // Channel frames. With no terminals (a phase-2 host) there is nothing to act on, and a write
       // to nowhere says so rather than vanishing.
       write: (f: Extract<BrainToHost, { t: "write" }>) => (t ? t.write(f.ch, f.bytes) : this.send({ t: "error", code: "not_implemented", message: `no channel ${f.ch}` })),
       resize: (f: Extract<BrainToHost, { t: "resize" }>) => t?.resize(f.ch, f.cols, f.rows),
-      kill: (f: Extract<BrainToHost, { t: "kill" }>) => (t ? t.kill(f.ch, f.signal) : this.send({ t: "error", code: "not_implemented", message: `no channel ${f.ch}` })),
-      ack: (f: Extract<BrainToHost, { t: "ack" }>) => t?.ack(f.ch, f.seq),
-      attach: (f: Extract<BrainToHost, { t: "attach" }>) => t?.attach(f.ch, f.seq, f.transcript_offset, f.session_id),
-      release: (f: Extract<BrainToHost, { t: "release" }>) => t?.release(f.ch),
+      kill: (f: Extract<BrainToHost, { t: "kill" }>) =>
+        procCh(f.ch) ? pr!.kill(f.ch, f.signal) : t ? t.kill(f.ch, f.signal) : this.send({ t: "error", code: "not_implemented", message: `no channel ${f.ch}` }),
+      ack: (f: Extract<BrainToHost, { t: "ack" }>) => (procCh(f.ch) ? pr!.ack(f.ch, f.seq) : t?.ack(f.ch, f.seq)),
+      attach: (f: Extract<BrainToHost, { t: "attach" }>) =>
+        procCh(f.ch) ? pr!.attach(f.ch, f.seq, f.session_id) : t?.attach(f.ch, f.seq, f.transcript_offset, f.session_id),
+      release: (f: Extract<BrainToHost, { t: "release" }>) => (procCh(f.ch) ? pr!.release(f.ch) : t?.release(f.ch)),
       policy: (f) => this.emit("policy", f),
       // Phase 6: index.ts runs update.ts and answers with update_status frames via sendControl().
       update: (f) => this.emit("update", f),
@@ -208,6 +224,7 @@ export class HostLink extends EventEmitter {
       this.clearTimers();
       // Link down, not process dead: the PTYs keep running and buffering; the brain re-attaches later.
       this.o.terminals?.linkDown();
+      this.o.procs?.linkDown();
       for (const [id, p] of this.pendingApi) { clearTimeout(p.timer); p.resolve({ status: 503, headers: {}, body: null }); this.pendingApi.delete(id); }
       this.lastError = `closed ${code}${reason?.length ? ` ${reason}` : ""}`;
       this.emit("offline", this.lastError);
@@ -229,6 +246,7 @@ export class HostLink extends EventEmitter {
     this.attempt = 0;
     this.setState("online");
     this.emit("online", f);
+    this.o.egress?.flush();
     const pingMs = f.ping_ms || this.o.pingMs || 15_000;
     this.clearTimers();
     // Host-side liveness mirrors the brain's: two unanswered pings and we drop and redial, so a
@@ -277,6 +295,18 @@ export class HostLink extends EventEmitter {
   /** One control frame to the brain, for callers outside the link (update status). False when down. */
   sendControl(f: HostToBrain): boolean {
     return this.send(f);
+  }
+
+  /** `spawn_proc` (phase 5): a headless run, answered like `spawn_pty` — "veto:" errors are logged. */
+  private async onSpawnProc(f: Extract<BrainToHost, { t: "spawn_proc" }>): Promise<void> {
+    if (!this.o.procs) return void this.send({ t: "rpc_result", id: f.id, ok: false, error: "this host runs no headless jobs" });
+    try {
+      this.send({ t: "rpc_result", id: f.id, ok: true, value: await this.o.procs.spawn(f.spec) });
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      if (msg.startsWith("veto:")) console.warn(`[host] refused a run — ${msg}`);
+      this.send({ t: "rpc_result", id: f.id, ok: false, error: msg });
+    }
   }
 
   /** One binary data frame (PTY bytes) to the brain. False when the link is not writable. */

@@ -20,15 +20,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { createRequire } from "node:module";
 import pty, { type IPty } from "node-pty";
-import { normalizeGitRemote } from "../hostlink/git-remote.js";
 import { Ring, chunk, type CheckoutInfo, type HostToBrain, type LiveInfo } from "../hostlink/wire.js";
 import { expandHomeRelative, isSpawnSpec, type SpawnSpec } from "../hosts/spawn-spec.js";
 import type { SpawnReply } from "../hosts/remote.js";
-import { ensureBranchWorktree, worktreeRootFor } from "../worktree-core.js";
+import { ensureBranchWorktree } from "../worktree-core.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "../agent-prep.js";
 import { ensureBypassAccepted, ensureTrustedCwd } from "../claude-trust.js";
 import { ensureGrokTrustedCwd } from "../grok-trust.js";
@@ -38,12 +35,10 @@ import { niceWrap } from "../machine.js";
 import { ensureDropDir, saveDrop } from "../drops.js";
 import { locateTranscript, transcriptIsJsonl, type FocusCtx } from "../focus.js";
 import type { AgentBackend } from "../backends/types.js";
+import { ensureRoot, hostBaseEnv, isDir, mainCheckouts, remoteKey, resolveRepos, safeRef, signalName, vetoReason } from "./resolve.js";
+import { egressForSpawn, type HostEgress } from "./egress.js";
 
-const execFileAsync = promisify(execFile);
-
-/** The env a host supplies itself (the brain sends none of these). Mirrors child-env.ts's allowlist. */
-const BASE_ENV = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM", "LANG", "LC_ALL", "TZ", "COLORTERM"];
-const DEFAULT_LOCALE = "en_US.UTF-8";
+export { remoteKey };
 
 /** Same negotiation terminal.ts does for a local seed — see its typeSeed for the two failure modes. */
 const SEED_MIN_MS = 2500;
@@ -88,6 +83,8 @@ export type HostTerminalsOptions = {
   mcPort: number;
   /** Prepare the profile (trust, hooks, skill, mc, AGENTS.md). Off in tests that must not write. */
   prepare?: boolean;
+  /** The workspace egress proxies this host runs (phase 5); absent = an egress-policed spawn is refused. */
+  egress?: HostEgress;
 };
 
 type Chan = {
@@ -105,25 +102,6 @@ type Chan = {
   workspace: { id: string; slug: string } | null;
 };
 
-/** One key per repository however it was cloned — the brain's own matcher (hostlink/git-remote.ts). */
-export function remoteKey(url: string | null | undefined): string {
-  return normalizeGitRemote(url) ?? "";
-}
-
-/** The real main checkouts among these paths (`.git` a directory), realpath'd like terminal.ts's. */
-function mainCheckouts(paths: string[]): string[] {
-  const out = new Set<string>();
-  for (const p of paths) {
-    try { if (fs.statSync(path.join(p, ".git")).isDirectory()) out.add(fs.realpathSync.native(p)); } catch {}
-  }
-  return [...out];
-}
-
-function ensureRoot(repoPath: string): string | null {
-  const root = worktreeRootFor(repoPath);
-  try { fs.mkdirSync(root, { recursive: true }); } catch {}
-  return fs.existsSync(root) ? root : null;
-}
 
 /** Incremental tail of one CLI transcript: whole lines only, by byte offset. */
 class TranscriptTail {
@@ -204,12 +182,21 @@ export class HostTerminals {
     this.brainDeny = Array.isArray(deny) ? deny.filter((d): d is string => typeof d === "string" && !!d) : [];
   }
 
-  private denied(ws: { id: string; slug: string } | null): string | null {
-    if (!ws) return null;
-    if (this.o.deny().some((d) => d === ws.id || d === ws.slug)) return `veto: workspace ${ws.slug} is denied on this host (CHRONOS_HOST_DENY)`;
-    if (this.brainDeny.some((d) => d === ws.id || d === ws.slug)) return `veto: workspace ${ws.slug} is denied on this host by the brain's policy`;
-    return null;
+  /** Lock #2 for anything this host does for a workspace — terminals here, runs and exec in procs.ts. */
+  vetoFor(ws: { id: string; slug: string } | null): string | null {
+    return vetoReason(this.o.deny(), this.brainDeny, ws);
   }
+
+  private denied(ws: { id: string; slug: string } | null): string | null {
+    return this.vetoFor(ws);
+  }
+
+  /**
+   * Another owner of channel numbers on this host (the headless runs, procs.ts): terminals and runs
+   * share the one number space the link multiplexes, so neither may hand out one the other holds.
+   */
+  private otherChannels: (ch: number) => boolean = () => false;
+  shareChannels(taken: (ch: number) => boolean): void { this.otherChannels = taken; }
 
   /** hello.live[]: every channel the brain should know about, exited-but-unreleased ones included. */
   live(): LiveInfo[] {
@@ -239,22 +226,12 @@ export class HostTerminals {
     if (!backend) throw new Error(`backend ${spec.backend} is not available on this host`);
     const profileDir = this.o.profiles()[spec.profile];
     if (!profileDir) throw new Error(`profile ${spec.profile} is not on this host — log it in here first (CLAUDE_CONFIG_DIR=~/.${spec.profile} claude)`);
-    if (spec.sandbox.egress_locked) throw new Error("this workspace's egress is locked, and hosts do not run the egress proxy yet (HOSTS.md phase 5)");
     if (spec.sandbox.mode !== "off" && !sandboxAvailable()) throw new Error(`sandbox ${spec.sandbox.mode} requested but this host has no sandbox-exec`);
+    // The workspace's egress proxy runs HERE, next to the agent (HOSTS.md phase 5). A locked workspace
+    // is network-locked to it by the Seatbelt profile, so no proxy = no spawn: never strand an agent.
+    const egress = await egressForSpawn(this.o.egress, spec.workspace, spec.egress ?? null, spec.sandbox.egress_locked);
 
-    const checkouts = await this.o.checkouts();
-    const byRemote = new Map<string, string>();
-    for (const c of checkouts) { const k = remoteKey(c.remote_url); if (k) byRemote.set(k, c.path); }
-    let repoPath: string | null = null;
-    if (spec.repo) {
-      repoPath = byRemote.get(remoteKey(spec.repo.git_remote) || "\0") ?? null;
-      if (!repoPath) repoPath = await this.maybeClone(spec.repo.git_remote);
-      if (!repoPath) {
-        throw new Error(`repo ${spec.repo.git_remote} is not checked out on this host — clone it under CHRONOS_HOST_ROOTS (or set CHRONOS_HOST_AUTO_CLONE=1)`);
-      }
-    }
-    const wsRepoPaths = spec.repos.map((r) => byRemote.get(remoteKey(r.git_remote) || "\0")).filter((p): p is string => !!p);
-    if (repoPath && !wsRepoPaths.includes(repoPath)) wsRepoPaths.push(repoPath);
+    const { checkouts, repoPath, wsRepoPaths, denyDirs } = await resolveRepos(this.o, spec.repo, spec.repos);
 
     let cwd = this.home;
     if (spec.resume_cwd && isDir(spec.resume_cwd)) cwd = spec.resume_cwd;
@@ -268,28 +245,25 @@ export class HostTerminals {
       ...wsRepoPaths.flatMap((p) => [p, ensureRoot(p)].filter((x): x is string => !!x)).filter((p) => p !== cwd),
       ensureDropDir(spec.session_id, path.join(this.home, ".mc", "drops")),
     ];
-    // Isolation on a host: every checkout here that is NOT this workspace's is denied. Stricter than
-    // the brain's list (other workspaces' registered repos) because the host cannot know which
-    // workspace an unregistered clone belongs to — and it never has to be told another client's repos.
-    const mine = new Set(wsRepoPaths);
-    const denyDirs = checkouts.map((c) => c.path).filter((p) => !mine.has(p)).flatMap((p) => [p, worktreeRootFor(p)]);
+    // Isolation on a host: every checkout here that is NOT this workspace's is denied (resolveRepos).
+    // Stricter than the brain's list (other workspaces' registered repos) because the host cannot know
+    // which workspace an unregistered clone belongs to — and it never has to be told another client's repos.
+    void checkouts;
     const shared = mainCheckouts(wsRepoPaths);
     const allowSecrets = workspaceSandboxAllow(JSON.stringify(spec.sandbox.allow));
 
     if (this.o.prepare !== false) await this.prepare(spec, backend.name, profileDir, cwd);
 
     const iArgs = backend.interactiveArgs ? backend.interactiveArgs(spec.model, spec.system, addDirs, spec.cli_session, spec.resume) : [];
-    const wrapped = sandboxWrap(spec.sandbox.mode, cwd, addDirs, profileDir, denyDirs, backend.bin(), iArgs, false, shared, allowSecrets);
+    const wrapped = sandboxWrap(spec.sandbox.mode, cwd, addDirs, profileDir, denyDirs, backend.bin(), iArgs, egress.locked, shared, allowSecrets);
     const { cmd, cmdArgs } = niceWrap(wrapped.cmd, wrapped.cmdArgs, spec.nice);
 
-    const base: Record<string, string> = {};
-    for (const k of BASE_ENV) if (process.env[k] !== undefined) base[k] = process.env[k]!;
-    if (!base.LANG && !base.LC_ALL) base.LANG = DEFAULT_LOCALE;
-    base.HOME = this.home;
+    const base = hostBaseEnv(this.home);
     const env: Record<string, string> = {
       ...base,
       ...expandHomeRelative(spec.env, spec.env_home_relative, this.home),
       ...backend.env({} as any, profileDir),
+      ...egress.env,
       MC_API: `http://localhost:${this.o.mcPort}/api`,
       PATH: `${this.home}/.mc/bin:${base.PATH ?? ""}`,
       MC_SESSION: spec.session_id,
@@ -326,24 +300,17 @@ export class HostTerminals {
     return { ch, pid: term.pid, cols: spec.cols, rows: spec.rows, cwd };
   }
 
-  private allocCh(): number {
+  /** A channel number no terminal or run on this host holds. */
+  allocCh(): number {
     let ch = this.nextCh;
-    while (this.chans.has(ch)) ch = (ch % 0xfffffffe) + 1;
+    while (this.chans.has(ch) || this.otherChannels(ch)) ch = (ch % 0xfffffffe) + 1;
     this.nextCh = (ch % 0xfffffffe) + 1;
     return ch;
   }
 
-  private async maybeClone(remote: string): Promise<string | null> {
-    if (!this.o.autoClone) return null;
-    const root = this.o.cloneRoot?.();
-    if (!root) return null;
-    const name = remoteKey(remote).split("/").pop() || "repo";
-    const dest = path.join(root, name);
-    if (fs.existsSync(dest)) return null; // a different repo already sits at that name: never clobber
-    fs.mkdirSync(root, { recursive: true });
-    await execFileAsync("git", ["clone", "--", remote, dest], { timeout: 10 * 60_000 });
-    return fs.realpathSync.native(dest);
-  }
+  /** Does a terminal hold this channel? (The link routes channel frames to its owner.) */
+  owns(ch: number): boolean { return this.chans.has(ch); }
+
 
   /** HOSTS.md `prepare()`: what terminal.ts does to the brain's own profile before a local spawn. */
   private async prepare(spec: SpawnSpec, backend: string, profileDir: string, cwd: string): Promise<void> {
@@ -482,19 +449,6 @@ export class HostTerminals {
   }
 }
 
-/** A branch/ref name we will hand to git as an argument: a name, never something that reads as an option. */
-function safeRef(r: unknown): boolean {
-  return typeof r === "string" && /^[\w][\w./-]{0,200}$/.test(r) && !r.includes("..");
-}
-
-function signalName(n: number): string {
-  for (const [name, num] of Object.entries(os.constants.signals)) if (num === n) return name;
-  return `SIG${n}`;
-}
-
-function isDir(p: string): boolean {
-  try { return path.isAbsolute(p) && fs.statSync(p).isDirectory(); } catch { return false; }
-}
 
 /**
  * node-pty's prebuilt `spawn-helper` comes out of `npm ci` without its exec bit on some installs, and

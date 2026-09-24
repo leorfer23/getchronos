@@ -9,10 +9,11 @@ import { codexBackend } from "../backends/codex.js";
 import { grokBackend } from "../backends/grok.js";
 import { opencodeBackend } from "../backends/opencode.js";
 import { mockBackend } from "../backends/mock.js";
-import type { HostBackend } from "./terminals.js";
+import type { AgentBackend } from "../backends/types.js";
 
-export function hostBackends(): Record<string, HostBackend> {
-  const out: Record<string, HostBackend> = {};
+/** Full backends: terminals use their interactive half, headless runs (procs.ts) their build/steer/oneShot half. */
+export function hostBackends(): Record<string, AgentBackend> {
+  const out: Record<string, AgentBackend> = {};
   for (const b of [claudeBackend, cursorBackend, codexBackend, grokBackend, opencodeBackend, mockBackend]) out[b.name] = b;
   return out;
 }

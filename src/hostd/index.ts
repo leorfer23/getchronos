@@ -12,8 +12,8 @@
  * dependency-free preflight before this file (and its imports) are loaded at all.
  *
  * Phase 2: the link, hello/vitals/capabilities, and the loopback `mc` forwarder. Phase 3: terminals
- * (terminals.ts) — PTYs spawned from a SpawnSpec, kept alive across link drops. Headless runs on a
- * host are Phase 5; the dispatch table answers those frames with an error.
+ * (terminals.ts) — PTYs spawned from a SpawnSpec, kept alive across link drops. Phase 5: headless runs
+ * and the ship pipeline's commands (procs.ts), and the workspaces' egress proxies (egress.ts).
  */
 import "./env.js"; // FIRST: loads ~/.chronos-host/.secrets before config.ts evaluates
 import fs from "node:fs";
@@ -28,6 +28,8 @@ import { VITALS_EVERY_MS } from "../machine.js";
 import { CONFIG } from "../config.js";
 import { REPO_ROOT } from "../repo-root.js";
 import { HostTerminals } from "./terminals.js";
+import { HostProcs } from "./procs.js";
+import { HostEgress } from "./egress.js";
 import { hostBackends } from "./backends.js";
 import { hostDeny, hostBuild, chronosVersion } from "./inventory.js";
 import { spawn } from "node:child_process";
@@ -100,8 +102,10 @@ async function cmdRun(): Promise<number> {
   }
   const mode = secretsMode();
   if (mode != null && mode & 0o077) console.warn(`[host] ${HOST_SECRETS} is readable by others (mode ${(mode & 0o777).toString(8)}) — chmod 600 it`);
-  // PTYs live in this process, not in the link: a dropped link must not take a terminal with it.
+  // PTYs and runs live in this process, not in the link: a dropped link must not take either with it.
+  const egress = new HostEgress();
   const terminals = new HostTerminals({
+    egress,
     root: REPO_ROOT,
     profiles: () => CONFIG.profiles,
     checkouts: () => scanCheckouts(),
@@ -111,6 +115,20 @@ async function cmdRun(): Promise<number> {
     backends: hostBackends(),
     mcPort: mcPort(),
   });
+  let boundMcPort = mcPort();
+  const procs = new HostProcs({
+    root: REPO_ROOT,
+    profiles: () => CONFIG.profiles,
+    checkouts: () => scanCheckouts(),
+    autoClone: env("CHRONOS_HOST_AUTO_CLONE") === "1",
+    cloneRoot: () => hostRoots()[0] ?? null,
+    backends: hostBackends(),
+    mcPort: () => boundMcPort,
+    veto: (ws) => terminals.vetoFor(ws),
+    allocCh: () => terminals.allocCh(),
+    egress,
+  });
+  terminals.shareChannels((ch) => procs.owns(ch));
   const cf = env("CF_ACCESS_CLIENT_ID") && env("CF_ACCESS_CLIENT_SECRET") ? { id: env("CF_ACCESS_CLIENT_ID"), secret: env("CF_ACCESS_CLIENT_SECRET") } : null;
   const link = new HostLink({
     brains: brains(),
@@ -118,8 +136,10 @@ async function cmdRun(): Promise<number> {
     token,
     fp: env("CHRONOS_HOST_CERT_FP") || null,
     cfAccess: cf,
-    hello: async () => ({ ...(await buildHello(id)), live: terminals.live() }),
+    hello: async () => ({ ...(await buildHello(id)), live: [...terminals.live(), ...procs.live()] }),
     terminals,
+    procs,
+    egress,
     vitals: sampleHostVitals,
     vitalsMs: VITALS_EVERY_MS,
     rpc: {
@@ -127,6 +147,10 @@ async function cmdRun(): Promise<number> {
       doctor: () => runDoctor(),
       drop: (a) => terminals.drop(a as Parameters<HostTerminals["drop"]>[0]),
       worktree: (a) => terminals.claimWorktree(a as Parameters<HostTerminals["claimWorktree"]>[0]),
+      // Phase 5: the ship pipeline where the worktree is (gates, git, gh), the verifier, run worktrees.
+      exec: (a) => procs.exec(a),
+      oneshot: (a) => procs.oneshot(a),
+      worktree_ensure: (a) => procs.worktreeEnsure(a),
     },
   });
   link.on("online", () => console.log(`[host] ${id} online via ${link.url}`));
@@ -156,6 +180,7 @@ async function cmdRun(): Promise<number> {
       });
       // Agents opened from now on point MC_API at the port that actually bound.
       terminals.setMcPort(port);
+      boundMcPort = port;
       console.log(`[host] mc forwarder on 127.0.0.1:${port}${port !== 7777 && !env("CHRONOS_HOST_MC_PORT") ? " (7777 is taken on this Mac)" : ""}`);
       break;
     } catch (e: any) {
@@ -168,6 +193,8 @@ async function cmdRun(): Promise<number> {
     // A host that stops takes its agents with it (they are its children); the brain revives them
     // with --resume on this host when it comes back (HOSTS.md → Reconnect and restarts).
     terminals.killAll();
+    procs.killAll();
+    egress.closeAll();
     await link.stop();
     fwd?.close();
     process.exit(0);
