@@ -30,7 +30,7 @@ import {
 } from "./wire.js";
 import { JoinCodes, ensureBrainCert, mintHostCredential, hashToken, legacyHostsFile, type BrainCert } from "./join.js";
 import { HostRegistry } from "./registry.js";
-import { hostsView } from "./view.js";
+import { brainBuild, hostsView, updateVerdict, UPDATE_STALE_MS, type UpdateRecord } from "./view.js";
 import { hosts, workspaces, LOCAL_HOST_ID } from "../store.js";
 import type { HostPatch } from "../store/hosts.js";
 import { validate, HostPatchSchema } from "../validation.js";
@@ -154,6 +154,12 @@ export class BrainLink extends EventEmitter {
   private cert: BrainCert | null = null;
   /** Last VITALS_KEEP vitals per host. Survives a link blip so a sparkline does not restart on every reconnect. */
   private readonly history = new Map<string, HostVitals[]>();
+  /**
+   * Phase 6: each host's last update. In memory, like vitals: it must outlive the link drop an
+   * update causes (that is how "restarting" becomes "done"), and a brain restart forgets it — the
+   * version the host reports in hello is the lasting truth.
+   */
+  private readonly updates = new Map<string, UpdateRecord>();
 
   constructor(private readonly opts: BrainLinkOptions = {}) {
     super();
@@ -280,6 +286,7 @@ export class BrainLink extends EventEmitter {
         return;
       }
       case "api": return void this.forwardApi(link, f);
+      case "update_status": return this.onUpdateStatus(link, f);
       case "error":
         console.warn(`[hostlink] ${link.id} reported ${f.code}: ${f.message}`);
         if (f.id) {
@@ -322,6 +329,7 @@ export class BrainLink extends EventEmitter {
       console.warn(`[hostlink] ${link.id}: could not record hello: ${e?.message ?? e}`);
     }
     this.pushPolicy(link.id);
+    this.settleUpdate(link.id, h);
     bus.publish({ topic: "host.online", host_id: link.id, name: link.name, via: link.via });
     this.emit("online", this.info(link));
   }
@@ -448,6 +456,64 @@ export class BrainLink extends EventEmitter {
     try { deny = JSON.parse(row.policy_json || "{}")?.deny ?? []; } catch {}
     try { reserve = row.reserve_json ? JSON.parse(row.reserve_json) : undefined; } catch {}
     return this.sendControl(hostId, { t: "policy", deny: Array.isArray(deny) ? deny : [], ...(reserve !== undefined ? { reserve } : {}) });
+  }
+
+  // ───────────── phase 6: version + update ─────────────
+
+  updateStatus(hostId: string): UpdateRecord | null {
+    return this.updates.get(hostId) ?? null;
+  }
+
+  /**
+   * Ask a connected host to update itself to what the brain runs. The host does the work and
+   * restarts (update.ts); its terminals end with it and are revived `--resume` on that host when it
+   * says hello again. Throws with a reason the Desk shows when the host cannot be asked.
+   */
+  requestUpdate(hostId: string, now = Date.now()): UpdateRecord {
+    const l = this.links.get(hostId);
+    if (!l?.hello) throw new UpdateRefused(409, "that computer is not connected");
+    const target = brainBuild();
+    const v = updateVerdict(target, { version: l.hello.version, commit: l.hello.commit ?? null, install: l.hello.install ?? null, connected: true });
+    if (!v.supported) {
+      throw new UpdateRefused(400, v.manual
+        ? `that computer runs a Chronos from before self-update — update it once on that Mac: ${v.manual}`
+        : l.hello.install === "dev" ? "that computer runs Chronos from a developer checkout — update it there" : "that computer cannot be updated from here");
+    }
+    const cur = this.updates.get(hostId);
+    if (cur && (cur.state === "requested" || cur.state === "running" || cur.state === "restarting") && now - cur.at < UPDATE_STALE_MS) {
+      throw new UpdateRefused(409, "an update is already under way on that computer");
+    }
+    const rec: UpdateRecord = { id: crypto.randomUUID(), target, state: "requested", at: now };
+    if (!this.send(l, { t: "update", id: rec.id, target })) throw new UpdateRefused(409, "the link to that computer is not writable");
+    this.updates.set(hostId, rec);
+    console.log(`[hostlink] ${hostId} (${l.name}) asked to update to chronos ${target.version}${target.commit ? ` @ ${target.commit.slice(0, 12)}` : ""}`);
+    bus.publish({ topic: "host.updated", host_id: hostId, status: "updating", actor: "human" });
+    return rec;
+  }
+
+  private onUpdateStatus(link: Link, f: Extract<HostToBrain, { t: "update_status" }>): void {
+    const rec = this.updates.get(link.id);
+    if (!rec || rec.id !== f.id) return; // a status for an update this brain did not ask for (or has forgotten)
+    const state = f.state === "running" || f.state === "restarting" || f.state === "failed" || f.state === "current" ? f.state : null;
+    if (!state) return;
+    this.updates.set(link.id, {
+      ...rec, state, at: Date.now(),
+      step: typeof f.step === "string" ? f.step.slice(0, 200) : undefined,
+      error: typeof f.error === "string" ? f.error.slice(0, 1000) : undefined,
+    });
+    if (state !== "running") console.log(`[hostlink] ${link.id} (${link.name}) update ${state}${f.error ? `: ${String(f.error).slice(0, 300)}` : ""}`);
+    bus.publish({ topic: "host.updated", host_id: link.id, status: `update_${state}`, actor: "host" });
+  }
+
+  /** A host said hello: if it was restarting into an update, did it come back on the target? */
+  private settleUpdate(hostId: string, h: Hello): void {
+    const rec = this.updates.get(hostId);
+    if (!rec || rec.state === "done" || rec.state === "failed" || rec.state === "current") return;
+    const there = h.install === "npm" ? h.version === rec.target.version : !!h.commit && !!rec.target.commit && h.commit === rec.target.commit;
+    if (there) this.updates.set(hostId, { ...rec, state: "done", step: undefined, at: Date.now() });
+    else if (rec.state === "restarting") {
+      this.updates.set(hostId, { ...rec, state: "failed", at: Date.now(), error: `restarted but came back on ${h.version}${h.commit ? ` @ ${h.commit.slice(0, 12)}` : ""} — check ~/.chronos-host/host.err.log on that Mac` });
+    }
   }
 
   // ───────────── the `mc` forwarder, brain side ─────────────
@@ -611,6 +677,10 @@ export class BrainLink extends EventEmitter {
   }
 }
 
+export class UpdateRefused extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+
 export function parseListen(spec: string): { host: string; port: number } {
   const s = spec.trim();
   const m = /^(?:\[?([^\]]*?)\]?:)?(\d+)$/.exec(s);
@@ -656,14 +726,33 @@ export function hostRepoUrl(env: NodeJS.ProcessEnv = process.env): string {
 const shq = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 
 /**
- * The one line the operator pastes on a new Mac (needs git, Node >= 22 and the Xcode command-line
- * tools for node-pty). Re-running it is safe: an existing clone is fast-forwarded, not re-cloned.
- * `npm run host` runs `src/hostd` through tsx (a devDependency `npm ci` installs), and so does the
- * LaunchAgent join installs — so no build step.
+ * How the join command installs Chronos on a new Mac: `git` (clone + npm ci — works today) or `npm`
+ * (`npx getchronos@<brain's version>` — once the package is published). CHRONOS_HOST_INSTALL.
  */
-export function hostJoinCommand(url: string, code: string, repo = hostRepoUrl()): string {
-  const dir = "~/.chronos-host/app";
-  return `{ [ -d ${dir}/.git ] && git -C ${dir} pull --ff-only || git clone ${shq(repo)} ${dir}; } && cd ${dir} && npm ci && npm run host -- join ${shq(url)} ${shq(code)}`;
+export function hostInstallMode(env: NodeJS.ProcessEnv = process.env): "git" | "npm" {
+  return (env.CHRONOS_HOST_INSTALL ?? "").trim().toLowerCase() === "npm" ? "npm" : "git";
+}
+
+/**
+ * The node check every join command starts with, before anything is downloaded: node 26 with an
+ * old lockfile, and a login shell that found a different node than the operator's terminal, are the
+ * two ways the first hosts failed half-way through. The range matches bin/host-core.mjs.
+ */
+export const NODE_CHECK = `node -e 'const v=process.versions.node,m=+v.split(".")[0];if(m<22||m>26){console.error("Chronos needs Node 22-26, this is "+v+". Fix: brew install node@24 and put /opt/homebrew/opt/node@24/bin first on PATH");process.exit(1)}'`;
+
+/**
+ * The one line the operator pastes on a new Mac. Safe to re-run: an existing clone is reset to the
+ * latest main, not re-cloned. Paths use "$HOME", never `~` (a `~` inside quotes is not expanded,
+ * and a paste that lost it once created ./.chronos-host wherever the operator stood).
+ *
+ *  - git: needs git and the Xcode command-line tools. `npm run host` enters through
+ *    bin/getchronos.mjs, whose preflight says what to fix if `npm ci` did not finish.
+ *  - npm: npx fetches the brain's own version, which installs itself into ~/.chronos-host/app
+ *    (the npx cache is not a place a LaunchAgent may point at).
+ */
+export function hostJoinCommand(url: string, code: string, repo = hostRepoUrl(), mode = hostInstallMode(), version = brainBuild().version): string {
+  if (mode === "npm") return `${NODE_CHECK} && npx -y getchronos@${shq(version)} host join ${shq(url)} ${shq(code)}`;
+  return `${NODE_CHECK} && D="$HOME/.chronos-host/app" && { [ -d "$D/.git" ] && git -C "$D" fetch -q origin main && git -C "$D" reset -q --hard FETCH_HEAD || git clone -q ${shq(repo)} "$D"; } && cd "$D" && npm ci --no-audit --no-fund && npm run host -- join ${shq(url)} ${shq(code)}`;
 }
 
 function defaultApiTarget(): { host: string; port: number } {
@@ -761,6 +850,27 @@ export function hostRoutes(requireAdmin: express.RequestHandler, link: () => Bra
     const after = hosts.get(id)!;
     bus.publish({ topic: "host.updated", host_id: id, status: after.status, actor: "human" });
     res.json(hostsView(l).find((h) => h.id === id) ?? null);
+  });
+  // Phase 6: update one computer, or every connected one that is behind and can be updated from here.
+  r.post("/hosts/update-all", requireAdmin, (_req, res) => {
+    const l = link();
+    const started: string[] = [];
+    const skipped: Array<{ id: string; name: string; reason: string }> = [];
+    for (const h of hostsView(l)) {
+      if (h.is_brain || !h.connected || !h.update?.available) continue;
+      try { l.requestUpdate(h.id); started.push(h.id); } catch (e: any) { skipped.push({ id: h.id, name: h.name, reason: String(e?.message ?? e) }); }
+    }
+    res.json({ started, skipped });
+  });
+  r.post("/hosts/:id/update", requireAdmin, (req, res) => {
+    const id = String(req.params.id);
+    if (id === LOCAL_HOST_ID) return res.status(400).json({ error: "this Mac is the brain: it updates with npm run deploy" });
+    try {
+      const rec = link().requestUpdate(id);
+      res.json({ update: rec, host: hostsView(link()).find((h) => h.id === id) ?? null });
+    } catch (e: any) {
+      res.status(e instanceof UpdateRefused ? e.status : 500).json({ error: String(e?.message ?? e) });
+    }
   });
   r.delete("/hosts/:id", requireAdmin, (req, res) => {
     const id = String(req.params.id);

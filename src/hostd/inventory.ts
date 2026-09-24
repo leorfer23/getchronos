@@ -14,7 +14,9 @@ import { CONFIG } from "../config.js";
 import { detectOriginUrl } from "../repo-git.js";
 import { machineLoad, readVitals, swapPctOf } from "../machine.js";
 import { REPO_ROOT } from "../repo-root.js";
-import { PROTOCOL_VERSION, type CheckoutInfo, type CliInfo, type Hello, type HostVitals, type ProfileInfo } from "../hostlink/wire.js";
+import { PROTOCOL_VERSION, type CheckoutInfo, type CliInfo, type Hello, type HostInstall, type HostVitals, type ProfileInfo } from "../hostlink/wire.js";
+import { checkNode } from "../../bin/host-core.mjs";
+import { commitOf, detectInstall } from "./update.js";
 
 /** The CLIs a host may be asked to run, plus the two every ship pipeline needs. */
 export const CLI_NAMES = ["claude", "cursor-agent", "grok", "opencode", "gh", "git"] as const;
@@ -121,8 +123,24 @@ export function chronosVersion(): string {
   }
 }
 
+/**
+ * What this process runs, for hello (phase 6): the commit and how it was installed, so the brain can
+ * say "update available" and knows whether the `update` frame is understood. Read once: the code
+ * under a running process does not change until an update restarts it.
+ */
+let buildInfo: Promise<{ commit: string | null; install: HostInstall }> | null = null;
+export function hostBuild(): Promise<{ commit: string | null; install: HostInstall }> {
+  buildInfo ??= (async () => {
+    const inst = detectInstall();
+    // A temporary copy (npx cache) is not something the brain can update, same as a dev checkout.
+    const install: HostInstall = inst.kind === "git" || inst.kind === "npm" ? inst.kind : "dev";
+    return { commit: await commitOf(inst.pkgRoot).catch(() => null), install };
+  })();
+  return buildInfo;
+}
+
 export async function buildHello(hostId: string, name = os.hostname().replace(/\.local$/, "")): Promise<Hello> {
-  const [clis, checkouts] = await Promise.all([probeClis(), scanCheckouts()]);
+  const [clis, checkouts, build] = await Promise.all([probeClis(), scanCheckouts(), hostBuild()]);
   return {
     t: "hello",
     proto: PROTOCOL_VERSION,
@@ -140,6 +158,8 @@ export async function buildHello(hostId: string, name = os.hostname().replace(/\
     checkouts,
     deny: hostDeny(),
     live: [], // Phase 3: PTYs and headless runs that survived a link drop, for re-attach.
+    commit: build.commit,
+    install: build.install,
   };
 }
 
@@ -181,8 +201,9 @@ export function checklist(input: {
   plistInstalled: boolean;
 }): Check[] {
   const out: Check[] = [];
-  const major = Number(/^v(\d+)/.exec(input.node)?.[1] ?? 0);
-  out.push({ ok: major >= 22, label: "node ≥ 22", detail: input.node, hint: "brew install node@22" });
+  // The supported range and its fix live in bin/host-core.mjs, shared with the preflight.
+  const n = checkNode(input.node, "");
+  out.push({ ok: n.ok, label: n.label, detail: input.node, hint: n.fix });
   const cli = (n: string) => input.clis.find((c) => c.name === n);
   for (const n of ["git", "gh"]) {
     const c = cli(n);
@@ -204,13 +225,13 @@ export function checklist(input: {
     ok: !!input.joined.id && input.joined.brains.length > 0,
     label: "joined a brain",
     detail: input.joined.id ? `${input.joined.id} → ${input.joined.brains.join(", ")}` : "no",
-    hint: "npm run host -- join <brain-url> <code>",
+    hint: "paste the command from Desk → Computers → + Add",
   });
   out.push({
     ok: input.secretsMode != null && (input.secretsMode & 0o077) === 0,
     label: "credential file is private",
     detail: input.secretsMode == null ? "missing" : `mode ${(input.secretsMode & 0o777).toString(8)}`,
-    hint: "chmod 600 ~/.chronos-host/.secrets",
+    hint: 'chmod 600 "$HOME/.chronos-host/.secrets"',
   });
   out.push({ ok: input.plistInstalled, label: "LaunchAgent installed", detail: input.plistInstalled ? "sh.chronos.host" : "no", hint: "re-run join, or install launchd/sh.chronos.host.plist.template" });
   return out;

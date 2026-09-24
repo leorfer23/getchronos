@@ -7,13 +7,15 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { REPO_ROOT } from "../repo-root.js";
 import { CONFIG } from "../config.js";
 import { hosts, repoCheckouts, workspaces, repos, LOCAL_HOST_ID } from "../store.js";
 import { hostById } from "../hosts/index.js";
-import { which, CLI_NAMES } from "../hostd/inventory.js";
+import { which, CLI_NAMES, chronosVersion } from "../hostd/inventory.js";
 import { admission, loadFromVitals, swapPctOf, type Admission } from "../machine.js";
 import type { HostRow } from "../types.js";
-import type { HostVitals } from "./wire.js";
+import type { HostInstall, HostVitals, UpdateTarget } from "./wire.js";
 import { parseCapabilities, parsePolicy, type HostCapabilities, type HostPolicy } from "./registry.js";
 import type { BrainLink } from "./brain-link.js";
 
@@ -45,7 +47,79 @@ export type HostView = {
   admission: Admission;
   live_sessions: number;
   checklist: Checklist;
+  /** Phase 6: the commit this computer runs (git installs) and how it was installed. */
+  commit: string | null;
+  install: HostInstall | null;
+  /** Phase 6: is it behind the brain, can the Desk update it, and how the last update went. null for the brain. */
+  update: HostUpdateView | null;
 };
+
+// ── phase 6: version + update ──
+
+/** What the brain runs — the version and commit every host is compared with, and updated to. */
+let brainBuildCache: UpdateTarget | null = null;
+export function brainBuild(): UpdateTarget {
+  if (!brainBuildCache) {
+    let commit: string | null = null;
+    try {
+      const sha = execFileSync("git", ["-C", REPO_ROOT, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+      if (/^[0-9a-f]{40}$/.test(sha)) commit = sha;
+    } catch {}
+    // Read once per boot: a deploy restarts the daemon, and that is the only way the brain's code changes.
+    brainBuildCache = { version: chronosVersion(), commit };
+  }
+  return brainBuildCache;
+}
+
+/** One host's last update, as the brain heard it (brain-link.ts keeps these, in memory). */
+export type UpdateRecord = {
+  id: string;
+  target: UpdateTarget;
+  state: "requested" | "running" | "restarting" | "failed" | "current" | "done";
+  step?: string;
+  error?: string;
+  at: number;
+};
+
+export type HostUpdateView = {
+  /** Behind the brain: a different commit (git) or version (npm), or a host older than self-update. */
+  available: boolean;
+  /** The Desk's Update button works: the host understands `update` and is an app install. */
+  supported: boolean;
+  target: UpdateTarget;
+  /** When not supported: what to run on that Mac instead (null when there is nothing to paste). */
+  manual: string | null;
+  status: UpdateRecord | null;
+};
+
+/** No word from a host for this long in the middle of an update = it failed (npm ci is ~minutes). */
+export const UPDATE_STALE_MS = 20 * 60_000;
+
+/** The one line that updates a pre-phase-6 host by hand, the first time. $HOME, never `~`. */
+export const MANUAL_GIT_UPDATE =
+  'cd "$HOME/.chronos-host/app" && git fetch -q origin main && git reset -q --hard FETCH_HEAD && npm ci --no-audit --no-fund && launchctl kickstart -k gui/$(id -u)/sh.chronos.host';
+
+/**
+ * Is this host behind the brain, and can the Desk do something about it? Pure.
+ *
+ * A host that reports no `install` predates self-update. The brain running this code is newer than
+ * any such host by construction, so it is "update available" — but only by hand, once.
+ */
+export function updateVerdict(brain: UpdateTarget, host: { version: string | null; commit: string | null; install: HostInstall | null; connected: boolean }, status: UpdateRecord | null = null, now = Date.now()): HostUpdateView {
+  const st = status && (status.state === "requested" || status.state === "running") && now - status.at > UPDATE_STALE_MS
+    ? { ...status, state: "failed" as const, error: `no word from the host for ${Math.round(UPDATE_STALE_MS / 60_000)} minutes — check ~/.chronos-host/host.err.log there` }
+    : status;
+  if (!host.version) return { available: false, supported: false, target: brain, manual: null, status: st };
+  if (!host.install) return { available: true, supported: false, target: brain, manual: MANUAL_GIT_UPDATE, status: st };
+  const available = host.install === "npm"
+    ? host.version !== brain.version
+    : !!brain.commit && !!host.commit && host.commit !== brain.commit;
+  if (host.install === "dev") return { available, supported: false, target: brain, manual: null, status: st };
+  // A git host can only follow a brain that has a commit to give it.
+  const supported = host.connected && (host.install === "npm" || !!brain.commit);
+  return { available, supported, target: brain, manual: null, status: st };
+}
+// ── end phase 6 ──
 
 export type Checklist = {
   clis: Array<{ name: string; ok: boolean; version: string | null }>;
@@ -126,7 +200,7 @@ export function hostsView(link: BrainLink): HostView[] {
         return {
           id: h.id, name: h.name, platform: h.platform, status: h.status, connected: true, is_brain: true,
           created_at: h.created_at, last_seen_at: new Date().toISOString(), policy, reserve,
-          link: null, version: null,
+          link: null, version: brainBuild().version, commit: brainBuild().commit, install: null, update: null,
           vitals: {
             history: snap.history.map((s) => ({ at: s.at, cpu: s.cpu, ram: s.ram, gpu: s.gpu })),
             load_per_core: v.load.loadPerCore, pressure: v.load.pressureLevel, swap_pct: swapPctOf(v.load), ram: snap.ram,
@@ -145,6 +219,14 @@ export function hostsView(link: BrainLink): HostView[] {
         created_at: h.created_at, last_seen_at: l ? new Date(l.last_seen_at).toISOString() : h.last_seen_at, policy, reserve,
         link: l ? { via: l.via, connected_at: l.connected_at, last_seen_at: l.last_seen_at } : null,
         version: l?.hello.version ?? caps?.version ?? null,
+        commit: (l ? l.hello.commit : caps?.commit) ?? null,
+        install: (l ? l.hello.install : caps?.install) ?? null,
+        update: updateVerdict(brainBuild(), {
+          version: l?.hello.version ?? caps?.version ?? null,
+          commit: (l ? l.hello.commit : caps?.commit) ?? null,
+          install: (l ? l.hello.install : caps?.install) ?? null,
+          connected: !!l,
+        }, link.updateStatus(h.id)),
         vitals: {
           history: l ? hist.map((s) => ({ at: s.at, cpu: s.cpu, ram: s.ram, gpu: s.gpu })) : [],
           load_per_core: last?.loadPerCore ?? null, pressure: last?.pressure ?? null, swap_pct: last?.swapPct ?? null, ram: null,

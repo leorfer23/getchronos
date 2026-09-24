@@ -118,6 +118,8 @@ export class HostLink extends EventEmitter {
       attach: (f: Extract<BrainToHost, { t: "attach" }>) => t?.attach(f.ch, f.seq, f.transcript_offset, f.session_id),
       release: (f: Extract<BrainToHost, { t: "release" }>) => t?.release(f.ch),
       policy: (f) => this.emit("policy", f),
+      // Phase 6: index.ts runs update.ts and answers with update_status frames via sendControl().
+      update: (f) => this.emit("update", f),
       error: (f) => { console.warn(`[host] brain says ${f.code}: ${f.message}`); this.lastError = `${f.code}: ${f.message}`; },
     };
   }
@@ -270,6 +272,11 @@ export class HostLink extends EventEmitter {
       if (msg.startsWith("veto:")) console.warn(`[host] refused a spawn — ${msg}`);
       this.send({ t: "rpc_result", id: f.id, ok: false, error: msg });
     }
+  }
+
+  /** One control frame to the brain, for callers outside the link (update status). False when down. */
+  sendControl(f: HostToBrain): boolean {
+    return this.send(f);
   }
 
   /** One binary data frame (PTY bytes) to the brain. False when the link is not writable. */
