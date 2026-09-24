@@ -15,7 +15,7 @@
     "url": "https://github.com/leorfer23/getchronos/issues"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22 <27"
   },
   "bin": {
     "chronosd": "./dist/index.js"
@@ -37,7 +37,7 @@
   "dependencies": {
     "@playwright/mcp": "^0.0.79",
     "@xterm/headless": "^6.0.0",
-    "better-sqlite3": "^11.8.1",
+    "better-sqlite3": "^13.0.3",
     "croner": "^9.0.0",
     "express": "^4.21.2",
     "node-pty": "^1.1.0",
