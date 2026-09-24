@@ -53,3 +53,5 @@ export { searchIndex } from "./store/search.js";
 export type { SearchHit } from "./store/search.js";
 export { board, parseMentions } from "./store/board.js";
 export type { BoardPost, BoardFeedItem } from "./store/board.js";
+export { memoryUsage, MEMORY_USAGE_KINDS } from "./store/memory-usage.js";
+export type { MemoryUsageRow, MemoryUsageKind, MemoryUsageAggregate, MemoryUsageMiss, NewMemoryUsage } from "./store/memory-usage.js";

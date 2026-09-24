@@ -74,6 +74,7 @@ import { forgetMemorySeen, markMemorySeen, memoryNotice, rememberFact } from "./
 import { addSample, proseBrief, proseGuide, saveGuide, startLearning } from "./prose.js";
 import { proseSamples } from "./store/prose.js";
 import { recall, renderRecall } from "./recall.js";
+import { recordRead, recordRecall, sessionFor, usageRoute } from "./memory-usage.js";
 import { openConflicts } from "./memory-conflicts.js";
 import * as agentMemory from "./agent-memory.js";
 import { isMemoryAgent } from "./agent-memory.js";
@@ -1519,6 +1520,8 @@ export function startServer() {
     const n = noteSvc.getNote(req.params.id);
     if (!n) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, n.workspace_id)) return;
+    // ?use=1 = an agent reading it in full (`mc memo get`); the Desk's renders don't pass it.
+    if (req.query.use === "1") recordRead(n.workspace_id, { kind: "memo_get", ref: n.id }, { source: "api", session_id: sessionFor(n.workspace_id, req.query.session) });
     res.json(publicNote(n));
   });
   // scope='global' notes land in EVERY workspace's agent context, crossing client isolation.
@@ -1646,8 +1649,13 @@ export function startServer() {
     if (!workspaces.get(req.params.id)) return res.status(404).json({ error: "workspace not found" });
     const q = String(req.query.q ?? "");
     const hits = recall(req.params.id, q);
+    recordRecall(req.params.id, q, hits, { source: "api", session_id: sessionFor(req.params.id, req.query.session) });
     res.json({ hits, text: renderRecall(req.params.id, q, hits) });
   });
+
+  // Which memory agents actually used (src/memory-usage.ts): per-ref counts, last use, which doors.
+  // Workspace-walled like recall; the dream pass ranks and prunes on it. ?since=ISO or 7d/24h.
+  api.get("/workspaces/:id/memory/usage", usageRoute);
 
   // Pairs of remembered facts a judge found to disagree. Read-only and workspace-walled, same as
   // recall: a conflict quotes two pieces of this workspace's memory.
@@ -2939,7 +2947,10 @@ export function startServer() {
       if (content == null) return res.status(404).json({ error: "reference not found" });
       return res.type("text/plain").send(content);
     }
-    if (req.query.use === "1") useSkill(s.id);
+    if (req.query.use === "1") {
+      useSkill(s.id);
+      recordRead(s.workspace_id, { kind: "skill_view", ref: s.id }, { source: "api", session_id: sessionFor(s.workspace_id, req.query.session) });
+    }
     res.json({ ...s, body: skillBody(s) });
   });
   // Create (open — agents author skills; they land `pending` unless the workspace auto-publishes).
