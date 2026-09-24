@@ -1,7 +1,7 @@
 # Hosts — one Desk, N computers
 
-> Status: **being built.** Phase 1 (the seam: `src/hosts/`, migration 134) and phase 2's transport
-> core (link, join, host process) have landed; see *Phases*. This is the plan the implementation PRs
+> Status: **being built.** Phase 1 (the seam: `src/hosts/`, migration 134) and phase 2 (link, join,
+> host process, the hosts registry and the Desk's Computers panel) have landed; see *Phases*. This is the plan the implementation PRs
 > follow; each phase at the end is one PR (or a short series) and updates this file when it lands.
 
 ## The gap
@@ -27,8 +27,9 @@ them somewhere else to go. Hosts are that somewhere else.
   (MDM) Macs, where enabling Remote Login alone can flag the machine as non-compliant.
 - **Adding a computer takes two steps:**
   1. Desk → ⋯ → **Computers → + Add**. The brain mints a one-time join code and shows one command.
-  2. On the new Mac: `npx getchronos host join <brain-url> <code>`. It installs a user-level
-     LaunchAgent, stores its credential, connects, and shows up on the Desk with its vitals.
+  2. On the new Mac: paste that command (today a `git clone` + `npm ci` + `npm run host -- join`,
+     later `npx getchronos host join <brain-url> <code>`). It installs a user-level LaunchAgent,
+     stores its credential, connects, and shows up on the Desk with its vitals.
 - **Policy lives on the brain, and the host has the last word.** The brain decides which workspaces
   a host may run and places work there. The host also keeps a **local veto list** in its own
   `.secrets`. The brain can never route a denied workspace to it, and neither can a bug in the
@@ -283,25 +284,41 @@ Mac today. So the design protects the **link** and the **boundaries between work
 
 ## Setup (what the operator does)
 
-On the brain, once:
+On the brain, once — pick how new computers reach it (either or both):
 
 ```bash
-# LAN hosts: open the host listener (skip if you'll only use the tunnel)
-echo 'CHRONOS_HOST_LISTEN=0.0.0.0:7779' >> .secrets && npm run deploy
+# Same network: open the host listener (TLS, pinned at join)
+echo 'CHRONOS_HOST_LISTEN=0.0.0.0:7779' >> .secrets
+# Anywhere: advertise the tunnel (cloudflared already forwards /host to :7777)
+echo 'CHRONOS_HOST_PUBLIC_URL=wss://desk.example.com/host' >> .secrets
+npm run deploy
 ```
 
 Per computer:
 
-1. Desk → ⋯ → Computers → **+ Add** → name it, pick its workspaces (allow or deny) → copy the command.
-2. On that Mac (needs Node ≥ 22 and git):
+1. Desk → ⋯ → **Computers** → **+ Add** → name it → **Get the command**. With both transports set,
+   pick *Same network* or *Anywhere*. The code inside works once, for 15 minutes.
+2. On that Mac (needs git, Node ≥ 22 and the Xcode command-line tools for `node-pty`), paste it in
+   Terminal. It is one line, safe to re-run:
    ```bash
-   npx getchronos host join wss://192.168.1.20:7779 CHR-7K3Q-…   # or your tunnel URL
+   { [ -d ~/.chronos-host/app/.git ] && git -C ~/.chronos-host/app pull --ff-only || git clone https://github.com/leorfer23/getchronos ~/.chronos-host/app; } \
+     && cd ~/.chronos-host/app && npm ci && npm run host -- join wss://192.168.1.20:7779/host CHR1-…
    ```
-   It checks the brain's fingerprint, stores its token in `~/.chronos-host/.secrets`, installs
-   `~/Library/LaunchAgents/sh.chronos.host.plist`, and connects.
-3. The Desk shows the checklist the host reported: CLIs installed, profiles logged in, repos
-   cloned. Fix anything red on that Mac (`claude` login per profile, `gh auth login`,
-   `git clone`). `chronos host doctor` prints the same checklist locally.
+   The repo is `CHRONOS_HOST_REPO_URL` on the brain (default: package.json's `repository`). `npm run
+   host` runs `src/hostd` through tsx, as does the LaunchAgent, so there is no build step. `join`
+   checks the brain's fingerprint, stores its token in `~/.chronos-host/.secrets`, installs
+   `~/Library/LaunchAgents/sh.chronos.host.plist`, and connects. The Desk's *Waiting for it to
+   connect…* turns into ✓.
+3. The computer's page in **Computers** shows what it reported: CLIs, which clients may run there
+   (toggle to keep one off it — that writes the brain policy; a client the Mac vetoes itself is
+   shown locked), each client's profile logged in or not, and each repo cloned or not. Fix anything
+   ✗ on that Mac (`claude` login per profile, `gh auth login`, `git clone` under
+   `CHRONOS_HOST_ROOTS`). `npm run host -- doctor` prints the same checklist there.
+
+From then on: the header chip becomes **N computers** (one bar per connected computer; click for
+each one's CPU/RAM/GPU), terminals that run elsewhere carry the computer's name on the rail, and
+"+ Terminal" gets a computer picker. *Takes work* off = drain (what runs keeps running, nothing new
+lands). **Remove this computer** revokes its token and drops its link; re-adding it needs a new code.
 
 Host-side knobs (in `~/.chronos-host/.secrets`):
 
@@ -386,12 +403,25 @@ it was.
      `DELETE /api/hosts/:id`), and `src/hostd/` (`npm run host -- join|run|status|doctor`, the
      `sh.chronos.host` LaunchAgent, hello with CLIs/profiles/checkouts/veto, vitals every 5s from
      `machine.ts`, the loopback `mc` forwarder, `spawn_pty`/`spawn_proc` answered "not yet").
-   - **Deferred:** the Desk **Computers** panel and header vitals chips (a follow-up PR; the data is
-     already at `GET /api/hosts/links`). Persisting hosts in Phase 1's `hosts` / `repo_checkouts`
-     tables — until those land, joined hosts' token hashes live in `<root>/hostlink/hosts.json`
-     (sandbox-denied) and are marked `TODO(hosts-p1)`. `authz.ts` does not read `forwardedHost()`
-     yet: forwarded requests already need a brain-issued token, and "the session must belong to that
-     host" needs `sessions.host_id` (Phase 3).
+   - **Landed (registry + Desk):** `src/hostlink/registry.ts` keeps hosts in the `hosts` table — join
+     inserts the row (the operator's name, the token hash, the pinned cert fingerprint), hello
+     writes `capabilities_json` (version, CLIs, profiles, checkouts, veto) and goes `online`, link
+     down goes `offline`, revoke is `disabled` + `token_hash` null. `draining` / `disabled` are the
+     operator's and survive the link coming and going; "connected right now" is always the live link,
+     never the column. hello's checkouts become `repo_checkouts` rows, matched to repos by
+     normalized git remote (ssh / scp / https, `.git`, slashes). The Phase 2 `hosts.json` is imported
+     once at boot and left in place. `GET /api/hosts` (no token hash, ever), `PATCH /api/hosts/:id`
+     (`name`, `policy: {deny: [workspace id or slug]}`, `status: draining|online|disabled`,
+     `reserve`), `host.online` / `host.offline` / `host.updated` on the bus; the Desk's fleet chip,
+     ⋯ → Computers (+ Add with the real join command), host tags on the rail and the "+ Terminal"
+     computer picker, which sends `host_id` with `POST /sessions`. Join codes return one command per
+     transport (`commands.lan`, `commands.tunnel`).
+   - **Deferred:** `authz.ts` does not read `forwardedHost()` yet: forwarded requests already need a
+     brain-issued token, and "the session must belong to that host" needs `sessions.host_id`
+     (Phase 3). Per-host admission on the Desk is computed from the host's vitals with
+     `machine.ts`'s thresholds (display only; placement is Phase 4). The full "New terminal" dialog
+     (⇧N) has no computer picker yet — only the quick line does. A paused (`disabled`, not revoked)
+     host's `chronos host` stops retrying on the 401, so re-enabling it needs that process restarted.
    - **Deviations:** join is a `/host` upgrade with `Authorization: Join <code>` rather than a separate
      endpoint, so the listener still serves nothing but `/host`. Pinning is chosen by the URL's
      hostname (see `pin.ts`), not by a flag. The wire carries `hello.proto` (protocol `major.minor`)

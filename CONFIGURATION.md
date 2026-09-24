@@ -436,7 +436,9 @@ actually runs, rather than against a wall clock a daily pass never reaches.
 
 A **host** is another Mac that runs agents for this daemon (the **brain**); see [HOSTS.md](./HOSTS.md).
 With nothing set, there are no hosts and nothing listens beyond `127.0.0.1:7777`: a single-machine
-install is unchanged. Phase 2 ships the link, join codes and vitals; nothing is placed on a host yet.
+install is unchanged — the Desk shows no Computers chip, tag or picker until a second Mac joins.
+Hosts join, report vitals and capabilities, and are listed and edited on the Desk (⋯ → Computers);
+remote terminals arrive in Phase 3.
 
 On the brain:
 
@@ -444,11 +446,25 @@ On the brain:
 |---|---|---|
 | `CHRONOS_HOST_LISTEN` | off | the dedicated LAN listener, e.g. `0.0.0.0:7779`. TLS with a self-signed brain cert (made on first use with `/usr/bin/openssl`), pinned by hosts at join. Serves `/host` WebSocket upgrades with a host token and a bare 404 for everything else |
 | `CHRONOS_HOST_PUBLIC_URL` | — | the `wss://<desk-domain>/host` tunnel URL(s), comma-separated, advertised in join codes. The tunnel door (`/host` on the loopback API) is always there and always needs a host token |
-| `CHRONOS_HOSTLINK_DIR` | `<root>/hostlink` | the brain cert, its key (sandbox-denied) and `hosts.json` — joined hosts' token **hashes** (sandbox-denied; replaced by the `hosts` table in Phase 1) |
+| `CHRONOS_HOSTLINK_DIR` | `<root>/hostlink` | the brain cert and its key (sandbox-denied). Joined hosts and their token **hashes** live in the `hosts` table; a Phase 2 `hosts.json` found here is imported once at boot and left in place |
+| `CHRONOS_HOST_REPO_URL` | `repository` in package.json, else `https://github.com/leorfer23/getchronos` | what the join command clones on a new Mac (the package is not on npm yet) |
 
-Adding a host (admin token): `POST /api/hosts/join-codes {name?}` returns a single-use code (15 minutes)
-and the command to paste on the new Mac. `GET /api/hosts/links` lists connected hosts with their
-hello and last vitals; `DELETE /api/hosts/:id` revokes a host's token and drops its link.
+Adding a host: Desk → ⋯ → **Computers** → **+ Add**, or with the admin token
+`POST /api/hosts/join-codes {name?}`. It returns a single-use code (15 minutes) and the command to
+paste on the new Mac — `commands.lan` when the listener is up, `commands.tunnel` when
+`CHRONOS_HOST_PUBLIC_URL` is set, `command` the best of the two:
+
+```bash
+{ [ -d ~/.chronos-host/app/.git ] && git -C ~/.chronos-host/app pull --ff-only || git clone <CHRONOS_HOST_REPO_URL> ~/.chronos-host/app; } \
+  && cd ~/.chronos-host/app && npm ci && npm run host -- join <url> <code>
+```
+
+`npm run host` runs `src/hostd` through tsx, so there is no build step. `GET /api/hosts` lists every
+computer (never a token hash): link, vitals history, admission, live terminals, and a checklist per
+workspace (allowed?, profile logged in?, repos cloned?). `PATCH /api/hosts/:id`
+`{name?, policy?: {deny: [workspace id or slug]}, status?: "draining"|"online"|"disabled", reserve?}`
+edits one; `DELETE /api/hosts/:id` revokes it (status `disabled`, token hash forgotten, link dropped —
+re-joining is the only way back). `GET /api/hosts/links` is the raw link list.
 
 On the host — `npm run host -- join <url> <code>` writes these into `~/.chronos-host/.secrets` (mode
 600) and installs `~/Library/LaunchAgents/sh.chronos.host.plist`. `npm run host -- doctor` prints the
@@ -568,6 +584,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_HOST_LISTEN` | — | `src/config.ts` |
 | `CHRONOS_HOST_MC_PORT` | `7777` | `src/hostd/index.ts` |
 | `CHRONOS_HOST_PUBLIC_URL` | — | `src/hostlink/brain-link.ts` |
+| `CHRONOS_HOST_REPO_URL` | package.json `repository` | `src/hostlink/brain-link.ts` |
 | `CHRONOS_HOST_ROOTS` | `"~/Documents/GitHub"` | `src/hostd/inventory.ts` |
 | `CHRONOS_HOST_TOKEN` | — | `src/hostd/index.ts` |
 | `CHRONOS_HOURLY_BACKUP_RETAIN` | `48` | `src/config.ts` |
