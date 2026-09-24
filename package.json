@@ -47,7 +47,7 @@
     "host": "node bin/getchronos.mjs host",
     "install:launchd": "node scripts/install-launchd.mjs",
     "test": "CHRONOS_TEST=1 CHRONOS_DB=:memory: CHRONOS_MAX_CONCURRENT=3 CHRONOS_DAILY_BUDGET=5 CHRONOS_RESUME_RL_MAX_HOURS=6 CHRONOS_DESKTOP_NOTIFY=0 CHRONOS_SANDBOX_DEFAULT=off CHRONOS_QUOTA_GATE=off node --import tsx --test 'src/**/*.test.ts' && node --test scripts/mc-help.test.mjs && npm run evals",
-    "deploy": "node scripts/predeploy-backup.mjs && npm test && npm run build && launchctl kickstart -k gui/$(id -u)/sh.chronos.daemon && sleep 3 && curl -s localhost:${CHRONOS_PORT:-7777}/api/health",
+    "deploy": "node scripts/predeploy-backup.mjs && npm test && npm run build && launchctl kickstart -k gui/$(id -u)/sh.chronos.daemon && sleep 3 && curl -s localhost:${CHRONOS_PORT:-7777}/api/health && node scripts/brainbar.mjs refresh",
     "evals": "CHRONOS_TEST=1 CHRONOS_DB=:memory: CHRONOS_SANDBOX_DEFAULT=off node --import tsx --test 'evals/**/*.eval.ts'",
     "evals:export": "node scripts/export-eval-cases.mjs"
   },
