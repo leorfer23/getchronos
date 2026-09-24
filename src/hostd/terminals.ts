@@ -30,7 +30,7 @@ import { expandHomeRelative, isSpawnSpec, type SpawnSpec } from "../hosts/spawn-
 import type { SpawnReply } from "../hosts/remote.js";
 import { ensureBranchWorktree, worktreeRootFor } from "../worktree-core.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "../agent-prep.js";
-import { ensureTrustedCwd } from "../claude-trust.js";
+import { ensureBypassAccepted, ensureTrustedCwd } from "../claude-trust.js";
 import { ensureGrokTrustedCwd } from "../grok-trust.js";
 import { installClaudeHooks, installCursorHooks, installGrokHooks } from "../term-hooks.js";
 import { sandboxAvailable, sandboxWrap, workspaceSandboxAllow } from "../sandbox.js";
@@ -360,6 +360,7 @@ export class HostTerminals {
       }
     }
     if (backend === "claude-code" && ensureTrustedCwd(profileDir, cwd) === "added") console.log(`[host] pre-trusted ${cwd} in ${path.basename(profileDir)}`);
+    if (backend === "claude-code" && ensureBypassAccepted(profileDir) === "added") console.log(`[host] pre-accepted bypass-permissions mode in ${path.basename(profileDir)}`);
     if (backend === "grok" && ensureGrokTrustedCwd(cwd, path.join(this.home, ".grok")) === "added") console.log(`[host] pre-trusted ${cwd} for grok`);
     await syncAgentsMd(cwd, this.o.root, this.home);
     void spec;
