@@ -19,7 +19,9 @@
  * and accepts any minor (a newer minor only adds optional fields or frame kinds the other side
  * ignores). Bump major only when an existing frame changes meaning.
  */
-export const PROTOCOL_VERSION = "1.0";
+export const PROTOCOL_VERSION = "1.1";
+// 1.1 (phase 3): hello.live[] carries `exit`/`transcript_offset`; `transcript` carries `offset`/`reset`;
+// brain → host `attach` and `release`. All additive: a 1.0 peer ignores what it does not know.
 
 /** Binary data frame header: magic(1) kind(1) ch(u32) seq(u64). */
 export const DATA_HEADER_BYTES = 14;
@@ -48,7 +50,21 @@ export const RING_BYTES = 256 * 1024;
 export type CliInfo = { name: string; path: string | null; version: string | null };
 export type ProfileInfo = { name: string; dir: string; exists: boolean };
 export type CheckoutInfo = { path: string; remote_url: string | null };
-export type LiveInfo = { ch: number; session_id: string; kind: "pty" | "proc"; pid: number | null; last_seq: number };
+export type LiveInfo = {
+  ch: number;
+  session_id: string;
+  kind: "pty" | "proc";
+  pid: number | null;
+  last_seq: number;
+  /**
+   * Set when the process already ended while the brain was not listening. The host keeps an exited
+   * channel (and its unacked output) until the brain `release`s it, so an exit that happened during a
+   * Wi-Fi drop is still delivered — as output, then the exit — instead of the row being guessed dead.
+   */
+  exit?: { code: number | null; signal: string | null } | null;
+  /** Bytes of this session's CLI transcript the host has read so far (see `transcript`). */
+  transcript_offset?: number;
+};
 export type HostVitals = {
   at: number;
   cpu: number | null;
@@ -81,7 +97,12 @@ export type HostToBrain =
   | Hello
   | ({ t: "vitals" } & HostVitals)
   | { t: "exit"; ch: number; code: number | null; signal: string | null }
-  | { t: "transcript"; ch: number; delta: string }
+  /**
+   * Raw CLI transcript bytes (JSONL, whole lines only) for one channel. `offset` is where `delta`
+   * starts in the host's file, so the brain can write it into its mirror idempotently (a resend after
+   * reconnect overlaps). `reset` = the host is now reading a different or truncated file: start over.
+   */
+  | { t: "transcript"; ch: number; delta: string; offset?: number; reset?: boolean }
   | { t: "api"; req_id: string; session_id: string | null; method: string; path: string; headers: Record<string, string>; body: string | null }
   | { t: "rpc_result"; id: string; ok: true; value: unknown }
   | { t: "rpc_result"; id: string; ok: false; error: string }
@@ -101,6 +122,13 @@ export type BrainToHost =
   | { t: "api_result"; req_id: string; status: number; headers: Record<string, string>; body: string | null }
   | { t: "policy"; deny: string[]; reserve?: unknown }
   | { t: "ack"; ch: number; seq: number }
+  /**
+   * The brain (re)adopts a channel after hello: resend output after `seq` (what the brain already
+   * has) and the transcript from `transcript_offset`, then any exit that is still pending.
+   */
+  | { t: "attach"; ch: number; seq: number; transcript_offset: number; session_id?: string }
+  /** The brain has processed this channel's exit: the host may forget it. */
+  | { t: "release"; ch: number }
   | { t: "ping"; n: number }
   | { t: "pong"; n: number }
   | { t: "error"; code: string; message: string; id?: string };

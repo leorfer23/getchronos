@@ -87,6 +87,8 @@ export const OpenSessionSchema = z.object({
   resumeId: id.optional(),
   agentSessionId: nullableId.optional(),
   resumeAgent: z.boolean().optional(),
+  /** Pin the terminal to a connected host (HOSTS.md phase 3), by id or name. Unset = the brain. */
+  host_id: z.string().max(80).nullable().optional(),
 });
 
 export const AgentNameSchema = z.object({

@@ -51,8 +51,8 @@ export const sessions = {
   create(s: NewSession & { id?: string }): Session {
     const id = s.id || randomUUID();
     db.prepare(
-      `INSERT INTO sessions (id,ticket_id,workspace_id,repo_id,title,goal,goal_kind,goal_source,spawn_goal,created_by,lead_id,agent_name,lead_token,backend,model,role,focus_only,cwd,status,created_at)
-       VALUES (@id,@ticket_id,@workspace_id,@repo_id,@title,@goal,@goal_kind,@goal_source,@spawn_goal,@created_by,@lead_id,@agent_name,@lead_token,@backend,@model,@role,@focus_only,@cwd,'live',@created_at)`
+      `INSERT INTO sessions (id,ticket_id,workspace_id,repo_id,title,goal,goal_kind,goal_source,spawn_goal,created_by,lead_id,agent_name,lead_token,backend,model,role,focus_only,cwd,host_id,status,created_at)
+       VALUES (@id,@ticket_id,@workspace_id,@repo_id,@title,@goal,@goal_kind,@goal_source,@spawn_goal,@created_by,@lead_id,@agent_name,@lead_token,@backend,@model,@role,@focus_only,@cwd,@host_id,'live',@created_at)`
     ).run({
       id,
       ticket_id: s.ticket_id ?? null,
@@ -80,6 +80,8 @@ export const sessions = {
       role: s.role ?? "human",
       focus_only: s.focus_only ? 1 : 0,
       cwd: s.cwd,
+      // The computer the pty runs on (HOSTS.md). Placement decides it once, here; it never moves.
+      host_id: s.host_id || "local",
       created_at: now(),
     });
     return this.get(id)!;
@@ -121,6 +123,14 @@ export const sessions = {
   /** Promotion (terminal.ts promoteToLead): the row keeps its id and transcript, only its role moves. */
   setRole(id: string, role: Session["role"]) {
     db.prepare("UPDATE sessions SET role=? WHERE id=?").run(role, id);
+  },
+  /**
+   * Where a REMOTE terminal actually runs, as its host resolved it (a path on that machine). A local
+   * row's cwd is chosen before the spawn and never set here; a remote one only exists after the host
+   * answers, since the brain sends intent, not paths (HOSTS.md → SpawnSpec).
+   */
+  setCwd(id: string, cwd: string) {
+    db.prepare("UPDATE sessions SET cwd=? WHERE id=?").run(cwd, id);
   },
   setPid(id: string, pid: number | null) {
     db.prepare("UPDATE sessions SET pid=? WHERE id=?").run(pid, id);

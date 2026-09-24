@@ -35,6 +35,10 @@ export interface FocusCtx {
   // On-disk chat UUID when it differs from sessionId (legacy unpinned grok: Chronos row id ≠ grok's
   // minted UUID). Bus events stay keyed by sessionId; locate uses this for the transcript path.
   transcriptSessionId?: string;
+  // A terminal on another host (HOSTS.md phase 3): its CLI writes the transcript on THAT machine, the
+  // host streams the raw lines over the link, and the brain keeps them in a mirror file. When set,
+  // this file IS the transcript — the per-backend locate (which looks under this Mac's home) is skipped.
+  transcriptFile?: string;
 }
 
 const focusMetricsSince = new Date().toISOString();
@@ -443,15 +447,29 @@ function adapterFor(backend: string): Adapter {
 
 // ──────────────────────── public API ────────────────────────
 
+/** The transcript file for a session, per backend — or the mirror a remote session is fed into. */
+export function locateTranscript(ctx: FocusCtx): string | null {
+  if (ctx.transcriptFile) return fs.existsSync(ctx.transcriptFile) ? ctx.transcriptFile : null;
+  return adapterFor(ctx.backend).locate(ctx);
+}
+
+/**
+ * Is this backend's transcript an append-only JSONL file (claude, codex, grok)? Those are what a host
+ * can stream as raw lines. cursor keeps a SQLite store that has no byte-append shape to mirror.
+ */
+export function transcriptIsJsonl(backend: string): boolean {
+  return !!adapterFor(backend).jsonlLine;
+}
+
 /** Is there a CLI transcript on disk for this session? (A revive only restores what was written.) */
 export function hasTranscript(ctx: FocusCtx): boolean {
-  try { return !!adapterFor(ctx.backend).locate(ctx); } catch { return false; }
+  try { return !!locateTranscript(ctx); } catch { return false; }
 }
 
 // Full snapshot for REST backfill on panel open.
 export function snapshotFocus(ctx: FocusCtx): FocusEvent[] {
   const a = adapterFor(ctx.backend);
-  const f = a.locate(ctx);
+  const f = locateTranscript(ctx);
   return f ? a.parse(f) : [];
 }
 
@@ -509,7 +527,7 @@ export function startFocus(ctx: FocusCtx) {
     t.busy = true;
     try {
       let file: string | null;
-      try { file = a.locate(ctx); } catch { return; }
+      try { file = locateTranscript(ctx); } catch { return; }
       if (!file) return;
       if (file !== t.file) {
         t.file = file;

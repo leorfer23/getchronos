@@ -1,117 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { ticketBranch } from "./tickets.js";
 import { db, repos, runs, sessions, tickets, workspaces } from "./store.js";
 import { isClosedTicketStatus, type Repo, type Session } from "./types.js";
 
-const execFileAsync = promisify(execFile);
+import { baseRef, ensureBranchWorktree, existingWorktree, git, isGitRepo, listWorktrees, worktreeRootFor } from "./worktree-core.js";
 
-// Per-ticket git worktree isolation. Instead of checking the ticket branch out in-place in the shared
-// repo working tree (which serialises builds + fights any open terminal), every ticket gets its OWN
-// worktree at a stable sibling path, branched off the freshly-fetched origin/<default> ("pull from
-// main before starting"). Terminals AND the headless build share the one worktree per ticket branch.
-//
-// SAFETY: every helper returns null / no-ops on ANY failure (not a git repo, offline, git too old,
-// branch already checked out elsewhere) so callers fall back to the plain repo path — worktrees are a
-// pure upgrade, never a new failure mode.
-//
-// Async (execFile, not execFileSync): these run on the same Node process as the HTTP/WS server —
-// a sync git call would block the whole event loop (every other request, WS heartbeat, timer) for
-// as long as fetch/worktree-add takes.
-async function git(repoPath: string, args: string[], timeoutMs = 10_000): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", repoPath, ...args], {
-    encoding: "utf8",
-    timeout: timeoutMs,
-  });
-  return stdout.trim();
-}
-
-export async function isGitRepo(repoPath: string): Promise<boolean> {
-  try {
-    await git(repoPath, ["rev-parse", "--git-dir"]);
-    return true;
-  } catch {
-    return false;
-  }
-}
+// The plain-git helpers (git, isGitRepo, listWorktrees, existingWorktree, baseRef) live in
+// worktree-core.ts so a `chronos host` can run them without the store; re-exported for callers here.
+export { isGitRepo };
 
 function worktreeRoot(repo: Repo): string {
   // Sibling of the repo (never inside its working tree). basename keeps repos with the same name in
   // different parents from colliding is not a concern — parent dir already disambiguates.
-  return path.join(path.dirname(repo.path), ".chronos-worktrees", path.basename(repo.path));
-}
-
-// Every worktree this repo has checked out, as [path, branch]. Parses `git worktree list --porcelain`
-// (records separated by blank lines: "worktree <path>" … "branch refs/heads/<name>").
-async function listWorktrees(repoPath: string): Promise<Array<{ path: string; branch: string }>> {
-  let out: string;
-  try {
-    out = await git(repoPath, ["worktree", "list", "--porcelain"]);
-  } catch {
-    return [];
-  }
-  const found: Array<{ path: string; branch: string }> = [];
-  let cur: string | null = null;
-  for (const line of out.split("\n")) {
-    if (line.startsWith("worktree ")) cur = line.slice("worktree ".length).trim();
-    else if (line.startsWith("branch refs/heads/") && cur) {
-      found.push({ path: cur, branch: line.slice("branch refs/heads/".length).trim() });
-      cur = null;
-    }
-  }
-  return found;
-}
-
-// The path a worktree for `branch` is checked out at, if one already exists.
-async function existingWorktree(repoPath: string, branch: string): Promise<string | null> {
-  return (await listWorktrees(repoPath)).find((w) => w.branch === branch)?.path ?? null;
-}
-
-// Best-effort "pull from main": fetch the default branch, then pick the freshest base ref available
-// (origin/<default> > local <default> > HEAD). Offline / no-remote degrades gracefully.
-async function baseRef(repoPath: string, defaultBranch: string): Promise<string> {
-  try {
-    await git(repoPath, ["fetch", "origin", defaultBranch], 20_000);
-  } catch {}
-  for (const ref of [`origin/${defaultBranch}`, defaultBranch]) {
-    try {
-      await git(repoPath, ["rev-parse", "--verify", "--quiet", ref]);
-      return ref;
-    } catch {}
-  }
-  return "HEAD";
+  return worktreeRootFor(repo.path);
 }
 
 // Ensure (creating if needed) a worktree for this ticket's branch and return its path, or null to tell
 // the caller to fall back to the plain repo path. Idempotent: reuses an existing worktree for the
 // branch; a build and a terminal on the same ticket land in the same dir.
 export async function ensureTicketWorktree(repo: Repo, ticketKey: string): Promise<string | null> {
-  if (!repo?.path || !fs.existsSync(repo.path) || !(await isGitRepo(repo.path))) return null;
-  const branch = ticketBranch(ticketKey);
-
-  const existing = await existingWorktree(repo.path, branch);
-  if (existing && fs.existsSync(existing)) return existing;
-
-  const wtPath = path.join(worktreeRoot(repo), branch.replace(/\//g, "-"));
-  try {
-    if (fs.existsSync(wtPath)) {
-      // Stale dir git doesn't know about → let git reconcile, then reuse.
-      try { await git(repo.path, ["worktree", "prune"]); } catch {}
-      if (fs.existsSync(wtPath)) return wtPath;
-    }
-    fs.mkdirSync(worktreeRoot(repo), { recursive: true });
-    const branchExists = (await git(repo.path, ["branch", "--list", branch])) !== "";
-    const args = branchExists
-      ? ["worktree", "add", wtPath, branch]
-      : ["worktree", "add", "-b", branch, wtPath, await baseRef(repo.path, repo.default_branch)];
-    await git(repo.path, args, 30_000);
-    // Canonicalise (git reports worktrees by their realpath, so reuse returns the same string).
-    return fs.existsSync(wtPath) ? fs.realpathSync(wtPath) : null;
-  } catch {
-    return null; // e.g. branch already checked out in the main tree — fall back to repo path
-  }
+  if (!repo?.path) return null;
+  return ensureBranchWorktree(repo.path, repo.default_branch, ticketBranch(ticketKey));
 }
 
 /** The pre-naming Desk branch (`desk/<id8>`). Still recognised so trees claimed before stay removable by their owner. */
@@ -243,6 +153,21 @@ export async function ensureSessionWorktree(
   } catch {
     return null;
   }
+}
+
+/**
+ * The branch a terminal on ANOTHER host (HOSTS.md) should claim — the naming half of
+ * ensureSessionWorktree, which the host cannot do (it has no store to see other terminals' claims).
+ * The worktree itself is created there, under that host's own checkout.
+ */
+export async function remoteWorktreeBranch(
+  sess: Pick<Session, "id" | "workspace_id" | "goal" | "spawn_goal" | "title" | "worktree_branch">,
+  as?: string | null,
+): Promise<string> {
+  if (sess.worktree_branch) return sess.worktree_branch;
+  const wanted = deskBranchName(sess, as);
+  const claimedByOther = !!db.prepare("SELECT 1 FROM sessions WHERE worktree_branch = ? AND id <> ? LIMIT 1").get(wanted, sess.id);
+  return claimedByOther ? `${wanted}-${sess.id.slice(0, 4)}` : wanted;
 }
 
 /** What a worktree is holding that removing it would destroy. */

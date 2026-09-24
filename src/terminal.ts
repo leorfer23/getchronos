@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { execFile, execFileSync } from "node:child_process";
-import { promisify } from "node:util";
 import type { WebSocket } from "ws";
 import { CONFIG } from "./config.js";
 import { detectPrompt, renderScreen, type DeskPrompt } from "./desk-prompt.js";
@@ -22,8 +20,12 @@ import { sanitizeCwd } from "./spawn-guard.js";
 import { ensureTicketWorktree, cleanupWorktree } from "./worktrees.js";
 import { egressEnv, egressLocked } from "./egress.js";
 import { niceWrap } from "./machine.js";
-import { hostFor, LOCAL_HOST_ID, type PtyHandle } from "./hosts/index.js";
-import { getBody, appendNote, updateTicket } from "./tickets.js";
+import { findHost, hostFor, LOCAL_HOST_ID, type PtyHandle } from "./hosts/index.js";
+import { brainPathsIn, buildRemoteSpawnSpec, profileNameFor } from "./hosts/spawn-spec.js";
+import { hostAccepts, hostPolicy, workspaceDenied } from "./hosts/policy.js";
+import { mirrorFile } from "./hosts/transcript-mirror.js";
+import type { RemoteHost } from "./hosts/remote.js";
+import { getBody, appendNote, updateTicket, ticketBranch } from "./tickets.js";
 import { bus } from "./bus.js";
 import { captureLearnings } from "./notes.js";
 import { agentContext } from "./skills.js";
@@ -39,6 +41,10 @@ import { installClaudeHooks, installCursorHooks, installGrokHooks } from "./term
 import { agentBlock, agentPrompt } from "./agent-defs.js";
 import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, type SessionGoal, type Workspace } from "./types.js";
 import { goalLines, setGoals, splitGoalText } from "./goals.js";
+import { installMcCli, installMcSkill, syncAgentsMd } from "./agent-prep.js";
+
+// Moved to agent-prep.ts (store-free, so `chronos host` runs the same code); re-exported for callers.
+export { excludeChronosArtifacts, gitExcludePath, gitTrackedSync, insideGitRepo, mcSystemText, syncAgentsMd } from "./agent-prep.js";
 
 // Standing instruction folded into every session (via system prompt where the CLI supports it, else the
 // seed): the operator watches a plain-English "Focus" feed (Understanding → narration → Summary), not the
@@ -236,6 +242,8 @@ interface Live {
    *  and a repaint is the terminal answering US, not the agent doing work. Without this, opening the
    *  wall turns every card green for one QUIET_MS window. */
   muteUntil?: number;
+  /** The pty runs on another host (HOSTS.md phase 3): its paths are that machine's, not this one's. */
+  remote?: boolean;
 }
 const live = new Map<string, Live>();
 
@@ -341,6 +349,61 @@ export function ensureWorktreeRoot(repoPath: string): string | null {
   return fs.existsSync(root) ? root : null;
 }
 
+/**
+ * A cwd the caller asked for, if — and only if — it is a directory the target host itself reported:
+ * the reopened row's own cwd / claimed worktree, or the replaced terminal's on that same host. A
+ * resume with no such request lands where the row last ran. Anything else is null: the host resolves.
+ */
+function hostReportedCwd(asked: string | null | undefined, resumed: Session | null, replaced: Session | undefined, hostId: string): string | null {
+  const known = new Set<string>();
+  for (const r of [resumed, replaced?.host_id === hostId ? replaced : null]) {
+    if (r?.cwd) known.add(r.cwd);
+    if (r?.worktree_path) known.add(r.worktree_path);
+  }
+  if (asked && known.has(asked)) return asked;
+  return resumed?.cwd || null;
+}
+
+/** `workspaces.sandbox_allow` as the raw entries (a SpawnSpec re-resolves them on the host's home). */
+function parseAllowRaw(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Brain-side lock #1 (HOSTS.md → Security) on a spawn pinned to, or sticky on, another computer:
+ * the host is connected, the workspace is not denied there — by the brain's policy for that host or
+ * by the veto the host itself reported — and the work is something a host can run today. Throws the
+ * reason; a policy refusal is also published as a violation, because it means something tried.
+ */
+export function assertRemotePlacement(hostId: string, workspaceId: string | null, backendName: string | null, resumeId: string | null): void {
+  const h = findHost(hostId) as RemoteHost | undefined;
+  if (!h) throw new Error(`unknown host \`${hostId}\` — not connected to this brain`);
+  if (!h.online) throw new Error(`host ${h.hello?.name ?? hostId} is offline${resumeId ? " — this terminal lives there and reopens when it reconnects" : ""}`);
+  // The operator's switch on that computer (the Desk's Computers panel): draining / disabled.
+  const accepts = hostAccepts(hostId, !resumeId);
+  if (!accepts.ok) throw new Error(`host ${h.hello?.name ?? hostId}: ${accepts.reason}`);
+  const ws = workspaceId ? workspaces.get(workspaceId) : undefined;
+  const deny = [...hostPolicy(hostId).deny, ...h.reportedDeny()];
+  if (workspaceDenied(deny, ws)) {
+    const reason = `workspace ${ws!.slug} is not allowed on host ${h.hello?.name ?? hostId}`;
+    console.warn(`[terminal] POLICY: refused to place ${ws!.slug} on ${hostId} (brain policy / host veto)`);
+    bus.publish({ topic: "host.policy_violation", host_id: hostId, workspace_id: ws!.id, session_id: resumeId, reason });
+    throw new Error(reason);
+  }
+  const b = getBackend(backendName);
+  if (b.kind === "cloud") throw new Error(`${b.name} runs on its provider's VM, not on a host`);
+  if (egressLocked(workspaceId)) throw new Error("this workspace's egress is locked, and hosts do not run the egress proxy yet (HOSTS.md phase 5)");
+  if (h.hello && h.hello.platform !== "darwin") throw new Error(`host ${h.hello.name} is ${h.hello.platform}; terminals need a macOS host (Seatbelt)`);
+  const mode = ws?.sandbox_mode ?? CONFIG.sandbox.defaultMode;
+  if (mode !== "off" && h.hello && !h.hello.capabilities?.sandbox) throw new Error(`host ${h.hello.name} cannot sandbox (${mode}) — no sandbox-exec there`);
+}
+
 // Open an interactive PTY session running the chosen agent CLI, sandboxed to its workspace.
 // - resumeId: revive an ended Chronos terminal (same row id, Claude --resume that id)
 // - agentSessionId + resumeAgent: open a new Chronos terminal that --resumes a headless run's CLI session
@@ -385,7 +448,17 @@ export async function openSession(
   // Every terminal opens on the brain until placement lands (HOSTS.md phase 4), so it is the brain's
   // own load that admits it.
   const openedBy = (opts.created_by ?? "operator").trim();
-  if (openedBy && openedBy !== "operator" && !opts.replaces) {
+  // Which computer this pty runs on (HOSTS.md). Phase 3 placement is pinned + sticky only: a reopen
+  // (resume, continue-headless) stays on the row's own host — its transcript lives there — and a
+  // fresh terminal goes where it was pinned, else the brain.
+  const targetHost =
+    (opts.resumeId ? sessions.get(opts.resumeId)?.host_id : null) ||
+    (opts.agentSessionId && opts.resumeAgent ? sessions.get(opts.agentSessionId)?.host_id : null) ||
+    opts.host_id ||
+    LOCAL_HOST_ID;
+  const remote = targetHost !== LOCAL_HOST_ID;
+  if (remote) assertRemotePlacement(targetHost, opts.workspace_id ?? null, opts.backend ?? null, opts.resumeId ?? null);
+  if (!remote && openedBy && openedBy !== "operator" && !opts.replaces) {
     const verdict = hostFor({ host_id: LOCAL_HOST_ID }).vitals().admission;
     if (!verdict.ok) throw new Error(`machine saturated — ${verdict.reason}`);
   }
@@ -461,10 +534,17 @@ export async function openSession(
     if (existing) {
       row = sessions.revive(existing.id)!;
       cwd = row.cwd;
+    } else if (remote) {
+      // A remote row's cwd is the host's answer to the spawn below — never a brain path.
+      cwd = "";
+      row = sessions.create({ ...opts, cwd, id: opts.agentSessionId, host_id: targetHost });
     } else {
       cwd = sanitizeCwd(opts.cwd, opts.workspace_id) ?? (await resolveSessionCwd(opts));
       row = sessions.create({ ...opts, cwd, id: opts.agentSessionId });
     }
+  } else if (remote) {
+    cwd = "";
+    row = sessions.create({ ...opts, cwd, host_id: targetHost });
   } else {
     cwd = opts.cwd || (await resolveSessionCwd(opts));
     row = sessions.create({ ...opts, cwd });
@@ -490,17 +570,21 @@ export async function openSession(
   const backend = getBackend(opts.backend);
   const ws = wsEarly;
   const configDir = ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude;
-  installMcSkill(configDir); // claude agents: skill in the config dir
-  installCardHooks(backend.name, configDir, childEnv(ws).CURSOR_CONFIG_DIR);
-  // claude asks "trust this folder?" on its first visit to any cwd, and a seeded terminal has no one
-  // to tap Yes — answer it here, in the profile, before the spawn (see claude-trust.ts).
-  if (backend.name === "claude-code" && ensureTrustedCwd(configDir, cwd) === "added")
-    console.log(`[terminal] pre-trusted ${cwd} in ${path.basename(configDir)}`);
-  // grok asks the same question per folder (one account, ~/.grok, no per-workspace home) and types
-  // the seed into the dialog when nobody answers — the pager quits on it (see grok-trust.ts).
-  if (backend.name === "grok" && ensureGrokTrustedCwd(cwd) === "added")
-    console.log(`[terminal] pre-trusted ${cwd} in ${grokHome()}`);
-  await syncAgentsMd(cwd);   // cursor/other agents: AGENTS.md in the repo root (in sync with the skill)
+  // Profile prep runs on the machine the CLI runs on. For a remote host that is `prepare()` inside
+  // its spawn (hostd/terminals.ts) — the brain's own profile dirs are not the ones that CLI reads.
+  if (!remote) {
+    installMcSkill(configDir); // claude agents: skill in the config dir
+    installCardHooks(backend.name, configDir, childEnv(ws).CURSOR_CONFIG_DIR);
+    // claude asks "trust this folder?" on its first visit to any cwd, and a seeded terminal has no one
+    // to tap Yes — answer it here, in the profile, before the spawn (see claude-trust.ts).
+    if (backend.name === "claude-code" && ensureTrustedCwd(configDir, cwd) === "added")
+      console.log(`[terminal] pre-trusted ${cwd} in ${path.basename(configDir)}`);
+    // grok asks the same question per folder (one account, ~/.grok, no per-workspace home) and types
+    // the seed into the dialog when nobody answers — the pager quits on it (see grok-trust.ts).
+    if (backend.name === "grok" && ensureGrokTrustedCwd(cwd) === "added")
+      console.log(`[terminal] pre-trusted ${cwd} in ${grokHome()}`);
+    await syncAgentsMd(cwd);   // cursor/other agents: AGENTS.md in the repo root (in sync with the skill)
+  }
   const denyDirs = opts.workspace_id ? workspaces.isolationDenyDirs(opts.workspace_id) : [];
   const mode = (ws?.sandbox_mode as any) ?? CONFIG.sandbox.defaultMode;
   // Repo-scoped ★ memos load only for their repos: use the session's repo, falling back to its
@@ -526,101 +610,206 @@ export async function openSession(
   const sysArg = backend.appendsSystem
     ? ([row.role === "lead" ? agentPrompt("lead") : null, leadBlock, FOCUS_CONTRACT, ctx, rel].filter(Boolean).join("\n\n") || null)
     : null;
-  // Workspace = the access boundary: let a ticket terminal read/write EVERY repo in its workspace
-  // (cross-repo work), not just cwd, plus the workspace's ticket-files dir (~/chronos is another
-  // workspace's denied root, so it must be re-granted explicitly). Repo is optional — a no-repo
-  // session lands in the first repo or home and can still reach them all. Both walls get the dirs:
-  // OS sandbox (addDirs) + claude (--add-dir).
-  // Also every repo's WORKTREE ROOT, not just the repo: a Desk terminal claims its worktree
-  // mid-session (`mc worktree`, once it knows which repo it needs), long after this profile is
-  // baked into the pty and can no longer be widened. Under `guard` the write happens to be allowed
-  // anyway — guard is `allow default` plus targeted denies — but `strict` is an allowlist, and
-  // without this line a strict workspace's agent would `cd` into its worktree and get "Operation
-  // not permitted" on every write, with nothing explaining why. Granting the ROOT (not a specific
-  // worktree) is what makes it work for whichever repo the agent turns out to need.
-  const repoDirs = opts.workspace_id
-    ? [
-        ...repos.list(opts.workspace_id).flatMap((r) =>
-          r.path && fs.existsSync(r.path) ? [r.path, ensureWorktreeRoot(r.path)].filter((p): p is string => !!p) : [],
-        ).filter((p) => p !== cwd),
-        ...(ws ? [ensureWsTicketsDir(ws.slug)] : []),
-      ]
-    : [];
-  // …and this terminal's own drop dir (src/drops.ts): where a file the operator drags from Finder
-  // onto the stage is written. Both walls again — without the `--add-dir` claude asks permission to
-  // Read a path outside its cwd, and the point of a drop is that the path just works. Added
-  // unconditionally, like wsTicketsDir above, and created here so `--add-dir` (claude AND cursor)
-  // never points at a path that does not exist yet.
-  repoDirs.push(ensureDropDir(row.id));
-  // CLI session id for transcript: prefer agentSessionId (headless continue), else Chronos row id.
-  // Every workspace repo's MAIN checkout is read-only to the agent, whatever it was spawned in. Two
-  // terminals pointed at one repo would otherwise share a working tree, and one's `git checkout`
-  // swaps the files under the other mid-edit (inventory-docs, 2026-09-14). An agent that means to
-  // change a repo claims its own worktree (`mc worktree`, created by the daemon, outside the sandbox)
-  // and works there. Only real main checkouts: `.git` a directory, so a repo registered at a worktree
-  // or a non-git folder (nowhere to claim a worktree from) stays writable.
-  const sharedCheckouts = opts.workspace_id ? mainCheckouts(repos.list(opts.workspace_id).map((r) => r.path)) : [];
-  const doResume = !!(opts.resumeId || opts.resumeAgent);
-  // Pin / resume id for CLIs that store the transcript under a UUID we choose (claude, cursor, grok).
-  // Bus/Focus stay keyed by this Chronos id. Grok before pinning minted its own UUID under cwd —
-  // resolve that on-disk id for the spawn args only so Desk reopen continues the real chat
-  // (grok-resume.ts) without retargeting focus.event session_id.
-  const cliSessionId = pinsSession ? (opts.agentSessionId || row.id) : null;
-  let spawnSessionId = cliSessionId;
-  if (backend.name === "grok" && doResume && cliSessionId) {
-    const siblings = sessions
-      .list({ limit: 200 })
-      .filter((s) => s.backend === "grok" && s.cwd === cwd && s.id !== row.id)
-      .map((s) => ({ id: s.id, createdAt: s.created_at }));
-    spawnSessionId = resolveGrokResumeId({
-      cwd,
-      sessionId: cliSessionId,
-      createdAt: row.created_at,
-      siblings,
-    });
-  }
-  const iArgs = backend.interactiveArgs
-    ? backend.interactiveArgs(opts.model ?? null, sysArg, repoDirs, spawnSessionId, doResume)
-    : [];
-  // Credential stores this client is trusted with (Globex ↔ ~/.config/gcloud, so `bq` can auth).
-  // Empty for every workspace that hasn't been given one explicitly.
-  const allowSecrets = workspaceSandboxAllow(ws?.sandbox_allow);
-  const sandboxed = sandboxWrap(mode, cwd, repoDirs, configDir, denyDirs, backend.bin(), iArgs, egressLocked(opts.workspace_id), sharedCheckouts, allowSecrets);
-  // …and `nice` OUTSIDE the sandbox wrapper: this CLI and everything it forks (vitest, tsc, its own
-  // subagents) run below the Desk webview and the daemon. One wrap for every way a terminal is
-  // opened — fresh, reopened, resumed, or a failover stand-in — since they all land here.
-  const { cmd, cmdArgs } = niceWrap(sandboxed.cmd, sandboxed.cmdArgs);
+  // Seed the conversation: the ticket context (or a passed seed) is typed in once the CLI has booted.
+  // Defined here (a remote spec carries it) but, for a local terminal, still EVALUATED after the spawn
+  // below, exactly where it always was — the ticket's notes gain a line in between (bindTicket).
+  // Precedence: an explicit seed, else a ticket's own brief, else the Desk intent (goal + kind +
+  // description) — a terminal spawned with a goal starts working on it without a second paste.
+  // A brief with no goal is still a first prompt: the Desk's goal field is optional, so "nothing to
+  // type in" means neither one was filled — not that the goal box was left empty.
+  const composeSeed = (): string | null => {
+    let seed =
+      opts.seed ??
+      (row.ticket_id
+        ? ticketSeed(row.ticket_id, remote)
+        : (row.goal || opts.description?.trim()) && !opts.resumeId
+          ? (row.role === "lead"
+              ? `You are the LEAD for this goal in ${ws?.name ?? "this workspace"}. Read your instructions above, then start.\n\n` +
+                deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id))
+              : deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id)))
+          : null);
+    // Backends without a system-prompt channel (cursor) get the standing notes + Focus contract folded
+    // into the seed instead — but only when there's an actual task/context to run (never paste the
+    // contract alone into a bare exploratory chat).
+    // A resumed chat already carries them from its first prompt: pasting them again would be a new turn.
+    if (!backend.appendsSystem && !opts.resumeId && (seed || ctx)) {
+      const pre = [leadBlock, FOCUS_CONTRACT, ctx].filter(Boolean).join("\n\n");
+      seed = pre + (seed ? `\n\n--- Your task ---\n${seed}` : "");
+    }
+    return seed;
+  };
+  let term: PtyHandle;
+  let env: Record<string, string>;
+  let cliSessionId: string | null;
+  let spawnSessionId: string | null;
+  /** A remote terminal's seed is typed host-side; composed before the spawn so it rides in the spec. */
+  let remoteSeed: string | null = null;
+  if (!remote) {
+    // Workspace = the access boundary: let a ticket terminal read/write EVERY repo in its workspace
+    // (cross-repo work), not just cwd, plus the workspace's ticket-files dir (~/chronos is another
+    // workspace's denied root, so it must be re-granted explicitly). Repo is optional — a no-repo
+    // session lands in the first repo or home and can still reach them all. Both walls get the dirs:
+    // OS sandbox (addDirs) + claude (--add-dir).
+    // Also every repo's WORKTREE ROOT, not just the repo: a Desk terminal claims its worktree
+    // mid-session (`mc worktree`, once it knows which repo it needs), long after this profile is
+    // baked into the pty and can no longer be widened. Under `guard` the write happens to be allowed
+    // anyway — guard is `allow default` plus targeted denies — but `strict` is an allowlist, and
+    // without this line a strict workspace's agent would `cd` into its worktree and get "Operation
+    // not permitted" on every write, with nothing explaining why. Granting the ROOT (not a specific
+    // worktree) is what makes it work for whichever repo the agent turns out to need.
+    const repoDirs = opts.workspace_id
+      ? [
+          ...repos.list(opts.workspace_id).flatMap((r) =>
+            r.path && fs.existsSync(r.path) ? [r.path, ensureWorktreeRoot(r.path)].filter((p): p is string => !!p) : [],
+          ).filter((p) => p !== cwd),
+          ...(ws ? [ensureWsTicketsDir(ws.slug)] : []),
+        ]
+      : [];
+    // …and this terminal's own drop dir (src/drops.ts): where a file the operator drags from Finder
+    // onto the stage is written. Both walls again — without the `--add-dir` claude asks permission to
+    // Read a path outside its cwd, and the point of a drop is that the path just works. Added
+    // unconditionally, like wsTicketsDir above, and created here so `--add-dir` (claude AND cursor)
+    // never points at a path that does not exist yet.
+    repoDirs.push(ensureDropDir(row.id));
+    // CLI session id for transcript: prefer agentSessionId (headless continue), else Chronos row id.
+    // Every workspace repo's MAIN checkout is read-only to the agent, whatever it was spawned in. Two
+    // terminals pointed at one repo would otherwise share a working tree, and one's `git checkout`
+    // swaps the files under the other mid-edit (inventory-docs, 2026-09-14). An agent that means to
+    // change a repo claims its own worktree (`mc worktree`, created by the daemon, outside the sandbox)
+    // and works there. Only real main checkouts: `.git` a directory, so a repo registered at a worktree
+    // or a non-git folder (nowhere to claim a worktree from) stays writable.
+    const sharedCheckouts = opts.workspace_id ? mainCheckouts(repos.list(opts.workspace_id).map((r) => r.path)) : [];
+    const doResume = !!(opts.resumeId || opts.resumeAgent);
+    // Pin / resume id for CLIs that store the transcript under a UUID we choose (claude, cursor, grok).
+    // Bus/Focus stay keyed by this Chronos id. Grok before pinning minted its own UUID under cwd —
+    // resolve that on-disk id for the spawn args only so Desk reopen continues the real chat
+    // (grok-resume.ts) without retargeting focus.event session_id.
+    cliSessionId = pinsSession ? (opts.agentSessionId || row.id) : null;
+    spawnSessionId = cliSessionId;
+    if (backend.name === "grok" && doResume && cliSessionId) {
+      const siblings = sessions
+        .list({ limit: 200 })
+        .filter((s) => s.backend === "grok" && s.cwd === cwd && s.id !== row.id)
+        .map((s) => ({ id: s.id, createdAt: s.created_at }));
+      spawnSessionId = resolveGrokResumeId({
+        cwd,
+        sessionId: cliSessionId,
+        createdAt: row.created_at,
+        siblings,
+      });
+    }
+    const iArgs = backend.interactiveArgs
+      ? backend.interactiveArgs(opts.model ?? null, sysArg, repoDirs, spawnSessionId, doResume)
+      : [];
+    // Credential stores this client is trusted with (Globex ↔ ~/.config/gcloud, so `bq` can auth).
+    // Empty for every workspace that hasn't been given one explicitly.
+    const allowSecrets = workspaceSandboxAllow(ws?.sandbox_allow);
+    const sandboxed = sandboxWrap(mode, cwd, repoDirs, configDir, denyDirs, backend.bin(), iArgs, egressLocked(opts.workspace_id), sharedCheckouts, allowSecrets);
+    // …and `nice` OUTSIDE the sandbox wrapper: this CLI and everything it forks (vitest, tsc, its own
+    // subagents) run below the Desk webview and the daemon. One wrap for every way a terminal is
+    // opened — fresh, reopened, resumed, or a failover stand-in — since they all land here.
+    const { cmd, cmdArgs } = niceWrap(sandboxed.cmd, sandboxed.cmdArgs);
 
-  const env = {
-    ...childEnv(ws),
-    ...backend.env({} as any, configDir),
-    ...mcEnv(opts.workspace_id, opts.repo_id, row.ticket_id),
-    // Lets the agent talk about ITSELF: `mc state working|blocked|done`, `mc goal set "…"`.
-    MC_SESSION: row.id,
-    ...egressEnv(opts.workspace_id),
-    // A Lead (LEADS.md): its own credential to type into other terminals of this workspace
-    // (MC_LEAD_TOKEN → x-mc-lead), the handle `mc session new` signs its workers' created_by with
-    // (MC_AGENT_NAME, overriding mcEnv's plain agent naming), and a flag a worker can check to
-    // refuse ever opening a Lead of its own.
-    ...(row.role === "lead"
-      ? { MC_LEAD_TOKEN: sessions.leadToken(row.id) ?? "", MC_AGENT_NAME: `lead:${row.id.slice(0, 8)}`, MC_LEAD: "1" }
-      : {}),
-    // …and, on a WORKER, which Lead it belongs to. An id, not a credential: it grants nothing (the
-    // daemon resolves the Lead from the worker's own row) and only lets `mc` say whose worker this is.
-    ...(leadBlock && row.lead_id ? { MC_LEAD_ID: row.lead_id } : {}),
-  } as Record<string, string>;
-  // Through the row's host (HOSTS.md): today always the brain, which is node-pty's spawn exactly as
-  // before. `pid` is a process id on THAT host, which is why the row carries host_id beside it.
-  const term = await hostFor(row).spawnPty({
-    id: row.id,
-    cmd,
-    args: cmdArgs,
-    cwd,
-    env,
-    cols: opts.cols ?? 100,
-    rows: opts.rows ?? 30,
-  });
-  sessions.setPid(row.id, term.pid ?? null);
+    env = {
+      ...childEnv(ws),
+      ...backend.env({} as any, configDir),
+      ...mcEnv(opts.workspace_id, opts.repo_id, row.ticket_id),
+      // Lets the agent talk about ITSELF: `mc state working|blocked|done`, `mc goal set "…"`.
+      MC_SESSION: row.id,
+      ...egressEnv(opts.workspace_id),
+      // A Lead (LEADS.md): its own credential to type into other terminals of this workspace
+      // (MC_LEAD_TOKEN → x-mc-lead), the handle `mc session new` signs its workers' created_by with
+      // (MC_AGENT_NAME, overriding mcEnv's plain agent naming), and a flag a worker can check to
+      // refuse ever opening a Lead of its own.
+      ...(row.role === "lead"
+        ? { MC_LEAD_TOKEN: sessions.leadToken(row.id) ?? "", MC_AGENT_NAME: `lead:${row.id.slice(0, 8)}`, MC_LEAD: "1" }
+        : {}),
+      // …and, on a WORKER, which Lead it belongs to. An id, not a credential: it grants nothing (the
+      // daemon resolves the Lead from the worker's own row) and only lets `mc` say whose worker this is.
+      ...(leadBlock && row.lead_id ? { MC_LEAD_ID: row.lead_id } : {}),
+    } as Record<string, string>;
+    // Through the row's host (HOSTS.md): today always the brain, which is node-pty's spawn exactly as
+    // before. `pid` is a process id on THAT host, which is why the row carries host_id beside it.
+    term = await hostFor(row).spawnPty({
+      id: row.id,
+      cmd,
+      args: cmdArgs,
+      cwd,
+      env,
+      cols: opts.cols ?? 100,
+      rows: opts.rows ?? 30,
+    });
+    sessions.setPid(row.id, term.pid ?? null);
+  } else {
+    // A remote host (HOSTS.md phase 3): the same decisions, sent as intent. The host resolves the
+    // checkout, worktree, profile dir, sandbox and env base on its own disk (hostd/terminals.ts).
+    const doResume = !!(opts.resumeId || opts.resumeAgent);
+    cliSessionId = pinsSession ? (opts.agentSessionId || row.id) : null;
+    spawnSessionId = cliSessionId;
+    // What a local spawn's env would carry, minus what only the brain can reach (the egress proxy on
+    // its loopback) — buildRemoteSpawnSpec then strips the base the host supplies and rewrites home paths.
+    env = {
+      ...childEnv(ws),
+      ...Object.fromEntries(Object.entries(backend.env({} as any, configDir)).filter(([, v]) => v !== configDir)),
+      ...mcEnv(opts.workspace_id, opts.repo_id, row.ticket_id),
+      MC_SESSION: row.id,
+      ...(row.role === "lead"
+        ? { MC_LEAD_TOKEN: sessions.leadToken(row.id) ?? "", MC_AGENT_NAME: `lead:${row.id.slice(0, 8)}`, MC_LEAD: "1" }
+        : {}),
+      ...(leadBlock && row.lead_id ? { MC_LEAD_ID: row.lead_id } : {}),
+    } as Record<string, string>;
+    remoteSeed = composeSeed();
+    const t = row.ticket_id ? tickets.get(row.ticket_id) : undefined;
+    const repo = (row.repo_id ? repos.get(row.repo_id) : undefined) ?? (t?.repo_id ? repos.get(t.repo_id) : undefined);
+    const { spec, dropped } = buildRemoteSpawnSpec({
+      sessionId: row.id,
+      workspace: ws ? { id: ws.id, slug: ws.slug } : null,
+      backend: backend.name,
+      model: opts.model ?? null,
+      role: row.role ?? "human",
+      cliSession: spawnSessionId,
+      resume: doResume,
+      repo: repo ? { id: repo.id, git_remote: repo.git_remote } : null,
+      wsRepos: opts.workspace_id ? repos.list(opts.workspace_id).map((r) => ({ id: r.id, git_remote: r.git_remote })) : [],
+      worktree: t && repo ? { branch: ticketBranch(t.key), base: repo.default_branch } : null,
+      // Only a path the HOST reported: this row's cwd or claimed worktree (a resume), or those of the
+      // terminal this one stands in for on the same host (failover). Never a brain-chosen directory.
+      resumeCwd: hostReportedCwd(opts.cwd, doResume ? row : null, opts.replaces ? sessions.get(opts.replaces) : undefined, targetHost),
+      profile: profileNameFor(ws?.config_dir, CONFIG.profiles, CONFIG.defaultProfile),
+      sandbox: { mode, allowRaw: parseAllowRaw(ws?.sandbox_allow), egressLocked: egressLocked(opts.workspace_id) },
+      system: sysArg,
+      env,
+      nice: CONFIG.agentNice,
+      cols: opts.cols ?? 100,
+      rows: opts.rows ?? 30,
+      seed: remoteSeed,
+      seedEnterMs: SEED_ENTER_MS,
+      brainHome: os.homedir(),
+      brainPaths: [process.cwd(), configDir],
+    });
+    if (dropped.length) console.warn(`[terminal] remote ${row.id.slice(0, 8)}: not sent to host ${targetHost} (brain-only paths): ${dropped.join(", ")}`);
+    // HOSTS.md's rule, checked on every spawn rather than trusted: no brain path reaches a host.
+    const leaks = brainPathsIn(spec, [os.homedir(), process.cwd(), configDir, ...(opts.workspace_id ? repos.list(opts.workspace_id).map((r) => r.path) : [])]);
+    if (leaks.length) {
+      sessions.end(row.id, "spawn refused: brain path in remote spec");
+      throw new Error(`refusing to send brain paths to host ${targetHost}: ${leaks.join("; ")}`);
+    }
+    try {
+      term = await hostFor(row).spawnPty(spec);
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      // The host's own veto (lock #2) refused: placement put a workspace where it is not allowed.
+      if (msg.startsWith("veto:")) {
+        console.warn(`[terminal] POLICY VIOLATION: host ${targetHost} refused ${ws?.slug ?? "?"} — ${msg}`);
+        bus.publish({ topic: "host.policy_violation", host_id: targetHost, workspace_id: ws?.id ?? null, session_id: row.id, reason: msg });
+      }
+      sessions.end(row.id, `spawn failed on host ${targetHost}`);
+      throw new Error(`host ${targetHost}: ${msg}`);
+    }
+    // Where the host put it — a path on THAT machine, and what a later --resume must start in.
+    if (term.cwd) { cwd = term.cwd; sessions.setCwd(row.id, cwd); }
+    sessions.setPid(row.id, term.pid ?? null);
+  }
 
   // Ticket binding: mark the ticket as actively worked + record which session/backend is on it.
   // (A ticket can carry several live sessions — multiple agents/terminals — so we never "unclaim".)
@@ -648,12 +837,45 @@ export async function openSession(
     sinceMs: Date.now(),
     cursorConfigDir: env.CURSOR_CONFIG_DIR,
     ...(spawnSessionId && spawnSessionId !== focusSessionId ? { transcriptSessionId: spawnSessionId } : {}),
+    // A remote CLI writes its transcript on its host, which streams it into this mirror.
+    ...(remote ? { transcriptFile: mirrorFile(row.id) } : {}),
   };
+  const entry = installLive(row, term, focusCtx, { titleDone: !!ticketTitle, backendName: backend.name, configDir, workspaceId: opts.workspace_id ?? null, remote });
+
+  const seed = remote ? remoteSeed : composeSeed();
+  if (seed) {
+    // A revive's continue-nudge is not the terminal's first prompt: keep the one it was opened with.
+    if (!opts.resumeId) sessions.setMeta(row.id, { first_prompt: seed });
+    // A remote host types it itself, next to the pty (it rode in the SpawnSpec).
+    if (!remote) typeSeed(entry, seed);
+  }
+
+  indexSession(row.id);
+  bus.publish({ topic: "session.started", session_id: row.id });
+  return sessions.get(row.id)!;
+}
+
+/**
+ * Put a spawned pty on the Desk: the Live entry, its Focus tail, and the output and exit paths every
+ * terminal shares. A local spawn, a remote spawn and a remote terminal re-adopted after a brain
+ * restart all come through here, so a terminal on another host reaches the wall, the screen mirror,
+ * turn detection and the close-out through exactly the code a local one does.
+ */
+function installLive(
+  row: Session,
+  term: PtyHandle,
+  focusCtx: FocusCtx,
+  w: { titleDone: boolean; backendName: string; configDir: string; workspaceId: string | null; remote: boolean; startedAt?: number },
+): Live {
+  const cwd = focusCtx.cwd;
+  const configDir = w.configDir;
+  const backendName = w.backendName;
   const entry: Live = {
     pty: term, buffer: "", pending: "", clients: new Set(), focusCtx,
     screen: new ScreenMirror(term.cols, term.rows), modes: new ModeTracker(),
-    inbuf: "", titleDone: !!ticketTitle,
-    lastOut: Date.now(), lastIn: Date.now(), startedAt: Date.now(), quiet: false,
+    inbuf: "", titleDone: w.titleDone,
+    lastOut: Date.now(), lastIn: Date.now(), startedAt: w.startedAt ?? Date.now(), quiet: false,
+    remote: w.remote,
   };
   live.set(row.id, entry);
 
@@ -683,7 +905,8 @@ export async function openSession(
     try { refreshLiveFocus(row.id); } catch {}
     // Freeze the ledger BEFORE the row goes cold: turns, tokens, dollars, lines, and the branch the
     // work landed on. The transcript is still on disk right now; in a month it may not be.
-    try { snapshotUsage(row.id, { cwd }); } catch {}
+    // (A remote terminal's cwd is a path on its host: there is no branch to read from here.)
+    try { snapshotUsage(row.id, w.remote ? {} : { cwd }); } catch {}
     // A seeded terminal that dies in seconds with its goal unticked is a Chronos incident, not a
     // closed chat: the screen it died on is the evidence, and it is gone the moment we dispose it.
     try {
@@ -702,53 +925,22 @@ export async function openSession(
     // have terminal.ts half-initialised at its top level.
     void import("./ask-robert.js").then((m) => m.cancelSessionAsks(row.id)).catch(() => {});
     // One haiku boot for both: search summary+tags AND (auto-memory) durable learnings.
-    runExitDigest(row.id, opts.workspace_id ?? null, configDir, digestText(row.id, transcript));
+    runExitDigest(row.id, w.workspaceId, configDir, digestText(row.id, transcript));
     // If no other live session is still on this ticket, log that the terminal closed and reclaim the
     // worktree — only if clean and no build is mid-run (cleanupWorktree no-ops on a dirty tree).
     if (row.ticket_id && !entry.restarting && !sessions.list({ ticket_id: row.ticket_id, status: "live" }).length) {
-      try { appendNote(row.ticket_id, `terminal session closed (${backend.name})`, "system"); } catch {}
+      try { appendNote(row.ticket_id, `terminal session closed (${backendName})`, "system"); } catch {}
       const repo = row.repo_id ? repos.get(row.repo_id) : undefined;
       const latest = runs.latestForTicket(row.ticket_id);
       const buildRunning = latest?.status === "running" || latest?.status === "queued";
-      if (repo?.path && !buildRunning) void cleanupWorktree(repo.path, cwd);
+      // A remote terminal's worktree is on its host, under that host's checkout: never touched from here.
+      if (repo?.path && !buildRunning && !w.remote) void cleanupWorktree(repo.path, cwd);
       bus.publish({ topic: "ticket.updated", ticket_id: row.ticket_id });
     }
     bus.publish({ topic: "session.ended", session_id: row.id });
     entry.onExited?.();
   });
-
-  // Seed the conversation: the ticket context (or a passed seed) is typed in once the CLI has booted.
-  // Precedence: an explicit seed, else a ticket's own brief, else the Desk intent (goal + kind +
-  // description) — a terminal spawned with a goal starts working on it without a second paste.
-  // A brief with no goal is still a first prompt: the Desk's goal field is optional, so "nothing to
-  // type in" means neither one was filled — not that the goal box was left empty.
-  let seed =
-    opts.seed ??
-    (row.ticket_id
-      ? ticketSeed(row.ticket_id)
-      : (row.goal || opts.description?.trim()) && !opts.resumeId
-        ? (row.role === "lead"
-            ? `You are the LEAD for this goal in ${ws?.name ?? "this workspace"}. Read your instructions above, then start.\n\n` +
-              deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id))
-            : deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id)))
-        : null);
-  // Backends without a system-prompt channel (cursor) get the standing notes + Focus contract folded
-  // into the seed instead — but only when there's an actual task/context to run (never paste the
-  // contract alone into a bare exploratory chat).
-  // A resumed chat already carries them from its first prompt: pasting them again would be a new turn.
-  if (!backend.appendsSystem && !opts.resumeId && (seed || ctx)) {
-    const pre = [leadBlock, FOCUS_CONTRACT, ctx].filter(Boolean).join("\n\n");
-    seed = pre + (seed ? `\n\n--- Your task ---\n${seed}` : "");
-  }
-  if (seed) {
-    // A revive's continue-nudge is not the terminal's first prompt: keep the one it was opened with.
-    if (!opts.resumeId) sessions.setMeta(row.id, { first_prompt: seed });
-    typeSeed(entry, seed);
-  }
-
-  indexSession(row.id);
-  bus.publish({ topic: "session.started", session_id: row.id });
-  return sessions.get(row.id)!;
+  return entry;
 }
 
 /**
@@ -995,7 +1187,10 @@ export function digestText(id: string, fallback: string): string {
  * The digest LLM is claimed once per session: goal-done + exit must not fire two haiku boots.
  */
 export function closeOutSession(id: string, opts: { cwd?: string; transcript?: string } = {}) {
-  try { snapshotUsage(id, opts.cwd ? { cwd: opts.cwd } : {}); } catch {}
+  // A remote terminal's cwd is a path on its host: reading "its branch" here would read this Mac's.
+  const row = sessions.get(id);
+  const here = !row?.host_id || row.host_id === LOCAL_HOST_ID;
+  try { snapshotUsage(id, opts.cwd && here ? { cwd: opts.cwd } : {}); } catch {}
   const s = sessions.get(id);
   if (!s) return;
   const ws = s.workspace_id ? workspaces.get(s.workspace_id) : undefined;
@@ -1068,7 +1263,7 @@ function bindTicket(ticketId: string, row: Session, backendName: string, role: s
   } catch {}
 }
 
-function ticketSeed(ticketId: string): string | null {
+function ticketSeed(ticketId: string, remote = false): string | null {
   const t = tickets.get(ticketId);
   if (!t) return null;
   const ws = workspaces.get(t.workspace_id);
@@ -1078,7 +1273,9 @@ function ticketSeed(ticketId: string): string | null {
   const wsRepos = ws ? repos.list(ws.id).map((r) => r.name) : [];
   const repoNote = !repo && wsRepos.length ? ` You may work across any repo in this workspace: ${wsRepos.join(", ")} (cwd is ${wsRepos[0]}; cd into others as needed). ` : " ";
   const body = getBody(t).slice(0, 4000);
-  return `You are in ${where}, working ticket ${t.key} "${t.title}". Read ${t.file_path} for full context.${repoNote}${body ? "Summary: " + body + " " : ""}Backlog tools (shell): \`mc note "<progress>"\` logs to this ticket, \`mc review\` moves it to review when done, \`mc ticket new --title "..."\` files a follow-up. Start now: first ask me any clarifying questions you need to do this well, then get to work.`;
+  // The ticket file is a path on the BRAIN's disk; a terminal on another host reads it through `mc`.
+  const read = remote ? `Run \`mc ticket get ${t.key}\` for full context.` : `Read ${t.file_path} for full context.`;
+  return `You are in ${where}, working ticket ${t.key} "${t.title}". ${read}${repoNote}${body ? "Summary: " + body + " " : ""}Backlog tools (shell): \`mc note "<progress>"\` logs to this ticket, \`mc review\` moves it to review when done, \`mc ticket new --title "..."\` files a follow-up. Start now: first ask me any clarifying questions you need to do this well, then get to work.`;
 }
 
 export function attach(id: string, ws: WebSocket): boolean {
@@ -1209,7 +1406,7 @@ export function resize(id: string, cols: number, rows: number) {
 export function killSession(id: string, reason?: string | null) {
   const e = live.get(id);
   // While the transcript is still warm and this row is still the newest for its session id.
-  try { closeOutSession(id, { cwd: e?.focusCtx.cwd, transcript: e?.buffer }); } catch {}
+  try { closeOutSession(id, { cwd: e?.remote ? undefined : e?.focusCtx.cwd, transcript: e?.buffer }); } catch {}
   if (e) { e.killed = true; try { e.pty.kill(); } catch {} }
   sessions.end(id, reason);
 }
@@ -1220,12 +1417,43 @@ export function killSession(id: string, reason?: string | null) {
  * work, on the wrong branch. Cursor is the exception: its chat lives under the directory it started in.
  */
 export function resumeOpts(old: Session) {
+  // A remote row's paths are on its host: whether its worktree still exists is the host's to check
+  // (it falls back when the dir is gone), not something this Mac's disk can answer.
+  const remote = !!old.host_id && old.host_id !== LOCAL_HOST_ID;
   return {
     resumeId: old.id,
     workspace_id: old.workspace_id, repo_id: old.repo_id, ticket_id: old.ticket_id,
     backend: old.backend, model: old.model, role: old.role,
-    cwd: (old.worktree_path && fs.existsSync(old.worktree_path) && !getBackend(old.backend).transcriptPerCwd) ? old.worktree_path : old.cwd,
+    cwd: (old.worktree_path && (remote || fs.existsSync(old.worktree_path)) && !getBackend(old.backend).transcriptPerCwd) ? old.worktree_path : old.cwd,
   };
+}
+
+/**
+ * A terminal still running on another host, re-adopted after THIS brain restarted (HOSTS.md →
+ * Reconnect: "boot reconciles, re-attach"). Nothing in memory knew it; its row is still `live`
+ * because boot only reaps local rows. It gets the same Live entry a fresh spawn gets, so the wall,
+ * input, turn detection and close-out all work — the caller then asks the host to resend.
+ */
+export function adoptRemoteSession(row: Session, term: PtyHandle): boolean {
+  if (live.has(row.id) || !row.host_id || row.host_id === LOCAL_HOST_ID) return false;
+  const backend = getBackend(row.backend);
+  const ws = row.workspace_id ? workspaces.get(row.workspace_id) : undefined;
+  const configDir = ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude;
+  const focusCtx: FocusCtx = {
+    sessionId: row.id, backend: backend.name, cwd: row.cwd, configDir,
+    sinceMs: Date.parse(row.created_at) || 0, transcriptFile: mirrorFile(row.id),
+  };
+  // Its scrollback was in the dead brain's memory; the host resends what it still holds, and the
+  // attach jiggle repaints a full-screen TUI. The title and first prompt are already on the row.
+  installLive(row, term, focusCtx, { titleDone: true, backendName: backend.name, configDir, workspaceId: row.workspace_id ?? null, remote: true });
+  bus.publish({ topic: "session.updated", session_id: row.id });
+  return true;
+}
+
+/** Is a remote session's transcript here (mirrored) — what makes it resumable after its host restarts. */
+export function remoteResumable(row: Session): boolean {
+  const b = getBackend(row.backend);
+  return b.supportsResume || (b.pinsSession === true && fs.existsSync(mirrorFile(row.id)));
 }
 
 /** Why this terminal may not become a Lead, or null. Same walls as `mc lead new` (LEADS.md). */
@@ -1294,23 +1522,10 @@ export function focusEvents(id: string): FocusEvent[] {
   const ws = s.workspace_id ? workspaces.get(s.workspace_id) : undefined;
   const configDir = ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude ?? "";
   const backend = getBackend(s.backend).name;
-  return snapshotFocus({ sessionId: id, backend, cwd: s.cwd ?? os.homedir(), configDir, sinceMs: 0, cursorConfigDir: workspaceCursorDir(ws) });
+  // A terminal that ran on another host: its story is in the mirror its host streamed here.
+  const remote = !!s.host_id && s.host_id !== LOCAL_HOST_ID;
+  return snapshotFocus({ sessionId: id, backend, cwd: s.cwd ?? os.homedir(), configDir, sinceMs: 0, cursorConfigDir: workspaceCursorDir(ws), ...(remote ? { transcriptFile: mirrorFile(id) } : {}) });
 }
-// Install the "mission-control" Claude skill into a config dir so every claude agent spawned with that
-// CLAUDE_CONFIG_DIR auto-knows the `mc` workflow (tickets, jobs, notes, review). Idempotent.
-// (Cursor doesn't read Claude skills — those sessions rely on the seed/goal prompt instead.)
-function installMcSkill(configDir: string) {
-  try {
-    const src = path.join(process.cwd(), "skills", "mission-control", "SKILL.md");
-    if (!fs.existsSync(src) || !configDir) return;
-    const dir = path.join(configDir, "skills", "mission-control");
-    fs.mkdirSync(dir, { recursive: true });
-    fs.copyFileSync(src, path.join(dir, "SKILL.md"));
-  } catch (e: any) {
-    console.warn("[terminal] mc skill install failed:", e?.message ?? e);
-  }
-}
-
 // The card's lifecycle hooks (term-hooks.ts), for whichever CLI this terminal runs. Idempotent, and a
 // failure only costs the card its hook signals — the pty fallback still paints it.
 function installCardHooks(backend: string, configDir: string, cursorDir?: string) {
@@ -1336,195 +1551,8 @@ function installAllMcSkills() {
   for (const d of dirs) installMcSkill(d);
 }
 
-// Cursor (and other CLIs) read AGENTS.md from the repo root, not Claude skills. Mirror the
-// mission-control skill body into each repo's AGENTS.md so cursor agents get the same MC workflow.
-// Kept IN SYNC with skills/mission-control/SKILL.md: regenerated at boot + on every session open.
-const AGENTS_BEGIN = "<!-- BEGIN mission-control (auto-generated by Chronos; in sync with the mission-control skill — do not edit) -->";
-const AGENTS_END = "<!-- END mission-control -->";
-
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-// Skill markdown minus its frontmatter — the shared source of truth for both the skill and AGENTS.md.
-function mcSkillBody(): string {
-  try {
-    const raw = fs.readFileSync(path.join(process.cwd(), "skills", "mission-control", "SKILL.md"), "utf8");
-    const m = raw.match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
-    return (m ? m[1] : raw).trim();
-  } catch {
-    return "";
-  }
-}
-
-const execFileAsync = promisify(execFile);
-
-// `git rev-parse --git-path info/exclude` resolves the real per-checkout exclude file whether
-// `repoPath` is a normal checkout (returns a path relative to repoPath, e.g. ".git/info/exclude")
-// or a worktree (.git is a FILE there — git returns an absolute path into the main repo's
-// .git/worktrees/<name>/info/exclude instead). Exported for testing the resolution alone.
-export async function gitExcludePath(repoPath: string): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", repoPath, "rev-parse", "--git-path", "info/exclude"], {
-    encoding: "utf8",
-    timeout: 5000,
-  });
-  const p = stdout.trim();
-  return path.isAbsolute(p) ? p : path.join(repoPath, p);
-}
-
-// Is this directory inside a git checkout at all? Asked once per sync so the artifact loop below
-// doesn't spend a failing subprocess (and a scary log line) per artifact on a plain directory.
-// Exported for testing the check alone.
-export async function insideGitRepo(dir: string): Promise<boolean> {
-  try {
-    const { stdout } = await execFileAsync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], {
-      encoding: "utf8",
-      timeout: 5000,
-    });
-    return stdout.trim() === "true";
-  } catch {
-    return false;
-  }
-}
-
-// Append a local-only ignore (never committed) so a generated AGENTS.md doesn't pollute the repo.
-// Never throws: a failure here (not a git repo, git missing, timeout) must not block AGENTS.md sync.
-async function gitExcludeLocal(repoPath: string, line: string): Promise<void> {
-  try {
-    const ex = await gitExcludePath(repoPath);
-    fs.mkdirSync(path.dirname(ex), { recursive: true });
-    const cur = fs.existsSync(ex) ? fs.readFileSync(ex, "utf8") : "";
-    if (!cur.split("\n").includes(line)) fs.writeFileSync(ex, cur.replace(/\n?$/, "\n") + line + "\n");
-  } catch (e: any) {
-    // A cwd that is not a checkout is ORDINARY, not a failure: the umbrella directory that holds
-    // several repos (~/Documents/GitHub/acme) is a normal place to open a terminal, and there
-    // is no exclude file to write there. It logged a two-line git fatal per artifact per session
-    // open. Everything else — git missing, a timeout, a read-only .git — still gets said out loud.
-    const msg = String(e?.stderr ?? e?.message ?? e);
-    if (/not a git repository/i.test(msg)) return;
-    console.warn("[terminal] AGENTS.md git-exclude failed:", msg);
-  }
-}
-
-// Is `rel` tracked by git in this checkout? `--error-unmatch` exits non-zero for an untracked path,
-// so every failure mode (untracked, not a repo, git missing, timeout) answers "not tracked" — the
-// same permissive answer the pre-existing code gave, which keeps non-git repo dirs working.
-//
-// Deliberately SYNCHRONOUS, and it must stay that way. execute() (runner.ts) needs this answer to
-// assemble append_system, and everything before its `liveSteer.set` registration has to stay
-// await-free — dispatch() returns mid-prologue, so a steer arriving during any earlier await
-// bounces to the mailbox instead of the queue. Making this a promise hung four steer/park tests.
-export function gitTrackedSync(repoPath: string, rel: string): boolean {
-  try {
-    const out = execFileSync("git", ["-C", repoPath, "ls-files", "--error-unmatch", "--", rel], {
-      encoding: "utf8",
-      timeout: 5000,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return out.trim().length > 0;
-  } catch {
-    return false;
-  }
-}
-
-// The mission-control workflow as standing system text, for callers that can't use the file mirror
-// below (see syncAgentsMd's tracked-file bail-out). Empty string when the skill body is unreadable.
-export function mcSystemText(): string {
-  return mcSkillBody();
-}
-
-// Everything Chronos writes INSIDE a repo working tree. Chronos is a purely local tool: none of it
-// may ever reach a repo's history, and `git add -A` (which Chronos itself runs three times on the
-// way to a PR, and which humans run constantly) stages untracked files too. So every artifact gets
-// a local-only ignore in every repo, refreshed on the same schedule as the AGENTS.md sync.
-//
-// `.mc/` holds ticket markdown, written under repo.path by resolveFilePath (tickets.ts). It had no
-// ignore at all: six of them were committed into the presence repo before this landed.
-const CHRONOS_ARTIFACTS = [".mc/"];
-
-// Local-only ignores for Chronos's in-repo artifacts. An artifact that is ALREADY tracked can't be
-// fixed from here — `info/exclude` is ignored for paths in the index — so that case is surfaced
-// loudly instead of silently doing nothing; it needs a `git rm --cached` in the repo.
-export async function excludeChronosArtifacts(repoPath: string): Promise<void> {
-  if (!(await insideGitRepo(repoPath))) return; // nothing to exclude from — see gitExcludeLocal
-  for (const art of CHRONOS_ARTIFACTS) {
-    try {
-      if (gitTrackedSync(repoPath, art.replace(/\/$/, ""))) {
-        console.warn(
-          `[terminal] ${repoPath}: ${art} is TRACKED by the repo — local exclude cannot help. ` +
-            `Run: git -C ${repoPath} rm -r --cached ${art}`
-        );
-        continue;
-      }
-      await gitExcludeLocal(repoPath, art);
-    } catch (e: any) {
-      console.warn(`[terminal] ${repoPath}: exclude ${art} failed:`, e?.message ?? e);
-    }
-  }
-}
-
-// Write/refresh the mission-control managed block in <repo>/AGENTS.md, preserving any existing
-// content. Called on PTY session open, daemon boot, and (via runner.ts) before every headless build
-// spawn — headless runs execute in a git worktree, which never has the untracked AGENTS.md a normal
-// checkout accumulates over time.
-//
-// NEVER touches an AGENTS.md the repo itself tracks. `info/exclude` has no effect on a path already
-// in the index, so appending the block to a tracked file is a real modification, and Chronos runs
-// `git add -A` in three places on the way to a PR (captureDiff, createForRun, shipPR in reviews.ts)
-// — the block shipped into presence's history that way (60a891b) and was one dispatch away from a
-// 346-line diff on a client repo's PR. It also left every such shared checkout permanently dirty,
-// which is enough on its own to make landCommitDelivery refuse to land. Returns what it did so the
-// caller can route the same content through a channel that touches no file (runner.ts).
-export async function syncAgentsMd(repoPath: string): Promise<"written" | "skipped-tracked" | "noop"> {
-  try {
-    if (!repoPath || repoPath === os.homedir() || !fs.existsSync(repoPath)) return "noop";
-    // Runs on every call, independent of the AGENTS.md outcome below: this is the one function all
-    // three call sites (boot, PTY open, pre-spawn) already share, so it's where the repo-shielding
-    // ignores belong. Keeping it above every early return is the point.
-    await excludeChronosArtifacts(repoPath);
-    const body = mcSkillBody();
-    if (!body) return "noop";
-    if (gitTrackedSync(repoPath, "AGENTS.md")) return "skipped-tracked";
-    const block = `${AGENTS_BEGIN}\n${body}\n${AGENTS_END}`;
-    const file = path.join(repoPath, "AGENTS.md");
-    const prev = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-    let next: string;
-    if (prev.includes(AGENTS_BEGIN) && prev.includes(AGENTS_END)) {
-      next = prev.replace(new RegExp(`${escapeRe(AGENTS_BEGIN)}[\\s\\S]*?${escapeRe(AGENTS_END)}`), block);
-    } else if (prev.trim()) {
-      next = `${prev.trimEnd()}\n\n${block}\n`; // append; never clobber the repo's own AGENTS.md
-    } else {
-      next = `${block}\n`;
-    }
-    if (next !== prev) fs.writeFileSync(file, next);
-    // Exclude on EVERY untracked write, not just the first-create it used to guard on: a
-    // pre-existing untracked AGENTS.md (a human's scratch copy, or one this daemon wrote before the
-    // exclude step existed) was never excluded, so the generated block still showed up in
-    // `git status` — and `add -A` stages untracked files too.
-    await gitExcludeLocal(repoPath, "AGENTS.md");
-    return "written";
-  } catch (e: any) {
-    console.warn("[terminal] AGENTS.md sync failed:", e?.message ?? e);
-    return "noop";
-  }
-}
-
 async function syncAllAgentsMd() {
   for (const r of repos.list()) if ((r as any).path) await syncAgentsMd((r as any).path);
-}
-
-// Install the `mc` agent CLI to ~/.mc/bin (a neutral path the per-workspace sandbox allows). Source
-// of truth is scripts/mc in the repo; copy it out so spawned agents can call `mc` via PATH.
-function installMcCli() {
-  try {
-    const src = path.join(process.cwd(), "scripts", "mc");
-    if (!fs.existsSync(src)) return;
-    const dir = path.join(os.homedir(), ".mc", "bin");
-    fs.mkdirSync(dir, { recursive: true });
-    const dst = path.join(dir, "mc");
-    fs.copyFileSync(src, dst);
-    fs.chmodSync(dst, 0o755);
-  } catch (e: any) {
-    console.warn("[terminal] mc CLI install failed:", e?.message ?? e);
-  }
 }
 
 // Boot: any session row left 'live' is stale (its pty died with the previous daemon). Instead of

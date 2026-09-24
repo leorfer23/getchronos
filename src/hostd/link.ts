@@ -7,9 +7,10 @@ import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import {
-  MAX_CONTROL_BYTES, decodeControl, encodeControl,
+  MAX_CONTROL_BYTES, decodeControl, encodeControl, encodeData,
   type BrainToHost, type Hello, type HostToBrain, type HostVitals,
 } from "../hostlink/wire.js";
+import type { HostTerminals } from "./terminals.js";
 import { classifyBrainUrl, pinBrain, pinnedTlsOptions } from "../hostlink/pin.js";
 
 export type LinkState = "idle" | "connecting" | "online" | "offline" | "stopped";
@@ -32,6 +33,8 @@ export type HostLinkOptions = {
   cfAccess?: { id: string; secret: string } | null;
   /** rpc ops beyond the built-ins. Return a value, or throw to answer ok:false. */
   rpc?: Record<string, (args: unknown) => Promise<unknown> | unknown>;
+  /** The host's PTYs (phase 3). Without it, spawn/write/kill are answered "not here". */
+  terminals?: HostTerminals;
 };
 
 type Handler = (f: any) => void;
@@ -96,18 +99,24 @@ export class HostLink extends EventEmitter {
     // The dispatch table. Anything the brain may send has an entry, including the frames this phase
     // does not implement yet — those answer with an explicit error so the brain never waits on a
     // silence it cannot tell from a slow host.
+    const t = o.terminals;
+    t?.attachLink({ online: () => this.state === "online", send: (f) => this.send(f), sendData: (ch, seq, b) => this.sendData(ch, seq, b) });
     this.handlers = {
       welcome: (f: Extract<BrainToHost, { t: "welcome" }>) => this.onWelcome(f),
       ping: (f) => this.send({ t: "pong", n: f.n }),
       pong: () => { this.missed = 0; },
       rpc: (f: Extract<BrainToHost, { t: "rpc" }>) => void this.onRpc(f),
       api_result: (f: Extract<BrainToHost, { t: "api_result" }>) => this.onApiResult(f),
-      spawn_pty: (f) => this.send({ t: "rpc_result", id: f.id, ok: false, error: "not yet: remote terminals land in HOSTS.md Phase 3" }),
+      spawn_pty: (f: Extract<BrainToHost, { t: "spawn_pty" }>) => void this.onSpawnPty(f),
       spawn_proc: (f) => this.send({ t: "rpc_result", id: f.id, ok: false, error: "not yet: headless runs on hosts land in HOSTS.md Phase 5" }),
-      write: (f) => this.send({ t: "error", code: "not_implemented", message: `no channel ${f.ch} (no PTYs on hosts before Phase 3)` }),
-      resize: () => {},
-      kill: (f) => this.send({ t: "error", code: "not_implemented", message: `no channel ${f.ch} (no PTYs on hosts before Phase 3)` }),
-      ack: () => {}, // no rings until PTYs exist; acks for unknown channels are harmless
+      // Channel frames. With no terminals (a phase-2 host) there is nothing to act on, and a write
+      // to nowhere says so rather than vanishing.
+      write: (f: Extract<BrainToHost, { t: "write" }>) => (t ? t.write(f.ch, f.bytes) : this.send({ t: "error", code: "not_implemented", message: `no channel ${f.ch}` })),
+      resize: (f: Extract<BrainToHost, { t: "resize" }>) => t?.resize(f.ch, f.cols, f.rows),
+      kill: (f: Extract<BrainToHost, { t: "kill" }>) => (t ? t.kill(f.ch, f.signal) : this.send({ t: "error", code: "not_implemented", message: `no channel ${f.ch}` })),
+      ack: (f: Extract<BrainToHost, { t: "ack" }>) => t?.ack(f.ch, f.seq),
+      attach: (f: Extract<BrainToHost, { t: "attach" }>) => t?.attach(f.ch, f.seq, f.transcript_offset, f.session_id),
+      release: (f: Extract<BrainToHost, { t: "release" }>) => t?.release(f.ch),
       policy: (f) => this.emit("policy", f),
       error: (f) => { console.warn(`[host] brain says ${f.code}: ${f.message}`); this.lastError = `${f.code}: ${f.message}`; },
     };
@@ -195,6 +204,8 @@ export class HostLink extends EventEmitter {
       if (this.ws !== ws) return;
       this.ws = null;
       this.clearTimers();
+      // Link down, not process dead: the PTYs keep running and buffering; the brain re-attaches later.
+      this.o.terminals?.linkDown();
       for (const [id, p] of this.pendingApi) { clearTimeout(p.timer); p.resolve({ status: 503, headers: {}, body: null }); this.pendingApi.delete(id); }
       this.lastError = `closed ${code}${reason?.length ? ` ${reason}` : ""}`;
       this.emit("offline", this.lastError);
@@ -244,6 +255,28 @@ export class HostLink extends EventEmitter {
     } catch (e: any) {
       this.send({ t: "rpc_result", id: f.id, ok: false, error: String(e?.message ?? e) });
     }
+  }
+
+  /**
+   * `spawn_pty`: answered as an rpc_result on the frame's id. A local-veto refusal is an ordinary
+   * error whose text starts with "veto:" — the brain logs it as a policy violation.
+   */
+  private async onSpawnPty(f: Extract<BrainToHost, { t: "spawn_pty" }>): Promise<void> {
+    if (!this.o.terminals) return void this.send({ t: "rpc_result", id: f.id, ok: false, error: "this host runs no terminals" });
+    try {
+      this.send({ t: "rpc_result", id: f.id, ok: true, value: await this.o.terminals.spawn(f.spec) });
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      if (msg.startsWith("veto:")) console.warn(`[host] refused a spawn — ${msg}`);
+      this.send({ t: "rpc_result", id: f.id, ok: false, error: msg });
+    }
+  }
+
+  /** One binary data frame (PTY bytes) to the brain. False when the link is not writable. */
+  sendData(ch: number, seq: number, bytes: Buffer): boolean {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN || this.state !== "online") return false;
+    try { ws.send(encodeData(ch, seq, bytes)); return true; } catch { return false; }
   }
 
   private onApiResult(f: Extract<BrainToHost, { t: "api_result" }>): void {

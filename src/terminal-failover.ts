@@ -447,7 +447,9 @@ async function handOff(
 
 async function openStandIn(s: Session, wall: Wall, from: string | null, to: string, model: string | null): Promise<Session> {
   // A claimed worktree is where the work actually is; the row's cwd is only where it started.
-  const cwd = s.worktree_path && fs.existsSync(s.worktree_path) ? s.worktree_path : s.cwd;
+  // On another host the worktree is on THAT disk: whether it still exists is the host's to check.
+  const remote = !!s.host_id && s.host_id !== "local";
+  const cwd = s.worktree_path && (remote || fs.existsSync(s.worktree_path)) ? s.worktree_path : s.cwd;
   let feed: string[] = [];
   try { feed = ops.feed(s.id); } catch {}
   if (feed.length < 2) {
@@ -478,6 +480,9 @@ async function openStandIn(s: Session, wall: Wall, from: string | null, to: stri
     created_by: "failover",
     seed,
     replaces: s.id,
+    // Sticky (HOSTS.md → Placement): a stand-in runs where the walled terminal ran — its worktree
+    // and files are on that machine.
+    host_id: s.host_id,
   });
 }
 

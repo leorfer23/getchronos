@@ -12,6 +12,7 @@ import {
   slotQueue,
   vitalsSnapshot,
 } from "../machine.js";
+import type { SpawnSpec } from "./spawn-spec.js";
 import type { Host, HeavySlotPool, HostVitals, LiveInfo, ProcHandle, ProcSpawn, PtyHandle, PtySpawn } from "./types.js";
 
 // The brain as a host: today's code, behind the Host seam (HOSTS.md phase 1). Every call here is
@@ -71,7 +72,9 @@ class LocalHost implements Host {
     return () => { if (this.live.get(info.id) === entry) this.live.delete(info.id); };
   }
 
-  async spawnPty(spec: PtySpawn): Promise<PtyHandle> {
+  async spawnPty(spec: PtySpawn | SpawnSpec): Promise<PtyHandle> {
+    // The brain builds its own command lines; an intent spec is for a host that resolves its own paths.
+    if (spec.kind === "intent") throw new Error("the local host spawns built command lines, not SpawnSpecs");
     const term = pty.spawn(spec.cmd, spec.args, {
       name: "xterm-color",
       cols: spec.cols,

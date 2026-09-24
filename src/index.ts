@@ -10,6 +10,7 @@ import { sessionActivity, sessionPrompt } from "./terminal.js";
 import { startCalendar } from "./calendar.js";
 import { startReminders } from "./reminders.js";
 import { startTerminals } from "./terminal.js";
+import { startRemoteTerminals } from "./remote-terminals.js";
 import { startConnectorSync } from "./connectors/index.js";
 import { startRepoScan } from "./repo-scan.js";
 import { startMonitor } from "./monitor.js";
@@ -96,6 +97,9 @@ startDeskWatch();
 startCalendar();
 startReminders();
 void startTerminals();
+// Terminals on other computers (HOSTS.md phase 3): re-attached when their host says hello, never
+// reaped or revived at boot like local ones — they did not die with this daemon.
+startRemoteTerminals();
 startConnectorSync();
 startRepoScan();
 startMonitor();

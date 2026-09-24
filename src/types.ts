@@ -840,6 +840,8 @@ export interface NewSession {
   role?: SessionRole;
   focus_only?: boolean;
   cwd: string;
+  /** The host to run on (HOSTS.md). Unset = `local`. Validated by api.ts / openSession before use. */
+  host_id?: string | null;
 }
 
 // 'workspace' = client-isolated (default). 'global' = operator profile, injected into every
