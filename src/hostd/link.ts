@@ -89,6 +89,8 @@ export class HostLink extends EventEmitter {
   url: string | null = null;
   since = Date.now();
   lastError: string | null = null;
+  /** The operator's name for this computer, as the brain's last welcome said (null before one / older brains). */
+  brainName: string | null = null;
   private ws: WebSocket | null = null;
   private stopped = false;
   private attempt = 0;
@@ -244,6 +246,7 @@ export class HostLink extends EventEmitter {
 
   private onWelcome(f: Extract<BrainToHost, { t: "welcome" }>): void {
     this.attempt = 0;
+    if (typeof f.name === "string" && f.name.trim()) this.brainName = f.name.trim().slice(0, 64);
     this.setState("online");
     this.emit("online", f);
     this.o.egress?.flush();

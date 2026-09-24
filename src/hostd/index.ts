@@ -17,6 +17,7 @@
  */
 import "./env.js"; // FIRST: loads ~/.chronos-host/.secrets before config.ts evaluates
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { HOST_HOME, HOST_SECRETS } from "./env.js";
@@ -37,6 +38,7 @@ import { decodeJoinCode } from "../hostlink/join.js";
 import { checkGit, checkDeps, shellPath } from "../../bin/host-core.mjs";
 import { defaultRunner, detectInstall, installForJoin, kickstart, launchdPid, npmCliFor, runUpdate } from "./update.js";
 import { writeHostPlist } from "./join.js";
+import { buildStatus, isHostStatus, mcPortCandidates as portCandidates } from "./status.js";
 import type { UpdateFrame, UpdateStatus, UpdateTarget } from "../hostlink/wire.js";
 
 const env = (k: string) => (process.env[k] ?? "").trim();
@@ -49,8 +51,9 @@ const mcPort = () => Number(env("CHRONOS_HOST_MC_PORT") || 7777);
  * (first contact, 2026-09-24: `mc state done` → 404 from a months-old local install). Fixed, not
  * random, so `status` can find the process again.
  */
-const mcPortCandidates = () => (env("CHRONOS_HOST_MC_PORT") ? [mcPort()] : [7777, ...Array.from({ length: 10 }, (_, i) => 7787 + i)]);
+const mcPortCandidates = () => portCandidates(env("CHRONOS_HOST_MC_PORT"));
 const plistPath = () => path.join(process.env.HOME ?? "", "Library", "LaunchAgents", `${HOST_LABEL}.plist`);
+const NAME_FILE = path.join(HOST_HOME, "name");
 const secretsMode = () => { try { return fs.statSync(HOST_SECRETS).mode; } catch { return null; } };
 
 async function cmdJoin(args: string[]): Promise<number> {
@@ -102,6 +105,10 @@ async function cmdRun(): Promise<number> {
   }
   const mode = secretsMode();
   if (mode != null && mode & 0o077) console.warn(`[host] ${HOST_SECRETS} is readable by others (mode ${(mode & 0o777).toString(8)}) — chmod 600 it`);
+  let knownName: string | null = null;
+  try { knownName = fs.readFileSync(NAME_FILE, "utf8").trim() || null; } catch {}
+  let buildCommit: string | null = null;
+  void hostBuild().then((b) => { buildCommit = b.commit; }).catch(() => {});
   // PTYs and runs live in this process, not in the link: a dropped link must not take either with it.
   const egress = new HostEgress();
   const terminals = new HostTerminals({
@@ -153,7 +160,15 @@ async function cmdRun(): Promise<number> {
       worktree_ensure: (a) => procs.worktreeEnsure(a),
     },
   });
-  link.on("online", () => console.log(`[host] ${id} online via ${link.url}`));
+  link.on("online", () => {
+    console.log(`[host] ${id} online via ${link.url}`);
+    // Remember the operator's name for this computer, so the menu bar says "m2" even after a
+    // restart while the brain is away (not a secret: it is the name on the Desk's Computers list).
+    if (link.brainName && link.brainName !== knownName) {
+      knownName = link.brainName;
+      try { fs.writeFileSync(NAME_FILE, knownName + "\n", { mode: 0o600 }); } catch {}
+    }
+  });
   // The brain's policy for this host: an extra veto next to CHRONOS_HOST_DENY, never a loosening.
   link.on("policy", (f: { deny?: unknown }) => terminals.setPolicy(f?.deny));
   link.on("offline", (why: string) => console.log(`[host] link down (${why}) — reconnecting`));
@@ -176,7 +191,17 @@ async function cmdRun(): Promise<number> {
     try {
       fwd = await startForwarder(link, {
         port,
-        status: () => ({ host_id: id, state: link.state, url: link.url, since: link.since, last_error: link.lastError }),
+        // An allowlist of fields (status.ts): loopback-only and unauthenticated, so never a token, an
+        // env var, a workspace or a title — what the menu bar item and `host status` read.
+        status: () => buildStatus({
+          hostId: id,
+          name: link.brainName ?? knownName ?? os.hostname().replace(/\.local$/, ""),
+          link: { state: link.state, since: link.since, url: link.url, lastError: link.lastError },
+          version: chronosVersion(),
+          commit: buildCommit,
+          work: [...terminals.work(), ...procs.work()],
+          home: os.homedir(),
+        }),
       });
       // Agents opened from now on point MC_API at the port that actually bound.
       terminals.setMcPort(port);
@@ -288,7 +313,7 @@ function statusOn(port: number): Promise<Record<string, unknown> | null> {
 async function localStatus(): Promise<Record<string, unknown> | null> {
   for (const port of mcPortCandidates()) {
     const s = await statusOn(port);
-    if (s && s.host_id) return s;
+    if (isHostStatus(s)) return s;
   }
   return null;
 }
@@ -305,7 +330,11 @@ async function cmdStatus(): Promise<number> {
   console.log(`agent     ${fs.existsSync(plistPath()) ? plistPath() : "(no LaunchAgent)"}`);
   const s = await localStatus();
   if (!s) console.log(`link      host process not running (no forwarder on 127.0.0.1:${mcPortCandidates().join("/")})`);
-  else console.log(`link      ${s.state}${s.url ? ` via ${s.url}` : ""} since ${new Date(Number(s.since)).toLocaleString()}${s.last_error ? ` — last error: ${s.last_error}` : ""}`);
+  else {
+    console.log(`link      ${s.state}${s.url ? ` via ${s.url}` : ""} since ${new Date(Number(s.since)).toLocaleString()}${s.last_error ? ` — last error: ${s.last_error}` : ""}`);
+    const work = Array.isArray(s.work) ? (s.work as Array<{ active?: boolean }>) : null;
+    if (work) console.log(`work      ${work.length ? `${work.filter((w) => w.active).length} working, ${work.length} running` : "nothing running"}`);
+  }
   return 0;
 }
 
