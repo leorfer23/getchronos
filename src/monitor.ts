@@ -12,6 +12,7 @@ import { notifyInfo } from "./telegram/api.js";
 import { esc } from "./telegram/api.js";
 import { kb, type Btn } from "./telegram/keyboards.js";
 import { maybeHygiene, reapEphemeralJobs } from "./hygiene.js";
+import { maybeDream } from "./dream.js";
 import { maybeLearnProse } from "./prose.js";
 import { maybeExpireIdeas, maybeMineIdeas } from "./ideas.js";
 import { pollDeliveries } from "./delivery.js";
@@ -587,6 +588,7 @@ export function startMonitor() {
       await maybeDigest();
       await maybeWeeklyReport();
       await maybeHygiene();
+      await maybeDream();
       maybeLearnProse();
       reapEphemeralJobs();
       maybeExpireIdeas();
@@ -616,5 +618,5 @@ export function startMonitor() {
     console.log(`[monitor] fast CI poll every ${CONFIG.ciPollSec}s while a PR is open`);
   }
 
-  console.log(`[monitor] sweeps every ${CONFIG.monitorEveryMin}m · digest ${CONFIG.digestHour < 0 ? "off" : CONFIG.digestHour + ":00"}`);
+  console.log(`[monitor] sweeps every ${CONFIG.monitorEveryMin}m · digest ${CONFIG.digestHour < 0 ? "off" : CONFIG.digestHour + ":00"} · dream ${CONFIG.dreamHours.length ? CONFIG.dreamHours.map((h) => h + ":00").join(",") : "off"}`);
 }

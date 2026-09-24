@@ -358,6 +358,7 @@ several are off already.
 | `CHRONOS_DAY_HEARTBEAT_CRON` | `*/30 * * * *` | how often |
 | `CHRONOS_DAY_HEARTBEAT_START` / `_END` | `09:00` / `20:00` | active window |
 | `CHRONOS_DIGEST_HOUR` | `8` | daily digest hour. `-1` = off **and disables the nightly backup** |
+| `CHRONOS_DREAM_HOURS` | `13,22` | local hours of the dream slot, when memory maintenance runs. Empty or `-1` = off. **Independent of `CHRONOS_DIGEST_HOUR`** — see Memory and learning |
 | `CHRONOS_STANDUP` | on | daily standup |
 | `CHRONOS_STANDUP_WORKSPACES` | *(empty)* | which project slugs get one. Empty = none |
 | `CHRONOS_STANDUP_CRON` / `_TZ` | `0 10 * * *` / machine tz | when |
@@ -399,6 +400,14 @@ daemon cannot tell it asks instead of guessing.
 | `CHRONOS_LESSON_DEDUPE` | on | near-duplicate rules collapse instead of stacking |
 | `CHRONOS_MEMORY_BUDGET_TOKENS` | `4000` | token ceiling for one agent's always-injected memory |
 | `CHRONOS_STOW_PASS_HORIZON` | off | `1` also decays by unreinforced stow passes, not by date alone |
+
+Memory maintenance runs in the **dream slot**: `CHRONOS_DREAM_HOURS`, a comma list of local hours
+(default `13,22`, after the two work blocks of the day). It does not depend on `CHRONOS_DIGEST_HOUR`:
+turning the morning digest off leaves maintenance running. A slot missed while the Mac slept or the
+daemon was down runs as soon as the daemon is up again — only the latest missed slot, never a backlog —
+and the last slot run is kept in the database, so a restart does not run it twice. Memory hygiene
+(learnings compaction, lesson decay, the stow pass, promotion cards) takes the first slot on a day at
+least six days after its last run, so it stays weekly. `-1` or an empty value turns the slot off.
 
 A persona's memory file is tiered and decays (the stow pass — MISSION-CONTROL.md §10): entries are
 `aging` (stale 30 days after they were last reinforced), `perishable` (7 days) or `pinned` (no clock).
@@ -484,6 +493,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_DELIVERY_POLL_MIN` | `15` | `src/config.ts` |
 | `CHRONOS_DESKTOP_NOTIFY` | — | `src/config.ts` |
 | `CHRONOS_DIGEST_HOUR` | `8` | `src/config.ts` |
+| `CHRONOS_DREAM_HOURS` | `"13,22"` | `src/config.ts` |
 | `CHRONOS_DRIFT_CHECK_MIN` | `30` | `src/config.ts` |
 | `CHRONOS_EGRESS_BASE_ALLOW` | — | `src/config.ts` |
 | `CHRONOS_EGRESS_CA_DIR` | — | `src/egress-ca.ts` |

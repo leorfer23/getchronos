@@ -134,16 +134,20 @@ test("memoryBlock caps the index instead of growing with the vault", () => {
 
 // ───────────────────────────── hygiene cadence ─────────────────────────────
 
-test("hygieneDue: never-run fires after digestHour, recent run holds, 6+ day gap fires again", () => {
-  const at = (iso: string) => new Date(iso);
-  // digestHour passed explicitly: the daemon's self-deploy runs this suite under its own env, where
-  // the daemon's secrets file sets CHRONOS_DIGEST_HOUR=-1 (digest off) — reading CONFIG here blocked
-  // every deploy.
-  assert.equal(hygieneDue(undefined, at("2026-08-31T10:00:00"), 8), true, "never ran → due");
-  assert.equal(hygieneDue(undefined, at("2026-08-31T05:00:00"), 8), false, "before digestHour → wait");
-  assert.equal(hygieneDue("2026-08-29T10:00:00Z", at("2026-08-31T10:00:00"), 8), false, "2 days ago → not due");
-  assert.equal(hygieneDue("2026-08-24T10:00:00Z", at("2026-08-31T10:00:00"), 8), true, "7 days ago → due");
-  assert.equal(hygieneDue(undefined, at("2026-08-31T10:00:00"), -1), false, "digest off → hygiene off");
+test("hygieneDue: rides the dream slot weekly, catches up after sleep, ignores the digest hour", () => {
+  const at = (y: number, mo: number, d: number, h: number, mi = 0) => new Date(y, mo - 1, d, h, mi);
+  // Hours passed explicitly: the daemon's self-deploy runs this suite under its own env — never read
+  // the operator's schedule from CONFIG in a test.
+  const H = [13, 22];
+  assert.equal(hygieneDue(undefined, at(2026, 8, 31, 14), H), "2026-08-31@13", "never ran → the latest slot");
+  assert.equal(hygieneDue(undefined, at(2026, 8, 31, 5), H), "2026-08-30@22", "05:00 → last night's missed slot");
+  assert.equal(hygieneDue("2026-08-29@13", at(2026, 8, 31, 14), H), null, "2 days ago → not due");
+  assert.equal(hygieneDue("2026-08-24@22", at(2026, 8, 31, 12), H), "2026-08-30@22", "6 slot days, slept through it → caught up");
+  assert.equal(hygieneDue("2026-08-25@22", at(2026, 8, 31, 12), H), null, "5 slot days → holds");
+  assert.equal(hygieneDue("2026-08-25@22", at(2026, 8, 31, 14), H), "2026-08-31@13", "slot day, not wall hours, sets the week");
+  assert.equal(hygieneDue("2026-08-31@13", at(2026, 8, 31, 23), H), null, "ran this slot's day → the 22:00 slot holds");
+  assert.equal(hygieneDue("2026-08-24T12:00:00Z", at(2026, 8, 31, 14), H), "2026-08-31@13", "legacy ISO last-run still read");
+  assert.equal(hygieneDue(undefined, at(2026, 8, 31, 14), []), null, "no dream hours → off");
 });
 
 // ───────────────────────────── ranking ─────────────────────────────

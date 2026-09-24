@@ -81,6 +81,13 @@ export function splitPaths(spec: string | undefined): string[] {
   return (spec ?? "").split(":").map((s) => s.trim()).filter(Boolean);
 }
 
+// Parse "13,22" into sorted, de-duplicated local hours (0-23). Empty, "-1" or garbage → [] (off):
+// a typo in .secrets must switch the slot off, never schedule it at a surprise hour.
+export function parseHours(spec: string | undefined): number[] {
+  const hours = (spec ?? "").split(",").map((s) => s.trim()).filter(Boolean).map(Number);
+  return [...new Set(hours.filter((h) => Number.isInteger(h) && h >= 0 && h <= 23))].sort((a, b) => a - b);
+}
+
 // Referenced twice below: as the actual DB path, and in the sandbox deny-list (PER-24) — the DB
 // holds every workspace's API token (workspaces.token), so a sandboxed job reading it directly
 // would bypass per-workspace scoping entirely, same as if it read the admin token file.
@@ -228,6 +235,10 @@ export const CONFIG = {
   holdAgedHours: Number(process.env.CHRONOS_HOLD_AGED_HOURS ?? 72),
   stuckSessionHours: Number(process.env.CHRONOS_STUCK_SESSION_HRS ?? 8), // a live terminal older than this = likely abandoned
   digestHour: Number(process.env.CHRONOS_DIGEST_HOUR ?? 8),        // local hour for the daily Telegram digest (-1 = off)
+  // Dream slots: local hours when memory maintenance runs (hygiene now; per-workspace dream pass
+  // later — src/dream.ts). Independent of digestHour on purpose: turning the morning message off
+  // silently killed memory hygiene for weeks. A slot missed while the Mac slept runs on wake.
+  dreamHours: parseHours(process.env.CHRONOS_DREAM_HOURS ?? "13,22"),
   // Recovery supervisor: work that stopped without finishing. NOTHING here re-dispatches on its own —
   // every stall becomes an approve/decline card (see recovery.ts). 0 min = supervisor off.
   recoverSweepMin: Number(process.env.CHRONOS_RECOVER_SWEEP_MIN ?? 30),
