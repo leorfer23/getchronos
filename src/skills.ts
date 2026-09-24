@@ -6,7 +6,6 @@ import { randomUUID } from "node:crypto";
 import { skills as store, workspaces, searchIndex } from "./store.js";
 import { bus } from "./bus.js";
 import { guard } from "./guard.js";
-import { lessonsBlock } from "./lessons.js";
 import { contextBlock } from "./notes.js";
 import { memoryBlock } from "./recall.js";
 import type { Skill, NewSkill, SkillStatus } from "./types.js";
@@ -171,24 +170,19 @@ export function skillIndexBlock(workspace_id: string): string {
 }
 
 // The full standing context injected into every agent's system prompt for a workspace:
-// operator-curated notes (contextBlock) + the L0 skill index + the comms rules this workspace has
-// learned from the operator's own corrections. All guarded internally.
+// operator-curated notes (contextBlock) + the L0 skill index + the workspace's voice page. All
+// guarded internally.
 //
-// Only `comms` lessons ride here — how to report, what he wants in the first line, what he doesn't
-// want at all — because they apply to every agent that ever writes to him. Build and review rules
-// are injected at dispatch, where the ticket's own text can rank them.
+// How he wants to be talked to rides here ONCE, as the voice page (prose.ts): one capped page,
+// rewritten from his writing and his `comms` corrections. The corrections themselves are not
+// injected as rows any more — they grew without bound and restated what the page says. Build and
+// review rules are injected at dispatch, where the ticket's own text can rank them.
 export function agentContext(workspace_id: string, repo_id?: string | null): string {
   return [
     contextBlock(workspace_id, repo_id),
     memoryBlock(workspace_id),
     skillIndexBlock(workspace_id),
     proseBlock(workspace_id),
-    lessonsBlock(workspace_id, {
-      repo_id,
-      topic: "comms",
-      limit: 5,
-      heading: "How this operator wants to be talked to (learned from his corrections):",
-    }),
   ]
     .filter(Boolean)
     .join("\n\n");

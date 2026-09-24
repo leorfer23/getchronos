@@ -117,7 +117,7 @@ import { WAKE_ATTEMPT_CAP, wakeBeaconAgeMs } from "./wake-queue.js";
 import { supervisionGraceMs, supervisionVerdict } from "./supervision-guard.js";
 import { runAgentHeartbeat, runFleetHeartbeat, runHeartbeat, type FleetAgent } from "./heartbeat.js";
 import { parseGates, suggestGates } from "./gates.js";
-import { recordLesson } from "./lessons.js";
+import { publishLesson, recordLesson } from "./lessons.js";
 import { listWidgets, readWidget } from "./widgets/index.js";
 import { ensureIntakeJob } from "./intake.js";
 import { RepoGitError, resolveRepoGitFields } from "./repo-git.js";
@@ -1752,13 +1752,21 @@ export function startServer() {
     res.status(201).json(recordLesson(req.body));
   });
 
+  // Both edit and delete announce the rule as it was and as it is: a comms rule that changed, moved
+  // topic or went away leaves that workspace's voice page stale (prose.ts rewrites it).
   api.patch("/lessons/:id", validate(PatchLessonSchema), (req, res) => {
-    if (!lessons.get(req.params.id)) return res.status(404).json({ error: "lesson not found" });
-    res.json(lessons.update(req.params.id, req.body));
+    const before = lessons.get(req.params.id);
+    if (!before) return res.status(404).json({ error: "lesson not found" });
+    const after = lessons.update(req.params.id, req.body);
+    publishLesson(before);
+    if (after) publishLesson(after);
+    res.json(after);
   });
 
   api.delete("/lessons/:id", (req, res) => {
+    const before = lessons.get(req.params.id);
     lessons.remove(req.params.id);
+    if (before) publishLesson(before, "deleted");
     res.json({ ok: true });
   });
 

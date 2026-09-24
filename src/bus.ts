@@ -112,7 +112,8 @@ export type BusEvent = (
       workspace_id: string | null;
     }
   | { topic: "ci.failed"; ticket_id: string; pr_url: string; ticket_key?: string; workspace_id?: string }
-  | { topic: "lesson.updated"; lesson_id: string; workspace_id: string; state: string }
+  /** `lesson_topic` is the rule's topic (build/review/comms/any) — a comms one marks the voice page stale. */
+  | { topic: "lesson.updated"; lesson_id: string; workspace_id: string; state: string; lesson_topic?: string }
   | { topic: "workspace.changed" }
   | { topic: "review.created"; review_id: string; run_id: string; ticket_id: string | null; ticket_key?: string; workspace_id?: string }
   | { topic: "review.updated"; review_id: string; state: string }

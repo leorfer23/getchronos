@@ -158,8 +158,8 @@ const HELP = `mc — Mission Control backlog CLI
                              save one message he wrote (text may be piped on stdin). With --draft it is an edit:
                              your draft next to what he actually sent — the strongest signal. Only HIS words.
   mc prose samples [--channel C] [--json] | mc prose rm <id> | mc prose learn
-                             list/drop samples; "learn" re-runs the read-only learner now (also auto after new samples)
-  mc prose guide --body -    replace the prose-guide memo (the learner's output; stdin with "-")
+                             list/drop samples; "learn" re-runs the read-only learner now (also auto after new samples or a comms lesson)
+  mc prose guide --body -    replace the prose-guide memo — the one-page voice page, ≤2500 chars (the learner's output; stdin with "-")
   mc learn "<durable fact>" [--label L] [--workspace ID]   note a fact in the session-learnings inbox (NOT auto-loaded; the operator promotes it)
   mc lesson list [--state active|proposed] [--topic build|review|comms] [--repo ID]
                              rules this workspace has learned; ● active (injected into agents), ○ proposed
