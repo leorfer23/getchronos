@@ -2,7 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { CONFIG } from "./config.js";
 import {
-  abandonPoll, acquireSlot, admission, beatSlot, machineLoad, niceCommand, parseMemorySysctl,
+  abandonPoll, acquireSlot, admission, beatSlot, cpuBusyPct, machineLoad, niceCommand, parseGpuUtil, parseMemorySysctl, parseVmStat,
   releaseForSession, releaseSlot, resetSlots, setSlotClock, slotHolders, slotQueue,
   type MachineLoad,
 } from "./machine.js";
@@ -266,4 +266,40 @@ test("a slot is never granted to a waiter whose client went away", async () => {
 test("abandoning a ticket nobody is waiting on is a no-op", () => {
   abandonPoll("nothing-here");
   assert.deepEqual(slotQueue(), []);
+});
+
+// ───────────────────────────── vitals parsers ─────────────────────────────
+
+const VM_STAT = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     4505.
+Pages active:                                 218101.
+Pages wired down:                             268110.
+Pages purgeable:                                  26.
+File-backed pages:                            146512.
+Anonymous pages:                              288938.
+Pages occupied by compressor:                 417788.
+`;
+
+test("vm_stat: RAM used counts app + wired + compressor, not file cache (Activity Monitor's number)", () => {
+  const r = parseVmStat(VM_STAT, 19327352832)!;
+  assert.equal(Math.round(r.totalMb), 18432);
+  // (288938 - 26 + 268110 + 417788) pages × 16 KB
+  assert.equal(Math.round(r.usedMb), Math.round((974810 * 16384) / 1048576));
+});
+
+test("vm_stat: missing fields read as no reading, never a made-up number", () => {
+  assert.equal(parseVmStat("Mach Virtual Memory Statistics: (page size of 16384 bytes)\n", 1e9), null);
+  assert.equal(parseVmStat("", 1e9), null);
+});
+
+test("ioreg: GPU is the busiest accelerator's Device Utilization %", () => {
+  const out = `"PerformanceStatistics" = {"Renderer Utilization %"=38,"Device Utilization %"=39}\n"PerformanceStatistics" = {"Device Utilization %"=12}`;
+  assert.equal(parseGpuUtil(out), 39);
+  assert.equal(parseGpuUtil("nothing here"), null);
+});
+
+test("cpu busy % is the non-idle share of the tick delta across all cores", () => {
+  const t = (user: number, idle: number) => ({ model: "", speed: 0, times: { user, nice: 0, sys: 0, irq: 0, idle } });
+  assert.equal(cpuBusyPct([t(0, 0), t(0, 0)], [t(30, 70), t(10, 90)]), 20);
+  assert.equal(cpuBusyPct([t(5, 5)], [t(5, 5)]), null);
 });
