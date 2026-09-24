@@ -1,17 +1,6 @@
 import pty from "node-pty";
 import { spawn, type ChildProcess } from "node:child_process";
-import {
-  abandonPoll,
-  acquireSlot,
-  admission,
-  beatSlot,
-  currentLoad,
-  heavySlotCount,
-  releaseSlot,
-  slotHolders,
-  slotQueue,
-  vitalsSnapshot,
-} from "../machine.js";
+import { admission, currentLoad, heavyPoolFor, heavySlotCount, vitalsSnapshot } from "../machine.js";
 import type { SpawnSpec } from "./spawn-spec.js";
 import type { Host, HeavySlotPool, HostVitals, LiveInfo, ProcHandle, ProcSpawn, PtyHandle, PtySpawn } from "./types.js";
 
@@ -114,15 +103,8 @@ class LocalHost implements Host {
     return { load, admission: admission(load), samples: vitalsSnapshot() };
   }
 
-  readonly slots: HeavySlotPool = {
-    size: heavySlotCount,
-    acquire: acquireSlot,
-    abandon: abandonPoll,
-    beat: beatSlot,
-    release: releaseSlot,
-    holders: slotHolders,
-    waiting: () => slotQueue().length,
-  };
+  // The brain's own pool — the one machine.ts's acquireSlot/releaseSlot have always served.
+  readonly slots: HeavySlotPool = heavyPoolFor("local", heavySlotCount);
 }
 
 export const localHost: Host = new LocalHost();

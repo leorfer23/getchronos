@@ -162,7 +162,7 @@ export const swapPctOf = (load: MachineLoad): number | null =>
  * Every number goes into the reason whichever one tripped — "load 34.1 on 12 cores" alone tells an
  * agent nothing about whether to wait or give up.
  */
-export function admission(load: MachineLoad, cfg = CONFIG.machine): Admission {
+export function admission(load: MachineLoad, cfg: { enabled: boolean; maxLoadPerCore: number; maxSwapUsedPct: number } = CONFIG.machine): Admission {
   if (!cfg.enabled) return { ok: true };
   const swapPct = swapPctOf(load);
   const overLoad = load.loadPerCore > cfg.maxLoadPerCore;
@@ -173,6 +173,36 @@ export function admission(load: MachineLoad, cfg = CONFIG.machine): Admission {
   return {
     ok: false,
     reason: `load ${load.load1.toFixed(1)} on ${load.ncpu} cores, memory pressure ${pressureWord(load.pressureLevel)} (${swapPart}); retry when workers finish`,
+  };
+}
+
+/**
+ * A host's reported vitals (the wire's `vitals` frame) as the MachineLoad `admission()` reads, so a
+ * remote Mac is judged by exactly the rule and thresholds the brain judges itself by, on its OWN core
+ * count. Pure; structural so machine.ts need not import the wire.
+ *
+ * A protocol-1.1 host reports only the ratios: `ncpu` then reads as 1 (load1 = the per-core figure,
+ * which is what admission compares anyway) and swap as a percentage of 100 "MB". The verdict is the
+ * same; only the wording of the reason is poorer until that host updates.
+ */
+export function loadFromVitals(v: {
+  loadPerCore: number;
+  pressure: PressureLevel | null;
+  swapPct: number | null;
+  ncpu?: number;
+  load1?: number;
+  swapUsedMb?: number | null;
+  swapTotalMb?: number | null;
+}): MachineLoad {
+  const ncpu = v.ncpu && v.ncpu > 0 ? v.ncpu : 1;
+  const hasMb = v.swapTotalMb != null && v.swapUsedMb != null;
+  return {
+    load1: v.load1 ?? v.loadPerCore * ncpu,
+    ncpu,
+    loadPerCore: v.loadPerCore,
+    swapUsedMb: hasMb ? v.swapUsedMb! : v.swapPct == null ? null : v.swapPct,
+    swapTotalMb: hasMb ? v.swapTotalMb! : v.swapPct == null ? null : 100,
+    pressureLevel: v.pressure,
   };
 }
 
@@ -209,9 +239,6 @@ export type SlotGrant =
  *  window covers a queue entry nobody has re-polled for: an abandoned place in line. */
 export const SLOT_STALE_MS = 90_000;
 
-const slots = new Map<string, Slot>();
-let queue: Waiter[] = [];
-
 /** Test seam: the clock the stale sweep reads, so reclaim is testable without waiting 90 seconds. */
 let nowMs: () => number = () => Date.now();
 export function setSlotClock(fn: (() => number) | null): void { nowMs = fn ?? (() => Date.now()); }
@@ -220,11 +247,13 @@ export function heavySlotCount(): number {
   return Math.max(1, Math.round(CONFIG.machine.heavySlots));
 }
 
-export function slotHolders(): SlotHolder[] {
-  const now = nowMs();
-  return [...slots.values()]
-    .sort((a, b) => a.since - b.since)
-    .map((s) => ({ slot_id: s.id, session_id: s.session_id, label: s.label, since: s.since, held_ms: now - s.since }));
+/**
+ * A host's heavy slots from its core count: one suite per ~6 cores, the same rule
+ * `CONFIG.machine.heavySlots` defaults to on the brain. An unknown count (a host too old to report
+ * it) is one slot: over-serialized, never over-committed.
+ */
+export function heavySlotsForCpus(ncpu: number | null | undefined): number {
+  return ncpu && Number.isFinite(ncpu) && ncpu > 0 ? Math.max(1, Math.floor(ncpu / 6)) : 1;
 }
 
 function detach(w: Waiter): Poll | null {
@@ -237,136 +266,208 @@ function detach(w: Waiter): Poll | null {
   return p;
 }
 
-function sweep(): void {
-  const now = nowMs();
-  for (const [id, s] of slots) {
-    if (now - s.beat > SLOT_STALE_MS) {
-      slots.delete(id);
-      console.warn(`[machine] heavy slot ${id.slice(0, 8)} (${s.label}) reclaimed — no heartbeat for ${Math.round((now - s.beat) / 1000)}s`);
+/**
+ * One machine's heavy slots (HOSTS.md → "Heavy slots are per host"). The brain keeps one of these
+ * per computer — its own, and one for each host an `mc heavy` was forwarded from — so two suites on
+ * two machines never wait for each other, and a busy host never queues behind the brain.
+ *
+ * All pools live on the brain: a slot is a permit, not a process, and the brain is where every
+ * `mc heavy` already lands (the host's forwarder carries it). A host restart therefore loses
+ * nothing; a brain restart forgets every slot, which is fine — see the API note on why slots are
+ * in-memory.
+ */
+export class HeavyPool {
+  private readonly slots = new Map<string, Slot>();
+  private queue: Waiter[] = [];
+
+  constructor(readonly hostId: string, private readonly sizeOf: () => number) {}
+
+  size(): number {
+    return Math.max(1, Math.round(this.sizeOf()));
+  }
+
+  holders(): SlotHolder[] {
+    const now = nowMs();
+    return [...this.slots.values()]
+      .sort((a, b) => a.since - b.since)
+      .map((s) => ({ slot_id: s.id, session_id: s.session_id, label: s.label, since: s.since, held_ms: now - s.since }));
+  }
+
+  private sweep(): void {
+    const now = nowMs();
+    for (const [id, s] of this.slots) {
+      if (now - s.beat > SLOT_STALE_MS) {
+        this.slots.delete(id);
+        console.warn(`[machine] heavy slot ${id.slice(0, 8)} (${s.label}) on ${this.hostId} reclaimed — no heartbeat for ${Math.round((now - s.beat) / 1000)}s`);
+      }
+    }
+    // A place in line nobody has come back for: the `mc heavy` was killed, or its client hung up and
+    // never re-polled. Dropped, or it would hold up everyone behind it forever.
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      const w = this.queue[i];
+      if (!w.poll && now - w.lastPoll > SLOT_STALE_MS) this.queue.splice(i, 1);
     }
   }
-  // A place in line nobody has come back for: the `mc heavy` was killed, or its client hung up and
-  // never re-polled. Dropped, or it would hold up everyone behind it forever.
-  for (let i = queue.length - 1; i >= 0; i--) {
-    const w = queue[i];
-    if (!w.poll && now - w.lastPoll > SLOT_STALE_MS) queue.splice(i, 1);
-  }
-}
 
-/**
- * Grant down the queue, in arrival order, while there is capacity.
- *
- * An entry with no live poll is SKIPPED, not granted: handing a slot to a caller that is not
- * listening would burn a permit for the full heartbeat window. It keeps its place — a `mc heavy`
- * between two 55s polls is back within milliseconds — and `sweep` removes it if it never returns.
- */
-function pump(): void {
-  sweep();
-  const n = heavySlotCount();
-  for (let i = 0; i < queue.length && slots.size < n; ) {
-    const w = queue[i];
-    if (!w.poll) { i++; continue; }
-    queue.splice(i, 1);
-    const settle = detach(w)!.settle;
-    const now = nowMs();
-    const slot: Slot = { id: randomUUID(), session_id: w.session_id, label: w.label, since: now, beat: now };
-    slots.set(slot.id, slot);
-    settle({ granted: true, slot_id: slot.id });
-  }
-}
-
-/**
- * Long-poll for one of the N machine-wide heavy slots.
- *
- * `ticket` is how a caller keeps its place across poll rounds. Without it, every 55s timeout would
- * send `mc heavy` to the BACK of the queue behind callers that arrived later, and with ten agents
- * behind a five-minute suite the oldest waiter would starve. Pass back the ticket a refusal returned
- * and the SAME queue entry resumes, with its original arrival time.
- *
- * `waitMs <= 0` is a single attempt (what the tests use); the API parks a caller for up to 55s.
- */
-export function acquireSlot(
-  opts: { session_id?: string | null; label: string; ticket?: string | null },
-  waitMs: number,
-): Promise<SlotGrant> {
-  return new Promise<SlotGrant>((resolve) => {
-    const now = nowMs();
-    // Resume the existing entry when the ticket is still in line; a ticket we have forgotten (expired,
-    // or from before a restart) simply re-joins at the back, which is the only honest thing to do.
-    // A new entry KEEPS the caller's ticket rather than minting its own, so whoever called us can
-    // name this entry before the promise settles — that is how the API drops an abandoned poll.
-    let w = opts.ticket ? queue.find((x) => x.ticket === opts.ticket) : undefined;
-    if (w) {
-      detach(w);
-      w.lastPoll = now;
-      w.label = opts.label;
-    } else {
-      w = { ticket: opts.ticket || randomUUID(), session_id: opts.session_id ?? null, label: opts.label, since: now, lastPoll: now, poll: null };
-      queue.push(w);
+  /**
+   * Grant down the queue, in arrival order, while there is capacity.
+   *
+   * An entry with no live poll is SKIPPED, not granted: handing a slot to a caller that is not
+   * listening would burn a permit for the full heartbeat window. It keeps its place — a `mc heavy`
+   * between two 55s polls is back within milliseconds — and `sweep` removes it if it never returns.
+   */
+  private pump(): void {
+    this.sweep();
+    const n = this.size();
+    for (let i = 0; i < this.queue.length && this.slots.size < n; ) {
+      const w = this.queue[i];
+      if (!w.poll) { i++; continue; }
+      this.queue.splice(i, 1);
+      const settle = detach(w)!.settle;
+      const now = nowMs();
+      const slot: Slot = { id: randomUUID(), session_id: w.session_id, label: w.label, since: now, beat: now };
+      this.slots.set(slot.id, slot);
+      settle({ granted: true, slot_id: slot.id });
     }
-    const entry = w;
-    let done = false;
-    const settle = (r: SlotGrant) => { if (!done) { done = true; resolve(r); } };
-    const refuse = () => { detach(entry); settle({ granted: false, holders: slotHolders(), ticket: entry.ticket }); };
+  }
 
-    entry.poll = { settle };
-    pump();
-    if (done) return;
-    if (waitMs <= 0) return refuse();
-    // Re-pump on a tick as well as on release: a holder can also go away by going STALE, and nothing
-    // publishes an event for that.
-    const tick = setInterval(pump, 2000);
-    tick.unref?.();
-    const timer = setTimeout(refuse, waitMs);
-    timer.unref?.();
-    entry.poll.tick = tick;
-    entry.poll.timer = timer;
-  });
+  /**
+   * Long-poll for one of this machine's heavy slots.
+   *
+   * `ticket` is how a caller keeps its place across poll rounds. Without it, every 55s timeout would
+   * send `mc heavy` to the BACK of the queue behind callers that arrived later, and with ten agents
+   * behind a five-minute suite the oldest waiter would starve. Pass back the ticket a refusal returned
+   * and the SAME queue entry resumes, with its original arrival time.
+   *
+   * `waitMs <= 0` is a single attempt (what the tests use); the API parks a caller for up to 55s.
+   */
+  acquire(opts: { session_id?: string | null; label: string; ticket?: string | null }, waitMs: number): Promise<SlotGrant> {
+    return new Promise<SlotGrant>((resolve) => {
+      const now = nowMs();
+      // Resume the existing entry when the ticket is still in line; a ticket we have forgotten
+      // (expired, or from before a restart) simply re-joins at the back, which is the only honest
+      // thing to do. A new entry KEEPS the caller's ticket rather than minting its own, so whoever
+      // called us can name this entry before the promise settles — that is how the API drops an
+      // abandoned poll.
+      let w = opts.ticket ? this.queue.find((x) => x.ticket === opts.ticket) : undefined;
+      if (w) {
+        detach(w);
+        w.lastPoll = now;
+        w.label = opts.label;
+      } else {
+        w = { ticket: opts.ticket || randomUUID(), session_id: opts.session_id ?? null, label: opts.label, since: now, lastPoll: now, poll: null };
+        this.queue.push(w);
+      }
+      const entry = w;
+      let done = false;
+      const settle = (r: SlotGrant) => { if (!done) { done = true; resolve(r); } };
+      const refuse = () => { detach(entry); settle({ granted: false, holders: this.holders(), ticket: entry.ticket }); };
+
+      entry.poll = { settle };
+      this.pump();
+      if (done) return;
+      if (waitMs <= 0) return refuse();
+      // Re-pump on a tick as well as on release: a holder can also go away by going STALE, and
+      // nothing publishes an event for that.
+      const tick = setInterval(() => this.pump(), 2000);
+      tick.unref?.();
+      const timer = setTimeout(refuse, waitMs);
+      timer.unref?.();
+      entry.poll.tick = tick;
+      entry.poll.timer = timer;
+    });
+  }
+
+  /**
+   * The client hung up (ctrl-C, closed socket) while its poll was parked. Detach the poll so `pump`
+   * cannot hand it a slot nobody is listening for; the queue entry keeps its place until either the
+   * caller re-polls with its ticket or `sweep` expires it.
+   */
+  abandon(ticket: string): void {
+    const w = this.queue.find((x) => x.ticket === ticket);
+    if (!w) return;
+    const p = detach(w);
+    p?.settle({ granted: false, holders: this.holders(), ticket });
+  }
+
+  /** Heartbeat. false = the slot is gone (already reclaimed) and the caller should re-acquire. */
+  beat(id: string): boolean {
+    const s = this.slots.get(id);
+    if (!s) return false;
+    s.beat = nowMs();
+    return true;
+  }
+
+  release(id: string): boolean {
+    const had = this.slots.delete(id);
+    if (had) this.pump();
+    return had;
+  }
+
+  /** A terminal that ended cannot still be running a test suite — free whatever it held. */
+  releaseForSession(sessionId: string): number {
+    let freed = 0;
+    for (const [id, s] of this.slots) if (s.session_id === sessionId) { this.slots.delete(id); freed++; }
+    if (freed) this.pump();
+    return freed;
+  }
+
+  /** Who is in line, oldest first — for tests and for `GET /machine`'s waiting count. */
+  queued(): Array<{ ticket: string; label: string; polling: boolean; since: number }> {
+    return this.queue.map((w) => ({ ticket: w.ticket, label: w.label, polling: !!w.poll, since: w.since }));
+  }
+
+  waiting(): number {
+    return this.queue.length;
+  }
+
+  reset(): void {
+    for (const w of this.queue.splice(0)) detach(w)?.settle({ granted: false, holders: [], ticket: w.ticket });
+    this.slots.clear();
+  }
 }
+
+/** Every pool this brain keeps, by host id. `local` is the brain's own, sized by CONFIG. */
+const pools = new Map<string, HeavyPool>();
+const localPool = new HeavyPool("local", heavySlotCount);
+pools.set("local", localPool);
 
 /**
- * The client hung up (ctrl-C, closed socket) while its poll was parked. Detach the poll so `pump`
- * cannot hand it a slot nobody is listening for; the queue entry keeps its place until either the
- * caller re-polls with its ticket or `sweep` expires it.
+ * The heavy-slot pool for a host, created on first use. `sizeOf` is read on every grant, so a host
+ * whose core count arrives with its first vitals frame is sized correctly from then on.
  */
-export function abandonPoll(ticket: string): void {
-  const w = queue.find((x) => x.ticket === ticket);
-  if (!w) return;
-  const p = detach(w);
-  p?.settle({ granted: false, holders: slotHolders(), ticket });
+export function heavyPoolFor(hostId: string, sizeOf: () => number): HeavyPool {
+  let p = pools.get(hostId);
+  if (!p) {
+    p = new HeavyPool(hostId, sizeOf);
+    pools.set(hostId, p);
+  }
+  return p;
 }
 
-/** Heartbeat. false = the slot is gone (already reclaimed) and the caller should re-acquire. */
-export function beatSlot(id: string): boolean {
-  const s = slots.get(id);
-  if (!s) return false;
-  s.beat = nowMs();
-  return true;
-}
+// The brain's own pool, under the names every caller (and machine.test.ts) has always used.
+export const slotHolders = (): SlotHolder[] => localPool.holders();
+export const acquireSlot = (opts: { session_id?: string | null; label: string; ticket?: string | null }, waitMs: number): Promise<SlotGrant> =>
+  localPool.acquire(opts, waitMs);
+export const abandonPoll = (ticket: string): void => localPool.abandon(ticket);
+export const beatSlot = (id: string): boolean => localPool.beat(id);
+export const releaseSlot = (id: string): boolean => localPool.release(id);
+export const slotQueue = () => localPool.queued();
 
-export function releaseSlot(id: string): boolean {
-  const had = slots.delete(id);
-  if (had) pump();
-  return had;
-}
-
-/** A terminal that ended cannot still be running a test suite — free whatever it held. */
+/**
+ * A terminal that ended cannot still be running a test suite — free whatever it held, on whichever
+ * machine it held it. A session holds slots only in its own host's pool, so walking all of them
+ * costs a few map scans and never needs the session row (which may already be gone).
+ */
 export function releaseForSession(sessionId: string): number {
   let freed = 0;
-  for (const [id, s] of slots) if (s.session_id === sessionId) { slots.delete(id); freed++; }
-  if (freed) pump();
+  for (const p of pools.values()) freed += p.releaseForSession(sessionId);
   return freed;
 }
 
-/** Test-only: forget every slot and waiter. */
+/** Test-only: forget every slot and waiter, on every host. */
 export function resetSlots(): void {
-  for (const w of queue.splice(0)) detach(w)?.settle({ granted: false, holders: [], ticket: w.ticket });
-  slots.clear();
-}
-
-/** Who is in line, oldest first — for tests and for `GET /machine`'s waiting count. */
-export function slotQueue(): Array<{ ticket: string; label: string; polling: boolean; since: number }> {
-  return queue.map((w) => ({ ticket: w.ticket, label: w.label, polling: !!w.poll, since: w.since }));
+  for (const p of pools.values()) p.reset();
 }
 
 // ───────────────────────────── 4. vitals: what the Desk header draws ─────────────────────────────
