@@ -11,6 +11,7 @@ import { notify, esc } from "./telegram/api.js";
 import { burnHalted } from "./burn-guard.js";
 import { gateDispatch } from "./quota-gate.js";
 import { renderReplay } from "./replay.js";
+import { hostFor } from "./hosts/index.js";
 import type { Job, Run, RunStatus } from "./types.js";
 
 // Single choke point for every trigger source. Enforces guardrails, then runs.
@@ -403,12 +404,16 @@ export function stopRun(runId: string): boolean {
   // run keeps its cloud_agent_id/cloud_run_id forever, and there is nothing left to cancel.
   if (run.status === "running" && run.cloud_agent_id && run.cloud_run_id) return stopCloudRun(run);
   if (!run.pid) return false;
+  // Signalled on the run's own host (HOSTS.md): `pid` is a process id on that machine and nowhere
+  // else. Inside the try on purpose — a run on a host this brain does not know is a stop that did
+  // not happen, which is exactly what `false` already means here.
   try {
-    process.kill(run.pid, "SIGTERM");
+    const host = hostFor(run);
+    host.signal(run.pid, "SIGTERM");
     runs.setStatus(runId, "killed");
     setTimeout(() => {
       try {
-        process.kill(run.pid!, "SIGKILL");
+        host.signal(run.pid!, "SIGKILL");
       } catch {}
     }, 5000);
     return true;
