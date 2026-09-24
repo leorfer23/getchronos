@@ -18,6 +18,7 @@ import { brainPathsInProc, buildRemoteProcSpec, type ProcSpec } from "./hosts/pr
 import { profileNameFor } from "./hosts/spawn-spec.js";
 import { worktreeRootFor } from "./worktree-core.js";
 import { gateRunners, workDirOf } from "./hosts/workdir.js";
+import { samePath } from "./hosts/run-placement.js";
 import { getBackend } from "./backends/index.js";
 import { isCloudBackend } from "./backends/types.js";
 import type {
@@ -520,8 +521,7 @@ export function runRepo(job: Pick<Job, "ticket_id" | "workspace_id" | "cwd">): R
   const t = job.ticket_id ? tickets.get(job.ticket_id) : undefined;
   if (t?.repo_id) return repos.get(t.repo_id);
   if (!job.workspace_id) return undefined;
-  const norm = (p: string) => p.replace(/\/+$/, "");
-  return repos.list(job.workspace_id).find((r) => r.path && norm(r.path) === norm(job.cwd));
+  return repos.list(job.workspace_id).find((r) => samePath(r.path, job.cwd));
 }
 
 /**

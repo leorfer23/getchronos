@@ -32,6 +32,7 @@
  * hosts existed: a headless run was never refused for load, and phase 5 does not start refusing it.
  * Placement NEVER sends a run onto a host past that host's own admission.
  */
+import fs from "node:fs";
 import os from "node:os";
 import { CONFIG } from "../config.js";
 import { bus } from "../bus.js";
@@ -60,6 +61,16 @@ export const BRAIN_ONLY_KINDS: Record<string, string> = {
 /** Kinds that work in a ticket worktree and ship through GitHub from wherever it is. */
 const NEEDS_GH = ["ci-fix:", "merge-gate:"];
 
+/**
+ * The same directory? Both sides realpath'd: a job's cwd was (spawn-guard sanitizeCwd), a repo's
+ * `path` usually was not — and macOS puts /tmp and /var behind symlinks (dispatcher.ts, the same trap).
+ */
+export function samePath(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  const real = (p: string) => { try { return fs.realpathSync(p); } catch { return p.replace(/\/+$/, ""); } };
+  return a.replace(/\/+$/, "") === b.replace(/\/+$/, "") || real(a) === real(b);
+}
+
 const kindOf = (name: string | null | undefined): string => {
   const base = baseJobName(name);
   const m = /^[a-z-]+:/.exec(base);
@@ -85,18 +96,16 @@ export function runHostEligibility(job: Pick<Job, "name" | "backend" | "workspac
   if (!ws) return { ok: false, why: "no workspace" };
   if (ws.placement === "brain") return { ok: false, why: `workspace ${ws.slug} keeps its jobs on the brain (placement=brain)` };
   const wsRepos = repos.list(ws.id);
-  const norm = (p: string) => p.replace(/\/+$/, "");
   const ticketRepo = job.ticket_id ? ticketRepoId(job.ticket_id) : null;
-  const repo = (ticketRepo ? wsRepos.find((r) => r.id === ticketRepo) : undefined) ?? wsRepos.find((r) => r.path && norm(r.path) === norm(job.cwd));
+  const repo = (ticketRepo ? wsRepos.find((r) => r.id === ticketRepo) : undefined) ?? wsRepos.find((r) => samePath(r.path, job.cwd));
   if (!repo) return { ok: false, why: "it has no repo a host could find" };
   if (!repo.git_remote) return { ok: false, why: `repo ${repo.name} has no git remote to find it by` };
   // A job placed at dispatch must start in the repo's own checkout — a host resolves THAT by remote.
   // Any other brain directory (a subfolder, a worktree the brain made, a scratch dir) stays here.
-  if (!o.pinnedCwd && (!repo.path || norm(repo.path) !== norm(job.cwd))) return { ok: false, why: `it starts in a directory on the brain (${job.cwd})` };
+  if (!o.pinnedCwd && !samePath(repo.path, job.cwd)) return { ok: false, why: `it starts in a directory on the brain (${job.cwd})` };
   let addDirs: string[] = [];
   try { addDirs = job.add_dirs ? JSON.parse(job.add_dirs) : []; } catch {}
-  const wsPaths = new Set(wsRepos.map((r) => r.path && norm(r.path)).filter(Boolean) as string[]);
-  const extra = addDirs.filter((d) => !wsPaths.has(norm(d)));
+  const extra = addDirs.filter((d) => !wsRepos.some((r) => samePath(r.path, d)));
   if (extra.length) return { ok: false, why: `it is granted brain directories (${extra[0]})` };
   const goal = tokenizePaths(job.goal, wsRepos, worktreeRootFor) ?? "";
   const files = brainOnlyPathsIn(goal, [os.homedir(), REPO_ROOT, process.cwd()]);
@@ -185,8 +194,7 @@ function runRepoOf(job: Pick<Job, "ticket_id" | "workspace_id" | "cwd">): Repo |
   const rid = job.ticket_id ? ticketRepoId(job.ticket_id) : null;
   if (rid) return repos.get(rid);
   if (!job.workspace_id) return undefined;
-  const norm = (p: string) => p.replace(/\/+$/, "");
-  return repos.list(job.workspace_id).find((r) => r.path && norm(r.path) === norm(job.cwd));
+  return repos.list(job.workspace_id).find((r) => samePath(r.path, job.cwd));
 }
 
 /**
