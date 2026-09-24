@@ -232,7 +232,7 @@ export function uninstall({ home = os.homedir(), hostHome = path.join(home, ".ch
   } else if (fs.existsSync(hostHome)) {
     left.push(`${hostHome} — the credential (.secrets), logs and app. Remove with: rm -rf ${shellPath(hostHome, home)}`);
   }
-  left.push(`${path.join(home, ".mc")} — the mc CLI and drops agents used; harmless without a host`);
+  if (fs.existsSync(path.join(home, ".mc"))) left.push(`${path.join(home, ".mc")} — the mc CLI and drops agents used; harmless without a host`);
   left.push("hooks/skill copies inside each agent profile (~/.claude*) — inert without the host");
   left.push("this computer on the brain: Desk → Computers → Remove this computer revokes its token");
   return { done, left };

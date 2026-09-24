@@ -84,7 +84,7 @@ async function cmdJoin(args: string[]): Promise<number> {
     console.log(`✓ joined as ${r.host_id}`);
     console.log(`  credential → ${r.secretsFile} (mode 600)`);
     console.log(`  brains     → ${r.brains.join(", ")}`);
-    console.log(r.plistFile ? `  LaunchAgent → ${r.plistFile} (loaded; starts at login)` : "  LaunchAgent skipped — run `npm run host -- run` yourself");
+    console.log(r.plistFile ? `  LaunchAgent → ${r.plistFile} (loaded; starts at login)` : `  LaunchAgent skipped — run it yourself: node ${shellPath(path.join(REPO_ROOT, "bin", "getchronos.mjs"))} host run`);
     return 0;
   } catch (e: any) {
     console.error(`✗ join failed: ${e?.message ?? e}`);
