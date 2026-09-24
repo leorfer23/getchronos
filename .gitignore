@@ -11,7 +11,7 @@ tsconfig.tsbuildinfo
 secrets/
 # hostlink/ holds the brain's TLS private key and joined hosts' credential hashes (HOSTS.md).
 # The daemon runs `git add -A` in its own checkout and this repo is public: never let it in.
-hostlink/
+/hostlink/
 *.pem
 .admin-token
 .vapid.json
