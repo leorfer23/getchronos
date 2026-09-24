@@ -871,9 +871,7 @@
   .mem-dream .t { color:var(--faint); font:11px ui-monospace,Menlo,monospace; }
   .mem-dream.undone { text-decoration:line-through; color:var(--faint); }
   .mem-dream button { all:unset; cursor:pointer; align-self:flex-start; font-size:12px; color:var(--accent); }
-  /* Jobs: the list on the left, one job on the right — its settings in tabs, its runs, one run's story. */
-  #dlg-jobs { width:min(1080px,96vw); }
-  #dlg-jobs .dlg { padding:0; gap:0; height:min(82vh, 860px); }
+  /* The two-pane layout (list left, one item right) — the Computers dialog is built on it. */
   .jobs { display:grid; grid-template-columns:280px 1fr; height:100%; min-height:0; }
   .jlist { border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
   .jl-head { display:flex; align-items:center; gap:8px; padding:12px 12px 8px; }
@@ -895,9 +893,6 @@
   .switch i { width:32px; height:18px; border-radius:999px; background:var(--line); position:relative; transition:background .15s; }
   .switch i::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:#fff; transition:left .15s; }
   .switch.on i { background:var(--accent); } .switch.on i::after { left:16px; }
-  .jtabs { display:flex; gap:2px; padding:8px 14px 0; border-bottom:1px solid var(--line); }
-  .jtabs button { border:0; background:transparent; color:var(--muted); padding:7px 12px; font-size:13.5px; font-weight:600; border-bottom:2px solid transparent; margin-bottom:-1px; }
-  .jtabs button.on { color:var(--ink); border-bottom-color:var(--accent); }
   .jbody { flex:1; min-height:0; overflow-y:auto; padding:14px 16px 18px; }
   .jbody .pane[hidden] { display:none; }
   .jbody .f { display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }
@@ -908,22 +903,225 @@
   .jbody textarea.mono { font:13px/1.5 ui-monospace,"SF Mono",Menlo,monospace; min-height:220px; }
   .jbody .cols { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0 14px; }
   .jbody .next { font-size:13px; color:var(--accent); }
-  .runs { display:flex; flex-direction:column; }
-  .rrow { display:grid; grid-template-columns:auto 130px 70px 60px 64px 1fr; column-gap:10px; align-items:center; padding:7px 8px; border-radius:8px; cursor:pointer; font-size:13.5px; }
-  .rrow:hover { background:var(--surface-2); }
-  .rrow .st { font-weight:600; }
-  .rrow .sum { color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .rrow .num { color:var(--faint); font-variant-numeric:tabular-nums; text-align:right; }
-  .rdet .back { border:0; background:none; color:var(--accent); font-size:13px; padding:0 0 10px; font-weight:600; }
-  .rdet .rh { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; font-size:13.5px; color:var(--muted); }
-  .rdet .rh b { color:var(--ink); }
-  .rdet .fblock { margin-bottom:10px; }
-  .rdet .err { color:var(--danger); white-space:pre-wrap; font:12.5px ui-monospace,Menlo,monospace; }
-  .trow { display:flex; gap:10px; align-items:center; padding:7px 8px; border:1px solid var(--line); border-radius:8px; margin-bottom:6px; font-size:13.5px; }
-  .trow code { font:12px ui-monospace,Menlo,monospace; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
   .jfoot { display:flex; gap:8px; align-items:center; padding:10px 14px; border-top:1px solid var(--line); }
   .jfoot .sp { flex:1; }
   .jempty { color:var(--faint); padding:40px; text-align:center; }
+  /* ── Jobs page: full screen. Top: filters. Then the fleet's numbers and days, then one row per job
+     (its run strip, health, next fire), grouped by client. A job opens in the drawer on the right. ── */
+  #dlg-jobs { width:100vw; height:100vh; max-width:none; max-height:none; margin:0; border:0; border-radius:0; box-shadow:none; background:var(--bg); }
+  #dlg-jobs::backdrop { background:var(--bg); }
+  .jv { display:flex; flex-direction:column; height:100%; min-height:0; font-size:14.5px; position:relative; }
+  .jv-bar { display:flex; align-items:center; gap:10px; padding:0 16px; height:52px; flex:none; background:var(--surface); border-bottom:1px solid var(--line); white-space:nowrap; }
+  .jv-bar .back { border:0; background:none; color:var(--muted); font-size:14.5px; padding:4px 8px; border-radius:7px; }
+  .jv-bar .back:hover { background:var(--surface-2); color:var(--ink); }
+  .jv-bar h2 { margin:0 6px 0 0; font-size:17px; letter-spacing:-.01em; }
+  .jv-q { flex:0 1 320px; min-width:120px; padding:6px 10px 6px 30px; border-radius:8px; border:1px solid var(--line); background:var(--bg) no-repeat 10px 50%/13px; color:var(--ink); font:inherit; font-size:14.5px;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%239AA49E' stroke-width='2'%3E%3Ccircle cx='7' cy='7' r='5'/%3E%3Cpath d='m11 11 4 4'/%3E%3C/svg%3E"); }
+  .jv-q:focus { outline:0; border-color:var(--accent); }
+  .jv-seg { display:inline-flex; gap:2px; padding:2px; border-radius:999px; background:var(--surface-2); }
+  .jv-seg button { border:0; background:transparent; color:var(--muted); border-radius:999px; padding:3px 10px; font-size:13.5px; }
+  .jv-seg button.on { background:var(--surface); color:var(--ink); font-weight:650; box-shadow:var(--shadow); }
+  .jv-bar .sp { flex:1; }
+  .jv-chk { display:inline-flex; align-items:center; gap:6px; font-size:13.5px; color:var(--muted); cursor:pointer; user-select:none; }
+  .jv-body { flex:1; min-height:0; display:flex; }
+  .jv-main { flex:1; min-width:0; overflow-y:auto; overflow-x:hidden; container-type:inline-size; }
+  .jv-wrap { padding:14px 18px 90px; max-width:1720px; margin:0 auto; display:flex; flex-direction:column; gap:12px; }
+  .jv-chips { display:flex; gap:6px; flex-wrap:wrap; }
+  .jv-chip { display:inline-flex; align-items:center; gap:7px; padding:4px 11px; border-radius:999px; border:1px solid var(--line); background:var(--surface); font-size:13.5px; color:var(--muted); }
+  .jv-chip:hover { color:var(--ink); }
+  .jv-chip.on { border-color:var(--ink); color:var(--ink); font-weight:650; }
+  .jv-chip i { width:8px; height:8px; border-radius:2px; display:inline-block; }
+  .jv-chip b { font-weight:600; color:var(--faint); font-variant-numeric:tabular-nums; }
+  .jv-chip .bad { color:var(--danger); }
+  .jv-top { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,1fr); gap:12px; }
+  .jv-kpis { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+  .jv-kpi { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:9px 12px 10px; display:flex; flex-direction:column; gap:1px; min-width:0; text-align:left; font:inherit; color:inherit; }
+  button.jv-kpi:hover { border-color:var(--faint); }
+  .jv-kpi .k { font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); font-weight:700; }
+  .jv-kpi .v { font-size:23px; font-weight:650; letter-spacing:-.02em; line-height:1.2; font-variant-numeric:tabular-nums; }
+  .jv-kpi .v small { font-size:14px; color:var(--faint); font-weight:600; }
+  .jv-kpi .s { font-size:12.5px; color:var(--faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .jv-kpi.bad .v { color:var(--danger); } .jv-kpi.live .v { color:var(--p-work); } .jv-kpi.good .v { color:var(--ok); }
+  .jv-hist { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:10px 12px 8px; display:flex; flex-direction:column; min-width:0; }
+  .jv-hist .hh { display:flex; align-items:baseline; gap:10px; font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); font-weight:700; }
+  .jv-hist .hh .lg { margin-left:auto; display:flex; gap:10px; text-transform:none; letter-spacing:0; font-weight:500; color:var(--faint); font-size:12px; }
+  .jv-hist .hh .lg i { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:0; }
+  .jv-bars { display:flex; align-items:flex-end; gap:3px; height:112px; padding-top:8px; }
+  .jv-bars .d { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:flex-end; align-items:stretch; gap:4px; height:100%; }
+  .jv-bars .col { display:flex; flex-direction:column-reverse; border-radius:3px; overflow:hidden; min-height:0; }
+  .jv-bars .col span { display:block; }
+  .jv-bars .x { font-size:10.5px; color:var(--faint); text-align:center; white-space:nowrap; overflow:hidden; height:14px; }
+  .jv-bars .d.today .x { color:var(--ink); font-weight:700; }
+  .c-ok { background:var(--ok); } .c-bad { background:var(--danger); } .c-oth { background:var(--faint); opacity:.55; }
+  .jv-tabsbar { position:sticky; top:0; z-index:5; background:var(--bg); display:flex; align-items:center; gap:10px; padding:6px 0 8px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .jv-tabs { display:flex; gap:2px; }
+  .jv-tabs button { border:0; background:transparent; color:var(--muted); padding:6px 12px; font-size:14.5px; font-weight:650; border-radius:8px; }
+  .jv-tabs button:hover { color:var(--ink); }
+  .jv-tabs button.on { color:var(--ink); background:var(--surface); box-shadow:var(--shadow); }
+  .jv-tabs button b { color:var(--faint); font-weight:600; margin-left:4px; font-variant-numeric:tabular-nums; }
+  .jv-tabsbar .sp { flex:1; }
+  .jv-sort { padding:4px 8px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--ink); font:inherit; font-size:13.5px; }
+  /* the table: one grid for header, group rows and job rows so every column lines up */
+  .jv-t { --cols: 26px 40px minmax(220px,2fr) minmax(190px,1.35fr) 62px 66px 78px 104px 70px 66px; }
+  .jv-hd, .jv-r { display:grid; grid-template-columns:var(--cols); column-gap:12px; align-items:center; padding:0 10px; }
+  .jv-hd { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--faint); font-weight:700; padding-top:8px; padding-bottom:6px; }
+  .jv-hd .n, .jv-r .n { text-align:right; font-variant-numeric:tabular-nums; }
+  .jv-hd button { all:unset; cursor:pointer; } .jv-hd button:hover, .jv-hd button.on { color:var(--ink); }
+  .jv-g { display:flex; align-items:center; gap:10px; padding:14px 10px 6px; cursor:pointer; user-select:none; }
+  .jv-g .car { color:var(--faint); width:12px; font-size:11px; transition:transform .12s; }
+  .jv-g.shut .car { transform:rotate(-90deg); }
+  .jv-g i.sw { width:10px; height:10px; border-radius:3px; }
+  .jv-g strong { font-size:15px; }
+  .jv-g .m { color:var(--muted); font-size:13px; }
+  .jv-g .m .bad { color:var(--danger); font-weight:650; } .jv-g .m .live { color:var(--p-work); font-weight:650; }
+  .jv-g .sp { flex:1; }
+  .jv-g .ga { opacity:0; transition:opacity .1s; display:flex; gap:6px; }
+  .jv-g:hover .ga, .jv-g .ga:focus-within { opacity:1; }
+  .jv-g .ga button { font-size:12.5px; padding:2px 9px; border-radius:7px; border:1px solid var(--line); background:var(--surface); color:var(--muted); }
+  .jv-g .ga button:hover { color:var(--ink); }
+  .jv-rows { background:var(--surface); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .jv-r { min-height:52px; padding-top:7px; padding-bottom:7px; border-top:1px solid var(--line); cursor:pointer; }
+  .jv-r:first-child { border-top:0; }
+  .jv-r:hover { background:color-mix(in srgb, var(--surface-2) 60%, transparent); }
+  .jv-r.on { background:var(--accent-soft); }
+  .jv-r.off .nm b { color:var(--muted); font-weight:600; }
+  .jv-r input[type=checkbox], .jv-hd input[type=checkbox] { width:15px; height:15px; margin:0; accent-color:var(--accent); cursor:pointer; }
+  .jv-r .nm { min-width:0; }
+  .jv-r .nm b { display:block; font-weight:650; font-size:14.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .jv-r .nm .l { display:flex; gap:6px; align-items:center; font-size:12.5px; color:var(--muted); white-space:nowrap; overflow:hidden; }
+  .jv-r .nm .l span { overflow:hidden; text-overflow:ellipsis; }
+  .jv-r .nm .l .ws { flex:none; display:inline-flex; align-items:center; gap:4px; }
+  .jv-r .nm .l .ws i { width:7px; height:7px; border-radius:2px; }
+  .jv-tag { flex:none; font-size:11px; font-weight:700; padding:0 6px; border-radius:5px; line-height:17px; }
+  .jv-tag.bad { background:var(--danger-soft); color:var(--danger); }
+  .jv-tag.live { background:color-mix(in srgb, var(--p-work) 16%, transparent); color:var(--p-work); }
+  .jv-tag.off { background:var(--surface-2); color:var(--muted); }
+  .jv-tag.new { background:var(--surface-2); color:var(--faint); }
+  .jv-r .dim { color:var(--faint); font-size:13px; }
+  .jv-r .n { font-size:13.5px; }
+  .jv-r .n.bad { color:var(--danger); font-weight:650; } .jv-r .n.warn { color:var(--warn); font-weight:650; }
+  .jv-r .when { font-size:13px; text-align:right; line-height:1.25; }
+  .jv-r .when small { display:block; color:var(--faint); font-size:11.5px; }
+  .jv-r .acts { display:flex; justify-content:flex-end; gap:2px; }
+  .jv-r .acts button { border:0; background:transparent; color:var(--muted); border-radius:7px; padding:3px 7px; font-size:14px; }
+  .jv-r .acts button:hover { background:var(--surface-2); color:var(--ink); }
+  /* the run strip: oldest left, newest right, like reading a log; one square per run */
+  .jv-strip { display:flex; gap:2px; align-items:center; height:22px; }
+  .jv-strip .sq { flex:1 1 0; max-width:9px; min-width:3px; height:18px; border-radius:2px; background:var(--surface-2); }
+  .jv-strip .sq[data-run] { cursor:pointer; }
+  .jv-strip .sq[data-run]:hover { transform:scaleY(1.2); outline:1px solid var(--ink); }
+  .sq.s-success { background:var(--ok); }
+  .sq.s-failed, .sq.s-timeout, .sq.s-blocked, .sq.s-interrupted { background:var(--danger); }
+  .sq.s-running { background:var(--p-work); } body.blink .sq.s-running { opacity:.45; }
+  .sq.s-queued, .sq.s-paused { background:var(--p-wait); }
+  .sq.s-rate_limited { background:var(--warn); }
+  .sq.s-killed { background:var(--faint); }
+  .sq.now { outline:2px solid var(--ink); outline-offset:1px; }
+  .jv-switch { width:30px; height:17px; border-radius:999px; background:var(--line); position:relative; border:0; padding:0; transition:background .15s; }
+  .jv-switch::after { content:""; position:absolute; top:2px; left:2px; width:13px; height:13px; border-radius:50%; background:#fff; transition:left .15s; box-shadow:0 1px 2px rgba(0,0,0,.2); }
+  .jv-switch.on { background:var(--accent); } .jv-switch.on::after { left:15px; }
+  .jv-empty { color:var(--faint); padding:60px 20px; text-align:center; line-height:1.6; }
+  .jv-empty b { color:var(--ink); }
+  /* runs feed and upcoming: one row per run / per fire, grouped by day */
+  .jv-day { font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); font-weight:700; padding:14px 10px 6px; }
+  .jv-f { --cols: 16px 74px minmax(170px,1.2fr) 120px 62px 62px 70px minmax(200px,2fr); }
+  .jv-u { --cols: 84px 76px minmax(200px,1.5fr) 150px minmax(160px,1fr) 44px; }
+  .jv-u .t { white-space:nowrap; }
+  .jv-f .jv-r, .jv-u .jv-r { min-height:40px; }
+  .jv-f .st { font-weight:650; font-size:13px; }
+  .jv-f .st.bad { color:var(--danger); } .jv-f .st.good { color:var(--ok); } .jv-f .st.live { color:var(--p-work); }
+  .jv-f .sum { color:var(--muted); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .jv-f .sum.err { color:var(--danger); }
+  .jv-f .jn, .jv-u .jn { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .jv-u .t { font-weight:700; font-variant-numeric:tabular-nums; }
+  .jv-u .in { color:var(--accent); font-size:13px; font-weight:600; }
+  .jv-f .wsn, .jv-u .wsn { display:flex; align-items:center; gap:5px; font-size:13px; color:var(--muted); white-space:nowrap; overflow:hidden; }
+  .jv-f .wsn i, .jv-u .wsn i { width:7px; height:7px; border-radius:2px; flex:none; }
+  /* bulk: what you checked, and what to do with all of it */
+  .jv-bulk { position:sticky; bottom:20px; width:max-content; max-width:calc(100% - 32px); margin:-40px auto 20px; display:flex; align-items:center; gap:8px; padding:8px 10px 8px 16px;
+    background:var(--ink); color:var(--bg); border-radius:12px; box-shadow:0 12px 40px rgba(0,0,0,.3); z-index:20; font-size:14px; white-space:nowrap; }
+  .jv-bulk[hidden] { display:none; }
+  .jv-bulk b { margin-right:6px; }
+  .jv-bulk button { border:1px solid color-mix(in srgb, var(--bg) 25%, transparent); background:transparent; color:var(--bg); border-radius:8px; padding:4px 11px; font-size:13.5px; }
+  .jv-bulk button:hover { background:color-mix(in srgb, var(--bg) 14%, transparent); }
+  .jv-bulk button.danger { background:var(--danger); border-color:transparent; color:#fff; }
+  /* the drawer: one job — header, health, tabs (Runs · Settings · Triggers) */
+  .jv-dr { width:min(640px, 46vw); flex:none; border-left:1px solid var(--line); background:var(--surface); display:flex; flex-direction:column; min-height:0; }
+  .jv-dr[hidden] { display:none; }
+  @media (max-width:1000px) { .jv-dr { position:absolute; right:0; top:52px; bottom:0; width:min(640px,100vw); z-index:15; box-shadow:-10px 0 40px rgba(0,0,0,.15); } }
+  .jv-dh { padding:12px 16px 10px; border-bottom:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+  .jv-dh .r1 { display:flex; align-items:center; gap:8px; }
+  .jv-dh .r1 input.name { flex:1; min-width:0; font-family:inherit; font-size:18px; font-weight:650; line-height:1.3; border:0; background:transparent; color:var(--ink); padding:3px 6px; margin-left:-6px; border-radius:6px; }
+  .jv-dh .r1 input.name:hover, .jv-dh .r1 input.name:focus { background:var(--surface-2); outline:0; }
+  .jv-dh .r2 { display:flex; align-items:center; gap:10px; font-size:13px; color:var(--muted); flex-wrap:wrap; }
+  .jv-dh .r2 .ws { display:inline-flex; align-items:center; gap:5px; } .jv-dh .r2 .ws i { width:8px; height:8px; border-radius:2px; }
+  .jv-dh .r2 .sw { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+  .jv-ds { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:1px; background:var(--line); border-bottom:1px solid var(--line); }
+  .jv-ds div { background:var(--surface); padding:8px 12px; display:flex; flex-direction:column; min-width:0; }
+  .jv-ds .k { font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--faint); font-weight:700; }
+  .jv-ds .v { font-size:15px; font-weight:650; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .jv-ds .v.bad { color:var(--danger); } .jv-ds .v.good { color:var(--ok); }
+  .jv-dt { display:flex; gap:2px; padding:8px 12px 0; border-bottom:1px solid var(--line); }
+  .jv-dt button { border:0; background:transparent; color:var(--muted); padding:7px 12px; font-size:14px; font-weight:650; border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .jv-dt button.on { color:var(--ink); border-bottom-color:var(--accent); }
+  .jv-db { flex:1; min-height:0; overflow-y:auto; padding:14px 16px 18px; }
+  .jv-df { display:flex; gap:8px; align-items:center; padding:10px 16px; border-top:1px solid var(--line); }
+  .jv-df .sp { flex:1; }
+  .jv-dur { display:flex; align-items:flex-end; gap:3px; height:84px; padding:0 2px 4px; border-bottom:1px solid var(--line); margin-bottom:10px; }
+  .jv-dur span { flex:1; max-width:18px; min-height:3px; border-radius:3px 3px 0 0; cursor:pointer; opacity:.85; }
+  .jv-dur span:hover { opacity:1; outline:1px solid var(--ink); }
+  .jv-dur span.s-success { background:var(--ok); }
+  .jv-dur span.s-failed, .jv-dur span.s-timeout, .jv-dur span.s-blocked, .jv-dur span.s-interrupted { background:var(--danger); }
+  .jv-dur span.s-running { background:var(--p-work); } .jv-dur span.s-queued, .jv-dur span.s-paused { background:var(--p-wait); }
+  .jv-dur span.s-rate_limited { background:var(--warn); } .jv-dur span.s-killed { background:var(--faint); }
+  .jv-durcap { display:flex; justify-content:space-between; font-size:11.5px; color:var(--faint); margin:-6px 0 12px; }
+  .jv-rl .rr { display:grid; grid-template-columns:auto 1fr auto auto auto; gap:10px; align-items:center; padding:7px 8px; border-radius:8px; cursor:pointer; font-size:13.5px; }
+  .jv-rl .rr:hover { background:var(--surface-2); }
+  .jv-rl .rr .w { display:flex; flex-direction:column; min-width:0; }
+  .jv-rl .rr .w b { font-weight:600; }
+  .jv-rl .rr .w span { color:var(--muted); font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .jv-rl .rr .w span.err { color:var(--danger); }
+  .jv-rl .rr .n { color:var(--faint); font-variant-numeric:tabular-nums; font-size:12.5px; text-align:right; }
+  .jv-sec { font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); font-weight:700; margin:18px 0 8px; padding-bottom:4px; border-bottom:1px solid var(--line); }
+  .jv-sec:first-child { margin-top:0; }
+  .jv-db .f { display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }
+  .jv-db .f > span { font-size:12px; color:var(--muted); font-weight:650; }
+  .jv-db .f .hint { font-size:12px; color:var(--faint); font-weight:500; }
+  .jv-db input, .jv-db select, .jv-db textarea { padding:7px 9px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font-size:14px; line-height:1.4; font-family:inherit; }
+  .jv-db textarea { resize:vertical; }
+  .jv-db textarea.mono { font:13px/1.5 ui-monospace,"SF Mono",Menlo,monospace; min-height:200px; }
+  .jv-db .cols { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:0 12px; }
+  .jv-db .next { font-size:13px; color:var(--accent); margin:-4px 0 12px; }
+  .jv-db .rdet .rh { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; font-size:13.5px; color:var(--muted); }
+  .jv-db .rdet .rh b { color:var(--ink); }
+  .jv-db .rdet .back { border:0; background:none; color:var(--accent); font-size:13px; padding:0 0 10px; font-weight:650; }
+  .jv-db .err { color:var(--danger); white-space:pre-wrap; font:12.5px ui-monospace,Menlo,monospace; }
+  .jv-db .trow { display:flex; gap:10px; align-items:center; padding:7px 8px; border:1px solid var(--line); border-radius:8px; margin-bottom:6px; font-size:13.5px; }
+  .jv-db .trow code { font:12px ui-monospace,Menlo,monospace; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  .jv-menu { position:relative; }
+  .jv-menu > div { position:absolute; right:0; top:calc(100% + 4px); background:var(--surface); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); padding:4px; display:flex; flex-direction:column; min-width:170px; z-index:30; }
+  .jv-menu > div[hidden] { display:none; }
+  .jv-menu > div button { border:0; background:none; text-align:left; padding:6px 10px; border-radius:7px; font-size:13.5px; color:var(--ink); }
+  .jv-menu > div button:hover { background:var(--surface-2); }
+  .jv-menu > div button.danger { color:var(--danger); }
+  /* narrower (the drawer is open, or a small window): the columns you can live without go first */
+  @container (max-width:1180px) {
+    .jv-top { grid-template-columns:1fr; }
+    .jv-t { --cols: 26px 40px minmax(180px,2fr) minmax(130px,1.3fr) 56px 74px 100px 58px; }
+    .jv-t .c-avg, .jv-t .c-cost { display:none; }
+    .jv-f { --cols: 16px 74px minmax(150px,1fr) 58px 58px minmax(160px,1.6fr); }
+    .jv-f .c-ws, .jv-f .c-cost { display:none; }
+    .jv-u { --cols: 84px 70px minmax(160px,1fr) 130px 44px; }
+    .jv-u .dim { display:none; }
+  }
+  @container (max-width:720px) {
+    .jv-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .jv-t { --cols: 26px 40px minmax(0,1fr) 70px 90px 34px; }
+    .jv-t .c-strip, .jv-t .c-rate { display:none; }
+    .jv-t .acts button[data-go] { display:none; }
+    .jv-u .wsn { display:none; }
+    .jv-u { --cols: 84px 70px minmax(0,1fr) 44px; }
+  }
   /* Computers: the Jobs layout — every computer on the left, one on the right. */
   #dlg-hosts { width:min(980px,96vw); }
   #dlg-hosts .dlg { padding:0; gap:0; height:min(80vh, 760px); }
@@ -1290,17 +1488,38 @@
      happened recently, what is next. You write it once; Robert keeps it current and reads all of
      them at the start of every turn. The last tab is his own memory of you. -->
 <!-- Jobs: agent work that runs without you — on a schedule, once at a time, on a webhook, or by
-     hand. Left: every job you set up (the fleet's own ticket/review runs are not jobs). Right: the
-     one you picked — its schedule, instructions, agent settings, triggers, and every run with its
-     summary and plain-English story. Robert sets these up too (`mc job new`). -->
+     hand. Full screen: the fleet's numbers and days on top, then one row per job with its last runs
+     as a strip, grouped by client; Runs is every run across jobs (what failed today), Upcoming is
+     what fires next. A job opens in the drawer: its runs, its settings, its triggers, one run's
+     story. The fleet's own ticket/review runs are not jobs unless you ask for them (⚙ System).
+     Robert sets these up too (`mc job new`). -->
 <dialog id="dlg-jobs">
-  <div class="dlg">
-    <div class="jobs">
-      <aside class="jlist">
-        <div class="jl-head"><strong>Jobs</strong><button class="btn primary" id="job-new">+ New</button><button class="icon" id="jobs-close" title="Close">✕</button></div>
-        <div class="jrows" id="job-rows"></div>
-      </aside>
-      <section class="jmain" id="jmain"></section>
+  <div class="jv">
+    <header class="jv-bar">
+      <button class="back" id="jobs-close" title="Back to the Desk (esc)">‹ Desk</button>
+      <h2>Jobs</h2>
+      <input class="jv-q" id="jv-q" placeholder="Search jobs, instructions…  /" autocomplete="off" spellcheck="false">
+      <span class="jv-seg" id="jv-win" title="The window the numbers, the days and the success rates cover"></span>
+      <span class="sp"></span>
+      <label class="jv-chk" title="Also show the jobs the fleet files for itself — ticket builds, reviews, plans, grades, dreams"><input type="checkbox" id="jv-sys"> System jobs</label>
+      <button class="btn primary" id="job-new">+ New job</button>
+    </header>
+    <div class="jv-body">
+      <section class="jv-main" id="jv-main">
+        <div class="jv-wrap">
+          <div class="jv-chips" id="jv-ws"></div>
+          <div class="jv-top"><div class="jv-kpis" id="jv-kpis"></div><div class="jv-hist" id="jv-hist"></div></div>
+          <div class="jv-tabsbar">
+            <div class="jv-tabs" id="jv-tabs"></div>
+            <span class="jv-seg" id="jv-filter"></span>
+            <span class="sp"></span>
+            <span id="jv-tools"></span>
+          </div>
+          <div id="jv-list"></div>
+        </div>
+        <div class="jv-bulk" id="jv-bulk" hidden></div>
+      </section>
+      <aside class="jv-dr" id="jv-dr" hidden></aside>
     </div>
   </div>
 </dialog>
@@ -4244,6 +4463,7 @@ qs("#keys-close").onclick = () => qs("#dlg-keys").close();
 
 // A /desk#reopen=<id> link selects an active terminal or revives a dormant one from SQLite.
 async function openFromHash() {
+  if (location.hash === "#jobs") return openJobs();
   const m = /#reopen=([0-9a-f-]{8,})/.exec(location.hash);
   if (!m) return;
   history.replaceState(null, "", location.pathname);
@@ -4433,138 +4653,410 @@ qs("#chat-log").addEventListener("click", (e) => {
   if (byId(id)) select(id); else toast("that terminal is gone");
 });
 // ── jobs ─────────────────────────────────────────────────────────────────────────────────────
-// Agent work that runs without you. The dialog is the whole surface: the list of jobs you (or
-// Robert) set up, one job's settings, its runs, and one run's story. Everything is the same API
-// Robert drives — nothing here that `mc job` cannot do.
-const J = { jobs: [], sel: null, tab: "overview", runs: [], run: null, story: null, triggers: [], busy: false };
+// Agent work that runs without you, as a full-screen page: every job with its last runs as a
+// strip, its health over a window, grouped by client; every run across jobs; what fires next.
+// One job opens in the drawer — runs, settings, triggers, one run's story. Everything is the same
+// API Robert drives — nothing here that `mc job` cannot do.
+const J = {
+  jobs: [], days: [], daysByWs: {}, feed: [], feedAt: 0, loaded: false,
+  sel: null, dirty: false, dtab: "runs", runs: [], triggers: [], run: null, story: null, menu: false,
+  checked: new Set(),
+  view: ["jobs", "runs", "upcoming"].includes(localStorage.getItem("jobs-view")) ? localStorage.getItem("jobs-view") : "jobs",
+  ws: localStorage.getItem("jobs-ws") || "all",
+  filter: "all", feedStatus: "all", q: "",
+  win: Number(localStorage.getItem("jobs-win")) || 7,
+  sys: localStorage.getItem("jobs-sys") === "1",
+  sort: localStorage.getItem("jobs-sort") || "health",
+  shut: new Set(readJson("jobs-shut", [])),
+};
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
-const CRON_PRESETS = [["0 * * * *", "hourly"], ["*/30 * * * *", "every 30 min"], ["0 9 * * *", "daily 09:00"], ["0 9 * * 1-5", "weekdays 09:00"], ["0 9 * * 1", "weekly Monday 09:00"]];
+const STRIP = 30;
+const CRON_PRESETS = [["0 * * * *", "hourly"], ["*/30 * * * *", "every 30 min"], ["*/15 * * * *", "every 15 min"], ["0 9 * * *", "daily 09:00"], ["0 9 * * 1-5", "weekdays 09:00"], ["0 9 * * 1", "weekly Monday 09:00"]];
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const RUN_DOT = { success: "done", failed: "blocked", timeout: "blocked", blocked: "blocked", running: "working", queued: "waiting", rate_limited: "waiting", paused: "waiting", killed: "ended" };
+const RUN_DOT = { success: "done", failed: "blocked", timeout: "blocked", blocked: "blocked", interrupted: "blocked", running: "working", queued: "waiting", rate_limited: "waiting", paused: "waiting", killed: "ended" };
+const FAILED = new Set(["failed", "timeout", "blocked", "interrupted"]);
+const LIVE = new Set(["running", "queued"]);
+const RUN_WORD = { rate_limited: "rate limited" };
 // A cron in words for the patterns people actually write; anything else stays as the expression.
 function cronText(x) {
   const m = String(x || "").trim().split(/\s+/); if (m.length !== 5) return x || "";
   const [mi, h, dom, mon, dow] = m; const hm = (H, M) => String(H).padStart(2, "0") + ":" + String(M).padStart(2, "0");
   if (/^\*\/\d+$/.test(mi) && h === "*" && dom === "*" && mon === "*" && dow === "*") return "every " + mi.slice(2) + " min";
   if (mi === "0" && h === "*" && dom === "*" && mon === "*" && dow === "*") return "hourly";
+  if (/^\d+$/.test(mi) && /^\*\/\d+$/.test(h) && dom === "*" && mon === "*" && dow === "*") return "every " + h.slice(2) + "h";
   if (/^\d+$/.test(mi) && /^\d+$/.test(h) && dom === "*" && mon === "*") {
     if (dow === "*") return "daily " + hm(h, mi);
     if (dow === "1-5") return "weekdays " + hm(h, mi);
     if (/^\d$/.test(dow)) return "weekly " + DAYS[Number(dow)] + " " + hm(h, mi);
   }
+  if (/^\d+$/.test(mi) && /^\d+$/.test(h) && /^\d+$/.test(dom) && mon === "*" && dow === "*") return "monthly, day " + dom + " " + hm(h, mi);
   return x;
 }
 const fmtWhen = (iso) => iso ? new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+function fmtSoon(iso) {
+  if (!iso) return "";
+  const d = new Date(iso), far = Date.parse(iso) - Date.now() > 6 * 86400000;
+  return d.toLocaleString([], far ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" } : { weekday: "short", hour: "2-digit", minute: "2-digit" });
+}
+const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+// A job's zone is worth a word only when its clock differs from yours right now — two names for
+// the same zone (America/Argentina/Buenos_Aires, America/Buenos_Aires) are the same clock.
+function tzOff(tz) {
+  try { return new Intl.DateTimeFormat("en", { timeZone: tz, timeZoneName: "shortOffset" }).formatToParts(new Date()).find((p) => p.type === "timeZoneName")?.value || tz; } catch { return tz; }
+}
 function schedText(j) {
-  if (j.trigger_type === "cron") return cronText(j.cron_expr) + (j.timezone && j.timezone !== TZ ? " · " + j.timezone : "");
+  if (j.trigger_type === "cron") return cronText(j.cron_expr) + (j.timezone && j.timezone !== TZ && tzOff(j.timezone) !== tzOff(TZ) ? " · " + j.timezone.split("/").pop().replace(/_/g, " ") + " time" : "");
   if (j.trigger_type === "once") return j.run_at ? "once · " + fmtWhen(j.run_at) : "once · fired";
   if (j.trigger_type === "webhook") return "webhook";
-  return "manual";
+  return "by hand";
 }
-const dur = (a, b) => { if (!a) return ""; const s = Math.max(0, Math.round((Date.parse(b || new Date().toISOString()) - Date.parse(a)) / 1000)); return s < 60 ? s + "s" : s < 3600 ? Math.round(s / 60) + "m" : (s / 3600).toFixed(1) + "h"; };
+const secs = (a, b) => a ? Math.max(0, Math.round((Date.parse(b || new Date().toISOString()) - Date.parse(a)) / 1000)) : null;
+function fmtDur(s) {
+  if (s == null) return "—";
+  if (s < 60) return s + "s";
+  if (s < 3600) { const m = Math.floor(s / 60), r = s % 60; return m + "m" + (r && m < 10 ? " " + r + "s" : ""); }
+  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60); return h + "h" + (m ? " " + m + "m" : "");
+}
+const dur = (a, b) => fmtDur(secs(a, b));
+// "in 12m" / "in 3h" / "in 2d" — how far away the next fire is.
+function inWhen(iso) {
+  if (!iso) return "";
+  const m = Math.round((Date.parse(iso) - Date.now()) / 60000);
+  if (m <= 0) return "now";
+  if (m < 60) return "in " + m + "m";
+  const h = Math.round(m / 60); return h < 36 ? "in " + h + "h" : "in " + Math.round(h / 24) + "d";
+}
+const pct = (a, b) => (b ? Math.round((a / b) * 100) : null);
 const jobById = (id) => J.jobs.find((j) => j.id === id);
-async function loadJobs() { try { J.jobs = await api("/jobs?kind=operator"); } catch (e) { toast("jobs: " + errMsg(e)); } }
+const wsKey = (j) => j.workspace_id || "";
+const wsLabel = (id) => (id ? wsName(id) || "unknown client" : "no client");
+const wsDot = (id) => `<i style="background:${id ? wsColor(id) : "var(--faint)"}"></i>`;
+const jobKind = () => (J.sys ? "all" : "operator");
+function savePrefs() {
+  try {
+    localStorage.setItem("jobs-view", J.view); localStorage.setItem("jobs-ws", J.ws); localStorage.setItem("jobs-win", String(J.win));
+    localStorage.setItem("jobs-sys", J.sys ? "1" : "0"); localStorage.setItem("jobs-sort", J.sort); localStorage.setItem("jobs-shut", JSON.stringify([...J.shut]));
+  } catch {}
+}
+
+async function loadJobs() {
+  try {
+    const b = await api(`/jobs/board?kind=${jobKind()}&days=${J.win}&strip=${STRIP}&tz=${new Date().getTimezoneOffset()}`);
+    J.jobs = b.jobs; J.days = b.days; J.daysByWs = b.days_by_ws || {}; J.loaded = true;
+    for (const id of [...J.checked]) if (!jobById(id)) J.checked.delete(id);
+  } catch (e) { toast("jobs: " + errMsg(e)); }
+}
+async function loadFeed() {
+  try { J.feed = await api(`/jobs/runs?kind=${jobKind()}&days=${J.win}&status=${J.feedStatus}&limit=400`); J.feedAt = Date.now(); }
+  catch (e) { toast("runs: " + errMsg(e)); }
+}
 async function openJobs(id) {
   const d0 = qs("#dlg-jobs");
-  await loadJobs();
   if (!d0.open) d0.showModal();
-  if (id && jobById(id)) await selectJob(id); else if (!J.sel || !jobById(J.sel)) { if (J.jobs[0]) await selectJob(J.jobs[0].id); else newJob(); }
+  if (location.hash !== "#jobs") history.replaceState(null, "", "#jobs");
+  if (!J.loaded) renderJobs();
+  await Promise.all([loadJobs(), J.view === "runs" ? loadFeed() : null]);
   renderJobs();
+  if (id && jobById(id)) await selectJob(id);
+  if (!id) qs("#jv-q").focus({ preventScroll: true });
 }
-function renderJobs() { renderJobList(); renderJobMain(); }
+function closeJobs() {
+  qs("#dlg-jobs").close();
+}
+qs("#dlg-jobs").addEventListener("close", () => { if (location.hash === "#jobs") history.replaceState(null, "", location.pathname); });
+
+// ── what the filters leave ──────────────────────────────────────────────────────────────────
+const failing = (j) => j.stats.streak_failed > 0;
+const running = (j) => j.stats.live > 0;
+function matchesQ(j) {
+  if (!J.q) return true;
+  const hay = (j.name + " " + (j.description || "") + " " + (j.goal || "") + " " + wsLabel(j.workspace_id) + " " + schedText(j)).toLowerCase();
+  return J.q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
+}
+const inWs = (j) => J.ws === "all" || wsKey(j) === J.ws;
+const FILTERS = [
+  ["all", "All", () => true],
+  ["failing", "Failing", failing],
+  ["running", "Running", running],
+  ["active", "Active", (j) => !!j.enabled],
+  ["paused", "Paused", (j) => !j.enabled],
+  ["never", "Never ran", (j) => !j.recent.length],
+];
+function visibleJobs() {
+  const f = (FILTERS.find((x) => x[0] === J.filter) || FILTERS[0])[2];
+  return J.jobs.filter((j) => inWs(j) && matchesQ(j) && f(j));
+}
+const lastAt = (j) => (j.recent[0] ? Date.parse(j.recent[0].started_at || j.recent[0].ended_at || 0) || Infinity : 0);
+const SORTS = {
+  health: ["Needs attention", (a, b) => (b.stats.streak_failed - a.stats.streak_failed) || (b.stats.live - a.stats.live) || (b.enabled - a.enabled) || a.name.localeCompare(b.name)],
+  name: ["Name", (a, b) => a.name.localeCompare(b.name)],
+  last: ["Last run", (a, b) => lastAt(b) - lastAt(a)],
+  next: ["Next run", (a, b) => (a.next_run ? Date.parse(a.next_run) : Infinity) - (b.next_run ? Date.parse(b.next_run) : Infinity)],
+  fails: ["Most failures", (a, b) => (b.stats.failed - a.stats.failed) || a.name.localeCompare(b.name)],
+  cost: ["Spend", (a, b) => b.stats.cost - a.stats.cost],
+  runs: ["Most runs", (a, b) => b.stats.runs - a.stats.runs],
+};
+
+// ── render ──────────────────────────────────────────────────────────────────────────────────
+function renderJobs() { renderJobChrome(); renderJobList(); renderDrawer(); renderBulk(); }
+function renderJobChrome() {
+  qs("#jv-win").innerHTML = [[1, "24h"], [7, "7d"], [14, "14d"], [30, "30d"]].map(([d, l]) => `<button data-win="${d}" class="${J.win === d ? "on" : ""}">${l}</button>`).join("");
+  qs("#jv-sys").checked = J.sys;
+  // clients: only the ones that have jobs, with how many and how many are failing
+  const by = new Map();
+  for (const j of J.jobs) { const k = wsKey(j); const c = by.get(k) || { n: 0, bad: 0 }; c.n++; if (failing(j)) c.bad++; by.set(k, c); }
+  if (J.ws !== "all" && !by.has(J.ws)) J.ws = "all";
+  const order = [...by.keys()].sort((a, b) => wsLabel(a).localeCompare(wsLabel(b)));
+  const totalBad = J.jobs.filter(failing).length;
+  qs("#jv-ws").innerHTML = `<button class="jv-chip${J.ws === "all" ? " on" : ""}" data-ws="all">All clients <b>${J.jobs.length}</b>${totalBad ? ` <b class="bad">${totalBad} failing</b>` : ""}</button>` +
+    order.map((k) => { const c = by.get(k); return `<button class="jv-chip${J.ws === k ? " on" : ""}" data-ws="${esc(k)}">${wsDot(k)}${esc(wsLabel(k))} <b>${c.n}</b>${c.bad ? ` <b class="bad">${c.bad}✕</b>` : ""}</button>`; }).join("");
+  renderKpis();
+  renderHist();
+  const scoped = J.jobs.filter(inWs);
+  const liveN = scoped.reduce((n, j) => n + j.stats.live, 0);
+  qs("#jv-tabs").innerHTML = [["jobs", "Jobs", scoped.length], ["runs", "Runs", null], ["upcoming", "Upcoming", scoped.filter((j) => j.enabled && j.next_run).length]]
+    .map(([k, l, n]) => `<button data-view="${k}" class="${J.view === k ? "on" : ""}">${l}${n != null ? `<b>${n}</b>` : k === "runs" && liveN ? `<b style="color:var(--p-work)">${liveN} live</b>` : ""}</button>`).join("");
+  if (J.view === "jobs") {
+    qs("#jv-filter").innerHTML = FILTERS.map(([k, l, f]) => { const n = scoped.filter(f).length; return `<button data-filter="${k}" class="${J.filter === k ? "on" : ""}">${l}${k === "all" ? "" : " " + n}</button>`; }).join("");
+    qs("#jv-tools").innerHTML = `<select class="jv-sort" id="jv-sort" title="Order">${Object.entries(SORTS).map(([k, [l]]) => opt(k, J.sort, "Sort: " + l)).join("")}</select>`;
+  } else if (J.view === "runs") {
+    qs("#jv-filter").innerHTML = [["all", "All"], ["failed", "Failed"], ["live", "Live"], ["success", "Succeeded"]].map(([k, l]) => `<button data-fs="${k}" class="${J.feedStatus === k ? "on" : ""}">${l}</button>`).join("");
+    qs("#jv-tools").innerHTML = "";
+  } else { qs("#jv-filter").innerHTML = ""; qs("#jv-tools").innerHTML = ""; }
+  qs("#jv-filter").hidden = J.view === "upcoming";
+}
+function renderKpis() {
+  const js = J.jobs.filter(inWs);
+  const s = js.reduce((a, j) => ({ runs: a.runs + j.stats.runs, ok: a.ok + j.stats.success, bad: a.bad + j.stats.failed, live: a.live + j.stats.live, cost: a.cost + j.stats.cost }), { runs: 0, ok: 0, bad: 0, live: 0, cost: 0 });
+  const active = js.filter((j) => j.enabled).length;
+  const failingN = js.filter(failing).length;
+  const rate = pct(s.ok, s.ok + s.bad);
+  const next = js.filter((j) => j.enabled && j.next_run).sort((a, b) => Date.parse(a.next_run) - Date.parse(b.next_run))[0];
+  const win = J.win === 1 ? "24h" : J.win + "d";
+  const k = (cls, key, v, sub, act) => `<${act ? `button data-kpi="${act}"` : "div"} class="jv-kpi ${cls}"><span class="k">${key}</span><span class="v">${v}</span><span class="s">${sub}</span></${act ? "button" : "div"}>`;
+  qs("#jv-kpis").innerHTML =
+    k("", "Jobs", `${active}<small> / ${js.length}</small>`, `${js.length - active} paused`, "active") +
+    k(s.live ? "live" : "", "Running now", s.live, s.live ? "in flight" : "nothing running", "running") +
+    k(failingN ? "bad" : "", "Failing", failingN, failingN ? "last run failed" : "all green", "failing") +
+    k(rate == null ? "" : rate >= 95 ? "good" : rate < 80 ? "bad" : "", "Success · " + win, rate == null ? "—" : rate + "<small>%</small>", `${s.ok} ok · ${s.bad} failed`) +
+    k("", "Runs · " + win, s.runs, s.runs ? "≈ " + Math.round(s.runs / J.win) + " a day" : "none yet") +
+    k("", "Spend · " + win, money(s.cost), next ? `next: ${esc(next.name)} ${inWhen(next.next_run)}` : "nothing scheduled");
+}
+function renderHist() {
+  const days = J.ws === "all" ? J.days : (J.daysByWs[J.ws] || J.days.map((d) => ({ ...d, success: 0, failed: 0, other: 0, cost: 0 })));
+  const max = Math.max(1, ...days.map((d) => d.success + d.failed + d.other));
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const lbl = (day) => { const d = new Date(day + "T12:00:00"); return days.length > 16 ? String(d.getDate()) : d.toLocaleDateString([], { weekday: "short" }).slice(0, 2) + " " + d.getDate(); };
+  const tot = days.reduce((a, d) => ({ ok: a.ok + d.success, bad: a.bad + d.failed }), { ok: 0, bad: 0 });
+  qs("#jv-hist").innerHTML = `<div class="hh">Runs per day<span class="lg"><span><i class="c-ok"></i>${tot.ok} ok</span><span><i class="c-bad"></i>${tot.bad} failed</span><span><i class="c-oth"></i>other</span></span></div>` +
+    `<div class="jv-bars">` + days.map((d) => {
+      const n = d.success + d.failed + d.other;
+      const h = (x) => (x / max) * 100;
+      return `<div class="d${d.day === today ? " today" : ""}" title="${esc(new Date(d.day + "T12:00:00").toDateString())} · ${d.success} ok · ${d.failed} failed · ${d.other} other · ${money(d.cost)}">` +
+        `<div class="col" style="flex:none;height:${n ? `calc((100% - 18px) * ${(h(n) / 100).toFixed(4)})` : "2px;background:var(--surface-2)"}">` +
+        (d.success ? `<span class="c-ok" style="flex:${d.success}"></span>` : "") + (d.other ? `<span class="c-oth" style="flex:${d.other}"></span>` : "") + (d.failed ? `<span class="c-bad" style="flex:${d.failed}"></span>` : "") +
+        `</div><div class="x">${esc(lbl(d.day))}</div></div>`;
+    }).join("") + `</div>`;
+}
+function stripHtml(j) {
+  const rs = j.recent.slice(0, STRIP).reverse();
+  const pad = Math.max(0, STRIP - rs.length);
+  return `<div class="jv-strip">` + `<i class="sq"></i>`.repeat(pad) + rs.map((r) =>
+    `<i class="sq s-${esc(r.status)}${J.run && J.run.id === r.id ? " now" : ""}" data-run="${r.id}" title="${esc((RUN_WORD[r.status] || r.status) + " · " + fmtWhen(r.started_at) + (r.ended_at ? " · " + dur(r.started_at, r.ended_at) : "") + (r.cost_usd != null ? " · " + money(r.cost_usd) : "") + (r.trigger_src ? " · " + r.trigger_src : ""))}"></i>`).join("") + `</div>`;
+}
+function jobRowHtml(j) {
+  const st = j.stats, rate = pct(st.success, st.success + st.failed);
+  const lr = j.recent[0];
+  const tags = (failing(j) ? `<span class="jv-tag bad">${st.streak_failed > 1 ? st.streak_failed + " failed in a row" : "failed"}</span>` : "") +
+    (running(j) ? `<span class="jv-tag live">running</span>` : "") + (!j.enabled ? `<span class="jv-tag off">paused</span>` : "") + (!j.recent.length ? `<span class="jv-tag new">never ran</span>` : "");
+  return `<div class="jv-r${J.sel === j.id ? " on" : ""}${j.enabled ? "" : " off"}" data-job="${j.id}">` +
+    `<input type="checkbox" data-chk="${j.id}"${J.checked.has(j.id) ? " checked" : ""} title="Select">` +
+    `<button class="jv-switch${j.enabled ? " on" : ""}" data-tog="${j.id}" title="${j.enabled ? "Active — click to pause" : "Paused — click to resume"}"></button>` +
+    `<div class="nm"><b title="${esc(j.name)}">${esc(j.name)}</b><div class="l"><span>${esc(schedText(j))}${j.description ? " · " + esc(j.description) : ""}</span>${tags}</div></div>` +
+    `<div class="c-strip">${stripHtml(j)}</div>` +
+    `<span class="n c-rate${rate != null && rate < 80 ? " bad" : rate != null && rate < 95 ? " warn" : ""}" title="${st.success} ok · ${st.failed} failed · ${st.runs} runs in the window">${rate == null ? `<span class="dim">—</span>` : rate + "%"}</span>` +
+    `<span class="n c-avg" title="average successful run · longest ${fmtDur(st.max_sec)}">${st.avg_sec == null ? `<span class="dim">—</span>` : fmtDur(st.avg_sec)}</span>` +
+    `<span class="when" title="${lr ? esc(fmtWhen(lr.started_at)) : ""}">${lr ? esc(age(lr.started_at || lr.ended_at)) + (age(lr.started_at || lr.ended_at) === "now" ? "" : " ago") + `<small>${esc(RUN_WORD[lr.status] || lr.status)}</small>` : `<span class="dim">—</span>`}</span>` +
+    `<span class="when">${j.enabled && j.next_run ? esc(inWhen(j.next_run)) + `<small>${esc(fmtSoon(j.next_run))}</small>` : `<span class="dim">${j.enabled ? "—" : "paused"}</span>`}</span>` +
+    `<span class="n c-cost">${st.cost ? money(st.cost) : `<span class="dim">—</span>`}</span>` +
+    `<span class="acts"><button data-go="${j.id}" title="Run it now">▶</button><button data-open="${j.id}" title="Open">›</button></span></div>`;
+}
+const groupByWs = () => J.ws === "all";
 function renderJobList() {
-  const host = qs("#job-rows");
-  host.innerHTML = J.jobs.map((j) => {
-    const lr = j.last_run;
-    return `<div class="jrow${J.sel === j.id ? " on" : ""}${j.enabled ? "" : " off"}" data-job="${j.id}">` +
-      `<span class="dot ${lr ? RUN_DOT[lr.status] || "ended" : "ended"}"></span>` +
-      `<div><div class="t">${esc(j.name)}</div><div class="l">${esc(schedText(j))}${j.next_run ? " · next " + esc(fmtWhen(j.next_run)) : ""}</div></div>` +
-      `<span class="age">${lr ? esc(age(lr.ended_at || lr.started_at)) : ""}</span></div>`;
-  }).join("") || `<div class="jempty">no jobs yet</div>`;
-  for (const el of qsa("[data-job]", host)) el.onclick = () => selectJob(el.dataset.job);
+  const host = qs("#jv-list");
+  if (!J.loaded) { host.innerHTML = `<div class="jv-empty">loading…</div>`; return; }
+  if (J.view === "runs") return renderFeed(host);
+  if (J.view === "upcoming") return renderUpcoming(host);
+  const list = visibleJobs().sort(SORTS[J.sort]?.[1] || SORTS.health[1]);
+  if (!J.jobs.length) { host.innerHTML = `<div class="jv-empty"><b>No jobs yet.</b><br>A job is agent work that runs without you — on a schedule, once, on a webhook, or by hand.<br><button class="btn primary" data-a="new" style="margin-top:14px">+ New job</button> or ask Robert.</div>`; return; }
+  if (!list.length) { host.innerHTML = `<div class="jv-empty">Nothing matches${J.q ? ` “${esc(J.q)}”` : ""}. <button class="btn ghost" data-a="clear">Clear filters</button></div>`; return; }
+  const allChecked = list.every((j) => J.checked.has(j.id));
+  const sortBtn = (k, l) => `<button data-sort="${k}" class="${J.sort === k ? "on" : ""}">${l}</button>`;
+  let out = `<div class="jv-t"><div class="jv-hd"><input type="checkbox" data-chkall${allChecked ? " checked" : ""} title="Select all shown"><span>On</span>${sortBtn("name", "Job")}<span class="c-strip">Last ${STRIP} runs</span><span class="n c-rate">${sortBtn("fails", "OK %")}</span><span class="n c-avg">Avg</span><span class="n">${sortBtn("last", "Last")}</span><span class="n">${sortBtn("next", "Next")}</span><span class="n c-cost">${sortBtn("cost", "Spend")}</span><span></span></div>`;
+  if (groupByWs()) {
+    const groups = new Map();
+    for (const j of list) { const k = wsKey(j); (groups.get(k) || groups.set(k, []).get(k)).push(j); }
+    const keys = [...groups.keys()].sort((a, b) => wsLabel(a).localeCompare(wsLabel(b)));
+    for (const k of keys) {
+      const js = groups.get(k), shut = J.shut.has(k);
+      const bad = js.filter(failing).length, live = js.filter(running).length, on = js.filter((j) => j.enabled).length;
+      out += `<div class="jv-g${shut ? " shut" : ""}" data-grp="${esc(k)}"><span class="car">▼</span><i class="sw" style="background:${k ? wsColor(k) : "var(--faint)"}"></i><strong>${esc(wsLabel(k))}</strong>` +
+        `<span class="m">${js.length} job${js.length === 1 ? "" : "s"} · ${on} active${bad ? ` · <span class="bad">${bad} failing</span>` : ""}${live ? ` · <span class="live">${live} running</span>` : ""}</span><span class="sp"></span>` +
+        `<span class="ga">${bad ? `<button data-ga="rerun" title="Run every failing job here again">↻ Rerun failing</button>` : ""}<button data-ga="disable">Pause all</button><button data-ga="enable">Resume all</button><button data-ga="select">Select</button></span></div>` +
+        (shut ? "" : `<div class="jv-rows">${js.map(jobRowHtml).join("")}</div>`);
+    }
+  } else out += `<div class="jv-rows" style="margin-top:4px">${list.map(jobRowHtml).join("")}</div>`;
+  host.innerHTML = out + `</div>`;
 }
-async function selectJob(id) {
-  J.sel = id; J.run = null; J.story = null;
+function dayLabel(iso) {
+  const d = new Date(iso), t = new Date(); const k = (x) => x.toDateString();
+  const y = new Date(t.getTime() - 86400000), tm = new Date(t.getTime() + 86400000);
+  if (k(d) === k(t)) return "Today";
+  if (k(d) === k(y)) return "Yesterday";
+  if (k(d) === k(tm)) return "Tomorrow";
+  return d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+}
+function renderFeed(host) {
+  const rows = J.feed.filter((r) => (J.ws === "all" || (r.workspace_id || "") === J.ws) && (!J.q || (r.job_name + " " + (r.summary || "") + " " + (r.error || "")).toLowerCase().includes(J.q.toLowerCase())));
+  if (!rows.length) { host.innerHTML = `<div class="jv-empty">${J.feedAt ? "No runs in this window." : "loading…"}</div>`; return; }
+  let out = `<div class="jv-f"><div class="jv-hd"><span></span><span>Status</span><span>Job</span><span class="c-ws">Client</span><span class="n">Started</span><span class="n">Took</span><span class="n c-cost">Cost</span><span>Result</span></div>`;
+  let day = "";
+  for (const r of rows) {
+    const d = r.started_at ? dayLabel(r.started_at) : "Queued";
+    if (d !== day) { if (day) out += `</div>`; day = d; out += `<div class="jv-day">${esc(d)}</div><div class="jv-rows">`; }
+    const cls = FAILED.has(r.status) ? "bad" : r.status === "success" ? "good" : LIVE.has(r.status) ? "live" : "";
+    const text = (r.error || r.summary || "").replace(/\s+/g, " ");
+    out += `<div class="jv-r" data-frun="${r.id}" data-fjob="${r.job_id}"><span class="dot ${RUN_DOT[r.status] || "ended"}"></span><span class="st ${cls}">${esc(RUN_WORD[r.status] || r.status)}</span>` +
+      `<span class="jn" title="${esc(r.job_name)}">${esc(r.job_name)}${r.attempt > 1 ? ` <span class="dim">· try ${r.attempt}</span>` : ""}</span><span class="wsn c-ws">${wsDot(r.workspace_id)}${esc(wsLabel(r.workspace_id))}</span>` +
+      `<span class="n">${esc(fmtTime(r.started_at))}</span><span class="n">${esc(r.started_at ? dur(r.started_at, r.ended_at) : "—")}</span><span class="n c-cost">${r.cost_usd != null ? money(r.cost_usd) : "—"}</span>` +
+      `<span class="sum${r.error ? " err" : ""}" title="${esc(text.slice(0, 300))}">${esc(text.slice(0, 220)) || `<span class="dim">${esc(r.trigger_src || "")}</span>`}</span></div>`;
+  }
+  host.innerHTML = out + `</div></div>`;
+}
+function renderUpcoming(host) {
+  const js = J.jobs.filter((j) => inWs(j) && matchesQ(j) && j.enabled && j.next_run).sort((a, b) => Date.parse(a.next_run) - Date.parse(b.next_run));
+  const paused = J.jobs.filter((j) => inWs(j) && matchesQ(j) && !j.enabled && (j.trigger_type === "cron" || (j.trigger_type === "once" && j.run_at)));
+  if (!js.length && !paused.length) { host.innerHTML = `<div class="jv-empty">Nothing scheduled. Jobs on a schedule or set to run once show up here.</div>`; return; }
+  let out = `<div class="jv-u">`, day = "";
+  const row = (j, on) => `<div class="jv-r${on ? "" : " off"}" data-job="${j.id}"><span class="t">${on ? esc(fmtTime(j.next_run)) : "—"}</span><span class="in">${on ? esc(inWhen(j.next_run)) : "paused"}</span>` +
+    `<span class="jn">${esc(j.name)}</span><span class="wsn">${wsDot(j.workspace_id)}${esc(wsLabel(j.workspace_id))}</span><span class="dim">${esc(schedText(j))}</span>` +
+    `<button class="jv-switch${j.enabled ? " on" : ""}" data-tog="${j.id}" title="${j.enabled ? "Pause" : "Resume"}"></button></div>`;
+  for (const j of js) {
+    const d = dayLabel(j.next_run);
+    if (d !== day) { if (day) out += `</div>`; day = d; out += `<div class="jv-day">${esc(d)}</div><div class="jv-rows">`; }
+    out += row(j, true);
+  }
+  if (day) out += `</div>`;
+  if (paused.length) out += `<div class="jv-day">Paused schedules · ${paused.length}</div><div class="jv-rows">${paused.map((j) => row(j, false)).join("")}</div>`;
+  host.innerHTML = out + `</div>`;
+}
+function renderBulk() {
+  const n = J.checked.size, el = qs("#jv-bulk");
+  el.hidden = !n || J.view !== "jobs";
+  if (el.hidden) return;
+  el.innerHTML = `<b>${n} selected</b><button data-bulk="run">▶ Run now</button><button data-bulk="enable">Resume</button><button data-bulk="disable">Pause</button><button data-bulk="delete" class="danger">Delete</button><button data-bulk="clear" title="Clear selection">✕</button>`;
+}
+
+// ── the drawer: one job ─────────────────────────────────────────────────────────────────────
+async function selectJob(id, tab) {
+  J.sel = id; J.run = null; J.story = null; J.menu = false; J.dirty = false;
+  if (tab) J.dtab = tab; else if (J.dtab === "settings" && id !== "new") J.dtab = "runs";
+  renderJobList(); renderDrawer();
+  if (id === "new") return;
   const [runs0, trig] = await Promise.all([api("/runs?job_id=" + id).catch(() => []), api("/triggers").catch(() => [])]);
+  if (J.sel !== id) return;
   J.runs = runs0; J.triggers = trig.filter((t) => t.job_id === id);
-  renderJobs();
+  renderDrawer();
 }
+function closeDrawer() { J.dirty = false; J.sel = null; J.run = null; J.story = null; J.menu = false; renderJobList(); renderDrawer(); }
 function newJob() {
-  J.sel = "new"; J.runs = []; J.triggers = []; J.run = null; J.tab = "overview";
-  renderJobs();
-  setTimeout(() => qs("#jmain input.name")?.focus(), 40);
+  J.sel = "new"; J.dirty = false; J.draft = null; J.runs = []; J.triggers = []; J.run = null; J.dtab = "settings";
+  renderJobList(); renderDrawer();
+  setTimeout(() => qs("#jv-dr input.name")?.focus(), 40);
 }
-const NEW_JOB = () => ({ id: "new", name: "", goal: "", description: "", workspace_id: byId(S.active)?.workspace_id || S.workspaces[0]?.id || null, backend: "claude-code", model: "", cwd: "", trigger_type: "manual", cron_expr: "0 9 * * 1-5", run_at: null, timezone: TZ, allowed_tools: "", disallowed_tools: "", sandbox: "guard", timeout_sec: 3600, max_budget_usd: null, retry_max: 0, verify: 0, notify: "all", enabled: 1, append_system: "" });
+const NEW_JOB = () => ({ id: "new", name: "", goal: "", description: "", workspace_id: J.ws !== "all" && J.ws ? J.ws : byId(S.active)?.workspace_id || S.workspaces[0]?.id || null, backend: "claude-code", model: "", cwd: "", trigger_type: "cron", cron_expr: "0 9 * * 1-5", run_at: null, timezone: TZ, allowed_tools: "", disallowed_tools: "", sandbox: "guard", timeout_sec: 3600, max_budget_usd: null, retry_max: 0, verify: 0, notify: "failures", enabled: 1, append_system: "", recent: [], stats: { runs: 0, success: 0, failed: 0, live: 0, cost: 0, avg_sec: null, max_sec: null, streak_failed: 0 } });
 const opt = (v, cur, label) => `<option value="${esc(v)}"${String(v) === String(cur ?? "") ? " selected" : ""}>${esc(label ?? v)}</option>`;
-function renderJobMain() {
-  const host = qs("#jmain");
-  const j = J.sel === "new" ? NEW_JOB() : jobById(J.sel);
-  if (!j) { host.innerHTML = `<div class="jempty">Pick a job, or <b>+ New</b>.</div>`; return; }
+function renderDrawer() {
+  const host = qs("#jv-dr");
+  const j = J.sel === "new" ? (J.draft || (J.draft = NEW_JOB())) : jobById(J.sel);
+  if (J.sel !== "new") J.draft = null;
+  if (!j) { host.hidden = true; host.innerHTML = ""; return; }
+  host.hidden = false;
+  // never repaint a form with edits you have not saved — a run ending elsewhere must not eat them
+  if ((J.dtab === "settings" || j.id === "new") && J.dirty && host.dataset.job === j.id) return;
+  host.dataset.job = j.id;
   const isNew = j.id === "new";
-  const tab = (k, l) => `<button data-tab="${k}" class="${J.tab === k ? "on" : ""}">${l}</button>`;
-  const localDT = j.run_at ? new Date(new Date(j.run_at).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "";
+  const st = j.stats, rate = pct(st.success, st.success + st.failed);
+  const tab = (k, l) => `<button data-dtab="${k}" class="${J.dtab === k ? "on" : ""}">${l}</button>`;
   host.innerHTML =
-    `<div class="jhead"><input class="name" placeholder="name it the way you'd say it" value="${esc(j.name)}">` +
-      `<label class="switch${j.enabled ? " on" : ""}" title="Active — a paused job keeps its runs and can still be run by hand"><i></i><span>${j.enabled ? "active" : "paused"}</span></label>` +
-      (isNew ? "" : `<button class="btn" data-a="run" title="Run it now">▶ Run now</button><button class="btn" data-a="del" title="Delete (click twice)">✕</button>`) + `</div>` +
-    `<div class="jtabs">${tab("overview", "Overview")}${tab("instructions", "Instructions")}${tab("agent", "Agent")}${tab("triggers", "Triggers" + (J.triggers.length ? " · " + J.triggers.length : ""))}${isNew ? "" : tab("runs", "Runs" + (J.runs.length ? " · " + J.runs.length : ""))}</div>` +
-    `<div class="jbody">` +
-      `<div class="pane" data-pane="overview"${J.tab === "overview" ? "" : " hidden"}>` +
-        `<div class="cols"><label class="f"><span>Schedule</span><select name="trigger_type">${opt("manual", j.trigger_type, "by hand / Robert")}${opt("cron", j.trigger_type, "on a schedule")}${opt("once", j.trigger_type, "once, at a time")}${opt("webhook", j.trigger_type, "on a webhook")}</select></label>` +
-        `<label class="f" data-for="cron"><span>Preset</span><select name="preset">${CRON_PRESETS.map(([x, l]) => opt(x, j.cron_expr, l)).join("")}<option value=""${CRON_PRESETS.some(([x]) => x === j.cron_expr) ? "" : " selected"}>custom</option></select></label>` +
-        `<label class="f" data-for="cron"><span>Cron <span class="hint">min hour day month weekday</span></span><input name="cron_expr" value="${esc(j.cron_expr || "")}" placeholder="0 9 * * 1-5"></label>` +
-        `<label class="f" data-for="cron"><span>Timezone</span><input name="timezone" value="${esc(j.timezone || TZ)}"></label>` +
-        `<label class="f" data-for="once"><span>Run at</span><input name="run_at" type="datetime-local" value="${localDT}"></label></div>` +
-        (j.next_run ? `<div class="f next">next run ${esc(fmtWhen(j.next_run))}</div>` : "") +
-        `<div class="cols"><label class="f"><span>Client</span><select name="workspace_id">${S.workspaces.map((w) => opt(w.id, j.workspace_id, w.name)).join("")}</select></label>` +
-        `<label class="f"><span>Tell me on Telegram</span><select name="notify">${opt("all", j.notify || "all", "every run")}${opt("failures", j.notify, "failures only")}${opt("off", j.notify, "never")}</select></label></div>` +
-        `<label class="f"><span>Description <span class="hint">— for you, not the agent</span></span><input name="description" value="${esc(j.description || "")}"></label>` +
-      `</div>` +
-      `<div class="pane" data-pane="instructions"${J.tab === "instructions" ? "" : " hidden"}>` +
-        `<label class="f"><span>Instructions <span class="hint">— the agent's prompt, every run</span></span><textarea class="mono" name="goal" placeholder="What should it do, what does done look like, what should it report.">${esc(j.goal || "")}</textarea></label>` +
-        `<label class="f"><span>Standing context <span class="hint">— appended to its system prompt (optional)</span></span><textarea name="append_system" rows="4">${esc(j.append_system || "")}</textarea></label>` +
-      `</div>` +
-      `<div class="pane" data-pane="agent"${J.tab === "agent" ? "" : " hidden"}>` +
-        `<div class="cols"><label class="f"><span>CLI</span><select name="backend">${S.backends.map((b) => opt(b.name, j.backend)).join("")}</select></label>` +
-        `<label class="f"><span>Model</span><input name="model" value="${esc(j.model || "")}" placeholder="default"></label>` +
-        `<label class="f"><span>Working directory</span><input name="cwd" value="${esc(j.cwd || "")}" placeholder="client's default"></label></div>` +
-        `<div class="cols"><label class="f"><span>Allowed tools <span class="hint">— empty = all; "Read,Grep,Glob,WebFetch" makes it read-only</span></span><input name="allowed_tools" value="${esc(j.allowed_tools || "")}"></label>` +
-        `<label class="f"><span>Disallowed tools</span><input name="disallowed_tools" value="${esc(j.disallowed_tools || "")}" placeholder="Edit,Write"></label></div>` +
-        `<div class="cols"><label class="f"><span>Sandbox</span><select name="sandbox">${opt("off", j.sandbox)}${opt("guard", j.sandbox)}${opt("strict", j.sandbox)}</select></label>` +
-        `<label class="f"><span>Timeout (s)</span><input name="timeout_sec" type="number" min="60" value="${j.timeout_sec || 3600}"></label>` +
-        `<label class="f"><span>Budget ($/run)</span><input name="max_budget_usd" type="number" step="0.5" min="0" value="${j.max_budget_usd ?? ""}" placeholder="none"></label>` +
-        `<label class="f"><span>Retries</span><input name="retry_max" type="number" min="0" max="5" value="${j.retry_max || 0}"></label></div>` +
-        `<label class="f"><span>Verify <span class="hint">— a second model checks the goal was actually met</span></span><select name="verify">${opt("0", j.verify ? "1" : "0", "no")}${opt("1", j.verify ? "1" : "0", "yes")}</select></label>` +
-      `</div>` +
-      `<div class="pane" data-pane="triggers"${J.tab === "triggers" ? "" : " hidden"}>` +
-        (J.triggers.map((t) => `<div class="trow"><span class="dot ${t.enabled ? "done" : "ended"}"></span><b>${esc(t.name)}</b><code>${esc(location.origin + "/api/triggers/hook/" + (t.token || "…"))}</code><span class="age">${t.fire_count || 0}× · ${t.last_fired_at ? age(t.last_fired_at) + " ago" : "never"}</span></div>`).join("") || `<div class="fempty">No triggers. A webhook fires this job when something posts to its URL.</div>`) +
-        (isNew ? "" : `<div style="margin-top:10px"><button class="btn" data-a="hook">+ Webhook</button> <span class="hint" style="font-size:12.5px;color:var(--faint)">TODO: event triggers (a review lands, CI goes red), relay, calendar.</span></div>`) +
-      `</div>` +
-      `<div class="pane" data-pane="runs"${J.tab === "runs" ? "" : " hidden"}>${J.run ? runDetailHtml(j) : runsHtml()}</div>` +
-    `</div>` +
-    `<div class="jfoot"><span class="hint" style="font-size:12.5px;color:var(--faint)">${isNew ? "Robert can set these up too — just ask him." : "id " + j.id.slice(0, 8) + " · created " + age(j.created_at) + " ago"}</span><span class="sp"></span><button class="btn" data-a="cancel">${isNew ? "Cancel" : "Revert"}</button><button class="btn primary" data-a="save">${isNew ? "Create" : "Save"}</button></div>`;
-  const sync = () => { const t = qs('[name="trigger_type"]', host).value; for (const el of qsa("[data-for]", host)) el.style.display = el.dataset.for === t ? "" : "none"; };
-  sync();
-  qs('[name="trigger_type"]', host).onchange = sync;
-  qs('[name="preset"]', host).onchange = (e) => { if (e.target.value) qs('[name="cron_expr"]', host).value = e.target.value; };
-  for (const b of qsa(".jtabs button", host)) b.onclick = () => { J.tab = b.dataset.tab; for (const p of qsa(".pane", host)) p.hidden = p.dataset.pane !== J.tab; for (const x of qsa(".jtabs button", host)) x.classList.toggle("on", x === b); };
-  qs(".switch", host).onclick = async () => { if (isNew) { const sw = qs(".switch", host); sw.classList.toggle("on"); qs("span", sw).textContent = sw.classList.contains("on") ? "active" : "paused"; return; } await patchJob(j.id, { enabled: !j.enabled }); };
-  for (const b of qsa("[data-a]", host)) b.onclick = () => jobAction(b.dataset.a, j, b);
-  qs(".pane[data-pane=runs]", host)?.addEventListener("click", (e) => {
-    const r = e.target.closest("[data-run]"); if (r) return openRun(r.dataset.run);
-    const b = e.target.closest("[data-ra]"); if (b) return runAction(b.dataset.ra, b);
-  });
+    `<div class="jv-dh"><div class="r1"><input class="name" placeholder="name it the way you'd say it" value="${esc(j.name)}"${isNew ? "" : ` title="Rename — saved with Save in Settings"`}>` +
+      (isNew ? "" : `<button class="btn" data-a="run" title="Run it now">▶ Run now</button><span class="jv-menu"><button class="icon" data-a="menu" title="More">⋯</button><div${J.menu ? "" : " hidden"}><button data-a="dup">Duplicate</button><button data-a="copyid">Copy id</button><button class="danger" data-a="del">Delete…</button></div></span>`) +
+      `<button class="icon" data-a="close" title="Close (esc)">✕</button></div>` +
+      `<div class="r2"><span class="ws">${wsDot(j.workspace_id)}${esc(wsLabel(j.workspace_id))}</span><span>${esc(schedText(j))}</span>${j.enabled && j.next_run ? `<span style="color:var(--accent)">next ${esc(inWhen(j.next_run))}</span>` : ""}<span class="sp" style="flex:1"></span>` +
+      `<span class="sw" data-a="toggle"><button class="jv-switch${j.enabled ? " on" : ""}" type="button"></button><span>${j.enabled ? "active" : "paused"}</span></span></div></div>` +
+    (isNew ? "" : `<div class="jv-ds"><div><span class="k">Success</span><span class="v ${rate == null ? "" : rate >= 95 ? "good" : rate < 80 ? "bad" : ""}">${rate == null ? "—" : rate + "%"}</span></div><div><span class="k">Runs · ${J.win === 1 ? "24h" : J.win + "d"}</span><span class="v">${st.runs}</span></div><div><span class="k">Avg run</span><span class="v">${fmtDur(st.avg_sec)}</span></div><div><span class="k">Spend</span><span class="v">${money(st.cost)}</span></div><div><span class="k">Last success</span><span class="v">${st.last_success_at ? esc(age(st.last_success_at)) + " ago" : "never"}</span></div></div>`) +
+    `<div class="jv-dt">${isNew ? "" : tab("runs", "Runs" + (J.runs.length ? " · " + J.runs.length : ""))}${tab("settings", "Settings")}${isNew ? "" : tab("triggers", "Triggers" + (J.triggers.length ? " · " + J.triggers.length : ""))}</div>` +
+    `<div class="jv-db">${J.dtab === "runs" && !isNew ? (J.run ? runDetailHtml(j) : runsHtml(j)) : J.dtab === "triggers" && !isNew ? triggersHtml(j) : settingsHtml(j)}</div>` +
+    (J.dtab === "settings" || isNew ? `<div class="jv-df"><span class="hint" style="font-size:12.5px;color:var(--faint)">${isNew ? "Robert can set these up too — just ask him." : "created " + esc(age(j.created_at)) + " ago · edited " + esc(age(j.updated_at)) + " ago"}</span><span class="sp"></span><button class="btn" data-a="cancel">${isNew ? "Cancel" : "Revert"}</button><button class="btn primary" data-a="save">${isNew ? "Create" : "Save"}</button></div>` : "");
+  if (J.dtab === "settings" || isNew) {
+    const sync = () => { const t = qs('[name="trigger_type"]', host).value; for (const el of qsa("[data-for]", host)) el.style.display = el.dataset.for.split(" ").includes(t) ? "" : "none"; };
+    sync();
+    qs('[name="trigger_type"]', host).onchange = sync;
+    qs('[name="preset"]', host).onchange = (e) => { if (e.target.value) qs('[name="cron_expr"]', host).value = e.target.value; };
+  }
 }
-function runsHtml() {
-  if (!J.runs.length) return `<div class="fempty">No runs yet. ▶ Run now, or wait for the schedule.</div>`;
-  return `<div class="runs">` + J.runs.map((r) => `<div class="rrow" data-run="${r.id}"><span class="dot ${RUN_DOT[r.status] || "ended"}"></span><span>${esc(fmtWhen(r.started_at))}</span><span class="st">${esc(r.status)}</span><span class="num">${esc(dur(r.started_at, r.ended_at))}</span><span class="num">${r.cost_usd != null ? money(r.cost_usd) : "—"}</span><span class="sum">${esc((r.error || r.summary || "").replace(/\s+/g, " ").slice(0, 160))}</span></div>`).join("") + `</div>`;
+function settingsHtml(j) {
+  const localDT = j.run_at ? new Date(new Date(j.run_at).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "";
+  return `<div class="pane" data-pane="overview"><div class="jv-sec">When</div>` +
+      `<div class="cols"><label class="f"><span>Runs</span><select name="trigger_type">${opt("cron", j.trigger_type, "on a schedule")}${opt("once", j.trigger_type, "once, at a time")}${opt("manual", j.trigger_type, "by hand / Robert")}${opt("webhook", j.trigger_type, "on a webhook")}</select></label>` +
+      `<label class="f" data-for="cron"><span>Preset</span><select name="preset">${CRON_PRESETS.map(([x, l]) => opt(x, j.cron_expr, l)).join("")}<option value=""${CRON_PRESETS.some(([x]) => x === j.cron_expr) ? "" : " selected"}>custom</option></select></label>` +
+      `<label class="f" data-for="cron"><span>Cron <span class="hint">min hour day month weekday</span></span><input name="cron_expr" value="${esc(j.cron_expr || "")}" placeholder="0 9 * * 1-5"></label>` +
+      `<label class="f" data-for="cron"><span>Timezone</span><input name="timezone" value="${esc(j.timezone || TZ)}"></label>` +
+      `<label class="f" data-for="once"><span>Run at</span><input name="run_at" type="datetime-local" value="${localDT}"></label></div>` +
+      (j.next_run ? `<div class="next">next run ${esc(fmtWhen(j.next_run))}</div>` : "") +
+      `<div class="cols"><label class="f"><span>Client</span><select name="workspace_id">${S.workspaces.map((w) => opt(w.id, j.workspace_id, w.name)).join("")}</select></label>` +
+      `<label class="f"><span>Tell me on Telegram</span><select name="notify">${opt("all", j.notify || "all", "every run")}${opt("failures", j.notify, "failures only")}${opt("off", j.notify, "never")}</select></label></div>` +
+      `<label class="f"><span>Description <span class="hint">— for you, not the agent</span></span><input name="description" value="${esc(j.description || "")}"></label></div>` +
+    `<div class="pane" data-pane="instructions"><div class="jv-sec">What it does</div>` +
+      `<label class="f"><span>Instructions <span class="hint">— the agent's prompt, every run</span></span><textarea class="mono" name="goal" placeholder="What should it do, what does done look like, what should it report.">${esc(j.goal || "")}</textarea></label>` +
+      `<label class="f"><span>Standing context <span class="hint">— appended to its system prompt (optional)</span></span><textarea name="append_system" rows="3">${esc(j.append_system || "")}</textarea></label></div>` +
+    `<div class="pane" data-pane="agent"><div class="jv-sec">Agent</div>` +
+      `<div class="cols"><label class="f"><span>CLI</span><select name="backend">${S.backends.map((b) => opt(b.name, j.backend)).join("")}</select></label>` +
+      `<label class="f"><span>Model</span><input name="model" value="${esc(j.model || "")}" placeholder="default"></label>` +
+      `<label class="f"><span>Working directory</span><input name="cwd" value="${esc(j.cwd || "")}" placeholder="client's default"></label></div>` +
+      `<div class="cols"><label class="f"><span>Allowed tools <span class="hint">empty = all</span></span><input name="allowed_tools" value="${esc(j.allowed_tools || "")}" placeholder="Read,Grep,Glob,WebFetch = read-only"></label>` +
+      `<label class="f"><span>Disallowed tools</span><input name="disallowed_tools" value="${esc(j.disallowed_tools || "")}" placeholder="Edit,Write"></label></div>` +
+      `<div class="cols"><label class="f"><span>Sandbox</span><select name="sandbox">${opt("off", j.sandbox)}${opt("guard", j.sandbox)}${opt("strict", j.sandbox)}</select></label>` +
+      `<label class="f"><span>Timeout (s)</span><input name="timeout_sec" type="number" min="60" value="${j.timeout_sec || 3600}"></label>` +
+      `<label class="f"><span>Budget ($/run)</span><input name="max_budget_usd" type="number" step="0.5" min="0" value="${j.max_budget_usd ?? ""}" placeholder="none"></label>` +
+      `<label class="f"><span>Retries</span><input name="retry_max" type="number" min="0" max="5" value="${j.retry_max || 0}"></label></div>` +
+      `<label class="f"><span>Verify <span class="hint">— a second model checks the goal was actually met</span></span><select name="verify">${opt("0", j.verify ? "1" : "0", "no")}${opt("1", j.verify ? "1" : "0", "yes")}</select></label></div>`;
+}
+function triggersHtml(j) {
+  return `<div class="pane" data-pane="triggers">` +
+    (J.triggers.map((t) => `<div class="trow"><span class="dot ${t.enabled ? "done" : "ended"}"></span><b>${esc(t.name)}</b><code>${esc(location.origin + "/api/triggers/hook/" + (t.token || "…"))}</code><span class="dim" style="font-size:12.5px">${t.fire_count || 0}× · ${t.last_fired_at ? esc(age(t.last_fired_at)) + " ago" : "never"}</span></div>`).join("") || `<div class="fempty">No triggers. A webhook fires this job when something posts to its URL.</div>`) +
+    `<div style="margin-top:10px"><button class="btn" data-a="hook">+ Webhook</button></div></div>`;
+}
+function runsHtml(j) {
+  if (!J.runs.length) return `<div class="pane" data-pane="runs"><div class="fempty">No runs yet. ▶ Run now, or wait for the schedule.</div></div>`;
+  const last = J.runs.slice(0, 40).reverse();
+  const ds = last.map((r) => secs(r.started_at, r.ended_at) || 0);
+  const max = Math.max(1, ...ds);
+  return `<div class="pane" data-pane="runs"><div class="jv-dur" title="How long each run took — the last ${last.length}, oldest left">` +
+    last.map((r, i) => `<span class="s-${esc(r.status)}" data-run="${r.id}" style="height:${Math.max(4, (ds[i] / max) * 100)}%" title="${esc((RUN_WORD[r.status] || r.status) + " · " + fmtWhen(r.started_at) + " · " + fmtDur(ds[i]))}"></span>`).join("") +
+    `</div><div class="jv-durcap"><span>${esc(fmtWhen(last[0].started_at))}</span><span>longest ${fmtDur(max)}</span><span>${esc(fmtWhen(last[last.length - 1].started_at))}</span></div>` +
+    `<div class="jv-rl">` + J.runs.map((r) => {
+      const text = (r.error || r.summary || "").replace(/\s+/g, " ").slice(0, 180);
+      return `<div class="rr" data-run="${r.id}"><span class="dot ${RUN_DOT[r.status] || "ended"}"></span><div class="w"><b>${esc(RUN_WORD[r.status] || r.status)} · ${esc(fmtWhen(r.started_at) || "queued")}</b>${text ? `<span class="${r.error ? "err" : ""}">${esc(text)}</span>` : ""}</div>` +
+        `<span class="n">${esc(r.trigger_src || "")}${r.attempt > 1 ? " · try " + r.attempt : ""}</span><span class="n">${esc(r.started_at ? dur(r.started_at, r.ended_at) : "—")}</span><span class="n">${r.cost_usd != null ? money(r.cost_usd) : "—"}</span></div>`;
+    }).join("") + `</div></div>`;
 }
 function runDetailHtml(j) {
   const r = J.run, st = J.story;
   const live = r.status === "running" || r.status === "queued";
-  let out = `<div class="rdet"><button class="back" data-ra="back">‹ all runs</button>` +
-    `<div class="rh"><span class="dot ${RUN_DOT[r.status] || "ended"}"></span><b>${esc(r.status)}</b><span>${esc(fmtWhen(r.started_at))}</span><span>${esc(dur(r.started_at, r.ended_at))}</span>${r.num_turns ? `<span>${r.num_turns} turns</span>` : ""}${r.cost_usd != null ? `<span>${money(r.cost_usd)}</span>` : ""}<span>${esc(r.trigger_src || "")}</span>` +
-    `<span class="sp" style="flex:1"></span>${live ? `<button class="btn" data-ra="kill">Stop</button>` : `<button class="btn" data-ra="continue" title="Reopen this run's conversation as a live terminal on your stage">⌨ Open as terminal</button>`}</div>`;
+  let out = `<div class="pane rdet" data-pane="runs"><button class="back" data-ra="back">‹ all runs</button>` +
+    `<div class="rh"><span class="dot ${RUN_DOT[r.status] || "ended"}"></span><b>${esc(RUN_WORD[r.status] || r.status)}</b><span>${esc(fmtWhen(r.started_at))}</span><span>${esc(dur(r.started_at, r.ended_at))}</span>${r.num_turns ? `<span>${r.num_turns} turns</span>` : ""}${r.cost_usd != null ? `<span>${money(r.cost_usd)}</span>` : ""}<span>${esc(r.trigger_src || "")}</span>${r.attempt > 1 ? `<span>try ${r.attempt}</span>` : ""}` +
+    `<span class="sp" style="flex:1"></span>${live ? `<button class="btn" data-ra="kill">Stop</button>` : `<button class="btn" data-ra="rerun" title="Run the job again">↻ Run again</button><button class="btn" data-ra="continue" title="Reopen this run's conversation as a live terminal on your stage">⌨ Open as terminal</button>`}</div>`;
   if (r.error) out += `<section class="fblock fatt blocked"><span class="lbl">error</span><div class="err">${esc(r.error)}</div></section>`;
   if (r.summary) out += `<section class="fblock result"><span class="lbl">Result</span><div class="t">${md(r.summary)}</div></section>`;
   if (!st) out += `<section class="fblock"><span class="lbl">Story</span><div class="skel"></div></section>`;
@@ -4574,15 +5066,16 @@ function runDetailHtml(j) {
   }
   return out + `</div>`;
 }
-async function openRun(id) {
-  J.tab = "runs"; J.run = J.runs.find((r) => r.id === id) || { id, status: "…" }; J.story = null;
-  renderJobMain();
-  try { const [run, story] = await Promise.all([api("/runs/" + id), api("/runs/" + id + "/story")]); J.run = run; J.story = story; } catch (e) { toast(errMsg(e)); }
-  if (J.tab === "runs" && J.run?.id === id) renderJobMain();
-  const box = qs("#jmain .jbody"); if (box) box.scrollTop = 0;
+async function openRun(id, jobId) {
+  if (jobId && J.sel !== jobId) { await selectJob(jobId, "runs"); }
+  J.dtab = "runs"; J.run = J.runs.find((r) => r.id === id) || { id, status: "…" }; J.story = null;
+  renderDrawer(); renderJobList();
+  try { const [run, story] = await Promise.all([api("/runs/" + id), api("/runs/" + id + "/story")]); if (J.run?.id !== id) return; J.run = run; J.story = story; } catch (e) { toast(errMsg(e)); }
+  if (J.dtab === "runs" && J.run?.id === id) renderDrawer();
+  const box = qs("#jv-dr .jv-db"); if (box) box.scrollTop = 0;
 }
 function readJobForm() {
-  const h = qs("#jmain"); const v = (n) => qs(`[name="${n}"]`, h)?.value ?? "";
+  const h = qs("#jv-dr"); const v = (n) => qs(`[name="${n}"]`, h)?.value ?? "";
   const num = (n) => { const x = v(n).trim(); return x === "" ? null : Number(x); };
   const t = v("trigger_type");
   const body = {
@@ -4592,58 +5085,190 @@ function readJobForm() {
     run_at: t === "once" && v("run_at") ? new Date(v("run_at")).toISOString() : null,
     allowed_tools: v("allowed_tools").trim() || null, disallowed_tools: v("disallowed_tools").trim() || null, sandbox: v("sandbox"),
     timeout_sec: num("timeout_sec") || 3600, max_budget_usd: num("max_budget_usd"), retry_max: num("retry_max") || 0, verify: v("verify") === "1",
-    notify: v("notify") || "all", enabled: qs(".switch", h).classList.contains("on"),
+    notify: v("notify") || "all", enabled: qs("#jv-dr .r2 .jv-switch").classList.contains("on"),
   };
   if (body.cwd === undefined) delete body.cwd;
   return body;
 }
+// The editable subset of a job, for Duplicate: everything a POST accepts, nothing it computed.
+const JOB_FIELDS = ["goal", "description", "append_system", "workspace_id", "backend", "model", "cwd", "allowed_tools", "disallowed_tools", "trigger_type", "cron_expr", "run_at", "timezone", "max_budget_usd", "timeout_sec", "retry_max", "sandbox", "notify"];
 async function patchJob(id, patch) {
-  try { const j = await api("/jobs/" + id, { method: "PATCH", body: JSON.stringify(patch) }); Object.assign(jobById(id) || {}, j); await loadJobs(); renderJobs(); }
-  catch (e) { toast("save failed: " + errMsg(e)); }
+  try {
+    const j = await api("/jobs/" + id, { method: "PATCH", body: JSON.stringify(patch) });
+    const cur = jobById(id); if (cur) Object.assign(cur, j);
+    await loadJobs(); renderJobs();
+    return true;
+  } catch (e) { toast("save failed: " + errMsg(e)); return false; }
+}
+async function toggleJob(id) {
+  const j = jobById(id); if (!j) return;
+  const on = !j.enabled;
+  j.enabled = on ? 1 : 0; renderJobChrome(); renderJobList(); if (J.sel === id) renderDrawer();
+  if (await patchJob(id, { enabled: on })) toast((on ? "resumed · " : "paused · ") + j.name);
+}
+async function runJob(id) {
+  const j = jobById(id);
+  try { const r = await api("/jobs/" + id + "/run", { method: "POST" }); toast("running · " + (j?.name || "job")); await loadJobs(); renderJobs(); return r; }
+  catch (e) { toast("run failed: " + errMsg(e)); return null; }
+}
+async function bulk(action, ids) {
+  if (!ids.length) return;
+  try {
+    const r = await api("/jobs/bulk", { method: "POST", body: JSON.stringify({ ids, action }) });
+    const bad = r.results.filter((x) => !x.ok);
+    const verb = { run: "started", enable: "resumed", disable: "paused", delete: "deleted" }[action];
+    toast(`${ids.length - bad.length} ${verb}` + (bad.length ? ` · ${bad.length} failed: ${bad[0].error}` : ""));
+    if (action === "delete") { for (const id of ids) J.checked.delete(id); if (ids.includes(J.sel)) J.sel = null; }
+  } catch (e) { toast(action + ": " + errMsg(e)); }
+  await loadJobs(); renderJobs();
 }
 async function jobAction(a, j, btn) {
-  if (a === "cancel") { if (j.id === "new") { J.sel = J.jobs[0]?.id || null; J.sel ? selectJob(J.sel) : renderJobs(); } else renderJobMain(); return; }
+  if (a === "close") return closeDrawer();
+  if (a === "menu") { J.menu = !J.menu; qs("#jv-dr .jv-menu > div").hidden = !J.menu; return; }
+  if (a === "toggle") {
+    if (j.id === "new") { const sw = qs("#jv-dr .r2 .jv-switch"); sw.classList.toggle("on"); qs("#jv-dr .r2 .sw > span").textContent = sw.classList.contains("on") ? "active" : "paused"; return; }
+    return toggleJob(j.id);
+  }
+  if (a === "cancel") { J.dirty = false; if (j.id === "new") { J.draft = null; return closeDrawer(); } return renderDrawer(); }
   if (a === "save") {
     const body = readJobForm();
     if (!body.name) return toast("name it first");
-    if (!body.goal.trim()) { J.tab = "instructions"; renderJobMain(); return toast("it needs instructions"); }
+    if (!body.goal.trim()) { qs('#jv-dr [name="goal"]')?.focus(); return toast("it needs instructions"); }
     if (body.trigger_type === "cron" && !body.cron_expr) return toast("a schedule needs a cron");
     if (body.trigger_type === "once" && !body.run_at) return toast("pick a time");
     try {
-      if (j.id === "new") { const created = await api("/jobs", { method: "POST", body: JSON.stringify(body) }); await loadJobs(); await selectJob(created.id); toast("created · " + created.name + (created.next_run ? " · next " + fmtWhen(created.next_run) : "")); }
-      else { await patchJob(j.id, body); toast("saved"); }
+      if (j.id === "new") {
+        const created = await api("/jobs", { method: "POST", body: JSON.stringify(body) });
+        J.draft = null; J.dirty = false; await loadJobs(); renderJobs(); await selectJob(created.id, "runs");
+        toast("created · " + created.name + (created.next_run ? " · next " + fmtWhen(created.next_run) : ""));
+      } else { J.dirty = false; if (await patchJob(j.id, body)) toast("saved"); else J.dirty = true; }
     } catch (e) { toast("save failed: " + errMsg(e)); }
     return;
   }
-  if (a === "run") { try { const r = await api("/jobs/" + j.id + "/run", { method: "POST" }); toast("running · " + j.name); J.tab = "runs"; await selectJob(j.id); if (r.run_id) openRun(r.run_id); } catch (e) { toast("run failed: " + errMsg(e)); } return; }
-  if (a === "del") return arm(btn, "delete?", async () => { try { await api("/jobs/" + j.id, { method: "DELETE" }); J.sel = null; await openJobs(); toast("deleted"); } catch (e) { toast(errMsg(e)); } });
-  if (a === "hook") { try { await api("/triggers", { method: "POST", body: JSON.stringify({ name: j.name + " webhook", job_id: j.id, source: "http" }) }); await selectJob(j.id); J.tab = "triggers"; renderJobMain(); } catch (e) { toast("webhook: " + errMsg(e)); } }
+  if (a === "run") { const r = await runJob(j.id); if (r) { J.dtab = "runs"; await selectJob(j.id, "runs"); if (r.run_id) openRun(r.run_id); } return; }
+  if (a === "dup") {
+    const body = { name: j.name + " (copy)", enabled: false, verify: !!j.verify };
+    for (const k of JOB_FIELDS) if (j[k] != null && j[k] !== "") body[k] = j[k];
+    if (body.trigger_type === "once" && !body.run_at) body.trigger_type = "manual";
+    try { const c = await api("/jobs", { method: "POST", body: JSON.stringify(body) }); await loadJobs(); renderJobs(); await selectJob(c.id, "settings"); toast("duplicated — paused until you turn it on"); }
+    catch (e) { toast("duplicate: " + errMsg(e)); }
+    return;
+  }
+  if (a === "copyid") { try { await navigator.clipboard.writeText(j.id); toast("copied " + j.id.slice(0, 8)); } catch { toast(j.id); } J.menu = false; return renderDrawer(); }
+  if (a === "del") return arm(btn, "Delete? click again", async () => { try { await api("/jobs/" + j.id, { method: "DELETE" }); J.sel = null; J.checked.delete(j.id); await loadJobs(); renderJobs(); toast("deleted · " + j.name); } catch (e) { toast(errMsg(e)); } });
+  if (a === "hook") { try { await api("/triggers", { method: "POST", body: JSON.stringify({ name: j.name + " webhook", job_id: j.id, source: "http" }) }); await selectJob(j.id, "triggers"); } catch (e) { toast("webhook: " + errMsg(e)); } }
 }
 async function runAction(a, btn) {
   const r = J.run; if (!r) return;
-  if (a === "back") { J.run = null; J.story = null; return renderJobMain(); }
+  if (a === "back") { J.run = null; J.story = null; renderJobList(); return renderDrawer(); }
   if (a === "kill") { try { await api("/runs/" + r.id + "/kill", { method: "POST" }); toast("stopping"); } catch (e) { toast(errMsg(e)); } return; }
+  if (a === "rerun") { const x = await runJob(r.job_id); if (x?.run_id) { J.runs = await api("/runs?job_id=" + r.job_id).catch(() => J.runs); openRun(x.run_id); } return; }
   if (a === "continue") return arm(btn, "open? (stops it if running)", async () => {
-    try { const res = await api("/runs/" + r.id + "/continue", { method: "POST", body: JSON.stringify({ cols: 100, rows: 30 }) }); qs("#dlg-jobs").close(); await load(); const sid = res?.session?.id || res?.id; if (sid) select(sid); }
+    try { const res = await api("/runs/" + r.id + "/continue", { method: "POST", body: JSON.stringify({ cols: 100, rows: 30 }) }); closeJobs(); await load(); const sid = res?.session?.id || res?.id; if (sid) select(sid); }
     catch (e) { toast("couldn't open: " + errMsg(e)); }
   }, 2500);
 }
-// Live: a run starting or ending repaints the list (and the run you are looking at); an ended run
+
+// ── wiring ──────────────────────────────────────────────────────────────────────────────────
+const jv = qs("#dlg-jobs");
+jv.addEventListener("click", async (e) => {
+  const t = e.target;
+  if (J.menu && !t.closest(".jv-menu")) { J.menu = false; const m = qs("#jv-dr .jv-menu > div"); if (m) m.hidden = true; }
+  const b = (sel) => t.closest(sel);
+  let x;
+  if ((x = b("[data-win]"))) { J.win = Number(x.dataset.win); savePrefs(); await Promise.all([loadJobs(), J.view === "runs" ? loadFeed() : null]); return renderJobs(); }
+  if ((x = b("[data-ws]"))) { J.ws = x.dataset.ws; savePrefs(); return renderJobs(); }
+  if ((x = b("[data-kpi]"))) { J.view = "jobs"; J.filter = J.filter === x.dataset.kpi ? "all" : x.dataset.kpi; savePrefs(); return renderJobs(); }
+  if ((x = b("[data-view]"))) { J.view = x.dataset.view; savePrefs(); renderJobs(); if (J.view === "runs") { await loadFeed(); renderJobList(); } return; }
+  if ((x = b("[data-filter]"))) { J.filter = x.dataset.filter; return renderJobs(); }
+  if ((x = b("[data-fs]"))) { J.feedStatus = x.dataset.fs; renderJobChrome(); await loadFeed(); return renderJobList(); }
+  if ((x = b("[data-sort]"))) { J.sort = J.sort === x.dataset.sort ? "health" : x.dataset.sort; savePrefs(); return renderJobs(); }
+  if ((x = b("[data-bulk]"))) {
+    const a = x.dataset.bulk, ids = [...J.checked];
+    if (a === "clear") { J.checked.clear(); return renderJobs(); }
+    if (a === "delete") return arm(x, `Delete ${ids.length}? click again`, () => bulk("delete", ids));
+    if (a === "run" && ids.length > 5) return arm(x, `Run ${ids.length}? click again`, () => bulk("run", ids));
+    return bulk(a, ids);
+  }
+  if ((x = b("[data-ga]"))) {
+    e.stopPropagation();
+    const k = x.closest("[data-grp]").dataset.grp;
+    const js = visibleJobs().filter((j) => wsKey(j) === k);
+    if (x.dataset.ga === "select") { const all = js.every((j) => J.checked.has(j.id)); for (const j of js) all ? J.checked.delete(j.id) : J.checked.add(j.id); return renderJobs(); }
+    if (x.dataset.ga === "rerun") return bulk("run", js.filter(failing).map((j) => j.id));
+    const ids = js.filter((j) => !!j.enabled !== (x.dataset.ga === "enable")).map((j) => j.id);
+    if (!ids.length) return toast("nothing to " + (x.dataset.ga === "enable" ? "resume" : "pause"));
+    return arm(x, (x.dataset.ga === "enable" ? "Resume " : "Pause ") + ids.length + "?", () => bulk(x.dataset.ga, ids));
+  }
+  if ((x = b("[data-grp]"))) { const k = x.dataset.grp; J.shut.has(k) ? J.shut.delete(k) : J.shut.add(k); savePrefs(); return renderJobList(); }
+  if ((x = b("[data-chkall]"))) { const vis = visibleJobs(); if (x.checked) for (const j of vis) J.checked.add(j.id); else for (const j of vis) J.checked.delete(j.id); return renderJobs(); }
+  if ((x = b("[data-chk]"))) { x.checked ? J.checked.add(x.dataset.chk) : J.checked.delete(x.dataset.chk); renderBulk(); const all = qs("[data-chkall]", jv); if (all) all.checked = visibleJobs().every((j) => J.checked.has(j.id)); return; }
+  if ((x = b("[data-tog]"))) return toggleJob(x.dataset.tog);
+  if ((x = b("[data-go]"))) { const r = await runJob(x.dataset.go); if (r?.run_id) { await selectJob(x.dataset.go, "runs"); openRun(r.run_id); } return; }
+  if ((x = b("#jv-list [data-run]"))) { const row = x.closest("[data-job]"); return openRun(x.dataset.run, row?.dataset.job); }
+  if ((x = b("[data-frun]"))) return openRun(x.dataset.frun, x.dataset.fjob);
+  if ((x = b("#jv-list [data-open]"))) return selectJob(x.dataset.open);
+  if ((x = b("#jv-list [data-job]"))) return J.sel === x.dataset.job && !J.run ? closeDrawer() : selectJob(x.dataset.job);
+  if ((x = b("#jv-list [data-a]"))) { if (x.dataset.a === "new") return newJob(); if (x.dataset.a === "clear") { J.q = ""; qs("#jv-q").value = ""; J.filter = "all"; J.ws = "all"; savePrefs(); return renderJobs(); } }
+  if ((x = b("#jv-dr [data-dtab]"))) { if (J.dirty && J.dtab === "settings" && x.dataset.dtab !== "settings") return arm(x, "discard edits?", () => { J.dirty = false; J.dtab = x.dataset.dtab; J.run = null; J.story = null; renderDrawer(); }); J.dtab = x.dataset.dtab; J.run = null; J.story = null; return renderDrawer(); }
+  if ((x = b("#jv-dr [data-run]"))) return openRun(x.dataset.run);
+  if ((x = b("#jv-dr [data-ra]"))) return runAction(x.dataset.ra, x);
+  if ((x = b("#jv-dr [data-a]"))) { const j = J.sel === "new" ? J.draft : jobById(J.sel); if (j) return jobAction(x.dataset.a, j, x); }
+});
+jv.addEventListener("input", (e) => { if (e.target.closest("#jv-dr") && e.target.matches("input, textarea, select")) J.dirty = true; });
+jv.addEventListener("change", (e) => { if (e.target.closest("#jv-dr") && e.target.matches("select")) J.dirty = true; if (e.target.id === "jv-sort") { J.sort = e.target.value; savePrefs(); renderJobList(); } });
+let jvQ = 0;
+qs("#jv-q").addEventListener("input", (e) => { clearTimeout(jvQ); jvQ = setTimeout(() => { J.q = e.target.value.trim(); renderJobChrome(); renderJobList(); }, 90); });
+qs("#jv-sys").addEventListener("change", async (e) => { J.sys = e.target.checked; J.checked.clear(); savePrefs(); await Promise.all([loadJobs(), J.view === "runs" ? loadFeed() : null]); renderJobs(); });
+// esc walks back one step: a menu → a run → its job → the page → the Desk. Read on keydown and
+// swallowed, so the native dialog cancel (which a browser may refuse to let us veto twice) never fires.
+function jobsBack() {
+  if (J.menu) { J.menu = false; return renderDrawer(); }
+  if (document.activeElement?.id === "jv-q" && J.q) { qs("#jv-q").value = ""; J.q = ""; return renderJobs(); }
+  if (document.activeElement?.closest?.("#jv-dr") && document.activeElement.matches("input, textarea, select")) return document.activeElement.blur();
+  if (J.run) { J.run = null; J.story = null; renderJobList(); return renderDrawer(); }
+  if (J.sel) { if (J.dirty) return toast("unsaved edits — Save or Revert first"); return closeDrawer(); }
+  if (J.checked.size) { J.checked.clear(); return renderJobs(); }
+  closeJobs();
+}
+jv.addEventListener("cancel", (e) => e.preventDefault());
+// On the document, not the dialog: after a repaint drops the focused button, keys land on <body>.
+document.addEventListener("keydown", (e) => {
+  if (!jv.open || document.querySelector("dialog[open]:not(#dlg-jobs)")) return;
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); return jobsBack(); }
+  const t = e.target;
+  if (e.metaKey || e.ctrlKey || e.altKey || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT"))) return;
+  if (e.key === "/") { e.preventDefault(); return qs("#jv-q").focus(); }
+  if (e.key === "n") { e.preventDefault(); return newJob(); }
+  if ((e.key === "j" || e.key === "k") && J.view === "jobs") {
+    e.preventDefault();
+    const ids = qsa("#jv-list [data-job]", jv).map((el) => el.dataset.job);
+    if (!ids.length) return;
+    const i = ids.indexOf(J.sel);
+    const next = ids[i < 0 ? 0 : Math.min(ids.length - 1, Math.max(0, i + (e.key === "j" ? 1 : -1)))];
+    selectJob(next).then(() => qs(`#jv-list [data-job="${next}"]`)?.scrollIntoView({ block: "nearest" }));
+  }
+  if (e.key === "r" && J.sel && J.sel !== "new") { e.preventDefault(); jobAction("run", jobById(J.sel)); }
+  if (e.key === "p" && J.sel && J.sel !== "new") { e.preventDefault(); toggleJob(J.sel); }
+}, true);
+// Live: a run starting or ending repaints the page (and the run you are looking at); an ended run
 // of a job you set up says so, wherever you are on the Desk.
 let jobsT = 0;
 function onJobEvent(e) {
-  if (e.topic === "run.ended" && e.job_name && J.jobs.some((j) => j.name === e.job_name)) toast(`${e.job_name}: ${e.status}`);
-  if (!qs("#dlg-jobs").open) return;
+  if (e.topic === "run.ended" && e.job_name && J.jobs.some((j) => j.name === e.job_name && (j.notify || "all") !== "off")) toast(`${e.job_name}: ${e.status}`);
+  if (!jv.open) return;
   clearTimeout(jobsT);
   jobsT = setTimeout(async () => {
-    await loadJobs();
+    await Promise.all([loadJobs(), J.view === "runs" ? loadFeed() : null]);
     if (J.sel && J.sel !== "new") { J.runs = await api("/runs?job_id=" + J.sel).catch(() => J.runs); if (J.run && e.run_id === J.run.id) { try { J.run = await api("/runs/" + J.run.id); J.story = await api("/runs/" + J.run.id + "/story"); } catch {} } }
-    if (!document.activeElement?.closest?.("#jmain input, #jmain textarea, #jmain select")) renderJobs(); else renderJobList();
-  }, 300);
+    renderJobChrome(); renderJobList(); renderBulk(); renderDrawer();
+  }, 400);
 }
+// Ages and "in 12m" drift: repaint the rows twice a minute while the page is up.
+setInterval(() => { if (jv.open && J.loaded) { renderJobList(); renderKpis(); } }, 30000);
 qs("#btn-jobs").onclick = () => openJobs();
 qs("#job-new").onclick = () => newJob();
-qs("#jobs-close").onclick = () => qs("#dlg-jobs").close();
+qs("#jobs-close").onclick = () => closeJobs();
 // ── memory ───────────────────────────────────────────────────────────────────────────────────
 // The workspace's memory as the tree agents see it (src/memory-tree.ts): the ★ memory-index trunk,
 // then ★ memory-hot, the memory-<topic> branches under their topics, other ★ memos, the inbox and

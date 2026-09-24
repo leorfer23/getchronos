@@ -18,7 +18,7 @@ export function baseJobName(name?: string | null): string {
 // sweep, fallback clone. They are runs, not something the operator set up; the Jobs surface
 // (Desk `⋯ → Jobs`, `GET /api/jobs?kind=operator`) shows everything else.
 export const INTERNAL_JOB_PREFIXES = [
-  "ticket:", "review:", "plan:", "grade:", "distill:", "ideas:", "intake:", "ci-fix:", "merge-gate:", "verify:", "nextday:", "dream:",
+  "ticket:", "review:", "plan:", "grade:", "distill:", "ideas:", "intake:", "ci-fix:", "merge-gate:", "verify:", "nextday:", "dream:", "prose:", "hygiene:",
 ];
 export function isInternalJob(name?: string | null): boolean {
   const base = baseJobName(name);
