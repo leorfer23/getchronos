@@ -102,6 +102,13 @@ export type BusEvent = (
   | { topic: "session.reopened"; session_id: string; by: string; actor: string; workspace_id?: string | null }
   // Manual worklog write (admin or Lead). Lead author is forced to lead:<id8>.
   | { topic: "worklog.written"; workspace_id: string; what: string; by: string; actor: string }
+  // A `chronos host` link came up / went down (HOSTS.md). Down is the LINK, not the terminals: they keep
+  // running on that Mac and re-attach on reconnect; the Desk greys their cards meanwhile.
+  | { topic: "host.online"; host_id: string; name: string }
+  | { topic: "host.offline"; host_id: string; reason: string }
+  // A host refused a spawn by its local veto (CHRONOS_HOST_DENY), or the brain's own policy refused
+  // one. Either means placement tried to put a workspace where it is not allowed.
+  | { topic: "host.policy_violation"; host_id: string; workspace_id: string | null; session_id: string | null; reason: string }
   | { topic: "clipboard.read"; by: string; describe: string; chars: number }
   | { topic: "clipboard.write"; by: string; describe: string; chars: number }
   | {

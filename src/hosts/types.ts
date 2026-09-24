@@ -1,4 +1,5 @@
 import type { Readable, Writable } from "node:stream";
+import type { SpawnSpec } from "./spawn-spec.js";
 import type { Admission, MachineLoad, SlotGrant, SlotHolder, vitalsSnapshot } from "../machine.js";
 
 // The seam between the brain and the computers its agents run on (HOSTS.md, "The seam: Host").
@@ -22,6 +23,12 @@ export interface PtyHandle {
   readonly pid: number;
   readonly cols: number;
   readonly rows: number;
+  /**
+   * Where the process runs, as a path on ITS host. Only a remote handle sets it: the host resolved
+   * the checkout / worktree itself (SpawnSpec carries intent, not paths), and the brain records what
+   * the host chose on the session row. Undefined on `local`, where the caller chose the cwd.
+   */
+  readonly cwd?: string;
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(signal?: string): void;
@@ -48,14 +55,12 @@ export interface ProcHandle {
 }
 
 /**
- * What a spawn is, in phase 1: a fully built command line. The brain still resolves cwd, env,
- * sandbox and `nice` itself, exactly as before, because every host is `local`.
- *
- * TODO(phase 3): replace with HOSTS.md's intent-shaped `SpawnSpec` (repo/worktree/profile NAME,
- * sandbox mode, env of secrets only) so the host works out its own paths. A remote host must never
- * receive an absolute path the brain made up.
+ * What a spawn is on `local`: a fully built command line. The brain resolves cwd, env, sandbox and
+ * `nice` itself, exactly as before hosts existed. A remote host takes a `SpawnSpec` instead
+ * (src/hosts/spawn-spec.ts): intent, never an absolute path the brain made up.
  */
 export interface PtySpawn {
+  kind?: "argv";
   /** The session id this pty belongs to — what `listLive()` reports it under. */
   id: string;
   cmd: string;
@@ -109,7 +114,8 @@ export interface Host {
   readonly id: string;
 
   // ── processes ──
-  spawnPty(spec: PtySpawn): Promise<PtyHandle>;
+  /** `local` takes a built command line (PtySpawn); a remote host takes intent (SpawnSpec). */
+  spawnPty(spec: PtySpawn | SpawnSpec): Promise<PtyHandle>;
   spawnProcess(spec: ProcSpawn): Promise<ProcHandle>;
   /**
    * Signal a process this host is running, by pid, synchronously. Throws when there is no such
@@ -124,8 +130,8 @@ export interface Host {
   vitals(): HostVitals;
   readonly slots: HeavySlotPool;
 
-  // TODO(phase 3): checkout(repo), worktree(op), prepare(spec), transcript(sub) — the fs side of a
-  //   terminal (worktrees, trust, hooks, AGENTS.md, transcript tails) still runs in-process on the
-  //   brain's own paths.
+  // Phase 3 does checkout/worktree/prepare/transcript INSIDE a remote spawn (the host resolves them
+  // from the SpawnSpec) rather than as separate verbs: nothing on the brain needs them on their own
+  // yet. They become verbs when the ship pipeline moves to hosts (phase 5).
   // TODO(phase 5): exec(cmd) — gates, reviews and delivery still call execFileSync in the worktree.
 }

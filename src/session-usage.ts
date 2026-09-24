@@ -5,6 +5,8 @@ import { bus } from "./bus.js";
 import { CONFIG } from "./config.js";
 import { estimateUsd } from "./pricing.js";
 import { sessions, workspaces } from "./store.js";
+import { LOCAL_HOST_ID } from "./store/hosts.js";
+import { mirrorFile } from "./hosts/transcript-mirror.js";
 
 // What a terminal has actually spent. The CLI already writes it — every claude transcript carries a
 // running `cost-state` (totalCostUSD, lines added/removed) and per-message `usage` — so this is a
@@ -71,6 +73,12 @@ function configDirFor(id: string): string | null {
 
 /** claude pins the transcript filename to the session id; the project dir depends on cwd. */
 function transcriptFor(id: string): string | null {
+  // A terminal on another host: its transcript is the mirror the host streams into (hosts/transcript-mirror.ts).
+  const row = sessions.get(id);
+  if (row && row.host_id && row.host_id !== LOCAL_HOST_ID) {
+    const m = mirrorFile(id);
+    return fs.existsSync(m) ? m : null;
+  }
   const configDir = configDirFor(id);
   if (!configDir) return null;
   const root = path.join(configDir, "projects");

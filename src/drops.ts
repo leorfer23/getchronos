@@ -36,8 +36,8 @@ export const DROP_ROOT = process.env.CHRONOS_DROPS ?? path.join(os.homedir(), ".
  * segment of ".." would put the drop root's PARENT one `path.join` away, and that is not a bug
  * worth leaving for whoever next passes an id in from a request.
  */
-export const sessionDropDir = (sessionId: string) =>
-  path.join(DROP_ROOT, String(sessionId).replace(/[^\w-]+/g, "_").slice(0, 80) || "session");
+export const sessionDropDir = (sessionId: string, root = DROP_ROOT) =>
+  path.join(root, String(sessionId).replace(/[^\w-]+/g, "_").slice(0, 80) || "session");
 
 // 25MB. Bigger than the 12MB chat/attachment cap because this is a plain "read this file" hand-off
 // — a CSV export or a screen recording is a normal thing to drop, and nothing re-encodes it.
@@ -83,8 +83,9 @@ function freeName(dir: string, name: string): string {
  * its own tools. Filtering by type here would only mean "the Desk refuses to hand you a .zip".
  */
 /** Make the dir exist at spawn: cursor also maps add-dirs to `--add-dir`, and a missing path there is untested. */
-export function ensureDropDir(sessionId: string): string {
-  const dir = sessionDropDir(sessionId);
+// `root`: a `chronos host` (HOSTS.md phase 3) keeps its drops under ITS home, the same `~/.mc/drops`.
+export function ensureDropDir(sessionId: string, root = DROP_ROOT): string {
+  const dir = sessionDropDir(sessionId, root);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }
@@ -94,11 +95,12 @@ export function saveDrop(input: {
   buffer: Buffer;
   filename: string;
   mime?: string;
+  root?: string;
 }): Drop {
   if (!input.buffer?.length) throw new Error("empty file");
   if (input.buffer.length > MAX_DROP_BYTES)
     throw new Error(`file too large (max ${MAX_DROP_BYTES / 1024 / 1024}MB)`);
-  const dir = ensureDropDir(input.sessionId);
+  const dir = ensureDropDir(input.sessionId, input.root);
   const name = freeName(dir, safeName(input.filename));
   const filePath = path.join(dir, name);
   // 0o600 like every other operator file the daemon writes: the drop may be a screenshot of a
