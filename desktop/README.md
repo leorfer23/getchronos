@@ -8,11 +8,12 @@ launchd; these are just renderers in real windows, and each reads `.admin-token`
 |---|---|---|
 | `app.swift` | `mc-app` (`scripts/build-app.sh`) | Resizable app window. Takes the page as an argument: `mc-app /desk` is the terminal wall, bare `mc-app` opens `/app`. |
 | `overlay.swift` | `mc-overlay` | Always-on-top ticket panel over `/overlay.html`. |
+| `icon.svg` → `icon.icns` | `scripts/build-icon.sh` | The Mac app icon: the hourglass mark from `site/assets/favicon.svg` on the night ground, sized to Apple's icon grid. `build-app.sh` bundles it. |
 | `wapp.swift` | `wapp` (`scripts/build-wapp.sh`) | Drives the real WhatsApp desktop client. See below. |
 
 **`src-tauri/` is vestigial.** It is a Tauri v2 scaffold from before the Swift shells existed, and
-nothing builds it any more — `scripts/build-app.sh` reads exactly one file out of it,
-`icons/icon.icns`. The section below is kept for whoever wants to revive it; it points at `/`, which
+nothing builds it any more — `scripts/build-app.sh` no longer reads anything
+from it (the icon moved to `desktop/icon.icns`). The section below is kept for whoever wants to revive it; it points at `/`, which
 now redirects to the small overlay rather than the dashboard it was written against.
 
 ## The Tauri scaffold (unused)
