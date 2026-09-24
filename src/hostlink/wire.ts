@@ -132,7 +132,15 @@ export const EXEC_MAX_BYTES = 8 * 1024 * 1024;
 
 // ───────────────────────────── control frames ─────────────────────────────
 
-export type CliInfo = { name: string; path: string | null; version: string | null };
+export type CliInfo = {
+  name: string; path: string | null; version: string | null;
+  /**
+   * Whether the CLI is logged in on this host, where that is readable without running a model call:
+   * grok/opencode by their auth file, cursor-agent by `status` or CURSOR_API_KEY. Absent (older
+   * hosts, or CLIs with no probe) and "unknown" mean "don't know" — placement only refuses on "no".
+   */
+  auth?: "yes" | "no" | "unknown";
+};
 export type ProfileInfo = { name: string; dir: string; exists: boolean };
 export type CheckoutInfo = { path: string; remote_url: string | null };
 export type LiveInfo = {

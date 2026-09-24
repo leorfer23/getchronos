@@ -47,6 +47,8 @@ export type PlaceRequest = {
   repo: { id: string; name: string; git_remote: string | null } | null;
   needs: {
     sandbox: string;
+    /** The spawn's env will carry CURSOR_API_KEY (workspace secrets or the daemon's own env). */
+    cursor_key?: boolean;
     egress_locked: boolean;
     /**
      * Phase 5: the workspace's egress brokers a credential (the brain's proxy terminates TLS and
@@ -89,6 +91,8 @@ export type HostCandidate = {
   sandbox: boolean;
   /** CLI names the host found on its PATH. */
   clis: string[];
+  /** CLIs the host reported as installed but NOT logged in (CliInfo.auth === "no"). */
+  unauthed?: string[];
   profiles: Array<{ name: string; exists: boolean }>;
   /** Repo ids checked out on this host (repo_checkouts). */
   checkouts: string[];
@@ -189,6 +193,9 @@ export function ineligible(h: HostCandidate, req: PlaceRequest): { kind: "policy
   if (req.needs.sandbox !== "off" && !h.sandbox) return gap(`cannot sandbox (${req.needs.sandbox}) — no sandbox-exec`);
   const cli = cliFor(req.backend);
   if (cli && !h.clis.includes(cli)) return gap(`${cli} not installed`);
+  // Installed but never logged in: the terminal would die on a login screen. cursor-agent is the one
+  // exception the spawn itself can cure — a workspace that carries CURSOR_API_KEY sends it along.
+  if (cli && h.unauthed?.includes(cli) && !(cli === "cursor-agent" && req.needs.cursor_key)) return gap(`${cli} not logged in`);
   if (req.needs.gh && !h.clis.includes("gh")) return gap("gh not installed");
   if (req.profile) {
     const p = h.profiles.find((x) => x.name === req.profile);

@@ -14,6 +14,8 @@ import { egressBrokered, egressEnforced } from "../egress.js";
 import { currentLoad, loadFromVitals, vitalsSnapshot } from "../machine.js";
 import { parseCapabilities, parsePolicy } from "../hostlink/registry.js";
 import { worktreeRootFor } from "../worktree-core.js";
+import { childEnv } from "../child-env.js";
+import type { Workspace } from "../types.js";
 import { ticketBranch } from "../tickets.js";
 import { findHost, remoteHosts } from "./index.js";
 import { RemoteHost } from "./remote.js";
@@ -67,6 +69,7 @@ export function placementCandidates(now = Date.now()): HostCandidate[] {
       platform: hello?.platform ?? caps?.platform ?? row?.platform ?? "",
       sandbox: !!(hello?.capabilities?.sandbox ?? caps?.sandbox),
       clis: (hello?.capabilities?.clis ?? caps?.clis ?? []).filter((c) => !!c.path).map((c) => c.name),
+      unauthed: (hello?.capabilities?.clis ?? caps?.clis ?? []).filter((c) => !!c.path && c.auth === "no").map((c) => c.name),
       profiles: (hello?.profiles ?? caps?.profiles ?? []).map((p) => ({ name: p.name, exists: !!p.exists })),
       checkouts: repoCheckouts.forHost(id).map((c) => c.repo_id),
       auto_clone: !!(hello?.capabilities?.auto_clone ?? caps?.auto_clone),
@@ -165,6 +168,7 @@ export function placeRequest(o: OpenIntent, openedBy: string): PlaceRequest {
       // brain's own listener is up.
       egress_locked: egressEnforced(o.workspace_id),
       brokered: egressBrokered(o.workspace_id),
+      cursor_key: carriesCursorKey(ws),
     },
     pinned: o.host_id || null,
     sticky: sticky ? { host_id: sticky.host_id, why: sticky.why } : null,
@@ -190,4 +194,9 @@ export function placeTerminal(o: OpenIntent, openedBy: string, mode: PlacementMo
     bus.publish({ topic: "host.policy_violation", host_id: hid, workspace_id: req.workspace.id, session_id: o.resumeId ?? null, reason: r.message });
   }
   throw new PlacementError(r);
+}
+
+/** Will a spawn for this workspace carry CURSOR_API_KEY? Same env the spawn itself is built from. */
+export function carriesCursorKey(ws: Workspace | null | undefined): boolean {
+  try { return !!childEnv(ws).CURSOR_API_KEY; } catch { return false; }
 }

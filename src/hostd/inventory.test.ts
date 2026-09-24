@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { buildHello, checklist, formatChecklist, hostDeny, hostRoots, sampleHostVitals, scanCheckouts, which } from "./inventory.js";
+import { buildHello, checklist, cliAuth, cursorAuthFrom, formatChecklist, hostDeny, hostRoots, sampleHostVitals, scanCheckouts, which } from "./inventory.js";
 import { PROTOCOL_VERSION, checkCompat } from "../hostlink/wire.js";
 
 test("roots: comma or colon separated, ~ expanded; deny: comma separated", () => {
@@ -105,4 +105,19 @@ test("doctor checklist: a joined host with tools is all green; missing pieces sa
   assert.match(text, /✗ joined a brain — no\n    → paste the command from Desk → Computers → \+ Add/);
   assert.match(text, /→ brew install node@24 .*"\$HOME\/\.zprofile"/, "the node fix is the preflight's, with $HOME");
   assert.match(text, /✓ grok \(optional\)/, "a missing agent CLI is fine while another one exists");
+});
+
+test("cli auth: grok by its auth file; cursor-agent by key or `status` wording, a locked keychain is unknown", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "inv-auth-"));
+  assert.equal(await cliAuth("grok", "/x/grok", {}, home), "no");
+  fs.mkdirSync(path.join(home, ".grok"));
+  fs.writeFileSync(path.join(home, ".grok", "auth.json"), "{}");
+  assert.equal(await cliAuth("grok", "/x/grok", {}, home), "yes");
+  assert.equal(await cliAuth("cursor-agent", "/nonexistent/cursor-agent", { CURSOR_API_KEY: "k" }, home), "yes");
+  assert.equal(await cliAuth("claude", "/x/claude", {}, home), undefined);
+  assert.equal(await cliAuth("opencode", "/x/opencode", {}, home), undefined);
+  assert.equal(cursorAuthFrom("\x1b[33mNot logged in\x1b[0m"), "no");
+  assert.equal(cursorAuthFrom("Error: Your macOS login keychain is locked.\nRun security unlock-keychain"), "unknown");
+  assert.equal(cursorAuthFrom("✓ Logged in as someone@example.com"), "yes");
+  assert.equal(cursorAuthFrom(""), "unknown");
 });
