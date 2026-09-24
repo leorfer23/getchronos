@@ -1524,7 +1524,9 @@ async function heavy(argv) {
       if (!wsId) die(`dream ${sub} needs --workspace or MC_WORKSPACE — memory is workspace-walled`);
       const base = "/workspaces/" + wsId + "/dream";
       if (sub === "context") {
-        const r = await req("GET", base + "/context" + (opt.run && opt.run !== "true" ? "?run=" + encodeURIComponent(opt.run) : ""));
+        const withRun = opt.run && opt.run !== "true";
+        // No --run opens a pass: the operator's call, or the running dream job's next chunk (the daemon decides).
+        const r = await req("GET", base + "/context" + (withRun ? "?run=" + encodeURIComponent(opt.run) : ""), undefined, withRun || !adminToken() ? undefined : adminHeaders());
         return console.log(JSON.stringify(r, null, 2));
       }
       if (sub === "branch") {
@@ -1559,7 +1561,7 @@ async function heavy(argv) {
       }
       if (sub === "undo") {
         const id = pos[2] || die("dream undo needs a run id (see mc dream runs)");
-        const r = await req("POST", base + "/runs/" + encodeURIComponent(id) + "/undo", {});
+        const r = await req("POST", base + "/runs/" + encodeURIComponent(id) + "/undo", {}, adminHeaders());
         return console.log(`undone ${r.id.slice(0, 8)} — memory is back to how it was before that pass`);
       }
       die("dream: unknown subcommand " + sub + " (context|branch|apply|runs|undo|run)");

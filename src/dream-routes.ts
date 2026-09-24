@@ -9,7 +9,7 @@
 import type express from "express";
 import { CONFIG } from "./config.js";
 import { checkScope, tokenOk } from "./authz.js";
-import { dreamRuns, workspaces } from "./store.js";
+import { dreamRuns, runs, workspaces } from "./store.js";
 import { applyPlan, dreamBranch, dreamContext, DreamError, publicRun, undoRun, workspaceOf } from "./dream-pass.js";
 import { dreamAll, startDream } from "./dream.js";
 import type { Workspace } from "./types.js";
@@ -24,6 +24,13 @@ function walled(req: Req, res: Res): Workspace | null {
   return ws;
 }
 
+const isAdmin = (req: Req) => tokenOk(req.get("x-mc-admin"), CONFIG.adminToken);
+
+// A dispatched dream job for this workspace is still queued/running: its next inbox chunk may open a
+// follow-up pass without a run id. Outside that window only the operator opens one.
+const dreamJobLive = (workspace_id: string) =>
+  dreamRuns.list(workspace_id, 5).some((r) => !!r.run_id && ["queued", "running"].includes(runs.get(r.run_id)?.status ?? ""));
+
 function fail(res: Res, e: unknown): void {
   if (e instanceof DreamError) { res.status(e.status).json({ error: e.message, problems: e.problems }); return; }
   console.error("[dream]", e);
@@ -34,6 +41,10 @@ function fail(res: Res, e: unknown): void {
 export function contextRoute(req: Req, res: Res): void {
   const ws = walled(req, res);
   if (!ws) return;
+  // Without ?run= this OPENS a pass, and a pass may rewrite the whole index. Only the operator, or a
+  // dream job startDream dispatched and still running (its next chunk) — never any terminal holding
+  // the workspace token.
+  if (!req.query.run && !isAdmin(req) && !dreamJobLive(ws.id)) { res.status(403).json({ error: "opening a dream pass is admin-only — pass --run <id> from the dispatched job" }); return; }
   try { res.json(dreamContext(ws, req.query.run ? String(req.query.run) : null)); } catch (e) { fail(res, e); }
 }
 
@@ -63,6 +74,8 @@ export function runsRoute(req: Req, res: Res): void {
 export function undoRoute(req: Req, res: Res): void {
   const ws = walled(req, res);
   if (!ws) return;
+  // Undo is the operator's veto over a pass, not something an agent in the workspace gets to use.
+  if (!isAdmin(req)) { res.status(403).json({ error: "undoing a dream pass is admin-only" }); return; }
   try { res.json(publicRun(undoRun(ws, String(req.params.run)))); } catch (e) { fail(res, e); }
 }
 
@@ -71,7 +84,7 @@ export function undoRoute(req: Req, res: Res): void {
  * one, even if nothing new happened (the backfill of a big inbox). Without: every active workspace.
  */
 export function runNowRoute(req: Req, res: Res): void {
-  if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) { res.status(403).json({ error: "dream run is admin-only (it dispatches paid jobs)" }); return; }
+  if (!isAdmin(req)) { res.status(403).json({ error: "dream run is admin-only (it dispatches paid jobs)" }); return; }
   const w = req.body?.workspace ? String(req.body.workspace) : null;
   try {
     if (!w) { res.json({ started: dreamAll("manual", null) }); return; }

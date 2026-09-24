@@ -451,6 +451,28 @@ test("POST /dream/run is admin-only", () => {
   assert.equal(res2.statusCode, 403, "no header is not admin either");
 });
 
+test("a workspace token can continue a dispatched pass, but never open one or undo one", () => {
+  const w = mkWs("dream-gate");
+  const tok = { "x-mc-workspace-token": workspaces.get(w.id)!.token! };
+  const open = fakeRes();
+  routes.contextRoute(fakeReq({ id: w.id }, tok, { query: {} }), open);
+  assert.equal(open.statusCode, 403, "no ?run= opens a pass — admin only");
+  assert.equal(dreamRuns.open(w.id).length, 0, "and nothing was opened");
+  const run = dreamRuns.create({ workspace_id: w.id, source: "slot", slot: null });
+  dreamRuns.patch(run.id, { status: "dispatched" });
+  const cont = fakeRes();
+  routes.contextRoute(fakeReq({ id: w.id }, tok, { query: { run: run.id } }), cont);
+  assert.equal(cont.statusCode, 200, "the dispatched job continues its own run");
+  const undo = fakeRes();
+  routes.undoRoute(fakeReq({ id: w.id, run: run.id }, tok), undo);
+  assert.equal(undo.statusCode, 403);
+  if (CONFIG.adminToken) {
+    const adm = fakeRes();
+    routes.contextRoute(fakeReq({ id: w.id }, { "x-mc-admin": CONFIG.adminToken }, { query: {} }), adm);
+    assert.equal(adm.statusCode, 200, "the operator may open one by hand");
+  }
+});
+
 // ───────────────────────────── scheduling ─────────────────────────────
 
 test("isActive: an inbox backlog always counts; everything else only when new", () => {
