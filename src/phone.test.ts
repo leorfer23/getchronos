@@ -29,6 +29,11 @@ test("sockets follow the page scheme and the token rides the same localStorage k
   assert.match(html, /localStorage\.getItem\("mc-token"\)/);
 });
 
+test("api() rides out a tunnel blip: one retry on a failed GET, never on a write", () => {
+  assert.match(html, /const method = \(opts\?\.method \|\| "GET"\)\.toUpperCase\(\);/);
+  assert.match(html, /method === "GET" && err instanceof TypeError \? new Promise\(\(r\) => setTimeout\(r, 1200\)\)\.then\(send\) : Promise\.reject\(err\)/);
+});
+
 test("the composer owns input: xterm stdin is off and the key bar covers what a phone keyboard lacks", () => {
   assert.match(html, /disableStdin: true/);
   for (const k of ['data-key="enter"', 'data-key="esc"', 'data-key="tab"', 'data-key="ctrl-c"', 'data-key="up"', 'data-key="down"']) {
