@@ -41,6 +41,25 @@ test("checkouts: direct children that are git repos, with their origin; dotdirs 
   assert.deepEqual(got, [{ path: a, remote_url: "git@github.com:x/alpha.git" }, { path: b, remote_url: null }]);
 });
 
+test("checkouts: one grouping level deep (~/GitHub/<client>/<repo>), never inside a checkout or node_modules", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "inv-group-"));
+  const mk = (rel: string, origin: string) => {
+    const d = path.join(root, rel);
+    fs.mkdirSync(d, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: d });
+    execFileSync("git", ["remote", "add", "origin", origin], { cwd: d });
+    return fs.realpathSync(d);
+  };
+  const p = mk("Personal/presence", "git@github.com:x/presence.git");
+  const m = mk("Medialab/airflow", "git@github.com:x/airflow.git");
+  const top = mk("toplevel", "git@github.com:x/top.git");
+  mk("toplevel/vendored", "git@github.com:x/vendored.git"); // inside a checkout: not a separate repo here
+  mk("Personal/node_modules/pkg", "git@github.com:x/pkg.git");
+  mk("Deep/a/b", "git@github.com:x/deep.git"); // two levels of grouping: out of reach on purpose
+  const got = (await scanCheckouts([root])).map((c) => c.path).sort();
+  assert.deepEqual(got, [m, p, top].sort());
+});
+
 test("hello is protocol-current and names this machine's platform", async () => {
   const prev = process.env.CHRONOS_HOST_ROOTS;
   process.env.CHRONOS_HOST_ROOTS = fs.mkdtempSync(path.join(os.tmpdir(), "inv-empty-")); // never scan the real ~/Documents

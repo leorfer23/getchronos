@@ -22,6 +22,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createRequire } from "node:module";
 import pty, { type IPty } from "node-pty";
 import { normalizeGitRemote } from "../hostlink/git-remote.js";
 import { Ring, chunk, type CheckoutInfo, type HostToBrain, type LiveInfo } from "../hostlink/wire.js";
@@ -185,7 +186,11 @@ export class HostTerminals {
 
   constructor(private readonly o: HostTerminalsOptions) {
     this.home = o.home ?? os.homedir();
+    ensurePtyHelper();
   }
+
+  /** The port the `mc` forwarder actually bound (see mcPortCandidates in index.ts). */
+  setMcPort(port: number): void { this.o.mcPort = port; }
 
   attachLink(link: TerminalsLink): void { this.link = link; }
 
@@ -488,4 +493,18 @@ function signalName(n: number): string {
 
 function isDir(p: string): boolean {
   try { return path.isAbsolute(p) && fs.statSync(p).isDirectory(); } catch { return false; }
+}
+
+/**
+ * node-pty's prebuilt `spawn-helper` comes out of `npm ci` without its exec bit on some installs, and
+ * then every spawn fails with a bare "posix_spawnp failed" (first contact, 2026-09-24). The brain
+ * re-grants it at boot (terminal.ts ensurePtyHelper); a host needs the same, resolved from node-pty's
+ * own location rather than the process cwd, since a LaunchAgent's cwd is not the checkout.
+ */
+export function ensurePtyHelper(): void {
+  try {
+    const dir = path.dirname(createRequire(import.meta.url).resolve("node-pty/package.json"));
+    const p = path.join(dir, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
+    if (fs.existsSync(p) && !(fs.statSync(p).mode & 0o111)) fs.chmodSync(p, 0o755);
+  } catch {}
 }

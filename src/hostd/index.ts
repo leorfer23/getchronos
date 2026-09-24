@@ -30,6 +30,14 @@ import { hostDeny } from "./inventory.js";
 const env = (k: string) => (process.env[k] ?? "").trim();
 const brains = () => env("CHRONOS_HOST_BRAINS").split(",").map((s) => s.trim()).filter(Boolean);
 const mcPort = () => Number(env("CHRONOS_HOST_MC_PORT") || 7777);
+/**
+ * Ports the forwarder tries, in order. An explicit CHRONOS_HOST_MC_PORT is the only one. Otherwise
+ * 7777 first (what `mc` defaults to), then a small fixed range: a Mac that also runs its own Chronos
+ * daemon already owns 7777, and an agent's MC_API pointing at THAT daemon talks to the wrong brain
+ * (first contact, 2026-09-24: `mc state done` → 404 from a months-old local install). Fixed, not
+ * random, so `status` can find the process again.
+ */
+const mcPortCandidates = () => (env("CHRONOS_HOST_MC_PORT") ? [mcPort()] : [7777, ...Array.from({ length: 10 }, (_, i) => 7787 + i)]);
 const plistPath = () => path.join(process.env.HOME ?? "", "Library", "LaunchAgents", `${HOST_LABEL}.plist`);
 const secretsMode = () => { try { return fs.statSync(HOST_SECRETS).mode; } catch { return null; } };
 
@@ -95,15 +103,22 @@ async function cmdRun(): Promise<number> {
   // The brain's policy for this host: an extra veto next to CHRONOS_HOST_DENY, never a loosening.
   link.on("policy", (f: { deny?: unknown }) => terminals.setPolicy(f?.deny));
   link.on("offline", (why: string) => console.log(`[host] link down (${why}) — reconnecting`));
-  const fwd = await startForwarder(link, {
-    port: mcPort(),
-    status: () => ({ host_id: id, state: link.state, url: link.url, since: link.since, last_error: link.lastError }),
-  }).catch((e) => {
-    // Another process owns :7777 (a brain on this same Mac). The link still runs; agents here would
-    // reach that local brain directly, which is what they did before hosts existed.
-    console.warn(`[host] mc forwarder could not bind 127.0.0.1:${mcPort()} (${e?.message ?? e}) — set CHRONOS_HOST_MC_PORT`);
-    return null;
-  });
+  let fwd: Awaited<ReturnType<typeof startForwarder>> | null = null;
+  for (const port of mcPortCandidates()) {
+    try {
+      fwd = await startForwarder(link, {
+        port,
+        status: () => ({ host_id: id, state: link.state, url: link.url, since: link.since, last_error: link.lastError }),
+      });
+      // Agents opened from now on point MC_API at the port that actually bound.
+      terminals.setMcPort(port);
+      if (port !== 7777) console.log(`[host] mc forwarder on 127.0.0.1:${port} (7777 is taken on this Mac)`);
+      break;
+    } catch (e: any) {
+      console.warn(`[host] mc forwarder could not bind 127.0.0.1:${port} (${e?.message ?? e})`);
+    }
+  }
+  if (!fwd) console.warn("[host] no mc forwarder — agents on this host cannot reach the brain; set CHRONOS_HOST_MC_PORT to a free port");
   link.start();
   const stop = async () => {
     // A host that stops takes its agents with it (they are its children); the brain revives them
@@ -133,9 +148,9 @@ async function runDoctor(): Promise<{ ok: boolean; text: string }> {
   return { ok: checks.every((c) => c.ok), text: formatChecklist(checks) };
 }
 
-function localStatus(): Promise<Record<string, unknown> | null> {
+function statusOn(port: number): Promise<Record<string, unknown> | null> {
   return new Promise((resolve) => {
-    const req = http.get({ host: "127.0.0.1", port: mcPort(), path: "/__host/status", timeout: 2000 }, (res) => {
+    const req = http.get({ host: "127.0.0.1", port, path: "/__host/status", timeout: 2000 }, (res) => {
       let s = "";
       res.on("data", (c) => (s += c));
       res.on("end", () => { try { resolve(JSON.parse(s)); } catch { resolve(null); } });
@@ -143,6 +158,15 @@ function localStatus(): Promise<Record<string, unknown> | null> {
     req.on("timeout", () => req.destroy());
     req.on("error", () => resolve(null));
   });
+}
+
+/** The first candidate port that answers as a host forwarder (a Chronos daemon on 7777 does not). */
+async function localStatus(): Promise<Record<string, unknown> | null> {
+  for (const port of mcPortCandidates()) {
+    const s = await statusOn(port);
+    if (s && s.host_id) return s;
+  }
+  return null;
 }
 
 async function cmdStatus(): Promise<number> {
@@ -154,7 +178,7 @@ async function cmdStatus(): Promise<number> {
   console.log(`deny      ${env("CHRONOS_HOST_DENY") || "(none)"}`);
   console.log(`agent     ${fs.existsSync(plistPath()) ? plistPath() : "(no LaunchAgent)"}`);
   const s = await localStatus();
-  if (!s) console.log(`link      host process not running (nothing on 127.0.0.1:${mcPort()})`);
+  if (!s) console.log(`link      host process not running (no forwarder on 127.0.0.1:${mcPortCandidates().join("/")})`);
   else console.log(`link      ${s.state}${s.url ? ` via ${s.url}` : ""} since ${new Date(Number(s.since)).toLocaleString()}${s.last_error ? ` — last error: ${s.last_error}` : ""}`);
   return 0;
 }

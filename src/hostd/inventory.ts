@@ -78,7 +78,12 @@ export function profiles(): ProfileInfo[] {
   return Object.entries(CONFIG.profiles).map(([name, dir]) => ({ name, dir, exists: fs.existsSync(dir) }));
 }
 
-/** Direct children of each root that are git checkouts (plus a root that is one itself), with origin. */
+/**
+ * Git checkouts under each root, with origin: the root itself, its children, and — for a child that
+ * is not a checkout — that child's children. Two levels because people group repos by client
+ * (`~/Documents/GitHub/<client>/<repo>`); the first real host was laid out exactly like that and
+ * reported zero checkouts under a one-level scan. Never deeper: node_modules and vendored repos.
+ */
 export async function scanCheckouts(roots = hostRoots()): Promise<CheckoutInfo[]> {
   const seen = new Set<string>();
   const found: string[] = [];
@@ -96,7 +101,14 @@ export async function scanCheckouts(roots = hostRoots()): Promise<CheckoutInfo[]
     consider(root);
     let entries: fs.Dirent[] = [];
     try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
-    for (const e of entries) if (!e.name.startsWith(".")) consider(path.join(root, e.name));
+    for (const e of entries) {
+      if (e.name.startsWith(".") || e.name === "node_modules") continue;
+      const child = path.join(root, e.name);
+      if (fs.existsSync(path.join(child, ".git"))) { consider(child); continue; }
+      let grand: fs.Dirent[] = [];
+      try { grand = fs.readdirSync(child, { withFileTypes: true }); } catch { continue; }
+      for (const g of grand) if (!g.name.startsWith(".") && g.name !== "node_modules") consider(path.join(child, g.name));
+    }
   }
   return Promise.all(found.map(async (p) => ({ path: p, remote_url: await detectOriginUrl(p) })));
 }

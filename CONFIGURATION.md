@@ -479,8 +479,8 @@ setup checklist; `npm run host -- status` shows the live link.
 | `CHRONOS_HOST_CERT_FP` | written by join | the pinned brain cert's SHA-256 |
 | `CHRONOS_HOST_DENY` | — | local veto: workspace slugs (or ids) this Mac refuses, whatever the brain says — checked before anything is forked. The brain's own deny list for this host (its `policy` frame) is applied too, and can only add refusals |
 | `CHRONOS_HOST_AUTO_CLONE` | `0` | `1` = a terminal for a repo this Mac has no checkout of clones it into the first `CHRONOS_HOST_ROOTS` entry; otherwise the spawn is refused with the remote named |
-| `CHRONOS_HOST_ROOTS` | `~/Documents/GitHub` | where to look for checkouts (comma- or colon-separated) |
-| `CHRONOS_HOST_MC_PORT` | `7777` | the loopback `mc` forwarder, so `MC_API=http://localhost:7777/api` works unchanged for agents on the host |
+| `CHRONOS_HOST_ROOTS` | `~/Documents/GitHub` | where to look for checkouts (comma- or colon-separated): each root, its children, and one grouping level below (`<root>/<client>/<repo>`) |
+| `CHRONOS_HOST_MC_PORT` | `7777`, then `7787`–`7796` | the loopback `mc` forwarder agents' `MC_API` points at. Unset, it takes 7777 or — when that is taken, e.g. by a Chronos daemon on the same Mac — the first free port of 7787–7796; set it to pin one |
 | `CHRONOS_HOST_HOME` | `~/.chronos-host` | the host's state dir (`.secrets`, logs) |
 | `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` | — | Cloudflare Access service token, sent only to tunnel (CA-verified) URLs, never to a LAN IP |
 
@@ -586,7 +586,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_HOST_HOME` | `~/.chronos-host` | `src/hostd/env.ts` |
 | `CHRONOS_HOST_ID` | — | `src/hostd/index.ts` |
 | `CHRONOS_HOST_LISTEN` | — | `src/config.ts` |
-| `CHRONOS_HOST_MC_PORT` | `7777` | `src/hostd/index.ts` |
+| `CHRONOS_HOST_MC_PORT` | `7777` (fallback 7787–7796) | `src/hostd/index.ts` |
 | `CHRONOS_HOST_PUBLIC_URL` | — | `src/hostlink/brain-link.ts` |
 | `CHRONOS_HOST_REPO_URL` | package.json `repository` | `src/hostlink/brain-link.ts` |
 | `CHRONOS_HOST_ROOTS` | `"~/Documents/GitHub"` | `src/hostd/inventory.ts` |
