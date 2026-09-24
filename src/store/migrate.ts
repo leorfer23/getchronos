@@ -1817,10 +1817,65 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       )`);
     },
   },
+  {
+    version: 134,
+    name: "hosts + repo_checkouts + sessions/runs.host_id — paths and pids belong to a computer",
+    // HOSTS.md phase 1: the seam, no behavior change. Today every process runs on the brain, so every
+    // existing row is `local` and nothing reads these columns to decide anything yet. They exist now
+    // so that when a second Mac joins, a pid or a path is never read on the wrong machine.
+    //
+    // repo_checkouts: `repos.path` is the brain's own checkout and stays the thing every caller reads.
+    // The `local` row mirrors it (backfilled here, kept in sync by store/repos.ts); a remote host adds
+    // its own row with ITS path, since /Users/alice on one Mac is /Users/a.smith on another. `head`
+    // and `scanned_at` stay null until a host actually scans (phase 2).
+    //
+    // host_id on sessions/runs is a plain column, not a REFERENCES: SQLite refuses ADD COLUMN with a
+    // foreign key and a non-null default while foreign_keys is on, and a table rebuild of sessions
+    // and runs is not worth it for a key the brain writes itself.
+    up: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS hosts (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'online',
+        policy_json TEXT,
+        reserve_json TEXT,
+        token_hash TEXT,
+        cert_fp TEXT,
+        last_seen_at TEXT,
+        capabilities_json TEXT,
+        created_at TEXT NOT NULL
+      )`);
+      ensureLocalHost(db);
+      db.exec(`CREATE TABLE IF NOT EXISTS repo_checkouts (
+        repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+        host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+        path TEXT NOT NULL,
+        head TEXT,
+        scanned_at TEXT,
+        PRIMARY KEY (repo_id, host_id)
+      )`);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_repo_checkouts_host ON repo_checkouts(host_id)");
+      db.exec("INSERT OR IGNORE INTO repo_checkouts (repo_id,host_id,path) SELECT id,'local',path FROM repos");
+      db.exec("ALTER TABLE sessions ADD COLUMN host_id TEXT NOT NULL DEFAULT 'local'");
+      db.exec("ALTER TABLE runs ADD COLUMN host_id TEXT NOT NULL DEFAULT 'local'");
+    },
+  },
 
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
+
+/**
+ * The brain is always a host. Run by migration 134 and again at every boot (store/db.ts), so even a
+ * row deleted by hand comes back: every session and run defaults to `local`, and the registry must
+ * be able to find the host they name. Idempotent; never touches an existing row.
+ */
+export function ensureLocalHost(db: Database.Database): void {
+  db.prepare(
+    "INSERT OR IGNORE INTO hosts (id,name,platform,status,created_at) VALUES ('local','local',?,'online',?)",
+  ).run(process.platform, new Date().toISOString());
+}
 
 // Applies every migration newer than the DB's current `user_version`, each in its own transaction.
 // Retrofit: every DB that predates this migration system built its schema by re-running ALL of the

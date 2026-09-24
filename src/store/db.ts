@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { CONFIG } from "../config.js";
-import { migrate } from "./migrate.js";
+import { ensureLocalHost, migrate } from "./migrate.js";
 import { now } from "./util.js";
 
 // GUARDRAIL — never let the test suite touch a real database.
@@ -54,6 +54,7 @@ if (CONFIG.dbPath !== ":memory:") {
 }
 
 migrate(db);
+ensureLocalHost(db);
 
 // Startup reconciliation: any run still 'running'/'queued' was orphaned by a daemon stop/crash
 // (its child process is gone and the in-memory queue is empty). Mark them so they don't hang forever.
@@ -63,13 +64,18 @@ migrate(db);
 // working on the provider's VM — so marking it interrupted here would be factually wrong, not just
 // inconvenient, and would undo the whole point of the cloud backend (survive the Mac sleeping or the
 // daemon being off). cloud-reconcile.ts (started later, in index.ts) picks those back up instead.
+//
+// The same reasoning is why this only touches host_id = 'local' (HOSTS.md, "Reconnect and
+// restarts"): a run on another computer is a child of THAT computer's host process, not of this
+// daemon, and it is still running. Sweeping it here would make every deploy double the fleet once
+// the host re-attaches it. Every run is 'local' today, so this changes nothing yet.
 {
   const orphans = db
-    .prepare("SELECT id FROM runs WHERE status IN ('running','queued') AND cloud_agent_id IS NULL")
+    .prepare("SELECT id FROM runs WHERE status IN ('running','queued') AND cloud_agent_id IS NULL AND host_id = 'local'")
     .all() as Array<{ id: string }>;
   if (orphans.length) {
     db.prepare(
-      "UPDATE runs SET status='interrupted', ended_at=?, error=COALESCE(error,'daemon restarted while run was active') WHERE status IN ('running','queued') AND cloud_agent_id IS NULL"
+      "UPDATE runs SET status='interrupted', ended_at=?, error=COALESCE(error,'daemon restarted while run was active') WHERE status IN ('running','queued') AND cloud_agent_id IS NULL AND host_id = 'local'"
     ).run(now());
     console.log(`[chronos] reconciled ${orphans.length} orphaned run(s) → interrupted`);
   }

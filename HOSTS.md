@@ -1,7 +1,8 @@
 # Hosts — one Desk, N computers
 
-> Status: **design**, not built. This is the plan the implementation PRs follow; each phase at the
-> end is one PR (or a short series) and updates this file when it lands.
+> Status: **phase 1 landed** (the seam: `src/hosts/`, migration 134); phases 2–6 are design. This is
+> the plan the implementation PRs follow; each phase at the end is one PR (or a short series) and
+> updates this file when it lands.
 
 ## The gap
 
@@ -91,6 +92,7 @@ interface Host {
   // processes
   spawnPty(spec: SpawnSpec): Promise<PtyHandle>;        // PtyHandle ≈ node-pty IPty: write/resize/kill/onData/onExit
   spawnProcess(spec: SpawnSpec): Promise<ProcHandle>;   // headless runs: stdout lines, stdin, kill, exit
+  signal(pid: number, sig: Signal): void;               // stop a run by its persisted pid (added in phase 1)
   listLive(): Promise<LiveInfo[]>;                      // reconcile after a brain restart
   // filesystem & git, always in the host's own paths
   checkout(repo: RepoRef): Promise<string | null>;      // the host's clone of this repo, or null
@@ -138,7 +140,7 @@ owner:
 - **`repo_checkouts(repo_id, host_id, path, head, scanned_at)`**. `repos.path` stays the brain's
   own checkout: the migration backfills it as the `local` row, so nothing that reads `repos.path`
   on the brain breaks. Hosts report their checkouts by scanning their landing dirs and matching
-  `git remote get-url origin` to `repos.remote_url` (today's `repo-scan.ts`, run on the host).
+  `git remote get-url origin` to `repos.git_remote` (today's `repo-scan.ts`, run on the host).
 - **Profiles by name.** Workspaces keep `config_dir` for `local`. Each host reports a registry of
   `profile name → dir` (the same `~/.claude-*` discovery as `config.ts:108`, run on the host). The
   spec carries the name.
@@ -341,10 +343,33 @@ reconciled at boot.
 Each phase ships on its own, keeps `npm test` green, and leaves a single-machine install exactly as
 it was.
 
-1. **Seam, no behavior change.** Add the `Host` interface plus `LocalHost` wrapping today's code.
-   Add `hosts`, `repo_checkouts` (backfilled from `repos.path`), `sessions.host_id`, `runs.host_id`,
-   and the profile registry by name. `live` holds `PtyHandle`. Every caller goes through
-   `hostFor(session)`. This is the big refactor, and it lands with nothing else in it.
+1. **Seam, no behavior change.** ✅ Landed. What is in it:
+   - **Schema (migration 134):** `hosts` with a `local` row (inserted by the migration and
+     re-ensured at every boot by `ensureLocalHost`), `repo_checkouts` backfilled from `repos.path`
+     as host `local` and kept in sync by `store/repos.ts` in the same transaction, and
+     `host_id TEXT NOT NULL DEFAULT 'local'` on `sessions` and `runs` (a plain column, not a
+     foreign key: SQLite refuses `ADD COLUMN … REFERENCES` with a non-null default). Store modules
+     in `src/store/hosts.ts`.
+   - **`src/hosts/`:** the `Host` interface, `PtyHandle`, `ProcHandle`, and `LocalHost`. Real in
+     this phase: `spawnPty`, `spawnProcess`, `signal`, `listLive`, `vitals`, `slots`. `hostFor(row)`
+     / `hostById(id)` resolve `local` and throw on any other id.
+   - **Routed through the seam:** `live` holds a `PtyHandle` (on `local` it *is* node-pty's IPty);
+     `openSession` spawns through `hostFor(row).spawnPty`; `runner.ts` through
+     `hostFor(run).spawnProcess`; `stopRun` and `continueFromRun` signal through the run's host;
+     agent admission, `GET /machine` and `mc heavy`'s slot endpoints read the local host.
+   - **Boot is `local` only:** `sessions.reapAll()`, the boot revive in `startTerminals()` and
+     `db.ts`'s interrupted sweep all filter on `host_id = 'local'`.
+   - **Deviations from the sketch above.** `spawnPty`/`spawnProcess` take a fully built command
+     line (`PtySpawn`/`ProcSpawn`: cmd, args, cwd, env) because every host is the brain; the
+     intent-shaped `SpawnSpec` replaces them in phase 3. `Host.signal(pid, sig)` was added: a stop
+     arrives from the API holding a run row with a persisted pid, not a handle, and must answer
+     synchronously. The **profile registry by name** did not land here: it is something hosts
+     report, so it arrives with `hello` in phase 2 (workspaces keep `config_dir` for `local`).
+   - **Not moved yet, on purpose:** fs and git (worktrees, trust/hooks/skill/AGENTS.md prep,
+     transcript tails) still run in-process on the brain's paths and move behind `checkout`,
+     `worktree`, `prepare` and `transcript` in phase 3; the ship pipeline's `execFileSync` moves
+     behind `exec` in phase 5. Brain-side services that spawn CLIs of their own (Robert's manager,
+     one-shot title/digest helpers, accelerators) stay on the brain.
 2. **`chronos host` + link + join.** Host process, `/host` endpoint, host listener, join codes, a
    pinned cert, both transports, `hello`/vitals/capabilities, the Desk **Computers** panel, and a
    vitals chip per host in the header. Nothing is placed on hosts yet.

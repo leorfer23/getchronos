@@ -1,4 +1,4 @@
-import { spawn, execFile } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -12,6 +12,7 @@ import { resolveVerifyMode, verdictBlocks, verify } from "./verifier.js";
 import { createForRun, prDeliveryPatch } from "./reviews.js";
 import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow } from "./sandbox.js";
 import { niceWrap } from "./machine.js";
+import { hostFor } from "./hosts/index.js";
 import { getBackend } from "./backends/index.js";
 import { isCloudBackend } from "./backends/types.js";
 import type {
@@ -380,13 +381,18 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
   // Headless runs get the same `nice` a Desk terminal does (src/machine.ts): a dispatched build is
   // no less able to fork a full vitest pool, and the operator's UI outranks both.
   const { cmd, cmdArgs } = niceWrap(sandboxed.cmd, sandboxed.cmdArgs);
-  const child = spawn(cmd, cmdArgs, {
+  // Through the run's host (HOSTS.md): today always the brain, which is child_process.spawn with the
+  // same stdio as before (stdin piped only in steer mode, stdout/stderr always piped).
+  const child = await hostFor(runs.get(runId)).spawnProcess({
+    id: runId,
+    cmd,
+    args: cmdArgs,
     cwd: job.cwd,
     // MC_RUN: lets `mc steps`/`mc step` (unlike ticket/workspace/repo, sessions have no run — so this
     // is set here, not inside mcEnv) address this run's progress checklist without the CLI knowing its
     // own run id any other way.
     env: { ...childEnv(ws), ...backend.env(job, profileDir), ...mcEnv(job.workspace_id, null, job.ticket_id), MC_RUN: runId, ...egressEnv(job.workspace_id) },
-    stdio: [steerMode ? "pipe" : "ignore", "pipe", "pipe"],
+    stdin: steerMode,
   });
 
   runs.patch(runId, { pid: child.pid ?? null });
@@ -442,9 +448,7 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
   }, job.timeout_sec * 1000);
   watchdog.unref?.();
 
-  // Non-null: stdout/stderr are always "pipe" — only stdin varies with steerMode, but the computed
-  // stdio tuple widens the inferred child type to Readable | null.
-  const rl = readline.createInterface({ input: child.stdout! });
+  const rl = readline.createInterface({ input: child.stdout });
   rl.on("line", (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
@@ -513,12 +517,12 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
     }
   });
 
-  child.stderr!.on("data", (d) => {
+  child.stderr.on("data", (d) => {
     stderrTail = (stderrTail + d.toString()).slice(-STDERR_CAP);
   });
 
   return await new Promise<RunStatus>((resolve) => {
-    child.on("close", async (code) => {
+    child.onClose(async (code) => {
       clearTimeout(watchdog);
       // Steers written to the pipe but never answered (run timed out / was killed / crashed mid-
       // turn) were marked delivered optimistically — put them back so the next dispatch re-injects
@@ -570,7 +574,7 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
       const final = await finalizeRun(job, runId, status, err, { exitCode: code ?? null });
       resolve(final);
     });
-    child.on("error", (e) => {
+    child.onError((e) => {
       clearTimeout(watchdog);
       liveSteer.delete(runId);
       runs.patch(runId, {

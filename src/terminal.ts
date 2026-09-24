@@ -1,4 +1,3 @@
-import pty from "node-pty";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -22,7 +21,8 @@ import { childEnv } from "./child-env.js";
 import { sanitizeCwd } from "./spawn-guard.js";
 import { ensureTicketWorktree, cleanupWorktree } from "./worktrees.js";
 import { egressEnv, egressLocked } from "./egress.js";
-import { admissionNow, niceWrap } from "./machine.js";
+import { niceWrap } from "./machine.js";
+import { hostFor, LOCAL_HOST_ID, type PtyHandle } from "./hosts/index.js";
 import { getBody, appendNote, updateTicket } from "./tickets.js";
 import { bus } from "./bus.js";
 import { captureLearnings } from "./notes.js";
@@ -197,7 +197,8 @@ const BUF_CAP = 256 * 1024; // scrollback kept in memory for replay on (re)attac
 const QUIET_MS = Math.max(1000, Number(process.env.CHRONOS_TERM_QUIET_MS ?? 6000));
 
 interface Live {
-  pty: pty.IPty;
+  /** node-pty's IPty on this Mac; on another host (HOSTS.md phase 3) a proxy over the link. */
+  pty: PtyHandle;
   buffer: string;
   /** Output waiting for the next coalesced send to attached clients (see flushOut). */
   pending: string;
@@ -381,9 +382,11 @@ export async function openSession(
   // A stand-in for a walled terminal (`replaces`) is exempt for the same reason the seat cap exempts
   // it: it takes an existing terminal's place rather than adding a process, and refusing it would
   // strand the work on a dead CLI exactly when the machine is too busy to notice.
+  // Every terminal opens on the brain until placement lands (HOSTS.md phase 4), so it is the brain's
+  // own load that admits it.
   const openedBy = (opts.created_by ?? "operator").trim();
   if (openedBy && openedBy !== "operator" && !opts.replaces) {
-    const verdict = admissionNow();
+    const verdict = hostFor({ host_id: LOCAL_HOST_ID }).vitals().admission;
     if (!verdict.ok) throw new Error(`machine saturated — ${verdict.reason}`);
   }
   // Guardrail: bound live sessions so a runaway agent can't fork unbounded terminals. Workers of a
@@ -606,12 +609,16 @@ export async function openSession(
     // daemon resolves the Lead from the worker's own row) and only lets `mc` say whose worker this is.
     ...(leadBlock && row.lead_id ? { MC_LEAD_ID: row.lead_id } : {}),
   } as Record<string, string>;
-  const term = pty.spawn(cmd, cmdArgs, {
-    name: "xterm-color",
-    cols: opts.cols ?? 100,
-    rows: opts.rows ?? 30,
+  // Through the row's host (HOSTS.md): today always the brain, which is node-pty's spawn exactly as
+  // before. `pid` is a process id on THAT host, which is why the row carries host_id beside it.
+  const term = await hostFor(row).spawnPty({
+    id: row.id,
+    cmd,
+    args: cmdArgs,
     cwd,
     env,
+    cols: opts.cols ?? 100,
+    rows: opts.rows ?? 30,
   });
   sessions.setPid(row.id, term.pid ?? null);
 
@@ -757,17 +764,19 @@ export async function continueFromRun(
   const job = jobs.get(run.job_id);
   if (!job) throw new Error("job not found");
 
-  // Headless process holds the CLI session — stop it so we can resume interactively.
+  // Headless process holds the CLI session — stop it so we can resume interactively. Signalled on
+  // the run's own host: its pid means nothing anywhere else.
   if (run.status === "running" || run.status === "queued") {
     if (run.pid) {
+      const host = hostFor(run);
       try {
-        process.kill(run.pid, "SIGTERM");
+        host.signal(run.pid, "SIGTERM");
       } catch {
         /* already dead */
       }
       setTimeout(() => {
         try {
-          process.kill(run.pid!, "SIGKILL");
+          host.signal(run.pid!, "SIGKILL");
         } catch {
           /* ignore */
         }
@@ -1534,8 +1543,10 @@ export async function startTerminals() {
   }
   installAllMcSkills();
   await syncAllAgentsMd();
-  const stale = sessions.list({ status: "live" });
-  sessions.reapAll(); // clean baseline: everything → ended; successful revives flip back to live
+  // Only this machine's: a terminal on another host did not die with this daemon (HOSTS.md,
+  // "Reconnect and restarts") and is re-attached, never revived here. All of them, until hosts ship.
+  const stale = sessions.list({ status: "live" }).filter((s) => s.host_id === LOCAL_HOST_ID);
+  sessions.reapAll(); // clean baseline: everything local → ended; successful revives flip back to live
   let revived = 0, skipped = 0;
   for (const s of stale) {
     // Non-resumable backends can't restore their transcript — reviving just spawns a fresh CLI on the

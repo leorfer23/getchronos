@@ -57,7 +57,7 @@ comes from a real shipped bug or a destroyed checkout. Read before writing code.
 
 ## Architecture entry points
 
-- `ARCHITECTURE.md` — system overview. `LEADS.md` — Leads: role=lead terminals that drive their own workers. `HOSTS.md` — multi-computer design (brain + hosts; not built yet). `MISSION-CONTROL.md` §5b — worker visibility/HITL layer
+- `ARCHITECTURE.md` — system overview. `LEADS.md` — Leads: role=lead terminals that drive their own workers. `HOSTS.md` — multi-computer design (brain + hosts; phase 1 seam in `src/hosts/`, the rest not built yet). `MISSION-CONTROL.md` §5b — worker visibility/HITL layer
   (steps, asks, mailbox, stall detection).
 - Dispatch chain: `src/tickets.ts` (goal templates) → `src/dispatcher.ts` → `src/runner.ts`
   (spawn, watchdog, park) → `src/asks.ts` (HITL park & resume).

@@ -361,8 +361,10 @@ export const sessions = {
     db.prepare("UPDATE sessions SET lead_token=? WHERE id=? AND role='lead'").run(randomBytes(16).toString("hex"), id);
     return this.get(id);
   },
-  // Mark any still-'live' session ended (called on boot — ptys die with the daemon).
+  // Mark any still-'live' session ended (called on boot — ptys die with the daemon). Only THIS
+  // machine's: a terminal on another host (HOSTS.md) is that host's child and outlives a brain restart — it is re-attached,
+  // not reaped. Every row is host 'local' until hosts ship, so today this is every live row.
   reapAll() {
-    db.prepare("UPDATE sessions SET status='ended', ended_at=?, agent_name=NULL, lead_token=NULL WHERE status='live'").run(now());
+    db.prepare("UPDATE sessions SET status='ended', ended_at=?, agent_name=NULL, lead_token=NULL WHERE status='live' AND host_id='local'").run(now());
   },
 };
