@@ -134,7 +134,9 @@ test("installKind: the clone at <hostHome>/app is git, npm's copy there is npm, 
   const npx = path.join(home, ".npm", "_npx", "abc123", "node_modules", "getchronos");
   fs.mkdirSync(npx, { recursive: true });
   assert.equal(installKind(npx, hh), "ephemeral");
-  assert.equal(installKind(REPO, hh), "dev");
+  const other = path.join(home, "src", "chronos");
+  fs.mkdirSync(path.join(other, ".git"), { recursive: true });
+  assert.equal(installKind(other, hh), "dev", "someone's own checkout is never swapped by an update");
 });
 
 test("stableNodePath: a Cellar node becomes its formula's opt link — only when that link is this very binary", () => {
