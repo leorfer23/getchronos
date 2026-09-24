@@ -377,6 +377,7 @@ See [SECURITY.md](./SECURITY.md) for the threat model and how to report a proble
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | the design: execution model, data model, API, relay |
 | [CONFIGURATION.md](./CONFIGURATION.md) | every environment variable, grouped, with defaults |
 | [LEADS.md](./LEADS.md) | Leads — a Robert for one goal, driving its own worker terminals |
+| [HOSTS.md](./HOSTS.md) | Hosts — one Desk, N computers: run agents on every Mac you own (design) |
 | [MISSION-CONTROL.md](./MISSION-CONTROL.md) | tickets, reviews, the board, worker visibility and HITL |
 | [CLAUDE.md](./CLAUDE.md) | the gotchas — read before changing code |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | how to work on it |
