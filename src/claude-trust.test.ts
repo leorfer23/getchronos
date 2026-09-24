@@ -49,3 +49,22 @@ test("a corrupt state file is left for claude to deal with, not overwritten", ()
   assert.equal(ensureTrustedCwd(dir, "/repo"), "skipped");
   assert.equal(fs.readFileSync(path.join(dir, ".claude.json"), "utf8"), "{not json");
 });
+
+// The M5 host (2026-09-24): the disk says `Github`, the scan said `GitHub`, APFS opened both, and the
+// trust entry under `GitHub` was invisible to claude, whose getcwd() returns `Github`.
+test("trust is written under the on-disk case too, on a case-insensitive disk", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "trust-case-"));
+  const real = path.join(root, "Github", "repo");
+  fs.mkdirSync(real, { recursive: true });
+  const asked = path.join(root, "GitHub", "repo");
+  if (!fs.existsSync(asked)) return t.skip("case-sensitive filesystem");
+  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), "trust-cfg-"));
+  fs.writeFileSync(path.join(cfg, ".claude.json"), "{}");
+  assert.equal(ensureTrustedCwd(cfg, asked), "added");
+  const projects = JSON.parse(fs.readFileSync(path.join(cfg, ".claude.json"), "utf8")).projects;
+  const onDisk = fs.realpathSync.native(asked);
+  assert.ok(onDisk.includes("/Github/"), onDisk);
+  assert.equal(projects[asked].hasTrustDialogAccepted, true);
+  assert.equal(projects[onDisk].hasTrustDialogAccepted, true);
+  assert.equal(ensureTrustedCwd(cfg, asked), "already");
+});

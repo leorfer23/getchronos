@@ -90,7 +90,7 @@ export async function scanCheckouts(roots = hostRoots()): Promise<CheckoutInfo[]
   const consider = (p: string) => {
     let real: string;
     try {
-      real = fs.realpathSync(p);
+      real = fs.realpathSync.native(p); // .native: the on-disk case (see canonicalCwd in claude-trust.ts)
       if (!fs.statSync(real).isDirectory() || !fs.existsSync(path.join(real, ".git"))) return;
     } catch {
       return;

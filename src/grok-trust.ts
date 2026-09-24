@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { trustKeys } from "./claude-trust.js";
 
 /**
  * Pre-accept grok's "Do you trust this folder?" dialog for `cwd`.
@@ -31,6 +32,16 @@ export function grokHome(env: NodeJS.ProcessEnv = process.env): string {
 const tomlString = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 
 export function ensureGrokTrustedCwd(cwd: string, home: string = grokHome()): "already" | "added" | "skipped" {
+  // Same on-disk-case rule as claude (trustKeys in claude-trust.ts): every spelling the CLI could use.
+  const keys = trustKeys(cwd);
+  if (keys.length > 1) {
+    const r = keys.map((k) => ensureGrokTrustedCwdOne(k, home));
+    return r.includes("added") ? "added" : r.every((x) => x === "already") ? "already" : "skipped";
+  }
+  return ensureGrokTrustedCwdOne(cwd, home);
+}
+
+function ensureGrokTrustedCwdOne(cwd: string, home: string): "already" | "added" | "skipped" {
   const file = path.join(home, "trusted_folders.toml");
   let text: string;
   let mode = 0o600;
