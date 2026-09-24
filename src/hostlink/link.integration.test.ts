@@ -150,7 +150,7 @@ test("join: a brain whose cert does not match the code's fingerprint is refused 
   assert.equal(brain.codes.pending(), before + 1, "the real code was never presented, so it is still unused");
 });
 
-test("run: host connects with pinning, brain gets hello then vitals, RPC works, spawn says not yet", { skip: !HAS_OPENSSL && "no openssl" }, async () => {
+test("run: host connects with pinning, brain gets hello then vitals, RPC works, a host without terminals refuses a spawn", { skip: !HAS_OPENSSL && "no openssl" }, async () => {
   assert.ok(joined, "join test ran");
   const { id, token, fp } = joined!;
   const onlineP = once<[HostLinkInfo]>((cb) => brain.onHostOnline(cb));
@@ -178,7 +178,7 @@ test("run: host connects with pinning, brain gets hello then vitals, RPC works, 
   assert.ok(brain.vitalsHistory(id).length >= 1);
 
   assert.equal((await brain.request(id, "vitals")) as any instanceof Object, true);
-  await assert.rejects(brain.request(id, "spawn_pty", { session_id: "s1" }), /not yet/);
+  await assert.rejects(brain.request(id, "spawn_pty", { session_id: "s1" }), /runs no terminals/);
   await assert.rejects(brain.request(id, "no_such_op"), /unknown op/);
 
   // Admin view of the same state.

@@ -7,8 +7,9 @@
  *   npm run host -- status                    this host's credential and live link state
  *   npm run host -- doctor                    the setup checklist, locally
  *
- * Phase 2 scope: the link, hello/vitals/capabilities, and the loopback `mc` forwarder. Spawning PTYs
- * and headless runs on a host is Phase 3/5; the dispatch table answers those frames with an error.
+ * Phase 2: the link, hello/vitals/capabilities, and the loopback `mc` forwarder. Phase 3: terminals
+ * (terminals.ts) — PTYs spawned from a SpawnSpec, kept alive across link drops. Headless runs on a
+ * host are Phase 5; the dispatch table answers those frames with an error.
  */
 import "./env.js"; // FIRST: loads ~/.chronos-host/.secrets before config.ts evaluates
 import fs from "node:fs";
@@ -20,6 +21,11 @@ import { HostLink } from "./link.js";
 import { startForwarder } from "./forwarder.js";
 import { buildHello, checklist, formatChecklist, hostRoots, probeClis, profiles, sampleHostVitals, scanCheckouts } from "./inventory.js";
 import { VITALS_EVERY_MS } from "../machine.js";
+import { CONFIG } from "../config.js";
+import { REPO_ROOT } from "../repo-root.js";
+import { HostTerminals } from "./terminals.js";
+import { hostBackends } from "./backends.js";
+import { hostDeny } from "./inventory.js";
 
 const env = (k: string) => (process.env[k] ?? "").trim();
 const brains = () => env("CHRONOS_HOST_BRAINS").split(",").map((s) => s.trim()).filter(Boolean);
@@ -56,6 +62,17 @@ async function cmdRun(): Promise<number> {
   }
   const mode = secretsMode();
   if (mode != null && mode & 0o077) console.warn(`[host] ${HOST_SECRETS} is readable by others (mode ${(mode & 0o777).toString(8)}) — chmod 600 it`);
+  // PTYs live in this process, not in the link: a dropped link must not take a terminal with it.
+  const terminals = new HostTerminals({
+    root: REPO_ROOT,
+    profiles: () => CONFIG.profiles,
+    checkouts: () => scanCheckouts(),
+    deny: () => hostDeny(),
+    autoClone: env("CHRONOS_HOST_AUTO_CLONE") === "1",
+    cloneRoot: () => hostRoots()[0] ?? null,
+    backends: hostBackends(),
+    mcPort: mcPort(),
+  });
   const cf = env("CF_ACCESS_CLIENT_ID") && env("CF_ACCESS_CLIENT_SECRET") ? { id: env("CF_ACCESS_CLIENT_ID"), secret: env("CF_ACCESS_CLIENT_SECRET") } : null;
   const link = new HostLink({
     brains: brains(),
@@ -63,12 +80,15 @@ async function cmdRun(): Promise<number> {
     token,
     fp: env("CHRONOS_HOST_CERT_FP") || null,
     cfAccess: cf,
-    hello: () => buildHello(id),
+    hello: async () => ({ ...(await buildHello(id)), live: terminals.live() }),
+    terminals,
     vitals: sampleHostVitals,
     vitalsMs: VITALS_EVERY_MS,
     rpc: {
       inventory: async () => ({ clis: await probeClis(), profiles: profiles(), checkouts: await scanCheckouts() }),
       doctor: () => runDoctor(),
+      drop: (a) => terminals.drop(a as Parameters<HostTerminals["drop"]>[0]),
+      worktree: (a) => terminals.claimWorktree(a as Parameters<HostTerminals["claimWorktree"]>[0]),
     },
   });
   link.on("online", () => console.log(`[host] ${id} online via ${link.url}`));
@@ -84,6 +104,9 @@ async function cmdRun(): Promise<number> {
   });
   link.start();
   const stop = async () => {
+    // A host that stops takes its agents with it (they are its children); the brain revives them
+    // with --resume on this host when it comes back (HOSTS.md → Reconnect and restarts).
+    terminals.killAll();
     await link.stop();
     fwd?.close();
     process.exit(0);

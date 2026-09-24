@@ -1,0 +1,484 @@
+/**
+ * The host's terminals (HOSTS.md phase 3): the other half of `RemoteHost`.
+ *
+ * A `spawn_pty` frame carries a SpawnSpec — intent, not paths. Everything path-shaped is worked out
+ * HERE, on this Mac, with the same modules the brain uses for a local terminal: the checkout is found
+ * by git remote among this host's own scanned clones, a ticket worktree is created under this host's
+ * `.chronos-worktrees` (worktree-core.ts), the profile NAME is mapped to this host's directory, the
+ * Seatbelt profile is built from this host's home (sandbox.ts), and the profile is prepared (trust,
+ * card hooks, skill, `mc`, AGENTS.md) on this disk (agent-prep.ts, claude-trust.ts, term-hooks.ts).
+ *
+ * The local veto (CHRONOS_HOST_DENY) is checked FIRST, before anything is resolved or forked. It is
+ * the host's own lock on workspace isolation: a bug in the brain's placement cannot get past it.
+ *
+ * PTYs outlive the link. Output goes into a 256 KB `Ring` per channel with a seq; while the link is
+ * down nothing is sent and nothing is blocked. When the brain re-attaches it names the last seq it
+ * has, and only what follows is resent — then live streaming resumes. An exit that happens while the
+ * brain is away is held until the brain `release`s the channel.
+ */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import pty, { type IPty } from "node-pty";
+import { Ring, chunk, type CheckoutInfo, type HostToBrain, type LiveInfo } from "../hostlink/wire.js";
+import { expandHomeRelative, isSpawnSpec, type SpawnSpec } from "../hosts/spawn-spec.js";
+import type { SpawnReply } from "../hosts/remote.js";
+import { ensureBranchWorktree, worktreeRootFor } from "../worktree-core.js";
+import { installMcCli, installMcSkill, syncAgentsMd } from "../agent-prep.js";
+import { ensureTrustedCwd } from "../claude-trust.js";
+import { ensureGrokTrustedCwd } from "../grok-trust.js";
+import { installClaudeHooks, installCursorHooks, installGrokHooks } from "../term-hooks.js";
+import { sandboxAvailable, sandboxWrap, workspaceSandboxAllow } from "../sandbox.js";
+import { niceWrap } from "../machine.js";
+import { ensureDropDir, saveDrop } from "../drops.js";
+import { locateTranscript, transcriptIsJsonl, type FocusCtx } from "../focus.js";
+import type { AgentBackend } from "../backends/types.js";
+
+const execFileAsync = promisify(execFile);
+
+/** The env a host supplies itself (the brain sends none of these). Mirrors child-env.ts's allowlist. */
+const BASE_ENV = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM", "LANG", "LC_ALL", "TZ", "COLORTERM"];
+const DEFAULT_LOCALE = "en_US.UTF-8";
+
+/** Same negotiation terminal.ts does for a local seed — see its typeSeed for the two failure modes. */
+const SEED_MIN_MS = 2500;
+const SEED_QUIET_MS = 1200;
+const SEED_MAX_MS = 20000;
+/** Transcript poll cadence (focus.ts polls its own tails at 700ms). */
+const TRANSCRIPT_MS = 700;
+const TRANSCRIPT_MAX_READ = 1 << 20;
+/** An exited channel the brain never releases (it is gone for good) is forgotten after this. */
+const EXITED_KEEP_MS = 30 * 60_000;
+
+export class VetoError extends Error {
+  readonly code = "veto";
+}
+
+/** How a host talks back to its brain. HostLink implements it; tests can stub it. */
+export interface TerminalsLink {
+  online(): boolean;
+  send(f: HostToBrain): boolean;
+  sendData(ch: number, seq: number, bytes: Buffer): boolean;
+}
+
+/** A CLI the host may run, resolved by the canonical backend name the spec carries. */
+export type HostBackend = Pick<AgentBackend, "name" | "bin" | "interactiveArgs" | "env">;
+
+export type HostTerminalsOptions = {
+  /** This host's home. Tests point it at a temp dir so nothing touches the operator's real profiles. */
+  home?: string;
+  /** Where `skills/` and `scripts/mc` live — this checkout. */
+  root: string;
+  /** Profile name → dir (the host's CONFIG.profiles). */
+  profiles: () => Record<string, string>;
+  /** This host's scanned checkouts (inventory.scanCheckouts). */
+  checkouts: () => Promise<CheckoutInfo[]>;
+  /** The local veto (CHRONOS_HOST_DENY). */
+  deny: () => string[];
+  /** Where cloned repos go when auto-clone is on: the first host root. */
+  cloneRoot?: () => string | null;
+  autoClone?: boolean;
+  backends: Record<string, HostBackend>;
+  /** The loopback `mc` forwarder's port — what MC_API points at. */
+  mcPort: number;
+  /** Prepare the profile (trust, hooks, skill, mc, AGENTS.md). Off in tests that must not write. */
+  prepare?: boolean;
+};
+
+type Chan = {
+  ch: number;
+  sessionId: string;
+  pty: IPty;
+  ring: Ring;
+  /** Live data frames go out only while true: after a reconnect, not until the brain re-attaches. */
+  streaming: boolean;
+  exit: { code: number | null; signal: string | null } | null;
+  exitSent: boolean;
+  lastOut: number;
+  forgetT?: NodeJS.Timeout;
+  tail: TranscriptTail | null;
+  workspace: { id: string; slug: string } | null;
+};
+
+/** Canonical form of a git remote so `git@github.com:o/r.git` and `https://github.com/o/r` match. */
+export function remoteKey(url: string | null | undefined): string {
+  let u = String(url ?? "").trim();
+  if (!u) return "";
+  u = u.replace(/\.git\/?$/, "").replace(/\/+$/, "");
+  const scp = /^[\w.-]+@([^:/]+):(.+)$/.exec(u); // git@host:owner/repo
+  if (scp) return `${scp[1].toLowerCase()}/${scp[2]}`;
+  try {
+    const p = new URL(u);
+    return `${p.hostname.toLowerCase()}${p.pathname}`.replace(/\/+$/, "");
+  } catch {
+    return u;
+  }
+}
+
+/** The real main checkouts among these paths (`.git` a directory), realpath'd like terminal.ts's. */
+function mainCheckouts(paths: string[]): string[] {
+  const out = new Set<string>();
+  for (const p of paths) {
+    try { if (fs.statSync(path.join(p, ".git")).isDirectory()) out.add(fs.realpathSync(p)); } catch {}
+  }
+  return [...out];
+}
+
+function ensureRoot(repoPath: string): string | null {
+  const root = worktreeRootFor(repoPath);
+  try { fs.mkdirSync(root, { recursive: true }); } catch {}
+  return fs.existsSync(root) ? root : null;
+}
+
+/** Incremental tail of one CLI transcript: whole lines only, by byte offset. */
+class TranscriptTail {
+  file: string | null = null;
+  offset = 0;
+  private timer: NodeJS.Timeout | null = null;
+  constructor(private readonly ctx: FocusCtx, private readonly emit: (delta: string, offset: number, reset: boolean) => boolean) {}
+  start(): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => this.poll(), TRANSCRIPT_MS);
+    this.timer.unref?.();
+  }
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+  /** Read what was appended and send it. Returns false when the send failed (offset not advanced). */
+  poll(): void {
+    let file: string | null = null;
+    try { file = locateTranscript(this.ctx); } catch {}
+    if (!file) return;
+    let reset = false;
+    if (file !== this.file) {
+      reset = this.file !== null; // a different file than the one we were streaming
+      this.file = file;
+      if (reset) this.offset = 0;
+    }
+    let size: number;
+    try { size = fs.statSync(file).size; } catch { return; }
+    if (size < this.offset) { this.offset = 0; reset = true; }
+    if (size <= this.offset && !reset) return;
+    const want = Math.min(size - this.offset, TRANSCRIPT_MAX_READ);
+    let buf = Buffer.alloc(0);
+    if (want > 0) {
+      try {
+        const fd = fs.openSync(file, "r");
+        try {
+          buf = Buffer.allocUnsafe(want);
+          const n = fs.readSync(fd, buf, 0, want, this.offset);
+          buf = buf.subarray(0, n);
+        } finally { fs.closeSync(fd); }
+      } catch { return; }
+    }
+    // Whole lines only: a JSONL record cut mid-write would be unparseable on the brain, and a cut
+    // mid-character would corrupt the UTF-8 in transit.
+    const nl = buf.lastIndexOf(0x0a);
+    const whole = nl >= 0 ? buf.subarray(0, nl + 1) : Buffer.alloc(0);
+    if (!whole.length && !reset) return;
+    if (this.emit(whole.toString("utf8"), this.offset, reset)) this.offset += whole.length;
+  }
+}
+
+export class HostTerminals {
+  private chans = new Map<number, Chan>();
+  // Random base: a restarted host must not hand out a channel number the brain still holds for a
+  // terminal that died with the previous process.
+  private nextCh = (crypto.randomBytes(4).readUInt32BE(0) % 0x3fffffff) + 1;
+  private link: TerminalsLink | null = null;
+  readonly home: string;
+
+  constructor(private readonly o: HostTerminalsOptions) {
+    this.home = o.home ?? os.homedir();
+  }
+
+  attachLink(link: TerminalsLink): void { this.link = link; }
+
+  /** hello.live[]: every channel the brain should know about, exited-but-unreleased ones included. */
+  live(): LiveInfo[] {
+    return [...this.chans.values()].map((c) => ({
+      ch: c.ch, session_id: c.sessionId, kind: "pty" as const, pid: c.pty.pid ?? null, last_seq: c.ring.lastSeq,
+      exit: c.exit, transcript_offset: c.tail?.offset ?? 0,
+    }));
+  }
+
+  /** The link dropped: stop streaming. PTYs keep running and their output keeps landing in the ring. */
+  linkDown(): void {
+    for (const c of this.chans.values()) { c.streaming = false; if (c.exit) c.exitSent = false; }
+  }
+
+  // ───────────── spawn ─────────────
+
+  async spawn(raw: unknown): Promise<SpawnReply> {
+    if (!isSpawnSpec(raw)) throw new Error("spawn_pty needs a SpawnSpec");
+    const spec = raw;
+    // Lock #2 (HOSTS.md → Security): the local veto, before anything is resolved, prepared or forked.
+    const deny = this.o.deny();
+    if (spec.workspace && deny.some((d) => d === spec.workspace!.id || d === spec.workspace!.slug)) {
+      throw new VetoError(`veto: workspace ${spec.workspace.slug} is denied on this host (CHRONOS_HOST_DENY)`);
+    }
+    for (const c of this.chans.values()) {
+      if (c.sessionId === spec.session_id && !c.exit) throw new Error(`session ${spec.session_id.slice(0, 8)} is already running here`);
+    }
+    const backend = this.o.backends[spec.backend];
+    if (!backend) throw new Error(`backend ${spec.backend} is not available on this host`);
+    const profileDir = this.o.profiles()[spec.profile];
+    if (!profileDir) throw new Error(`profile ${spec.profile} is not on this host — log it in here first (CLAUDE_CONFIG_DIR=~/.${spec.profile} claude)`);
+    if (spec.sandbox.egress_locked) throw new Error("this workspace's egress is locked, and hosts do not run the egress proxy yet (HOSTS.md phase 5)");
+    if (spec.sandbox.mode !== "off" && !sandboxAvailable()) throw new Error(`sandbox ${spec.sandbox.mode} requested but this host has no sandbox-exec`);
+
+    const checkouts = await this.o.checkouts();
+    const byRemote = new Map<string, string>();
+    for (const c of checkouts) if (c.remote_url) byRemote.set(remoteKey(c.remote_url), c.path);
+    let repoPath: string | null = null;
+    if (spec.repo) {
+      repoPath = byRemote.get(remoteKey(spec.repo.git_remote)) ?? null;
+      if (!repoPath) repoPath = await this.maybeClone(spec.repo.git_remote);
+      if (!repoPath) {
+        throw new Error(`repo ${spec.repo.git_remote} is not checked out on this host — clone it under CHRONOS_HOST_ROOTS (or set CHRONOS_HOST_AUTO_CLONE=1)`);
+      }
+    }
+    const wsRepoPaths = spec.repos.map((r) => byRemote.get(remoteKey(r.git_remote))).filter((p): p is string => !!p);
+    if (repoPath && !wsRepoPaths.includes(repoPath)) wsRepoPaths.push(repoPath);
+
+    let cwd = this.home;
+    if (spec.resume_cwd && isDir(spec.resume_cwd)) cwd = spec.resume_cwd;
+    else if (repoPath && spec.worktree && safeRef(spec.worktree.branch) && safeRef(spec.worktree.base)) cwd = (await ensureBranchWorktree(repoPath, spec.worktree.base, spec.worktree.branch)) ?? repoPath;
+    else if (repoPath) cwd = repoPath;
+    else if (wsRepoPaths[0]) cwd = wsRepoPaths[0];
+
+    // Every workspace repo + its worktree root (a strict profile must allow a later `mc worktree`),
+    // and this terminal's drop dir — the same set terminal.ts grants a local terminal.
+    const addDirs = [
+      ...wsRepoPaths.flatMap((p) => [p, ensureRoot(p)].filter((x): x is string => !!x)).filter((p) => p !== cwd),
+      ensureDropDir(spec.session_id, path.join(this.home, ".mc", "drops")),
+    ];
+    // Isolation on a host: every checkout here that is NOT this workspace's is denied. Stricter than
+    // the brain's list (other workspaces' registered repos) because the host cannot know which
+    // workspace an unregistered clone belongs to — and it never has to be told another client's repos.
+    const mine = new Set(wsRepoPaths);
+    const denyDirs = checkouts.map((c) => c.path).filter((p) => !mine.has(p)).flatMap((p) => [p, worktreeRootFor(p)]);
+    const shared = mainCheckouts(wsRepoPaths);
+    const allowSecrets = workspaceSandboxAllow(JSON.stringify(spec.sandbox.allow));
+
+    if (this.o.prepare !== false) await this.prepare(spec, backend.name, profileDir, cwd);
+
+    const iArgs = backend.interactiveArgs ? backend.interactiveArgs(spec.model, spec.system, addDirs, spec.cli_session, spec.resume) : [];
+    const wrapped = sandboxWrap(spec.sandbox.mode, cwd, addDirs, profileDir, denyDirs, backend.bin(), iArgs, false, shared, allowSecrets);
+    const { cmd, cmdArgs } = niceWrap(wrapped.cmd, wrapped.cmdArgs, spec.nice);
+
+    const base: Record<string, string> = {};
+    for (const k of BASE_ENV) if (process.env[k] !== undefined) base[k] = process.env[k]!;
+    if (!base.LANG && !base.LC_ALL) base.LANG = DEFAULT_LOCALE;
+    base.HOME = this.home;
+    const env: Record<string, string> = {
+      ...base,
+      ...expandHomeRelative(spec.env, spec.env_home_relative, this.home),
+      ...backend.env({} as any, profileDir),
+      MC_API: `http://localhost:${this.o.mcPort}/api`,
+      PATH: `${this.home}/.mc/bin:${base.PATH ?? ""}`,
+      MC_SESSION: spec.session_id,
+    };
+
+    const term = pty.spawn(cmd, cmdArgs, { name: "xterm-color", cols: spec.cols, rows: spec.rows, cwd, env });
+    const ch = this.allocCh();
+    const c: Chan = { ch, sessionId: spec.session_id, pty: term, ring: new Ring(undefined, ch), streaming: !!this.link?.online(), exit: null, exitSent: false, lastOut: Date.now(), tail: null, workspace: spec.workspace };
+    this.chans.set(ch, c);
+    term.onData((d) => {
+      c.lastOut = Date.now();
+      for (const part of chunk(Buffer.from(d, "utf8"))) {
+        const f = c.ring.append(part);
+        if (c.streaming) this.link?.sendData(ch, f.seq, f.bytes);
+      }
+    });
+    term.onExit(({ exitCode, signal }) => {
+      c.tail?.poll(); // the agent's closing lines, before the brain snapshots its ledger on exit
+      c.tail?.stop();
+      c.exit = { code: exitCode ?? null, signal: signal ? signalName(signal) : null };
+      this.sendExit(c);
+      c.forgetT = setTimeout(() => this.chans.delete(ch), EXITED_KEEP_MS);
+      c.forgetT.unref?.();
+    });
+
+    if (transcriptIsJsonl(backend.name)) {
+      c.tail = new TranscriptTail(
+        { sessionId: spec.cli_session || spec.session_id, backend: backend.name, cwd, configDir: profileDir, sinceMs: Date.now(), cursorConfigDir: env.CURSOR_CONFIG_DIR },
+        (delta, offset, reset) => (c.streaming ? !!this.link?.send({ t: "transcript", ch, delta, offset, ...(reset ? { reset } : {}) }) : false),
+      );
+      c.tail.start();
+    }
+    if (spec.seed) this.typeSeed(c, spec.seed.text, spec.seed.enter_after_ms);
+    return { ch, pid: term.pid, cols: spec.cols, rows: spec.rows, cwd };
+  }
+
+  private allocCh(): number {
+    let ch = this.nextCh;
+    while (this.chans.has(ch)) ch = (ch % 0xfffffffe) + 1;
+    this.nextCh = (ch % 0xfffffffe) + 1;
+    return ch;
+  }
+
+  private async maybeClone(remote: string): Promise<string | null> {
+    if (!this.o.autoClone) return null;
+    const root = this.o.cloneRoot?.();
+    if (!root) return null;
+    const name = remoteKey(remote).split("/").pop() || "repo";
+    const dest = path.join(root, name);
+    if (fs.existsSync(dest)) return null; // a different repo already sits at that name: never clobber
+    fs.mkdirSync(root, { recursive: true });
+    await execFileAsync("git", ["clone", "--", remote, dest], { timeout: 10 * 60_000 });
+    return fs.realpathSync(dest);
+  }
+
+  /** HOSTS.md `prepare()`: what terminal.ts does to the brain's own profile before a local spawn. */
+  private async prepare(spec: SpawnSpec, backend: string, profileDir: string, cwd: string): Promise<void> {
+    installMcSkill(profileDir, this.o.root);
+    installMcCli(this.o.root, this.home);
+    // Hooks rewrite the CLI's USER config; tests spawn with real-looking profiles and must never.
+    if (!process.env.CHRONOS_TEST) {
+      try {
+        if (backend === "claude-code") installClaudeHooks(profileDir);
+        else if (backend === "cursor-agent") installCursorHooks(path.join(this.home, ".cursor"));
+        else if (backend === "grok") installGrokHooks(path.join(this.home, ".grok"));
+      } catch (e: any) {
+        console.warn(`[host] ${backend} card hooks install failed: ${e?.message ?? e}`);
+      }
+    }
+    if (backend === "claude-code" && ensureTrustedCwd(profileDir, cwd) === "added") console.log(`[host] pre-trusted ${cwd} in ${path.basename(profileDir)}`);
+    if (backend === "grok" && ensureGrokTrustedCwd(cwd, path.join(this.home, ".grok")) === "added") console.log(`[host] pre-trusted ${cwd} for grok`);
+    await syncAgentsMd(cwd, this.o.root, this.home);
+    void spec;
+  }
+
+  // Type-then-Enter next to the pty (HOSTS.md: "no jitter"): the same wait-for-quiet as terminal.ts.
+  private typeSeed(c: Chan, seed: string, enterMs: number): void {
+    const started = Date.now();
+    const line = seed.replace(/\r?\n/g, " ");
+    const tick = setInterval(() => {
+      const waited = Date.now() - started;
+      if (c.exit) return void clearInterval(tick);
+      if (waited < SEED_MIN_MS) return;
+      if (Date.now() - c.lastOut < SEED_QUIET_MS && waited < SEED_MAX_MS) return;
+      clearInterval(tick);
+      try {
+        c.pty.write(line);
+        setTimeout(() => { try { if (!c.exit) c.pty.write("\r"); } catch {} }, enterMs).unref?.();
+      } catch {}
+    }, 250);
+    tick.unref?.();
+  }
+
+  // ───────────── frames from the brain ─────────────
+
+  write(ch: number, data: string): void {
+    const c = this.chans.get(ch);
+    if (!c || c.exit) return;
+    try { c.pty.write(String(data ?? "")); } catch {}
+  }
+
+  resize(ch: number, cols: number, rows: number): void {
+    const c = this.chans.get(ch);
+    if (!c || c.exit) return;
+    const w = Math.max(2, cols | 0), h = Math.max(2, rows | 0);
+    try { c.pty.resize(w, h); } catch {}
+  }
+
+  kill(ch: number, signal?: string): void {
+    const c = this.chans.get(ch);
+    if (!c || c.exit) return;
+    try { c.pty.kill(signal); } catch {}
+  }
+
+  ack(ch: number, seq: number): void {
+    this.chans.get(ch)?.ring.ack(seq);
+  }
+
+  /**
+   * The brain (re)adopts a channel: resend what it lacks, in order — output after `seq`, then the
+   * transcript after `transcript_offset`, then the exit if it already happened — and stream from here.
+   */
+  attach(ch: number, seq: number, transcriptOffset: number, sessionId?: string): void {
+    const c = this.chans.get(ch);
+    if (!c || (sessionId && c.sessionId !== sessionId)) {
+      // Not ours (any more): tell the brain it is gone rather than leave a card waiting on it.
+      this.link?.send({ t: "exit", ch, code: null, signal: "SIGLOST" });
+      return;
+    }
+    c.ring.ack(seq);
+    const { frames } = c.ring.since(seq);
+    for (const f of frames) this.link?.sendData(ch, f.seq, f.bytes);
+    c.streaming = true;
+    if (c.tail) {
+      if (transcriptOffset <= (c.tail.offset ?? 0)) c.tail.offset = Math.max(0, transcriptOffset);
+      c.tail.poll();
+    }
+    if (c.exit) this.sendExit(c);
+  }
+
+  release(ch: number): void {
+    const c = this.chans.get(ch);
+    if (!c || !c.exit) return;
+    if (c.forgetT) clearTimeout(c.forgetT);
+    this.chans.delete(ch);
+  }
+
+  private sendExit(c: Chan): void {
+    if (!c.exit || !c.streaming || c.exitSent) return;
+    if (this.link?.send({ t: "exit", ch: c.ch, code: c.exit.code, signal: c.exit.signal })) c.exitSent = true;
+  }
+
+  /** A file dropped on this terminal on the Desk: written into THIS host's drop dir; the path is typed. */
+  drop(args: { session_id: string; filename: string; mime?: string; b64: string }): { path: string; name: string; size: number; mime: string } {
+    const known = [...this.chans.values()].some((c) => c.sessionId === args.session_id && !c.exit);
+    if (!known) throw new Error("no live terminal for that session on this host");
+    return saveDrop({
+      sessionId: args.session_id,
+      buffer: Buffer.from(String(args.b64 ?? ""), "base64"),
+      filename: String(args.filename || "drop"),
+      mime: args.mime,
+      root: path.join(this.home, ".mc", "drops"),
+    });
+  }
+
+  /**
+   * `mc worktree` from one of this host's terminals: the brain chose the branch; the worktree is made
+   * here, under this host's checkout of the repo, with the same code the brain uses for its own.
+   */
+  async claimWorktree(a: { session_id: string; git_remote: string; branch: string; base: string }): Promise<{ path: string }> {
+    const c = [...this.chans.values()].find((x) => x.sessionId === a.session_id && !x.exit);
+    if (!c) throw new Error("no live terminal for that session on this host");
+    // It becomes a git argument: a name only, never something git could read as an option.
+    if (!/^[\w][\w./-]{0,200}$/.test(String(a.branch)) || String(a.branch).includes("..")) throw new Error("bad branch name");
+    if (!/^[\w][\w./-]{0,200}$/.test(String(a.base || "main"))) throw new Error("bad base branch name");
+    const deny = this.o.deny();
+    if (c.workspace && deny.some((d) => d === c.workspace!.id || d === c.workspace!.slug)) throw new VetoError(`veto: workspace ${c.workspace.slug} is denied on this host`);
+    const repoPath = (await this.o.checkouts()).find((x) => remoteKey(x.remote_url) === remoteKey(a.git_remote))?.path;
+    if (!repoPath) throw new Error(`repo ${a.git_remote} is not checked out on this host`);
+    const p = await ensureBranchWorktree(repoPath, String(a.base || "main"), String(a.branch));
+    if (!p) throw new Error(`could not create a worktree for ${a.branch} (not a git repo, or the branch is checked out elsewhere)`);
+    return { path: p };
+  }
+
+  /** Stop every terminal (host shutdown). */
+  killAll(): void {
+    for (const c of this.chans.values()) if (!c.exit) { try { c.pty.kill(); } catch {} }
+  }
+}
+
+/** A branch/ref name we will hand to git as an argument: a name, never something that reads as an option. */
+function safeRef(r: unknown): boolean {
+  return typeof r === "string" && /^[\w][\w./-]{0,200}$/.test(r) && !r.includes("..");
+}
+
+function signalName(n: number): string {
+  for (const [name, num] of Object.entries(os.constants.signals)) if (num === n) return name;
+  return `SIG${n}`;
+}
+
+function isDir(p: string): boolean {
+  try { return path.isAbsolute(p) && fs.statSync(p).isDirectory(); } catch { return false; }
+}
