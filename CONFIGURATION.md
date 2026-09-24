@@ -405,9 +405,24 @@ Memory maintenance runs in the **dream slot**: `CHRONOS_DREAM_HOURS`, a comma li
 (default `13,22`, after the two work blocks of the day). It does not depend on `CHRONOS_DIGEST_HOUR`:
 turning the morning digest off leaves maintenance running. A slot missed while the Mac slept or the
 daemon was down runs as soon as the daemon is up again — only the latest missed slot, never a backlog —
-and the last slot run is kept in the database, so a restart does not run it twice. Memory hygiene
-(learnings compaction, lesson decay, the stow pass, promotion cards) takes the first slot on a day at
-least six days after its last run, so it stays weekly. `-1` or an empty value turns the slot off.
+and the last slot run is kept in the database, so a restart does not run it twice. `-1` or an empty
+value turns the slot off.
+
+At every slot, the **dream pass** (`src/dream-pass.ts`, persona `agents/dreamer/`) runs one job per
+workspace that has had activity since its last pass — inbox lines waiting, worklog entries, ended
+terminals, new lessons, memory reads. Each job runs on that workspace's own Claude profile and default
+model, read-only on code, and writes memory only through `mc dream apply`, where the daemon enforces
+every cap: the ★ `memory-index` (3000 chars, lines ≤200), the ★ `memory-hot` page rebuilt from the
+last 14 days (1500), and the `memory-<topic>` / `memory-repo-<repo>` branches (6000). It triages the
+`session-learnings` inbox a chunk at a time (≤12k chars per round) and empties what it triaged. An
+index line nothing used for 30 days moves to its branch, a branch line unused for 90 days is archived;
+a `## Pinned` section in the index never ages. Everything removed goes to `memory-archive` (never
+injected) with where it came from and why, and every pass can be undone: `mc dream runs`,
+`mc dream undo <run>`, or ↶ Undo in the Desk's 🧠 Memory dialog. `mc dream run [--workspace slug]`
+dreams now, outside the slots.
+
+Weekly memory hygiene (lesson decay and the persona stow pass) takes the first slot on a day at least
+six days after its last run.
 
 A persona's memory file is tiered and decays (the stow pass — MISSION-CONTROL.md §10): entries are
 `aging` (stale 30 days after they were last reinforced), `perishable` (7 days) or `pinned` (no clock).

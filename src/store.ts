@@ -55,3 +55,5 @@ export { board, parseMentions } from "./store/board.js";
 export type { BoardPost, BoardFeedItem } from "./store/board.js";
 export { memoryUsage, MEMORY_USAGE_KINDS } from "./store/memory-usage.js";
 export type { MemoryUsageRow, MemoryUsageKind, MemoryUsageAggregate, MemoryUsageMiss, NewMemoryUsage } from "./store/memory-usage.js";
+export { dreamRuns, memoryClocks } from "./store/dream.js";
+export type { DreamRun, DreamStatus, DreamSource, MemoryClock } from "./store/dream.js";

@@ -1780,6 +1780,43 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       db.exec("CREATE INDEX IF NOT EXISTS idx_memory_usage_ts ON memory_usage(ts)");
     },
   },
+  {
+    version: 133,
+    name: "dream_runs + memory_clocks — the per-workspace dream pass",
+    // dream_runs: one row per pass (src/dream-pass.ts). `chunk` is the inbox lines the bundle showed
+    // (the plan must decide every one), `snapshot` is everything apply needs to undo itself, `stats`
+    // and `receipt` are what the operator reads. memory_clocks: when each line of the memory tree was
+    // last reinforced by evidence, keyed by its prose hash (memory-tiers.ts entryHash) — kept out of
+    // the ★ bodies so the injected text carries no markers.
+    up: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS dream_runs (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        slot TEXT,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL,
+        job_id TEXT,
+        run_id TEXT,
+        chunk TEXT,
+        stats TEXT,
+        receipt TEXT,
+        snapshot TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        gathered_at TEXT,
+        finished_at TEXT,
+        undone_at TEXT
+      )`);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_dream_runs_ws ON dream_runs(workspace_id, created_at)");
+      db.exec(`CREATE TABLE IF NOT EXISTS memory_clocks (
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        hash TEXT NOT NULL,
+        reinforced TEXT NOT NULL,
+        first_seen TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, hash)
+      )`);
+    },
+  },
 
 ];
 

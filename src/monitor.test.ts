@@ -6,7 +6,6 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { randomUUID } from "node:crypto";
 import { pruneBackups, rotateLogIfNeeded, composeBrief, isStalled, maybeStallSweep, shouldRemind, maybeAskReminders, effectiveStallMinutes, effectiveAskRemindHours, type BriefWs } from "./monitor.js";
-import { needsCompaction, shouldOfferPromotion, factCount } from "./hygiene.js";
 import { db, workspaces, tickets, jobs, runs, events, kv, asks, repos, steps } from "./store.js";
 import { getAgent } from "./agent-lifecycle.js";
 
@@ -165,35 +164,6 @@ test("composeBrief: caps buttons at 6", () => {
   const arrived = Array.from({ length: 9 }, (_, i) => arr(`ACM-${i}`, `2026-07-12T0${i}:00`));
   const { buttons } = composeBrief("2026-07-12", [mkWs({ open: 9, arrived })], totals);
   assert.equal(buttons.length, 6);
-});
-
-const mkNote = (o: any = {}): any => ({ id: "n1", context: 0, body: "", ...o });
-const facts = (n: number) => Array.from({ length: n }, (_, i) => `- fact ${i}`).join("\n");
-
-test("needsCompaction: only past ~3000 chars", () => {
-  assert.equal(needsCompaction("x".repeat(3000)), false);
-  assert.equal(needsCompaction("x".repeat(3001)), true);
-});
-
-test("factCount counts bullet lines, ignores headings/blanks", () => {
-  assert.equal(factCount("## Repo\n- a\n- b\n\n## Gotchas\n- c"), 3);
-});
-
-test("shouldOfferPromotion: needs an un-flagged memo with >=10 facts", () => {
-  const kvGet = () => undefined;
-  assert.equal(shouldOfferPromotion(undefined, kvGet), false);
-  assert.equal(shouldOfferPromotion(mkNote({ body: facts(9) }), kvGet), false);          // too few
-  assert.equal(shouldOfferPromotion(mkNote({ body: facts(10) }), kvGet), true);
-  assert.equal(shouldOfferPromotion(mkNote({ context: 1, body: facts(20) }), kvGet), false); // already ★
-});
-
-test("shouldOfferPromotion: stays quiet after Ignore until the memo doubles", () => {
-  const note = mkNote({ body: facts(10) });                 // ~70 chars
-  const ignored = String(note.body.length);
-  const kvGet = (k: string) => (k === `hygiene.ignored.${note.id}` ? ignored : undefined);
-  assert.equal(shouldOfferPromotion(note, kvGet), false);   // just ignored, same size
-  const grown = mkNote({ body: facts(30) });                // >2x the stored size
-  assert.equal(shouldOfferPromotion(grown, kvGet), true);
 });
 
 test("effectiveStallMinutes: null falls back to global CONFIG, a number wins, 0 means off", () => {

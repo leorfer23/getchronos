@@ -321,14 +321,9 @@ async function handleCallback(cb: any) {
       if (r.run_id) return watchRun(r.run_id, Number(chatId), `plan ${t.key}`);
       return send(chatId, `⚠️ ${esc(r.status ?? "dispatch failed")}`);
     }
-    // Learnings-promotion card (weekly hygiene): ★ promote flags the memo as context (feeds agents);
-    // Ignore records the current size in kv so the card stays quiet until the memo doubles.
-    if (ns === "lp") {
-      const n = noteSvc.listNotes().find((x) => x.id.startsWith(id));
-      if (!n) { await ack("note gone"); return stripKb(); }
-      if (op === "y") { noteSvc.updateNote(n.id, { context: true }); await ack("★ promoted — feeds agents"); await stripKb(); return send(chatId, `★ <b>${esc(n.title)}</b> now loads into this workspace's agents`); }
-      if (op === "n") { kv.set(`hygiene.ignored.${n.id}`, String(n.body.length)); await ack("ignored"); return stripKb(); }
-    }
+    // Retired learnings-promotion card: taps on one still sitting in the chat. ★-ing the whole inbox
+    // would inject all of it into every prompt; the dream pass promotes it line by line instead.
+    if (ns === "lp") { await ack("retired — the dream pass triages the inbox now"); return stripKb(); }
     // A routing question (src/thread-router.ts): the tap re-runs the message the operator already
     // sent, on the workspace he picked — its own Robert, its own session, its own brief.
     if (ns === "tr") {

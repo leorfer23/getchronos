@@ -1,26 +1,20 @@
 import { CONFIG } from "./config.js";
-import { workspaces, repos, jobs, runs, kv, notes } from "./store.js";
-import { dispatch } from "./dispatcher.js";
+import { jobs, runs, kv } from "./store.js";
 import { awaitingRecovery } from "./recovery.js";
-import * as noteSvc from "./notes.js";
 import { decayLessons } from "./lessons.js";
 import { MEMORY_AGENTS, agentMemoryNote } from "./agent-memory.js";
 import { runStowPass, recentReinforcement } from "./stow.js";
-import { notify, notifyInfo, esc } from "./telegram/api.js";
-import { kb } from "./telegram/keyboards.js";
-import type { Note } from "./types.js";
-import { REPO_ROOT } from "./repo-root.js";
+import { notifyInfo, esc } from "./telegram/api.js";
 import { latestSlot, slotDay } from "./dream.js";
 
-const LEARN_SLUG = "session-learnings";
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const HYGIENE_KV = "hygiene.last_run";
 const HYGIENE_EVERY_DAYS = 6;
 
-// Jobs created purely to run once (rate-limit fallback clones, this file's own compaction jobs)
-// and never re-dispatched by id afterward — nothing schedules or reruns them. Left alone they pile
-// up in the jobs table/UI forever.
-const EPHEMERAL_JOB_PREFIXES = ["fallback:", "hygiene:", "prose:"];
+// Jobs created purely to run once (rate-limit fallback clones, the dream pass's per-slot jobs, the
+// retired hygiene compaction jobs still in old DBs) and never re-dispatched by id afterward — nothing
+// schedules or reruns them. Left alone they pile up in the jobs table/UI forever.
+export const EPHEMERAL_JOB_PREFIXES = ["fallback:", "hygiene:", "prose:", "dream:"];
 let lastReapDay = "";
 
 // Once a day, delete ephemeral jobs that are done (no running/queued run) and old enough that a
@@ -39,25 +33,6 @@ export function reapEphemeralJobs(): void {
     if (awaitingRecovery(job.id)) continue;
     jobs.remove(job.id);
   }
-}
-
-// A memo worth compacting has grown past the point where duplicates and stale facts pile up.
-export function needsCompaction(body: string): boolean {
-  return body.length > 3000;
-}
-
-// Bullet-style fact lines (captureLearnings writes `- <fact>`); the count is the card's "N learnings".
-export function factCount(body: string): number {
-  return body.split("\n").filter((l) => l.trim().startsWith("-")).length;
-}
-
-// Offer to ★-promote an un-flagged learnings memo once it holds ≥10 facts. After an Ignore we store
-// the size in kv and stay quiet until the memo doubles, so the card doesn't nag every Sunday.
-export function shouldOfferPromotion(note: Note | undefined, kvGet: (k: string) => string | undefined): boolean {
-  if (!note || note.context) return false;
-  if (factCount(note.body) < 10) return false;
-  const ignoredAt = kvGet(`hygiene.ignored.${note.id}`);
-  return !ignoredAt || note.body.length > Number(ignoredAt) * 2;
 }
 
 /**
@@ -98,26 +73,20 @@ export function stowMemories(now = new Date()): string[] {
   return nudges;
 }
 
-const goal =
-  `MEMORY HYGIENE (read-only code — you edit ONE memo via the mc CLI, never the filesystem). ` +
-  `Compact this workspace's session-learnings memo WITHOUT losing information.\n` +
-  `1. Read it: \`mc memo get session-learnings\`.\n` +
-  `2. Rewrite the whole body: \`mc memo edit session-learnings --body "<full new body>"\`.\n` +
-  `Rules: merge duplicates, collapse near-identical facts into one, drop transient/dated items that no longer matter, ` +
-  `keep EVERY still-true durable fact. Group under short ## headings (Repo, Conventions, Operator preferences, Gotchas). ` +
-  `Keep the body under ~4000 chars. Compact — do not summarize real facts away.`;
-
-// Weekly-ish memory hygiene. Per non-archived workspace whose session-learnings memo has grown big →
-// dispatch a read-only agent to compact it in place; independently, offer to ★-promote un-flagged
-// memos that carry enough facts to be worth feeding back into agents.
+// Weekly memory hygiene: retire lessons nobody's code matches any more, and run the stow pass over
+// the personas' own memory files (Robert's). Workspace memory — the session-learnings inbox, the
+// index, branches — is the dream pass's (src/dream-pass.ts, twice a day): the haiku job that used to
+// compact session-learnings in place here, and the card offering to ★ the whole inbox, are gone. The
+// compaction only ever rewrote an inbox no agent loads, and ★-ing a 70k inbox would have put all of it
+// in every prompt; the dream pass instead promotes line by line, under caps, and empties the inbox.
 //
 // Rides the dream slot (src/dream.ts), not the digest hour: gating on digestHour meant that turning
 // the morning message off (CHRONOS_DIGEST_HOUR=-1) turned memory maintenance off with it, silently,
 // from 2026-08-31 on. It fires at the first slot on a calendar day ≥6 days after the last run's —
 // or on the first tick after that slot if the Mac slept through it.
 //
-// Weekly, not every slot: the compaction job re-fires on any memo still over needsCompaction's bar,
-// and the promotion card and stow nudges are Telegram messages — twice a day would be nagging.
+// Weekly, not every slot: lesson decay is measured in weeks, and the stow nudges are Telegram
+// messages — twice a day would be nagging.
 //
 // Returns the slot to record, or null. `last` is that slot key, or an ISO timestamp from before the
 // slot existed (read as its local day).
@@ -136,47 +105,10 @@ export async function maybeHygiene() {
   if (!slot) return;
   kv.set(HYGIENE_KV, slot);
 
-  // Retire rules that stopped meaning anything before compacting anything else — a lesson vault
-  // that only ever grows is a prompt tax, and a rule nobody's code matches any more is noise.
+  // A lesson vault that only ever grows is a prompt tax, and a rule nobody's code matches any more is noise.
   const retired = decayLessons();
   if (retired) console.log(`[hygiene] archived ${retired} stale lesson(s)`);
 
   const stowNudges = stowMemories();
   if (stowNudges.length) await notifyInfo(`🧹 <b>Memory</b> ${esc(stowNudges.join(" · "))}`).catch(() => {});
-
-  const compacted: string[] = [];
-  for (const w of workspaces.list()) {
-    const memo = notes.bySlug(w.id, LEARN_SLUG);
-    if (!memo) continue;
-
-    if (needsCompaction(memo.body)) {
-      const cwd = repos.list(w.id)[0]?.path || REPO_ROOT;
-      const job = jobs.create({
-        name: `hygiene:${w.slug}`,
-        description: `Compact session-learnings for ${w.name}`,
-        goal,
-        workspace_id: w.id,
-        // pure text merge/dedup of learnings — no code reasoning; pinned to claude/haiku so a
-        // workspace's alternate review backend never gets an invalid model name
-        backend: "claude-code",
-        model: "haiku",
-        cwd,
-        sandbox: w.sandbox_mode,
-        disallowed_tools: "Edit,Write,MultiEdit,NotebookEdit",
-        trigger_type: "manual",
-      });
-      dispatch(job.id, `hygiene:${w.slug}`);
-      compacted.push(w.name);
-    }
-
-    if (shouldOfferPromotion(memo, kv.get)) {
-      const i = memo.id.slice(0, 8);
-      await notify(
-        `🧠 <b>${esc(w.name)}</b> has ${factCount(memo.body)} learnings not fed back into agents`,
-        kb([[{ text: "★ Promote", data: `lp.y.${i}` }, { text: "Ignore", data: `lp.n.${i}` }]])
-      ).catch(() => {});
-    }
-  }
-  if (compacted.length)
-    await notifyInfo(`🧹 <b>Memory hygiene</b> · ${todayStr()}\nCompacting: ${compacted.map(esc).join(", ")}`).catch(() => {});
 }

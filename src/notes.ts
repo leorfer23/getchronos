@@ -75,7 +75,13 @@ export function createNote(input: NewNote): Note {
   const scope = validScope(input.scope); // throws before any disk write
   const repo_ids = validRepoIds(ws.id, input.repo_ids); // throws before any disk write
   let slug = kebab(input.title);
-  if (store.bySlug(ws.id, slug)) slug = `${slug}-${Date.now().toString(36).slice(-4)}`;
+  if (input.slug != null) {
+    // A caller that names the slug (the memory tree, whose slugs ARE its structure) gets exactly that
+    // slug or an error — never a suffixed near-miss that every later lookup would miss.
+    if (input.slug !== kebab(input.slug)) throw new Error(`invalid note slug: ${input.slug}`);
+    if (store.bySlug(ws.id, input.slug)) throw new Error(`note slug taken: ${input.slug}`);
+    slug = input.slug;
+  } else if (store.bySlug(ws.id, slug)) slug = `${slug}-${Date.now().toString(36).slice(-4)}`;
   const fp = filePath(ws.slug, slug);
   const ts = new Date().toISOString();
   const body = input.body ?? `# ${input.title}\n\n`;
@@ -190,9 +196,12 @@ export function contextBlock(workspace_id: string, repo_id?: string | null): str
   const inRepoScope = (n: Note): boolean =>
     !n.repo_ids || n.repo_ids.length === 0 || (!!repo_id && n.repo_ids.includes(repo_id));
   const globals = store.globalContextNotes();
-  // The memory index (memory-tree.ts) is the trunk every agent must see: always first in the budget.
+  // The memory index (memory-tree.ts) is the trunk every agent must see, then what is hot right now:
+  // both first in the budget, in that order, so no other ★ memo can starve them. Literal slugs, not
+  // memory-tree's constants — memory-tree imports this module.
+  const head = (n: Note) => (n.slug === "memory-index" ? 0 : n.slug === "memory-hot" ? 1 : 2);
   const wsNotes = store.contextNotes(workspace_id).filter((n) => n.scope !== "global" && inRepoScope(n))
-    .sort((a, b) => Number(b.slug === "memory-index") - Number(a.slug === "memory-index"));
+    .sort((a, b) => head(a) - head(b));
   if (!globals.length && !wsNotes.length) return "";
 
   const sections: string[] = [];
@@ -217,8 +226,8 @@ export function contextBlock(workspace_id: string, repo_id?: string | null): str
 }
 
 // Append auto-extracted session learnings into the workspace's standing learnings memo
-// (created on first use). Returns the note, or null if nothing given. The memo is NOT context-flagged
-// by default — the operator promotes it to ★ if they want it fed back into agents.
+// (created on first use). Returns the note, or null if nothing given. The memo is an INBOX, never
+// injected: the dream pass (src/dream-pass.ts) triages it into the memory tree and empties it.
 //
 // Near-duplicate bullets (token Jaccard ≥ LEARN_DEDUPE) are skipped so the vault does not grow a
 // pile of restatements. This is memo capture only — lessons remain the imperative-rule channel;
@@ -243,7 +252,7 @@ export function captureLearnings(workspace_id: string, facts: string[], sessionL
     memo = createNote({
       workspace_id,
       title: "Session learnings",
-      body: `# Session learnings\n\nAuto-captured durable facts from agent sessions. Flag ★ (context) to feed back into future agents.\n`,
+      body: `# Session learnings\n\nInbox of durable facts from agent sessions. The dream pass triages it into the memory tree twice a day.\n`,
     });
   }
   const existing = learningBullets(memo.body);
