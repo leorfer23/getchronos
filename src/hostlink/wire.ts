@@ -216,7 +216,7 @@ export type HostToBrain =
   | ProcHostToBrain;
 
 export type BrainToHost =
-  | { t: "welcome"; proto: string; host_id: string; ping_ms: number }
+  | { t: "welcome"; proto: string; host_id: string; ping_ms: number; name?: string }
   | { t: "joined"; host_id: string; token: string }
   | { t: "spawn_pty"; id: string; spec: unknown }
   | { t: "spawn_proc"; id: string; spec: unknown }

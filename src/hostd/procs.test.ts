@@ -87,7 +87,13 @@ test("stdout reaches the brain as whole lines, in seq order, from the host's che
   // Two writes that split a line in the middle, then a last line with no newline at all.
   const r = await p.spawn(spec(`printf 'one\\ntw'; sleep 0.1; printf 'o\\nthree'; echo "cwd:$PWD" >&2`));
   assert.equal(r.cwd, repo, "no explicit cwd: the host's own checkout of the repo, found by remote");
+  // While it runs, the menu bar sees it (status.ts) — by repo dir and backend, never its workspace.
+  const w = p.work();
+  assert.equal(w.length, 1);
+  assert.deepEqual({ kind: w[0].kind, cwd: w[0].cwd, backend: w[0].backend }, { kind: "run", cwd: repo, backend: "sh" });
+  assert.ok(!("workspace" in w[0]));
   await until(() => !!link.exitOf(r.ch), "the exit");
+  assert.deepEqual(p.work(), [], "an exited run is not work any more");
   const frames = link.data.filter((d) => d.ch === r.ch);
   assert.deepEqual(frames.map((f) => f.seq), frames.map((_, i) => i + 1), "seq 1, 2, 3 … with no hole");
   for (const f of frames.slice(0, -1)) assert.ok(f.text.endsWith("\n"), `a frame is whole lines: ${JSON.stringify(f.text)}`);

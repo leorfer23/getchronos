@@ -318,7 +318,9 @@ export class BrainLink extends EventEmitter {
     const prev = this.links.get(link.id);
     if (prev && prev !== link) this.drop(prev, 4409, "replaced by a newer connection");
     this.links.set(link.id, link);
-    this.send(link, { t: "welcome", proto: PROTOCOL_VERSION, host_id: link.id, ping_ms: this.pingMs });
+    // `name` (additive; older hosts ignore it): the operator's name for this computer, which the
+    // host's menu bar item shows instead of a hostname like "Leonels-MacBook-Pro".
+    this.send(link, { t: "welcome", proto: PROTOCOL_VERSION, host_id: link.id, ping_ms: this.pingMs, name: link.name });
     link.pingTimer = setInterval(() => this.pingTick(link), this.pingMs);
     link.pingTimer.unref?.();
     console.log(`[hostlink] ${link.id} (${link.name}) online via ${link.via} — ${h.platform}/${h.arch}, chronos ${h.version}`);

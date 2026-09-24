@@ -26,6 +26,8 @@
     "!dist/**/*.test.js",
     "!dist/**/*.eval.js",
     "launchd/sh.chronos.host.plist.template",
+    "launchd/sh.chronos.hostbar.plist.template",
+    "desktop/hostbar.swift",
     "scripts/mc",
     "scripts/fix-node-pty-perms.mjs",
     "skills/mission-control/",

@@ -1,5 +1,6 @@
 // Types for host-core.mjs, which stays plain JS so it runs before node_modules is whole.
 export declare const HOST_LABEL: "sh.chronos.host";
+export declare const HOSTBAR_LABEL: "sh.chronos.hostbar";
 export declare const PACKAGE_NAME: "getchronos";
 export declare const SUPPORTED_NODE: { min: number; max: number };
 export declare const NODE_FIX: string;

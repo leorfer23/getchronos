@@ -37,6 +37,7 @@ import { locateTranscript, transcriptIsJsonl, type FocusCtx } from "../focus.js"
 import type { AgentBackend } from "../backends/types.js";
 import { ensureRoot, hostBaseEnv, isDir, mainCheckouts, remoteKey, resolveRepos, safeRef, signalName, vetoReason } from "./resolve.js";
 import { egressForSpawn, type HostEgress } from "./egress.js";
+import type { WorkSource } from "./status.js";
 
 export { remoteKey };
 
@@ -100,6 +101,9 @@ type Chan = {
   forgetT?: NodeJS.Timeout;
   tail: TranscriptTail | null;
   workspace: { id: string; slug: string } | null;
+  backend: string;
+  cwd: string;
+  startedAt: number;
 };
 
 
@@ -206,6 +210,16 @@ export class HostTerminals {
     }));
   }
 
+  /**
+   * What the menu bar lists (status.ts): every terminal still running. Internal shape — status.ts
+   * shortens the id and reduces the cwd to a repo folder; the workspace is never handed out.
+   */
+  work(): WorkSource[] {
+    return [...this.chans.values()].filter((c) => !c.exit).map((c) => ({
+      kind: "terminal" as const, id: c.sessionId, cwd: c.cwd, backend: c.backend, startedAt: c.startedAt, lastOut: c.lastOut,
+    }));
+  }
+
   /** The link dropped: stop streaming. PTYs keep running and their output keeps landing in the ring. */
   linkDown(): void {
     for (const c of this.chans.values()) { c.streaming = false; if (c.exit) c.exitSent = false; }
@@ -271,7 +285,7 @@ export class HostTerminals {
 
     const term = pty.spawn(cmd, cmdArgs, { name: "xterm-color", cols: spec.cols, rows: spec.rows, cwd, env });
     const ch = this.allocCh();
-    const c: Chan = { ch, sessionId: spec.session_id, pty: term, ring: new Ring(undefined, ch), streaming: !!this.link?.online(), exit: null, exitSent: false, lastOut: Date.now(), tail: null, workspace: spec.workspace };
+    const c: Chan = { ch, sessionId: spec.session_id, pty: term, ring: new Ring(undefined, ch), streaming: !!this.link?.online(), exit: null, exitSent: false, lastOut: Date.now(), tail: null, workspace: spec.workspace, backend: backend.name, cwd, startedAt: Date.now() };
     this.chans.set(ch, c);
     term.onData((d) => {
       c.lastOut = Date.now();

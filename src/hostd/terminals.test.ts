@@ -58,6 +58,13 @@ test("an allowed workspace spawns, and the refusal messages for what a host cann
   assert.equal(r.cwd, home, "no repo, no workspace checkout → the host's home");
   assert.ok(r.pid > 0);
   assert.equal(t.live()[0].session_id, "sess-veto");
+  // What the menu bar lists (status.ts): a live terminal, and nothing about its workspace.
+  const w = t.work();
+  assert.equal(w.length, 1);
+  assert.deepEqual(Object.keys(w[0]).sort(), ["backend", "cwd", "id", "kind", "lastOut", "startedAt"]);
+  assert.equal(w[0].kind, "terminal");
+  assert.equal(w[0].backend, "sh");
+  assert.equal(w[0].cwd, home);
   await assert.rejects(t.spawn(spec()), /already running here/);
   t.killAll();
 });

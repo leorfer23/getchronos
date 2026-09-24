@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template for the host's menu bar item (HOSTS.md → Menu bar). Do not install by hand —
+     `getchronos host menubar install` compiles desktop/hostbar.swift and renders this file to
+     ~/Library/LaunchAgents/sh.chronos.hostbar.plist. It reads only the host's loopback status. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.chronos.hostbar</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__BIN__</string>
+  </array>
+
+  <!-- Nothing secret belongs here: LaunchAgents are world-readable. The item finds the host's port in
+       __HOST_HOME__/.secrets itself (that one key only). -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>CHRONOS_HOST_HOME</key>
+    <string>__HOST_HOME__</string>
+  </dict>
+
+  <!-- A menu bar item for the logged-in operator: start with the login session, only in a GUI
+       session. RunAtLoad is right HERE (a UI item on a host), unlike the brain's agent Chromes.
+       KeepAlive only after a crash: Quit exits 0 and means "gone until the next login". -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <key>StandardOutPath</key>
+  <string>__HOST_HOME__/hostbar.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOST_HOME__/hostbar.log</string>
+</dict>
+</plist>

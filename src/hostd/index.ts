@@ -7,6 +7,7 @@
  *   npm run host -- status                    this host's credential and live link state
  *   npm run host -- doctor                    the setup checklist, locally
  *   npm run host -- update                    update this host now (the Desk's Update does the same)
+ *   npm run host -- menubar install|uninstall|status   the menu bar item (menubar.ts)
  *
  * `npm run host` and `npx getchronos host` both enter through bin/getchronos.mjs, which runs the
  * dependency-free preflight before this file (and its imports) are loaded at all.
@@ -17,6 +18,7 @@
  */
 import "./env.js"; // FIRST: loads ~/.chronos-host/.secrets before config.ts evaluates
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { HOST_HOME, HOST_SECRETS } from "./env.js";
@@ -37,6 +39,8 @@ import { decodeJoinCode } from "../hostlink/join.js";
 import { checkGit, checkDeps, shellPath } from "../../bin/host-core.mjs";
 import { defaultRunner, detectInstall, installForJoin, kickstart, launchdPid, npmCliFor, runUpdate } from "./update.js";
 import { writeHostPlist } from "./join.js";
+import { installMenubar, menubarPaths, menubarState, refreshMenubar, uninstallMenubar, type MenubarDeps } from "./menubar.js";
+import { buildStatus, isHostStatus, mcPortCandidates as portCandidates } from "./status.js";
 import type { UpdateFrame, UpdateStatus, UpdateTarget } from "../hostlink/wire.js";
 
 const env = (k: string) => (process.env[k] ?? "").trim();
@@ -49,15 +53,17 @@ const mcPort = () => Number(env("CHRONOS_HOST_MC_PORT") || 7777);
  * (first contact, 2026-09-24: `mc state done` → 404 from a months-old local install). Fixed, not
  * random, so `status` can find the process again.
  */
-const mcPortCandidates = () => (env("CHRONOS_HOST_MC_PORT") ? [mcPort()] : [7777, ...Array.from({ length: 10 }, (_, i) => 7787 + i)]);
+const mcPortCandidates = () => portCandidates(env("CHRONOS_HOST_MC_PORT"));
 const plistPath = () => path.join(process.env.HOME ?? "", "Library", "LaunchAgents", `${HOST_LABEL}.plist`);
+const NAME_FILE = path.join(HOST_HOME, "name");
 const secretsMode = () => { try { return fs.statSync(HOST_SECRETS).mode; } catch { return null; } };
 
 async function cmdJoin(args: string[]): Promise<number> {
   const noLaunchd = args.includes("--no-launchd");
+  const withMenubar = args.includes("--menubar");
   const [url, code] = args.filter((a) => !a.startsWith("--"));
   if (!url || !code) {
-    console.error("usage: npm run host -- join <brain-url> <code> [--no-launchd]");
+    console.error("usage: npm run host -- join <brain-url> <code> [--no-launchd] [--menubar]");
     return 2;
   }
   // `npx getchronos host join` runs from npm's cache, which npm prunes at will: install this same
@@ -87,6 +93,9 @@ async function cmdJoin(args: string[]): Promise<number> {
     console.log(`  credential → ${r.secretsFile} (mode 600)`);
     console.log(`  brains     → ${r.brains.join(", ")}`);
     console.log(r.plistFile ? `  LaunchAgent → ${r.plistFile} (loaded; starts at login)` : `  LaunchAgent skipped — run it yourself: node ${shellPath(path.join(REPO_ROOT, "bin", "getchronos.mjs"))} host run`);
+    // The menu bar item is offered, never installed unasked: it compiles Swift and adds a login item.
+    if (withMenubar) return (await cmdMenubar(["install"])) === 0 ? 0 : 1;
+    console.log(`  menu bar    → see this Mac's agents at a glance: node ${shellPath(path.join(REPO_ROOT, "bin", "getchronos.mjs"))} host menubar install`);
     return 0;
   } catch (e: any) {
     console.error(`✗ join failed: ${e?.message ?? e}`);
@@ -102,6 +111,10 @@ async function cmdRun(): Promise<number> {
   }
   const mode = secretsMode();
   if (mode != null && mode & 0o077) console.warn(`[host] ${HOST_SECRETS} is readable by others (mode ${(mode & 0o777).toString(8)}) — chmod 600 it`);
+  let knownName: string | null = null;
+  try { knownName = fs.readFileSync(NAME_FILE, "utf8").trim() || null; } catch {}
+  let buildCommit: string | null = null;
+  void hostBuild().then((b) => { buildCommit = b.commit; }).catch(() => {});
   // PTYs and runs live in this process, not in the link: a dropped link must not take either with it.
   const egress = new HostEgress();
   const terminals = new HostTerminals({
@@ -153,7 +166,15 @@ async function cmdRun(): Promise<number> {
       worktree_ensure: (a) => procs.worktreeEnsure(a),
     },
   });
-  link.on("online", () => console.log(`[host] ${id} online via ${link.url}`));
+  link.on("online", () => {
+    console.log(`[host] ${id} online via ${link.url}`);
+    // Remember the operator's name for this computer, so the menu bar says "m2" even after a
+    // restart while the brain is away (not a secret: it is the name on the Desk's Computers list).
+    if (link.brainName && link.brainName !== knownName) {
+      knownName = link.brainName;
+      try { fs.writeFileSync(NAME_FILE, knownName + "\n", { mode: 0o600 }); } catch {}
+    }
+  });
   // The brain's policy for this host: an extra veto next to CHRONOS_HOST_DENY, never a loosening.
   link.on("policy", (f: { deny?: unknown }) => terminals.setPolicy(f?.deny));
   link.on("offline", (why: string) => console.log(`[host] link down (${why}) — reconnecting`));
@@ -176,7 +197,17 @@ async function cmdRun(): Promise<number> {
     try {
       fwd = await startForwarder(link, {
         port,
-        status: () => ({ host_id: id, state: link.state, url: link.url, since: link.since, last_error: link.lastError }),
+        // An allowlist of fields (status.ts): loopback-only and unauthenticated, so never a token, an
+        // env var, a workspace or a title — what the menu bar item and `host status` read.
+        status: () => buildStatus({
+          hostId: id,
+          name: link.brainName ?? knownName ?? os.hostname().replace(/\.local$/, ""),
+          link: { state: link.state, since: link.since, url: link.url, lastError: link.lastError },
+          version: chronosVersion(),
+          commit: buildCommit,
+          work: [...terminals.work(), ...procs.work()],
+          home: os.homedir(),
+        }),
       });
       // Agents opened from now on point MC_API at the port that actually bound.
       terminals.setMcPort(port);
@@ -217,6 +248,11 @@ async function updateTo(target: UpdateTarget, report: (s: Omit<UpdateStatus, "t"
     rewritePlist: (appDir) => {
       if (fs.existsSync(plistPath())) writeHostPlist({ hostHome: HOST_HOME, pkgRoot: inst.kind === "npm" ? path.join(appDir, "node_modules", "getchronos") : appDir });
     },
+    // The menu bar item is compiled from the app's own source: rebuild it from the new code, when installed.
+    afterSwap: async (appDir) => {
+      const pkgRoot = inst.kind === "npm" ? path.join(appDir, "node_modules", "getchronos") : appDir;
+      console.log(`[host] update: menu bar — ${await refreshMenubar({ run: defaultRunner, hostHome: HOST_HOME, pkgRoot })}`);
+    },
   });
 }
 
@@ -250,6 +286,34 @@ async function cmdUpdate(): Promise<number> {
   return r === "failed" ? 1 : 0;
 }
 
+const menubarDeps = (): MenubarDeps => ({ run: defaultRunner, hostHome: HOST_HOME, pkgRoot: REPO_ROOT });
+
+/** `host menubar install|uninstall|status` (HOSTS.md → Menu bar). */
+async function cmdMenubar(args: string[]): Promise<number> {
+  const [sub] = args;
+  const d = menubarDeps();
+  if (sub === "install") {
+    const r = await installMenubar(d, (s) => console.log(s));
+    if (!r.ok) {
+      console.error(`✗ menu bar: ${r.error}${r.fix ? `\n  fix: ${r.fix}` : ""}`);
+      return 1;
+    }
+    console.log(`✓ menu bar item installed — ${menubarPaths(d).bin}, starts at login (${menubarPaths(d).plist})`);
+    return 0;
+  }
+  if (sub === "uninstall") {
+    for (const l of await uninstallMenubar(d)) console.log(`✓ ${l}`);
+    return 0;
+  }
+  if (sub === "status") {
+    const s = await menubarState(d);
+    console.log(!s.installed ? "menu bar  not installed" : s.pid ? `menu bar  running (pid ${s.pid})` : "menu bar  installed, not running");
+    return 0;
+  }
+  console.log("usage: npm run host -- menubar <install | uninstall | status>");
+  return sub ? 2 : 0;
+}
+
 async function runDoctor(): Promise<{ ok: boolean; text: string }> {
   const [clis, checkouts] = await Promise.all([probeClis(), scanCheckouts()]);
   // The preflight's own checks first (bin/host-core.mjs): a broken git or a half-installed tree is
@@ -259,7 +323,14 @@ async function runDoctor(): Promise<{ ok: boolean; text: string }> {
   const build = await hostBuild();
   // A developer's own checkout runs fine; it is only never updated from the Desk.
   const installed = { ok: true, label: "installed", detail: `${build.install}${build.install === "dev" ? " (updates by hand)" : ""} — chronos ${chronosVersion()}${build.commit ? ` @ ${build.commit.slice(0, 12)}` : ""} (${inst.pkgRoot})` };
-  const checks = [installed, ...pre, ...checklist({
+  // Optional, so never a ✗: whether this Mac shows its agents in the menu bar.
+  const mb = await menubarState(menubarDeps()).catch(() => ({ installed: false, pid: null }));
+  const menubar = {
+    ok: true,
+    label: "menu bar item",
+    detail: !mb.installed ? `not installed (optional: node ${shellPath(path.join(REPO_ROOT, "bin", "getchronos.mjs"))} host menubar install)` : mb.pid ? `running (pid ${mb.pid})` : "installed, not running (it was quit; starts again at login)",
+  };
+  const checks = [installed, ...pre, menubar, ...checklist({
     node: process.version,
     clis,
     profiles: profiles(),
@@ -288,7 +359,7 @@ function statusOn(port: number): Promise<Record<string, unknown> | null> {
 async function localStatus(): Promise<Record<string, unknown> | null> {
   for (const port of mcPortCandidates()) {
     const s = await statusOn(port);
-    if (s && s.host_id) return s;
+    if (isHostStatus(s)) return s;
   }
   return null;
 }
@@ -305,7 +376,11 @@ async function cmdStatus(): Promise<number> {
   console.log(`agent     ${fs.existsSync(plistPath()) ? plistPath() : "(no LaunchAgent)"}`);
   const s = await localStatus();
   if (!s) console.log(`link      host process not running (no forwarder on 127.0.0.1:${mcPortCandidates().join("/")})`);
-  else console.log(`link      ${s.state}${s.url ? ` via ${s.url}` : ""} since ${new Date(Number(s.since)).toLocaleString()}${s.last_error ? ` — last error: ${s.last_error}` : ""}`);
+  else {
+    console.log(`link      ${s.state}${s.url ? ` via ${s.url}` : ""} since ${new Date(Number(s.since)).toLocaleString()}${s.last_error ? ` — last error: ${s.last_error}` : ""}`);
+    const work = Array.isArray(s.work) ? (s.work as Array<{ active?: boolean }>) : null;
+    if (work) console.log(`work      ${work.length ? `${work.filter((w) => w.active).length} working, ${work.length} running` : "nothing running"}`);
+  }
   return 0;
 }
 
@@ -316,13 +391,14 @@ async function main(argv: string[]): Promise<number> {
     case "run": return cmdRun();
     case "status": return cmdStatus();
     case "update": return cmdUpdate();
+    case "menubar": return cmdMenubar(rest);
     case "doctor": {
       const r = await runDoctor();
       console.log(r.text);
       return r.ok ? 0 : 1;
     }
     default:
-      console.log("usage: npm run host -- <join <brain-url> <code> | run | status | doctor | update>  (uninstall: bin/getchronos.mjs host uninstall)");
+      console.log("usage: npm run host -- <join <brain-url> <code> | run | status | doctor | update | menubar>  (uninstall: bin/getchronos.mjs host uninstall)");
       return cmd ? 2 : 0;
   }
 }

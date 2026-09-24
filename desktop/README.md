@@ -10,6 +10,7 @@ launchd; these are just renderers in real windows, and each reads `.admin-token`
 | `overlay.swift` | `mc-overlay` | Always-on-top ticket panel over `/overlay.html`. |
 | `icon.svg` → `icon.icns` | `scripts/build-icon.sh` | The Mac app icon: the hourglass mark from `site/assets/favicon.svg` on the night ground, sized to Apple's icon grid. `build-app.sh` bundles it. |
 | `wapp.swift` | `wapp` (`scripts/build-wapp.sh`) | Drives the real WhatsApp desktop client. See below. |
+| `hostbar.swift` | `~/.chronos-host/bin/chronos-hostbar` (`getchronos host menubar install`) | A **host's** menu bar item: how many agents work on this Mac right now, and on which repos. Reads only the host's loopback `/__host/status`, no token. Ships in the npm package and is compiled on the host. See HOSTS.md → Menu bar. |
 
 **`src-tauri/` is vestigial.** It is a Tauri v2 scaffold from before the Swift shells existed, and
 nothing builds it any more — `scripts/build-app.sh` no longer reads anything

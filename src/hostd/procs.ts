@@ -41,6 +41,7 @@ import type { Job } from "../types.js";
 import { hostBaseEnv, insideCheckouts, isDir, resolveRepos, safeRef, type CloneOpts } from "./resolve.js";
 import { egressForSpawn, type HostEgress } from "./egress.js";
 import { VetoError, type TerminalsLink } from "./terminals.js";
+import type { WorkSource } from "./status.js";
 
 /** A CLI a host runs headless, by the canonical backend name the spec carries. */
 export type ProcBackend = Pick<AgentBackend, "name" | "bin" | "buildArgs" | "env"> & Partial<Pick<AgentBackend, "steerArgs" | "oneShot">>;
@@ -84,6 +85,11 @@ type ProcChan = {
   timedOut: boolean;
   watchdog: NodeJS.Timeout | null;
   forgetT?: NodeJS.Timeout;
+  backend: string;
+  cwd: string;
+  startedAt: number;
+  /** Last stdout or stderr byte: the menu bar's "working" (status.ts ACTIVE_MS). */
+  lastOut: number;
 };
 
 /** An exited run the brain never releases (it is gone for good) is forgotten after this. */
@@ -131,6 +137,13 @@ export class HostProcs {
   live(): LiveInfo[] {
     return [...this.chans.values()].map((c) => ({
       ch: c.ch, session_id: c.runId, kind: "proc" as const, pid: c.child.pid ?? null, last_seq: c.ring.lastSeq, exit: c.exit,
+    }));
+  }
+
+  /** What the menu bar lists (status.ts): every run still running. Internal shape; never the workspace. */
+  work(): WorkSource[] {
+    return [...this.chans.values()].filter((c) => !c.exit).map((c) => ({
+      kind: "run" as const, id: c.runId, cwd: c.cwd, backend: c.backend, startedAt: c.startedAt, lastOut: c.lastOut,
     }));
   }
 
@@ -234,6 +247,7 @@ export class HostProcs {
       ch, runId: spec.run_id, child, ring: new Ring(this.o.ringBytes ?? PROC_RING_BYTES, ch),
       streaming: !!this.link?.online(), exit: null, exitSent: false, partial: Buffer.alloc(0),
       stderrTail: "", timedOut: false, watchdog: null,
+      backend: backend.name, cwd, startedAt: Date.now(), lastOut: Date.now(),
     };
     this.chans.set(ch, c);
     child.stdout!.on("data", (b: Buffer) => this.onStdout(c, b));
@@ -253,6 +267,7 @@ export class HostProcs {
   }
 
   private onStdout(c: ProcChan, b: Buffer): void {
+    c.lastOut = Date.now();
     const all = c.partial.length ? Buffer.concat([c.partial, b]) : b;
     const nl = all.lastIndexOf(0x0a);
     if (nl < 0) {
@@ -264,6 +279,7 @@ export class HostProcs {
   }
 
   private onStderr(c: ProcChan, text: string): void {
+    c.lastOut = Date.now();
     c.stderrTail = (c.stderrTail + text).slice(-STDERR_KEEP);
     if (c.streaming) this.link?.send({ t: "stderr", ch: c.ch, text });
   }
