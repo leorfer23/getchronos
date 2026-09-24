@@ -404,6 +404,9 @@ const workspaceFields = {
   auto_review: z.boolean().optional(),
   merge_gate: z.boolean().optional(),
   live_steer: z.boolean().optional(),
+  // HOSTS.md phase 5: where this workspace's headless jobs may run. null = the default (`hosts` while
+  // CHRONOS_PLACEMENT=auto). `hosts+cloud` is deferred: the operator never gets a surprise cloud bill.
+  placement: z.enum(["brain", "hosts"]).nullable().optional(),
   plan_panel: z.boolean().optional(),
   review_panel: z.boolean().optional(),
   review_min_difficulty: z.number().int().min(0).max(5).nullable().optional(),

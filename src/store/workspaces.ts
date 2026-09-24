@@ -152,6 +152,8 @@ export const workspaces = {
         default_model=@default_model,sandbox_mode=@sandbox_mode,sandbox_allow=@sandbox_allow,backends=@backends,ticket_connector=@ticket_connector,
         connector_config=@connector_config,slack_config=@slack_config,egress_config=@egress_config,ideas_config=@ideas_config,review_backend=@review_backend,review_model=@review_model,verify_mode=@verify_mode,fallback_backend=@fallback_backend,fallback_model=@fallback_model,route_config=@route_config,auto_grade=@auto_grade,auto_skill=@auto_skill,skill_distill=@skill_distill,auto_plan=@auto_plan,auto_build=@auto_build,auto_review=@auto_review,merge_gate=@merge_gate,live_steer=@live_steer,plan_panel=@plan_panel,review_panel=@review_panel,review_min_difficulty=@review_min_difficulty,archived=@archived,updated_at=@updated_at WHERE id=@id`
     ).run(next as any);
+    // Kept out of the statement above on purpose: one column, set on its own (migration 137).
+    if (patch.placement !== undefined) db.prepare("UPDATE workspaces SET placement = ? WHERE id = ?").run(patch.placement ?? null, id);
     return this.get(id);
   },
   remove(id: string): void {

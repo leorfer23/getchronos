@@ -105,6 +105,9 @@ export interface Workspace {
   // 1 = steer-capable backends spawn with streaming stdin so `mc tell` / POST /runs/:id/steer
   // reach the LIVE run instead of waiting for its next checkpoint. See runner.ts steerRun.
   live_steer: number;
+  // HOSTS.md phase 5: where headless jobs may run — 'brain' keeps them all here, 'hosts' lets
+  // placement send them to other computers. null = default ('hosts' while CHRONOS_PLACEMENT=auto).
+  placement?: "brain" | "hosts" | null;
 
   // 1 = hard tickets get a scout PANEL (map / prior-art / risk) merged into one brief, not one scout.
   plan_panel: number;
@@ -159,6 +162,7 @@ export interface NewWorkspace {
   auto_review?: boolean;
   merge_gate?: boolean;
   live_steer?: boolean;
+  placement?: "brain" | "hosts" | null;
   plan_panel?: boolean;
   review_panel?: boolean;
   review_min_difficulty?: number | null;
@@ -626,6 +630,12 @@ export interface Job {
   enabled: number;
   created_at: string;
   updated_at: string;
+  /**
+   * HOSTS.md phase 5: the computer this job is PINNED to, and on which `cwd` is a path — set when its
+   * directory is a ticket worktree a host created (tickets.ts / reviews.ts). Null = placed at dispatch;
+   * `cwd` is then a brain path (a remote run lands in that repo's checkout on the chosen host).
+   */
+  host_id?: string | null;
 }
 
 export interface Run {
@@ -664,6 +674,10 @@ export interface Run {
   cloud_last_event_id: string | null;
   /** The computer this run's process lives on (HOSTS.md). `pid` means something only there. */
   host_id: string;
+  /** Phase 5: the directory it ran in, on `host_id` (what that host reported). Null = the job's cwd. */
+  cwd?: string | null;
+  /** Phase 5: why it runs on that computer, when there was a choice ("most headroom (m2 62 · local 45)"). */
+  placement?: string | null;
 }
 
 export interface NewJob {
@@ -694,6 +708,8 @@ export interface NewJob {
   on_failure?: string | null;
   notify?: "all" | "failures" | "off" | null;
   enabled?: boolean;
+  /** Pin to a host (its cwd is then a path THERE, not validated against the brain's disk). */
+  host_id?: string | null;
 }
 
 // An interactive terminal session (PTY) running an agent CLI. May be bound to a ticket or free-floating

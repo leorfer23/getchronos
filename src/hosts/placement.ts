@@ -7,8 +7,10 @@
  *
  *  1. **Eligible**: online, not draining/disabled, the workspace allowed by brain policy AND by the
  *     host's own veto, the backend's CLI installed, the workspace's profile present, the repo checked
- *     out (or `auto_clone`), no egress lock (hosts run no egress proxy until phase 5), and a platform
- *     that can honour the sandbox. The brain is always eligible: it is where every guard in
+ *     out (or `auto_clone`), an egress lock only onto a host that runs the proxy itself (phase 5) and
+ *     never a workspace whose egress brokers credentials, and a platform that can honour the sandbox.
+ *     A headless run (phase 5) also needs a host that runs them (`procs`) and, for work that ships
+ *     through GitHub, `gh` there. The brain is always eligible: it is where every guard in
  *     openSession already runs, and a single-machine install must place exactly as it did.
  *  2. **Sticky**: a resume, a revive, a failover stand-in, a ticket whose worktree is on one machine,
  *     a directory the brain named — that host, or a refusal that says why. Never a silent move: the
@@ -43,7 +45,19 @@ export type PlaceRequest = {
   /** The workspace's profile NAME (spawn-spec.ts profileNameFor). */
   profile: string | null;
   repo: { id: string; name: string; git_remote: string | null } | null;
-  needs: { sandbox: string; egress_locked: boolean };
+  needs: {
+    sandbox: string;
+    egress_locked: boolean;
+    /**
+     * Phase 5: the workspace's egress brokers a credential (the brain's proxy terminates TLS and
+     * injects it). A host's proxy never holds the secret, so such work stays on the brain.
+     */
+    brokered?: boolean;
+    /** Phase 5: a headless run — the host must answer `spawn_proc` (protocol 1.3). */
+    procs?: boolean;
+    /** Phase 5: the work ends in `git push` / `gh pr …` on that host. */
+    gh?: boolean;
+  };
   /** A computer chosen by hand (Desk picker, `--host`). */
   pinned: string | null;
   /** Where this work already lives, and why it cannot move. */
@@ -79,6 +93,10 @@ export type HostCandidate = {
   /** Repo ids checked out on this host (repo_checkouts). */
   checkouts: string[];
   auto_clone: boolean;
+  /** Phase 5 (protocol 1.3): runs headless jobs + exec. */
+  procs?: boolean;
+  /** Phase 5 (protocol 1.3): runs a workspace's egress proxy itself. */
+  egress?: boolean;
   /** Its latest governor reading, or null when there is none recent enough to trust. */
   load: MachineLoad | null;
   /** RAM in use, % (Activity Monitor's "Memory Used"), or null when unknown. */
@@ -164,11 +182,14 @@ export function ineligible(h: HostCandidate, req: PlaceRequest): { kind: "policy
   if (denied(h.deny, ws)) return { kind: "policy", reason: `workspace ${ws!.slug} is not allowed on host ${h.name} (brain policy)` };
   if (denied(h.veto, ws)) return { kind: "policy", reason: `workspace ${ws!.slug} is not allowed on host ${h.name} (its own veto)` };
   if (req.backend_kind === "cloud") return gap(`${req.backend} runs on its provider's VM, not on a host`);
-  if (req.needs.egress_locked) return gap("egress-locked workspaces run on the brain until hosts run the egress proxy (phase 5)");
+  if (req.needs.brokered) return gap("its egress brokers credentials — only the brain's proxy may hold them");
+  if (req.needs.egress_locked && !h.egress) return gap("egress-locked, and this host runs no egress proxy (update it)");
+  if (req.needs.procs && !h.procs) return gap("runs no headless jobs (update it)");
   if (h.platform !== "darwin") return gap(`${h.platform || "unknown platform"} — terminals need macOS (Seatbelt)`);
   if (req.needs.sandbox !== "off" && !h.sandbox) return gap(`cannot sandbox (${req.needs.sandbox}) — no sandbox-exec`);
   const cli = cliFor(req.backend);
   if (cli && !h.clis.includes(cli)) return gap(`${cli} not installed`);
+  if (req.needs.gh && !h.clis.includes("gh")) return gap("gh not installed");
   if (req.profile) {
     const p = h.profiles.find((x) => x.name === req.profile);
     // claude-code keeps its login IN the profile dir; the other CLIs only need the name to resolve.
