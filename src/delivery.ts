@@ -121,6 +121,7 @@ export async function markPrClosed(t: Ticket): Promise<void> {
 
 // Merge the ticket's open PR from Mission Control (no GitHub tab needed).
 // ponytail: squash is the fixed strategy; add a per-repo merge-method column if it ever matters.
+/** @deprecated Tickets are retired — Desk terminal PRs merge via src/terminal-automerge.ts. */
 export async function mergePrForTicket(ticketId: string): Promise<Ticket> {
   const t = tickets.get(ticketId);
   if (!t) throw new Error("ticket not found");
@@ -268,6 +269,7 @@ export async function reconcileOrphanReviews(limit = MAX_ORPHAN_RECONCILE): Prom
 
 // Poll every ticket with pr_state='open': ask gh whether its PR merged/closed, apply the transition,
 // and notify. Never throws (gh wrapped per-ticket; notify swallowed) so the monitor tick stays alive.
+/** @deprecated Ticket-PR poll; tickets are retired. Terminal PRs: src/terminal-automerge.ts. */
 export async function pollDeliveries(now = new Date()): Promise<void> {
   // Orphans first: a ticket with no pr_url never enters the open list below. Cheap when empty.
   try {
@@ -334,7 +336,8 @@ export async function pollDeliveries(now = new Date()): Promise<void> {
         await maybeRunGate({ ...t, ci_state: ci });
         continue;
       }
-      // Green CI + auto-merge on → ship it now, no manual click. Merge closes the loop.
+      // @deprecated (tickets retired): green CI + auto-merge on → ship it now. Desk terminal PRs are
+      // merged by src/terminal-automerge.ts instead.
       if (CONFIG.autoMerge && ci === "passing") {
         try {
           await mergePrForTicket(t.id);

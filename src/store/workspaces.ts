@@ -27,9 +27,9 @@ export const workspaces = {
     const ts = now();
     db.prepare(
       `INSERT INTO workspaces (id,slug,name,kind,config_dir,account_label,secrets_file,default_dir,git_name,git_email,daily_budget_usd,max_concurrent,stall_minutes,ask_remind_hours,ask_policy,capabilities,
-        default_backend,default_model,sandbox_mode,sandbox_allow,backends,ticket_connector,connector_config,slack_config,egress_config,ideas_config,review_backend,review_model,verify_mode,fallback_backend,fallback_model,route_config,auto_grade,auto_skill,skill_distill,auto_plan,auto_build,auto_review,merge_gate,live_steer,plan_panel,review_panel,review_min_difficulty,archived,token,created_at,updated_at)
+        default_backend,default_model,sandbox_mode,sandbox_allow,backends,ticket_connector,connector_config,slack_config,egress_config,ideas_config,review_backend,review_model,verify_mode,fallback_backend,fallback_model,route_config,auto_grade,auto_skill,skill_distill,auto_plan,auto_build,auto_review,merge_gate,auto_merge_prs,live_steer,plan_panel,review_panel,review_min_difficulty,archived,token,created_at,updated_at)
        VALUES (@id,@slug,@name,@kind,@config_dir,@account_label,@secrets_file,@default_dir,@git_name,@git_email,@daily_budget_usd,@max_concurrent,@stall_minutes,@ask_remind_hours,@ask_policy,@capabilities,
-        @default_backend,@default_model,@sandbox_mode,@sandbox_allow,@backends,@ticket_connector,@connector_config,@slack_config,@egress_config,@ideas_config,@review_backend,@review_model,@verify_mode,@fallback_backend,@fallback_model,@route_config,@auto_grade,@auto_skill,@skill_distill,@auto_plan,@auto_build,@auto_review,@merge_gate,@live_steer,@plan_panel,@review_panel,@review_min_difficulty,@archived,@token,@created_at,@updated_at)`
+        @default_backend,@default_model,@sandbox_mode,@sandbox_allow,@backends,@ticket_connector,@connector_config,@slack_config,@egress_config,@ideas_config,@review_backend,@review_model,@verify_mode,@fallback_backend,@fallback_model,@route_config,@auto_grade,@auto_skill,@skill_distill,@auto_plan,@auto_build,@auto_review,@merge_gate,@auto_merge_prs,@live_steer,@plan_panel,@review_panel,@review_min_difficulty,@archived,@token,@created_at,@updated_at)`
     ).run({
       id,
       token: randomBytes(24).toString("hex"),
@@ -71,6 +71,7 @@ export const workspaces = {
       auto_build: w.auto_build ? 1 : 0,
       auto_review: w.auto_review ? 1 : 0,
       merge_gate: w.merge_gate ? 1 : 0,
+      auto_merge_prs: w.auto_merge_prs ? 1 : 0,
       live_steer: w.live_steer ? 1 : 0,
       plan_panel: w.plan_panel ? 1 : 0,
       review_panel: w.review_panel ? 1 : 0,
@@ -141,6 +142,7 @@ export const workspaces = {
       auto_build: patch.auto_build !== undefined ? (patch.auto_build ? 1 : 0) : cur.auto_build,
       auto_review: patch.auto_review !== undefined ? (patch.auto_review ? 1 : 0) : cur.auto_review,
       merge_gate: patch.merge_gate !== undefined ? (patch.merge_gate ? 1 : 0) : cur.merge_gate,
+      auto_merge_prs: patch.auto_merge_prs !== undefined ? (patch.auto_merge_prs ? 1 : 0) : cur.auto_merge_prs,
       live_steer: patch.live_steer !== undefined ? (patch.live_steer ? 1 : 0) : cur.live_steer,
       plan_panel: patch.plan_panel !== undefined ? (patch.plan_panel ? 1 : 0) : cur.plan_panel,
       review_panel: patch.review_panel !== undefined ? (patch.review_panel ? 1 : 0) : cur.review_panel,
@@ -150,7 +152,7 @@ export const workspaces = {
       `UPDATE workspaces SET slug=@slug,name=@name,kind=@kind,config_dir=@config_dir,
         account_label=@account_label,secrets_file=@secrets_file,default_dir=@default_dir,git_name=@git_name,git_email=@git_email,daily_budget_usd=@daily_budget_usd,max_concurrent=@max_concurrent,stall_minutes=@stall_minutes,ask_remind_hours=@ask_remind_hours,ask_policy=@ask_policy,capabilities=@capabilities,default_backend=@default_backend,
         default_model=@default_model,sandbox_mode=@sandbox_mode,sandbox_allow=@sandbox_allow,backends=@backends,ticket_connector=@ticket_connector,
-        connector_config=@connector_config,slack_config=@slack_config,egress_config=@egress_config,ideas_config=@ideas_config,review_backend=@review_backend,review_model=@review_model,verify_mode=@verify_mode,fallback_backend=@fallback_backend,fallback_model=@fallback_model,route_config=@route_config,auto_grade=@auto_grade,auto_skill=@auto_skill,skill_distill=@skill_distill,auto_plan=@auto_plan,auto_build=@auto_build,auto_review=@auto_review,merge_gate=@merge_gate,live_steer=@live_steer,plan_panel=@plan_panel,review_panel=@review_panel,review_min_difficulty=@review_min_difficulty,archived=@archived,updated_at=@updated_at WHERE id=@id`
+        connector_config=@connector_config,slack_config=@slack_config,egress_config=@egress_config,ideas_config=@ideas_config,review_backend=@review_backend,review_model=@review_model,verify_mode=@verify_mode,fallback_backend=@fallback_backend,fallback_model=@fallback_model,route_config=@route_config,auto_grade=@auto_grade,auto_skill=@auto_skill,skill_distill=@skill_distill,auto_plan=@auto_plan,auto_build=@auto_build,auto_review=@auto_review,merge_gate=@merge_gate,auto_merge_prs=@auto_merge_prs,live_steer=@live_steer,plan_panel=@plan_panel,review_panel=@review_panel,review_min_difficulty=@review_min_difficulty,archived=@archived,updated_at=@updated_at WHERE id=@id`
     ).run(next as any);
     // Kept out of the statement above on purpose: one column, set on its own (migration 137).
     if (patch.placement !== undefined) db.prepare("UPDATE workspaces SET placement = ? WHERE id = ?").run(patch.placement ?? null, id);

@@ -5,7 +5,8 @@ import zlib from "node:zlib";
 import { usageSnapshot } from "./usage-meter.js";
 import { CONFIG } from "./config.js";
 import { isClosedTicketStatus, type Workspace } from "./types.js";
-import { db, runs, sessions, tickets, reviews, workspaces, activity, events, searchIndex, egressLog, steps, messages, jobs, asks, kv, ideas } from "./store.js";
+import { db, runs, sessions, sessionPrs, tickets, reviews, workspaces, activity, events, searchIndex, egressLog, steps, messages, jobs, asks, kv, ideas } from "./store.js";
+import { focusEvents } from "./terminal.js";
 import { buildReport } from "./report.js";
 import { notify } from "./telegram.js";
 import { notifyInfo } from "./telegram/api.js";
@@ -16,6 +17,7 @@ import { maybeDream } from "./dream.js";
 import { maybeLearnProse } from "./prose.js";
 import { maybeExpireIdeas, maybeMineIdeas } from "./ideas.js";
 import { pollDeliveries } from "./delivery.js";
+import { harvestSessionPrs, pollSessionPrs } from "./terminal-automerge.js";
 import { reapDoneWorktrees } from "./worktrees.js";
 import { pruneMemoryUsage } from "./memory-usage.js";
 import { sweepStalls } from "./recovery.js";
@@ -618,6 +620,18 @@ export function startMonitor() {
       finally { ciBusy = false; }
     }, CONFIG.ciPollSec * 1000).unref?.();
     console.log(`[monitor] fast CI poll every ${CONFIG.ciPollSec}s while a PR is open`);
+
+    // Desk terminals' own PRs (auto_merge_prs workspaces): harvest new links, then merge the green ones.
+    let termBusy = false;
+    setInterval(async () => {
+      if (termBusy) return;
+      termBusy = true;
+      try {
+        harvestSessionPrs(focusEvents);
+        if (sessionPrs.hasOpen()) await pollSessionPrs();
+      } catch (e: any) { console.warn("[monitor] terminal automerge", e?.message ?? e); }
+      finally { termBusy = false; }
+    }, CONFIG.ciPollSec * 1000).unref?.();
   }
 
   console.log(`[monitor] sweeps every ${CONFIG.monitorEveryMin}m · digest ${CONFIG.digestHour < 0 ? "off" : CONFIG.digestHour + ":00"} · dream ${CONFIG.dreamHours.length ? CONFIG.dreamHours.map((h) => h + ":00").join(",") : "off"}`);

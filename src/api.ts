@@ -60,6 +60,7 @@ import { helperSpendSnapshot } from "./helper-spend.js";
 import { efficiencyToolsStatus } from "./efficiency-tools.js";
 import { focusEfficiencySnapshot } from "./focus.js";
 import { sessionArtifacts } from "./session-artifacts.js";
+import { recordSessionPrs } from "./terminal-automerge.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
 import { cloudRunFor, cloudSessionState, cloudVisibleRepos, followUpCloudSession, openCloudSession, wantsCloudBackend } from "./desk-cloud.js";
@@ -1175,6 +1176,7 @@ export function startServer() {
     // capped before anything is handed to `gh` — isPrUrl is the same guard delivery.ts merges behind.
     const seen = String(req.query.urls ?? "").split(",").map((u) => u.trim()).filter(isPrUrl).slice(0, 8);
     try {
+      recordSessionPrs(s, seen);
       res.json(await sessionArtifacts(s, focusEvents(s.id), seen));
     } catch (e: any) {
       res.status(500).json({ error: String(e?.message ?? e) });

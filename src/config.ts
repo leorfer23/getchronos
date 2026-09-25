@@ -277,7 +277,8 @@ export const CONFIG = {
   deliveryPollMin: Number(process.env.CHRONOS_DELIVERY_POLL_MIN ?? 15),
   // Fast CI poll: while any delivery=pr PR is open, re-check every N sec for near-real-time CI (0 = off).
   ciPollSec: Number(process.env.CHRONOS_CI_POLL_SEC ?? 25),
-  // Auto-merge a Chronos-shipped PR the moment its CI goes green (no manual merge click). 0 = off.
+  // @deprecated — tickets are retired. Ticket-PR auto-merge only; Desk terminal PRs use the per-workspace
+  // `auto_merge_prs` flag (src/terminal-automerge.ts). Kept until the ticket poll is removed. 0 = off.
   autoMerge: process.env.CHRONOS_AUTO_MERGE !== "0",
   // Auto-dispatch a fix terminal on the PR branch when CI fails; cap re-tries per ticket per process.
   autoCiFix: process.env.CHRONOS_AUTO_CI_FIX !== "0",
