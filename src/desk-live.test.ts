@@ -96,11 +96,10 @@ test("nothing open = Robert on the stage; ended terminals stay behind the on-dem
   assert.match(html, /if \(cur && !S\.dismissed\.has\(cur\.id\) && \(cur\.live \|\| S\.stickEnded\)\) return;/);
 });
 
-test("Robert on the Desk: markdown bubbles, terminal chips, select directives, the briefs he reads every turn", () => {
+test("Robert on the Desk: markdown bubbles, terminal chips (he never moves the stage), the briefs he reads every turn", () => {
   assert.match(html, /marked\.parse\(withChips, \{ breaks: true \}\)/);
   assert.match(html, /\\b\(\[0-9a-f\]\{8\}\)\\b/, "an 8-char id in his reply becomes a chip");
-  assert.match(html, /if \(a\.op !== "select" && a\.op !== "focus_terminal"\) continue;/);
-  assert.match(html, /runActions\(r\?\.actions\)/);
+  assert.doesNotMatch(html, /runActions/, "nothing he says moves the operator's screen");
   assert.match(html, /<dialog id="dlg-briefs">/);
   assert.match(html, /api\("\/workspaces\/" \+ B\.tab \+ "\/brief", \{ method: "PUT"/);
   assert.match(html, /api\("\/agents\/robert\/memory", \{ method: "PUT"/);
@@ -117,7 +116,7 @@ test("jobs: a full-screen page — board by client with run strips, runs feed, u
   assert.match(html, /api\("\/runs\/" \+ id \+ "\/story"\)/);
   assert.match(html, /"run\.started", "run\.ended", "job\.updated",/);
   assert.match(html, /run_at: t === "once" && v\("run_at"\) \? new Date\(v\("run_at"\)\)\.toISOString\(\) : null,/, "one-timers send an ISO time, in the operator's zone");
-  assert.match(html, /if \(a\.op === "jobs"\) \{ openJobs\(a\.id \? String\(a\.id\) : null\); continue; \}/, "Robert can put a job on the screen");
+  assert.doesNotMatch(html, /a\.op === "jobs"/, "Robert never puts a job on the screen");
   assert.match(html, /api\("\/runs\/" \+ r\.id \+ "\/continue"/, "a run reopens as a live terminal");
   assert.match(html, /if \(location\.hash === "#jobs"\) return openJobs\(\);/, "/desk#jobs opens straight to it");
   assert.match(html, /if \(e\.key === "Escape"\) \{ e\.preventDefault\(\); e\.stopPropagation\(\); return jobsBack\(\); \}/, "esc walks back one step at a time");

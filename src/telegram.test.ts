@@ -15,6 +15,7 @@ import {
   checkPlaceholders,
   applyBatchRefs,
   autoExecProposal,
+  scanUiActions,
 } from "./telegram/agent.js";
 import { CONFIG } from "./config.js";
 import { kv } from "./store.js";
@@ -596,4 +597,20 @@ test("dismissProposal: removes from kv so a restart cannot resurrect it", () => 
   unloadPendingProposalsForTest();
   assert.deepEqual(takeProposal(id), { ok: false, reason: "restart" });
   resetPendingProposalsForTest();
+});
+
+test("Robert never moves the operator's screen: navigation UI lines leave his reply and go nowhere; ask survives", () => {
+  const out = scanUiActions([
+    "Login fix is waiting on you (abcd1234).",
+    'UI {"op":"select","id":"abcd1234"}',
+    'UI {"op":"focus_terminal","match":"login"}',
+    'UI {"op":"focus_ticket","key":"API-21"}',
+    'UI {"op":"view","name":"flow"}',
+    'UI {"op":"workspace","name":"api"}',
+    'UI {"op":"jobs","id":"j1"}',
+    '{"op":"select","id":"abcd1234"}',
+    'UI {"op":"ask","question":"Merge it?"}',
+  ].join("\n"));
+  assert.equal(out.reply, "Login fix is waiting on you (abcd1234).");
+  assert.deepEqual(out.actions, [{ op: "ask", question: "Merge it?" }]);
 });
