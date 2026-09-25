@@ -19,7 +19,7 @@ import { describeTool } from "../focus.js";
 import { isAuthError, isProviderLimitError, withProviderFallback } from "../manager-fallback.js";
 import { agentDef, agentPrompt } from "../agent-defs.js";
 import { widgetPromptBlock } from "../widgets/index.js";
-import { askLine, commitTurn, resolveTurn, type Route } from "../thread-router.js";
+import { askLine, commitTurn, resolveTurnSmart, type Route } from "../thread-router.js";
 import { send, sendChatAction, esc } from "./api.js";
 import { kb, type Btn } from "./keyboards.js";
 import { getActiveExec } from "./active-exec.js";
@@ -625,7 +625,7 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
   // the chip on a routing question) → the thread router, which reads a #tag, a ticket key, a project
   // name or the thread's sticky workspace out of the message itself → the unscoped fleet thread.
   // Each workspace is a separate warm Robert on its own CLI session, so this choice IS the isolation.
-  const turn = resolveTurn(text, {
+  const turn = await resolveTurnSmart(text, {
     // A tap on a routing question (pick) is as explicit as /conv; pick.ws === null means the shop.
     selected: pick ? pick.ws : activeWsForChat(chat),
     route: pick ? false : undefined,

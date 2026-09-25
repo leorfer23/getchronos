@@ -382,6 +382,9 @@ these two knobs are only for shorthand and for how long the thread stays where y
 |---|---|---|
 | `CHRONOS_THREAD_STICKY_MIN` | `90` | minutes an untagged message keeps landing on the project the last one did. `0` = forever (it still releases on a fleet-wide question like "status") |
 | `CHRONOS_THREAD_ALIASES` | *(empty)* | your shorthand for a project, `alias=slug` pairs: `CHRONOS_THREAD_ALIASES="at=atlas,cd=cedar"` makes `#at`, `#cd` and a bare "cd" route. Two characters is enough for an alias you declared; a slug or name needs three |
+| `CHRONOS_THREAD_ROUTER_MODEL` | `haiku` | the model that reads each untagged chat message together with the open terminals and the recent thread and picks the project (`src/route-model.ts`); the keyword rules become its hints and its fallback. `off` = rules only. An explicit `#slug` never goes to the model |
+| `CHRONOS_THREAD_ROUTER_TIMEOUT_MS` | `15000` | past this the router falls back to the rules |
+| `CHRONOS_THREAD_ROUTER_API_KEY` | *(falls back to `ANTHROPIC_API_KEY`)* | with a key the router calls the Messages API directly (~1s, fractions of a cent); without one it runs the claude CLI on your subscription — free, but 3–11s per message |
 
 Nothing else needs configuring: `#all` / `#fleet` / `#shop` always mean the whole shop, and when the
 daemon cannot tell it asks instead of guessing.
@@ -760,6 +763,9 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_TEST_SECRET` | — | `src/agent-defs.test.ts` |
 | `CHRONOS_THREAD_ALIASES` | — | `src/config.ts` |
 | `CHRONOS_THREAD_STICKY_MIN` | `90` | `src/config.ts` |
+| `CHRONOS_THREAD_ROUTER_MODEL` | `haiku` | `src/config.ts` |
+| `CHRONOS_THREAD_ROUTER_TIMEOUT_MS` | `15000` | `src/config.ts` |
+| `CHRONOS_THREAD_ROUTER_API_KEY` | — | `src/config.ts` |
 | `CHRONOS_TG_CHAT_ID` | `""` | `src/config.ts` |
 | `CHRONOS_TG_PROPOSAL_CAP` | `40` | `src/config.ts` |
 | `CHRONOS_TG_PROPOSAL_TTL_MS` | `24` | `src/config.ts` |

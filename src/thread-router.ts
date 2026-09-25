@@ -18,12 +18,18 @@
  *   d. the sticky workspace: whatever the previous routed message in this thread landed on
  *   d'. failing that, the terminal the surface has on screen (see why it sits below the sticky)
  *   e. nothing to go on → ASK. Never guess: the surface offers the candidates as one tappable line.
+ *
+ * That order is the FALLBACK. The surfaces call resolveTurnSmart, where only (a) stays a rule: every
+ * other message goes to a cheap model (src/route-model.ts) that sees the open terminals and the
+ * recent thread, with b–d' handed to it as hints. It falls back to the order above when the model is
+ * off, slow or makes no sense.
  */
 import { CONFIG } from "./config.js";
+import { modelRoute, type RouteHints } from "./route-model.js";
 import { kv, repos, sessions, tickets, workspaces, wsPrefix } from "./store.js";
 import type { Workspace } from "./types.js";
 
-export type RouteHow = "tag" | "key" | "name" | "sticky" | "fleet" | "ask";
+export type RouteHow = "tag" | "key" | "name" | "sticky" | "fleet" | "ask" | "model";
 
 export type RouteCandidate = { ws: string | null; slug: string; name: string };
 
@@ -337,6 +343,45 @@ export function routeMessage(text: string, ctx: RouteCtx = {}): Route {
   return { ...base, ws: null, how: "ask", confidence: 0, text: body, candidates: askCandidates(), why: "no project signal and nothing sticky" };
 }
 
+// ── the model ────────────────────────────────────────────────────────────────────────────────────
+
+/** Below this the model's pick is a guess, and a guess is worse than asking. */
+const MODEL_MIN_CONFIDENCE = 0.5;
+
+/**
+ * routeMessage with judgment: an explicit #tag is still final, everything else is the model's call,
+ * made with the rules' signals as hints. Null from the model → routeMessage, unchanged.
+ */
+export async function routeSmart(text: string, ctx: RouteCtx = {}): Promise<Route> {
+  const now = ctx.now ?? Date.now();
+  const surface = ctx.surface || "web";
+  const tags = scanTags(text);
+  if (tags.targets.length) return routeMessage(text, ctx);
+  const body = tags.text;
+  const social = isSocial(body.trim());
+  const slugOf = (id: string | null) => (id ? workspaces.get(id)?.slug ?? id : null);
+  const sticky = getSticky(surface, now);
+  const staged = ctx.uiWorkspace || (ctx.stagedSessionId ? sessionWs(ctx.stagedSessionId) : null);
+  const hints: RouteHints = {
+    signals: textSignals(body).map((s) => ({ why: s.why, workspaces: s.ws.map((id) => slugOf(id) ?? id) })),
+    fleetIntent: isFleetIntent(body),
+    social,
+    sticky: sticky ? { slug: slugOf(sticky.ws), minutesAgo: Math.round((now - sticky.at) / 60_000) } : null,
+    staged: staged && workspaces.get(staged) ? slugOf(staged) : null,
+  };
+  const m = await modelRoute(body, hints);
+  if (!m) return routeMessage(text, ctx);
+  const base = { text: body, social, why: "model: " + m.why };
+  if (m.ws === "ask" || m.confidence < MODEL_MIN_CONFIDENCE) {
+    // "gracias" is never worth a question — the rules already know where small talk goes.
+    if (social) return routeMessage(text, ctx);
+    const all = askCandidates();
+    const first = m.candidates.map((sl) => all.find((c) => c.slug.toLowerCase() === sl)).filter((c): c is RouteCandidate => !!c);
+    return { ...base, ws: null, how: "ask", confidence: m.confidence, candidates: [...new Set([...first, ...all])] };
+  }
+  return { ...base, ws: m.ws, how: "model", confidence: m.confidence, candidates: [] };
+}
+
 // ── the one seam both surfaces use ───────────────────────────────────────────────────────────────
 
 export type ResolvedTurn = {
@@ -364,6 +409,19 @@ export function resolveTurn(
   if (selected || opts.route === false)
     return { ws: selected, text, routed: null, ask: null, how: selected ? "selected" : "fleet" };
   const r = routeMessage(text, { surface: opts.surface, stagedSessionId: opts.stagedSessionId, uiWorkspace: opts.uiWorkspace });
+  if (r.how === "ask") return { ws: null, text: r.text, routed: null, ask: r, how: "ask" };
+  return { ws: r.ws, text: r.text, routed: r, ask: null, how: r.how };
+}
+
+/** resolveTurn, routed by the model (routeSmart). What the Desk, the phone and Telegram call. */
+export async function resolveTurnSmart(
+  text: string,
+  opts: { selected?: string | null; route?: boolean; surface?: string; stagedSessionId?: string | null; uiWorkspace?: string | null } = {},
+): Promise<ResolvedTurn> {
+  const selected = opts.selected ?? null;
+  if (selected || opts.route === false)
+    return { ws: selected, text, routed: null, ask: null, how: selected ? "selected" : "fleet" };
+  const r = await routeSmart(text, { surface: opts.surface, stagedSessionId: opts.stagedSessionId, uiWorkspace: opts.uiWorkspace });
   if (r.how === "ask") return { ws: null, text: r.text, routed: null, ask: r, how: "ask" };
   return { ws: r.ws, text: r.text, routed: r, ask: null, how: r.how };
 }

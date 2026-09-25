@@ -641,6 +641,12 @@ export const CONFIG = {
   thread: {
     stickyMinutes: Number(process.env.CHRONOS_THREAD_STICKY_MIN ?? 90),
     aliases: parseAliases(process.env.CHRONOS_THREAD_ALIASES),
+    // The model that reads each untagged message in context and picks the project (src/route-model.ts).
+    // "off" = keyword rules only. A timeout falls back to the rules too.
+    routerModel: process.env.CHRONOS_THREAD_ROUTER_MODEL ?? "haiku",
+    routerTimeoutMs: Number(process.env.CHRONOS_THREAD_ROUTER_TIMEOUT_MS ?? 15_000),
+    // Optional: with a key the router skips the CLI and calls the Messages API directly (~1s).
+    routerApiKey: process.env.CHRONOS_THREAD_ROUTER_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "",
   },
   // Operator prose (src/prose.ts): per workspace, a read-only agent turns the operator's own writing
   // into a style guide agents follow when they draft Slack/Jira/email on his behalf. It re-learns once
