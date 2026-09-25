@@ -638,19 +638,27 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
   commitTurn("telegram", turn);
   const threadWs = turn.ws;
   const body = turn.text; // the #tag never reaches the model
+  // Auto-routed (no #tag, no /conv pick): the fleet-wide Robert takes it, focused on the router's pick —
+  // same as the Desk's POST /agent. The row still files under threadWs.
+  const focusWs = turn.routed && turn.how !== "tag" && threadWs ? workspaces.get(threadWs) : undefined;
+  const runWs = focusWs ? null : threadWs;
   // Where it landed, when he did not say so himself — the thread is one, the conversations are not.
   const stamp = turn.ws && turn.how !== "tag" && turn.how !== "selected" ? `#${workspaces.get(turn.ws)?.slug ?? "?"} · ` : "";
+  const focusLine = focusWs
+    ? `FOCUS — the router thinks this is about ${focusWs.name} (#${focusWs.slug}, workspace_id ${focusWs.id}). Start there; act on any other project the request touches.\n\n`
+    : "";
   // Shared thread recap so web/brief history is available when the operator switches channels.
-  const prompt = fleetLine(threadWs) + "\n\n" + (chatLog.contextBlock({ limit: 12, workspaceId: threadWs }) || "") + body;
+  const recap = focusWs ? chatLog.contextBlock({ limit: 12, everywhere: true }) : chatLog.contextBlock({ limit: 12, workspaceId: runWs });
+  const prompt = fleetLine(runWs) + "\n\n" + focusLine + (recap || "") + body;
   const ask: Ask = { id, chat, prompt, msgId };
   asks.set(id, ask);
   ensureTyping(chat);
   try {
     let reply: string;
     if (warm) {
-      const m = threadWs ? warmForChatWs(chat, threadWs) : warmForChat(chat);
+      const m = runWs ? warmForChatWs(chat, runWs) : warmForChat(chat);
       ask.warm = m;
-      const tgKey = threadWs ? `tg:${chat}:${threadWs}` : `tg:${chat}`;
+      const tgKey = runWs ? `tg:${chat}:${runWs}` : `tg:${chat}`;
       reply = await withProviderFallback({
         key: tgKey,
         primary: () => m.turn(prompt, undefined, undefined, CONFIG.agent.model),
@@ -658,13 +666,13 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
         primaryOn: (model) => m.turn(prompt, undefined, undefined, model),
         system: m.system,
         prompt,
-        wsId: threadWs,
-        profileDir: threadWs ? webProfileDir(threadWs) : undefined,
+        wsId: runWs,
+        profileDir: runWs ? webProfileDir(runWs) : undefined,
         agent: { name: "Robert", tools: MANAGER_TOOLS },
         // Telegram propose-and-confirm: no CHRONOS_ADMIN on primary or fallback.
         killPrimary: () => {
           m.kill();
-          if (threadWs) tgWsWarm.delete(`${chat}:${wsKey(threadWs)}`);
+          if (runWs) tgWsWarm.delete(`${chat}:${wsKey(runWs)}`);
           else tgWarm.delete(chat);
         },
       });
@@ -677,7 +685,7 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
         primaryOn: (model) => spawnAgent(ask, model),
         system: robertPrompt("telegram"),
         prompt,
-        wsId: threadWs,
+        wsId: runWs,
       });
     }
     const scan = scanProposal(reply || "");
@@ -1419,7 +1427,9 @@ export async function askManagerWeb(
   text: string,
   onDelta?: AgentDelta,
   wsId?: string | null,
-  opts?: { model?: string; voice?: boolean; turn?: string; label?: string },
+  // focus: the router's pick on an auto-routed turn. The turn then runs on the fleet-wide Robert
+  // (wsId null) with that project named as where to start — never a fence (agents/_blocks/threads.md).
+  opts?: { model?: string; voice?: boolean; turn?: string; label?: string; focus?: string | null },
 ): Promise<{ reply: string; actions: UiAction[]; steps: RobertStep[]; turn: string }> {
   const key = wsKey(wsId);
   rotateWebIfIdle(key);
@@ -1446,7 +1456,14 @@ export async function askManagerWeb(
   const realWsId = key === "default" ? null : key;
   // The live fleet first, then a recap of this workspace's thread (web + any Telegram/briefing rows
   // in it, cut at the last divider), then what he said.
-  const prompt = fleetLine(realWsId) + "\n\n" + (chatLog.contextBlock({ limit: 12, workspaceId: realWsId }) || "") + (opts?.voice ? VOICE_TURN + "\n\n" : "") + text;
+  const focusWs = !realWsId && opts?.focus ? workspaces.get(opts.focus) : undefined;
+  const focusLine = focusWs
+    ? `FOCUS — the router thinks this is about ${focusWs.name} (#${focusWs.slug}, workspace_id ${focusWs.id}). Start there; act on any other project the request touches.\n\n`
+    : "";
+  const recap = focusWs
+    ? chatLog.contextBlock({ limit: 12, everywhere: true })
+    : chatLog.contextBlock({ limit: 12, workspaceId: realWsId });
+  const prompt = fleetLine(realWsId) + "\n\n" + focusLine + (recap || "") + (opts?.voice ? VOICE_TURN + "\n\n" : "") + text;
   const reply = await withProviderFallback({
     key: `web:${key}`,
     primary: () => m.turn(prompt, onDelta, undefined, model),

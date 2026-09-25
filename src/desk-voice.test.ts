@@ -26,7 +26,7 @@ test("a call is one button and ⌘⇧V, and hangs up the same way", () => {
 test("what you say is an ordinary turn, flagged as voice", () => {
   assert.match(html, /queueAsk\(text, !!barge && OV\.busy, true\)/);
   assert.match(html, /if \(VC\.on\) body\.voice = true;/);
-  assert.match(api, /\{ voice: !!req\.body\.voice, turn: turnId \}/);
+  assert.match(api, /\{ voice: !!req\.body\.voice, turn: turnId, focus: runWs \? null : ws \}/);
   assert.match(agent, /opts\?\.voice \? VOICE_TURN/);
 });
 
