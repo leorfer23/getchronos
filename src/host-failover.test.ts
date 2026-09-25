@@ -142,7 +142,7 @@ test("offline ≥ grace → moved once to the brain with its conversation; a sec
   assert.equal(next.agent_name, "importer", "the handle moves once the old row frees it");
   assert.match(next.placement ?? "", /continues .* from m2/);
   assert.equal(posts.length, 1);
-  assert.match(posts[0], /^m2 offline 6m → moved 1 terminal here: "Importer fix"/);
+  assert.match(posts[0], /^m2 offline 6m → moved 1 terminal here: HF: "fix the importer"/);
 
   const again = await hf.sweepHostFailover(now + MIN);
   assert.equal(again.length, 0);
@@ -180,7 +180,7 @@ test("repo on no online computer → stays live, one Desk line saying why, once"
   assert.equal(opened.length, 0);
   assert.equal(sessions.get(s.id)!.status, "live");
   assert.equal(posts.length, 1);
-  assert.match(posts[0], /could not move "Ghost work" — ghost is not checked out on this Mac or on any online computer; it stays on m2/);
+  assert.match(posts[0], /could not move HF: "fix the importer" — ghost is not checked out on this Mac or on any online computer; it stays on m2/);
   await hf.sweepHostFailover(now + 5 * MIN);
   assert.equal(posts.length, 1, "said once");
 });
@@ -265,4 +265,12 @@ test("placement: a move is admission-exempt and never sticky to the dead host", 
   assert.equal(req.exempt_admission, true);
   assert.equal(req.sticky, null, "unlike `replaces`, which would pin it back onto m2");
   assert.equal(req.pinned, "local");
+});
+
+test("the Desk line names each terminal by its project and goal, not a pasted-prompt title", () => {
+  const ws = workspaces.create({ slug: `tt-${Date.now()}`, name: "Medialab", config_dir: "/tmp/tt" } as any);
+  const s = { id: "abcdef12-0000", workspace_id: ws.id, title: "ng por DM , después este job:", goal: "ShareOut ask to Robert, 30-day flag backfill", spawn_goal: null } as any;
+  assert.equal(hf.titleOf(s), 'Medialab: "ShareOut ask to Robert, 30-day flag backfill"');
+  const long = hf.titleOf({ ...s, workspace_id: null, goal: "x".repeat(100) });
+  assert.equal(long, `"${"x".repeat(69)}…"`);
 });
