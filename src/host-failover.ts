@@ -431,7 +431,13 @@ export async function failoverSession(s: Session, label: string, mins: number): 
   return { kind: "moved", from: cur, to: sessions.get(next.id) ?? next, host_id: target.host_id, mode };
 }
 
-const titleOf = (s: Session) => `"${(s.title || s.goal || s.spawn_goal || `terminal ${id8(s.id)}`).trim().slice(0, 60)}"`;
+// The goal reads as what the terminal is for; its title is often the first words of a pasted prompt.
+// Prefixed with the project, since one line can carry terminals from several.
+export const titleOf = (s: Session) => {
+  const what = (s.goal || s.spawn_goal || s.title || `terminal ${id8(s.id)}`).replace(/\s+/g, " ").trim();
+  const ws = s.workspace_id ? workspaces.get(s.workspace_id)?.name : null;
+  return `${ws ? `${ws}: ` : ""}"${what.length > 70 ? what.slice(0, 69).trimEnd() + "…" : what}"`;
+};
 
 /** The one Desk line for a host: what moved where, and what could not. */
 export function deskLine(label: string, mins: number, results: MoveResult[]): string | null {
