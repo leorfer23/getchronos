@@ -270,7 +270,7 @@
   body.no-terms:not(.mode-fleet) .chat { display:flex; width:auto; flex:1; border-left:0; }
   body.no-terms:not(.mode-fleet) #chat-close { display:none; }
   body.no-terms:not(.mode-fleet) .chat-log, body.no-terms:not(.mode-fleet) .chat-ask, body.no-terms:not(.mode-fleet) .chat-work,
-  body.no-terms:not(.mode-fleet) .chat-hint, body.no-terms:not(.mode-fleet) .chat-head { padding-left:max(14px, calc((100% - 820px) / 2)); padding-right:max(14px, calc((100% - 820px) / 2)); }
+  body.no-terms:not(.mode-fleet) .chat-hint, body.no-terms:not(.mode-fleet) .chat-head, body.no-terms:not(.mode-fleet) .askpop { padding-left:max(14px, calc((100% - 820px) / 2)); padding-right:max(14px, calc((100% - 820px) / 2)); }
   .empty { color:var(--faint); padding:26px 10px; text-align:center; font-size:14px; }
   /* Parked: a thought that is not a terminal yet. One line each; the body opens on click. */
   .row.jot .t { font-weight:500; }
@@ -1221,6 +1221,39 @@
   .chat-ask { display:flex; gap:7px; padding:10px 12px; border-top:1px solid var(--line); }
   .chat-ask textarea { flex:1; min-width:0; padding:10px 13px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font-size:17px; line-height:1.45; font-family:inherit; resize:none; max-height:45vh; min-height:48px; }
   .chat-hint { padding:0 12px 9px; font-size:13px; color:var(--faint); }
+  /* The Ask widget (static/ask-card.js): a question for you is a card you answer where you read it,
+     and "? N" in the head is every one still waiting, across the fleet. */
+  .askn { flex:none; height:26px; padding:0 10px; border-radius:999px; border:1px solid var(--warn); background:var(--warn-soft); color:var(--warn);
+    font:inherit; font-size:13.5px; font-weight:700; font-variant-numeric:tabular-nums; cursor:pointer; }
+  .askn[hidden] { display:none; }
+  .askn.on { background:var(--warn); color:var(--bg); }
+  .askpop { flex:none; max-height:62%; overflow:auto; padding:10px 12px; display:flex; flex-direction:column; gap:8px; border-bottom:1px solid var(--line); background:var(--bg); }
+  .askpop[hidden] { display:none; }
+  .ak-empty { font-size:14px; color:var(--faint); padding:4px 2px; }
+  .bub.ak-only { padding:0; background:transparent; border:0; width:min(88%, 800px); }
+  .bub .askc-host + p, .bub p + .askc-host { margin-top:8px; }
+  .askc { border:1px solid var(--line); border-left:3px solid var(--warn); border-radius:10px; background:var(--surface); padding:10px 12px; white-space:normal; font-size:15px; line-height:1.45; }
+  .askc.sending { opacity:.55; pointer-events:none; }
+  .ak-h { display:flex; align-items:baseline; gap:7px; font-size:13px; color:var(--muted); }
+  .ak-i { width:17px; height:17px; flex:none; border-radius:50%; background:var(--warn); color:var(--bg); font-size:11.5px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; align-self:center; }
+  .ak-who { flex:1; min-width:0; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ak-age { flex:none; color:var(--faint); font-variant-numeric:tabular-nums; }
+  .ak-q { margin-top:5px; font-size:16px; font-weight:600; color:var(--ink); overflow-wrap:anywhere; }
+  .ak-note { margin-top:5px; font-size:13.5px; color:var(--muted); }
+  .ak-note b { font-weight:600; }
+  .ak-ops { display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; }
+  .ak-ops button { max-width:100%; padding:4px 12px; border-radius:999px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font:inherit; font-size:14px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ak-ops button:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
+  .ak-f { display:flex; gap:6px; margin-top:9px; }
+  .ak-f input { flex:1; min-width:0; padding:6px 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font:inherit; font-size:15px; }
+  .ak-f input:focus { outline:none; border-color:var(--accent); }
+  .ak-f button { flex:none; padding:0 12px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:var(--accent-ink); font:inherit; font-size:14px; font-weight:600; cursor:pointer; }
+  .askc.done { display:flex; align-items:baseline; gap:8px; padding:6px 12px; border-left-color:var(--ok); font-size:14px; color:var(--muted); }
+  .askc.done.gone { border-left-color:var(--faint); }
+  .askc.done .ak-ok { color:var(--ok); font-weight:700; flex:none; }
+  .askc.done .ak-q1 { flex:1 1 40%; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .askc.done .ak-a { flex:0 1 auto; min-width:0; max-width:55%; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .askc.done .ak-a i { color:var(--faint); font-style:normal; }
   .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--ink); color:var(--bg);
     padding:9px 18px; border-radius:10px; font-size:15.5px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:80; }
   .toast.show { opacity:1; }
@@ -1300,12 +1333,14 @@
       <span class="dot ended" id="rob-dot"></span>
       <strong>Robert</strong>
       <span class="who" id="rob-status" title="What he is doing right now">idle</span>
+      <button class="askn" id="chat-asks" hidden>? 0</button>
       <select id="chat-model" class="model" title="Model Robert uses — chat, wakes, watches. Same list as a new Claude terminal."></select>
       <button class="icon" id="chat-voice" title="Voice call — talk, he does it and answers out loud (⌘⇧V)">🎙</button>
       <button class="icon" id="chat-briefs" title="Briefs — what each project is and what you want from it; Robert keeps them current">📋</button>
       <button class="icon" id="chat-new" title="New conversation — keeps the transcript, drops his context">⟲</button>
       <button class="icon" id="chat-close" title="Close (⌘K / ⎋)">✕</button>
     </div>
+    <div class="askpop" id="askpop" hidden></div>
     <div class="chat-log" id="chat-log"></div>
     <div class="chat-work" id="chat-work" hidden>
       <span class="dots"><i></i><i></i><i></i></span>
@@ -1634,6 +1669,7 @@
 <script src="/term-links.js"></script>
 <script src="/desk-companion.js"></script>
 <script src="/desk-quick-actions.js"></script>
+<script src="/ask-card.js"></script>
 <script src="/tag-complete.js"></script>
 <script src="/chat-reply.js"></script>
 <script src="/vendor/xterm-addon-webgl.js"></script>
@@ -1846,6 +1882,7 @@ function renderCounts() {
   const live = S.sessions.filter((s) => s.live && !S.dismissed.has(s.id));
   const n = (...ph) => live.filter((s) => ph.includes(phaseOf(s))).length;
   const need = n("blocked", "decide"), blocked = n("blocked"), turn = n("your_turn"), waiting = n("waiting"), working = n("working"), stalled = n("stalled");
+  AskCard.recount();
   const parts = [];
   if (need) parts.push(`<span class="need${blocked ? " stop" : ""}" data-need>${need} need${need === 1 ? "s" : ""} you</span>`);
   if (turn) parts.push(`<span class="turn" data-need><b>${turn}</b> your turn</span>`);
@@ -5610,6 +5647,7 @@ function ovLine(cls, text, ws, chip = true, own = false) {
   d.innerHTML = mdChat(text);
   d._raw = text;
   dwEmbed(d);
+  AskCard.embed(d);
   setChip(d, ws, chip);
   OV.log.appendChild(d);
   OV.log.scrollTop = OV.log.scrollHeight;
@@ -6024,6 +6062,8 @@ async function ovHistory(reload = false) {
     }
   } catch {}
 }
+// The Ask widget: cards in the log, and every open question behind "? N" (static/ask-card.js).
+AskCard.init({ api, toast, sessions: () => S.sessions, askOf, who: chipLabel, button: qs("#chat-asks"), panel: qs("#askpop"), log: OV.log });
 chatOpen(localStorage.getItem("desk-chat") === "1");
 loadRobertModel();
 
@@ -6231,7 +6271,7 @@ function vcPicked(n, text) {
 // (the audio is ready by the time the one before it ends) and played in order.
 function speakable(text) {
   let t = String(text ?? "").replace(/```[\s\S]*?```/g, " ");
-  t = t.split("\n").filter((l) => !/^\s*(UI\b|\{.*\}\s*$)/.test(l)).join("\n");
+  t = t.split("\n").filter((l) => !/^\s*(UI\b|\{.*\}\s*$|::ask [0-9a-f-]{8,36}::\s*$)/.test(l)).join("\n");
   t = t.replace(/\b([0-9a-f]{8})(?:-?[0-9a-f]{4}){0,3}(?:-?[0-9a-f]{12})?\b/g, (m, id8) => { const s = S.sessions.find((x) => x.id.startsWith(id8)); return s ? chipLabel(s) : m; });
   t = t.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/https?:\/\/\S+/g, VC.lang === "es" ? "un enlace" : "a link").replace(/`([^`]*)`/g, "$1");
   t = t.replace(/^\s*(?:[-•*]|\d+[.)])\s+/gm, "").replace(/\s+·\s+/g, ", ").replace(/[*_#>|~]+/g, " ").replace(/\p{Extended_Pictographic}️?/gu, "");
@@ -6420,6 +6460,7 @@ const BUS_TOPICS = [
   "jot.updated", "jot.ran", "jot.followup", "launch.updated", "launch.ran",
   "run.started", "run.ended", "job.updated",
   "host.online", "host.offline", "host.updated",
+  "ask.created", "ask.answered",
   "inbox.updated",
 ].join(",");
 function connectBus() {
@@ -6429,6 +6470,8 @@ function connectBus() {
   ws.onmessage = (ev) => {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     if (DW.topics.has(e.topic)) dwBus(e.topic);
+    AskCard.onEvent(e);
+    if (AskCard.TOPICS.includes(e.topic)) return;
     if (e.topic === "host.online" || e.topic === "host.offline" || e.topic === "host.updated") return loadHostsSoon();
     if (e.topic === "inbox.updated") return loadInboxSoon();
     if (e.topic === "session.activity") {

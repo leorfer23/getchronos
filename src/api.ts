@@ -15,6 +15,7 @@ import { buildGraphify, queryGraphify, GraphifyError } from "./accel/graphify.js
 import { postToBoard } from "./board.js";
 import { nameError as varNameError, expiryFromHours } from "./store/workspace-vars.js";
 import { answerAsk, notifyAskCreated, resolveAsk, waitForAskAnswer } from "./asks.js";
+import { isOperatorsAsk } from "./robert-asks.js";
 import { deliverPending, resolveMessageTarget, sendMessage } from "./messages.js";
 import { egressCfg, egressPort, syncEgress } from "./egress.js";
 import { createSkill, skillBody, skillRef, patchSkill, appendSkill, setSkillStatus, removeSkill, useSkill } from "./skills.js";
@@ -2524,7 +2525,18 @@ export function startServer() {
     // and an ask the operator dated out of today is not something he needs now. ?bucket=all|dated|aged
     // is how a surface asks for the rest, and every row carries its bucket so it can say which.
     const bucket = filterByBucket(rows, parseBucketFilter(req.query.bucket));
-    res.json(bucket.map((a) => ({ ...a, ticket_key: a.ticket_id ? (tickets.get(a.ticket_id)?.key ?? null) : null })));
+    // `for_operator`: whether it is his to answer NOW (not still with Robert or a Lead) — the Desk's
+    // "? N" count. The rest stay in the list so a surface can tell which terminals are already asking.
+    res.json(bucket.map((a) => ({ ...a, ticket_key: a.ticket_id ? (tickets.get(a.ticket_id)?.key ?? null) : null, for_operator: isOperatorsAsk(a) })));
+  });
+
+  // One ask, whatever its state — the chat's Ask card reads the row, so a card from yesterday shows
+  // what was answered rather than a stale question. Same scope rule as answering it.
+  api.get("/asks/:id", (req, res) => {
+    const ask = resolveAsk(req.params.id);
+    if (!ask) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, ask.workspace_id)) return;
+    res.json({ ...ask, ticket_key: ask.ticket_id ? (tickets.get(ask.ticket_id)?.key ?? null) : null, for_operator: isOperatorsAsk(ask) });
   });
 
   // "Later" is an answer: date the question off the live list instead of leaving it live or

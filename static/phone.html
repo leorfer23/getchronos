@@ -278,6 +278,35 @@
   .copytext { user-select:text; -webkit-user-select:text; -webkit-touch-callout:default; white-space:pre-wrap; overflow-wrap:anywhere; font-family:ui-monospace,"Roboto Mono",Menlo,monospace; font-size:12.5px; line-height:1.35; background:var(--bg); color:var(--ink); padding:12px; border-radius:12px; max-height:58vh; overflow:auto; margin:0 0 10px; }
   .bub.pending:empty::after { content:"thinking…"; }
   .chat .day { align-self:center; color:var(--faint); font-size:12.5px; }
+  /* The Ask widget (static/ask-card.js) — the Desk's, at thumb size. */
+  #v-robert .thead { grid-template-columns:var(--tap) 1fr auto var(--tap); }
+  .askn { height:36px; padding:0 13px; border-radius:999px; background:var(--warn-soft); color:var(--warn); font-size:15px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .askn[hidden] { display:none; }
+  .askn.on { background:var(--warn); color:var(--bg); }
+  .askpop { flex:none; max-height:65%; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px; border-bottom:1px solid var(--line); background:var(--bg); -webkit-overflow-scrolling:touch; }
+  .askpop[hidden] { display:none; }
+  .ak-empty { font-size:15px; color:var(--faint); }
+  .bub.ak-only { padding:0; background:transparent; width:88%; }
+  .bub .askc-host + p, .bub p + .askc-host { margin-top:8px; }
+  .askc { border-left:3px solid var(--warn); border-radius:14px; background:var(--surface); padding:12px 14px; white-space:normal; font-size:16px; line-height:1.4; }
+  .askc.sending { opacity:.55; pointer-events:none; }
+  .ak-h { display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--muted); }
+  .ak-i { width:20px; height:20px; flex:none; border-radius:50%; background:var(--warn); color:var(--bg); font-size:13px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; }
+  .ak-who { flex:1; min-width:0; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ak-age { flex:none; color:var(--faint); }
+  .ak-q { margin-top:6px; font-size:17px; font-weight:700; overflow-wrap:anywhere; }
+  .ak-note { margin-top:6px; font-size:14.5px; color:var(--muted); }
+  .ak-ops { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .ak-ops button { min-height:44px; max-width:100%; padding:0 16px; border-radius:999px; background:var(--surface-2); font-size:15.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ak-f { display:flex; gap:8px; margin-top:10px; }
+  .ak-f input { flex:1; min-width:0; min-height:44px; padding:0 14px; border-radius:12px; border:1px solid var(--line); background:var(--bg); font-size:16px; outline:none; }
+  .ak-f button { flex:none; min-height:44px; padding:0 16px; border-radius:12px; background:var(--accent); color:var(--accent-ink); font-size:15.5px; font-weight:700; }
+  .askc.done { display:flex; align-items:baseline; gap:8px; padding:9px 14px; border-left-color:var(--accent); font-size:15px; color:var(--muted); }
+  .askc.done.gone { border-left-color:var(--faint); }
+  .askc.done .ak-ok { color:var(--accent); font-weight:800; flex:none; }
+  .askc.done .ak-q1 { flex:1 1 40%; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .askc.done .ak-a { flex:0 1 auto; min-width:0; max-width:55%; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .askc.done .ak-a i { color:var(--faint); font-style:normal; }
 
   /* ── sheets ───────────────────────────────────────────────────────────────── */
   .sheet-bg { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:40; display:flex; align-items:flex-end; }
@@ -394,9 +423,11 @@
     <div class="thead">
       <button class="ic" id="r-back" aria-label="Back">‹</button>
       <div class="tt"><b>Robert</b><small><span class="dot working"></span><span>runs the whole desk</span></small></div>
+      <button class="askn" id="r-asks" hidden>? 0</button>
       <button class="ic" id="r-reset" aria-label="New thread" title="New thread">↺</button>
     </div>
     <div class="rstrip" id="rstrip"></div>
+    <div class="askpop" id="r-askpop" hidden></div>
     <div class="chat" id="chat"></div>
     <div class="composer">
       <button class="mic" id="r-mic" aria-label="Talk">🎤</button>
@@ -418,6 +449,7 @@
 <script src="/vendor/xterm-addon-fit.js"></script>
 <script src="/term-links.js"></script>
 <script src="/desk-quick-actions.js"></script>
+<script src="/ask-card.js"></script>
 <script src="/tag-complete.js"></script>
 <script src="/chat-reply.js"></script>
 <script src="/vendor/marked.min.js"></script>
@@ -596,6 +628,7 @@ async function load() {
   if (S.filter && !S.workspaces.some((w) => w.id === S.filter)) S.filter = null;
   renderHome();
   badge(needsCount());
+  AskCard.recount();
   if (first) document.dispatchEvent(new Event("phone:loaded"));
   renderCurrent();
 }
@@ -1703,7 +1736,7 @@ qs("#chat").addEventListener("click", (e) => { const a = e.target.closest('a[hre
 function bubble(kind, text) {
   const log = qs("#chat"); const d = document.createElement("div");
   d.className = "bub " + kind; d._raw = text;
-  if (kind === "rob") d.innerHTML = mdRob(text); else d.textContent = text;
+  if (kind === "rob") { d.innerHTML = mdRob(text); AskCard.embed(d); } else d.textContent = text;
   log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
 }
 async function robertHistory() {
@@ -1731,6 +1764,8 @@ function showRobert() {
   api("/agent/warm", { method: "POST", body: JSON.stringify({ ws: R.ws }) }).catch(() => {});
 }
 qs("#btn-robert").onclick = () => { fx.tap(); showRobert(); };
+// The Ask widget: cards in his thread, and every open question behind "? N" (static/ask-card.js).
+AskCard.init({ api, toast, sessions: () => S.sessions, askOf, who: (s) => sTitle(s).slice(0, 40), button: qs("#r-asks"), panel: qs("#r-askpop"), log: qs("#chat") });
 qs("#r-back").onclick = () => { fx.tap(); show("v-home", "in-left"); renderHome(); };
 qs("#r-reset").onclick = () => confirmSheet(R.ws ? `Start a new thread with Robert on ${wsName(R.ws)}?` : "Start a new desk-wide thread with Robert?", "New thread", async () => { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: R.ws }) }); qs("#chat").innerHTML = ""; toast("new thread"); });
 const rComposer = qs("#r-composer");
@@ -1920,7 +1955,7 @@ function copySheet() {
 window.addEventListener("orientationchange", () => setTimeout(() => refit(true), 300));
 
 // ── live updates ────────────────────────────────────────────────────────────
-const BUS_TOPICS = ["session.status", "session.activity", "agent.state", "session.started", "session.ended", "session.updated", "session.usage", "agent.delta", "agent.push", "focus.event"].join(",");
+const BUS_TOPICS = ["session.status", "session.activity", "agent.state", "session.started", "session.ended", "session.updated", "session.usage", "agent.delta", "agent.push", "ask.created", "ask.answered", "focus.event"].join(",");
 let busRetry = 1000, reloadT;
 const reloadSoon = () => { clearTimeout(reloadT); reloadT = setTimeout(() => load().catch(() => {}), 250); };
 function connectBus() {
@@ -1934,6 +1969,8 @@ function connectBus() {
   ws.onclose = () => { qs("#bus-dot").className = "dot"; setTimeout(connectBus, busRetry); busRetry = Math.min(busRetry * 2, 20000); };
   ws.onmessage = (ev) => {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
+    AskCard.onEvent(e);
+    if (AskCard.TOPICS.includes(e.topic)) return;
     if (e.topic === "agent.delta") {
       // Only his words: thinking and tool lines are not the answer.
       const mine = e.client === CLIENT;
