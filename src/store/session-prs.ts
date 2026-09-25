@@ -29,6 +29,12 @@ export const sessionPrs = {
   open(limit = 20): SessionPr[] {
     return db.prepare("SELECT * FROM session_prs WHERE state = 'open' ORDER BY updated_at ASC LIMIT ?").all(limit) as SessionPr[];
   },
+  /** Open rows for one workspace (or every one, for the operator), newest first — the Desk cockpit. */
+  openIn(workspace_id: string | null, limit = 50): SessionPr[] {
+    return (workspace_id
+      ? db.prepare("SELECT * FROM session_prs WHERE state = 'open' AND workspace_id = ? ORDER BY created_at DESC LIMIT ?").all(workspace_id, limit)
+      : db.prepare("SELECT * FROM session_prs WHERE state = 'open' ORDER BY created_at DESC LIMIT ?").all(limit)) as SessionPr[];
+  },
   hasOpen(): boolean {
     return !!db.prepare("SELECT 1 FROM session_prs WHERE state = 'open' LIMIT 1").get();
   },

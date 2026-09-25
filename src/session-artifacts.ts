@@ -24,6 +24,7 @@ import os from "node:os";
 import { execFileTimed } from "./exec.js";
 import { childEnv } from "./child-env.js";
 import { repos, tickets, workspaces } from "./store.js";
+import { ciRollup } from "./delivery.js";
 import type { FocusEvent } from "./focus.js";
 import type { Session } from "./types.js";
 
@@ -37,7 +38,11 @@ export interface PrPin {
   state: PrState | null; // null = gh could not answer (offline, no auth): shown as unknown, never as merged
   title: string | null;
   source: "ticket" | "feed";
+  /** Its check rollup (delivery.ts ciRollup) — null when the repo has no CI or gh could not say. */
+  ci?: CiState;
 }
+
+export type CiState = "pending" | "passing" | "failing" | null;
 
 export interface DocPin {
   kind: "doc";
@@ -129,13 +134,13 @@ function docLabel(url: string): string {
 
 // ──────────────────────────── PR state, cached ────────────────────────────
 
-export type PrView = { state?: string; title?: string; isDraft?: boolean };
+export type PrView = { state?: string; title?: string; isDraft?: boolean; statusCheckRollup?: any[] };
 export type ViewPrFn = (url: string, cwd: string, env: NodeJS.ProcessEnv) => Promise<PrView | null>;
 
 const realViewPr: ViewPrFn = async (url, cwd, env) => {
   try {
     const raw = (
-      await execFileTimed("gh", ["pr", "view", url, "--json", "state,title,isDraft"], {
+      await execFileTimed("gh", ["pr", "view", url, "--json", "state,title,isDraft,statusCheckRollup"], {
         cwd,
         env,
         encoding: "utf8",
@@ -154,7 +159,7 @@ export function setViewPr(fn: ViewPrFn | null): void {
   viewPr = fn ?? realViewPr;
 }
 
-type CacheRow = { state: PrState | null; title: string | null; at: number };
+type CacheRow = { state: PrState | null; title: string | null; ci: CiState; at: number };
 const cache = new Map<string, CacheRow>();
 /** Tests only: forget every cached PR state. */
 export function clearPrCache(): void {
@@ -189,7 +194,9 @@ export async function prStates(
     }
     const view = await viewPr(url, ctx.cwd, ctx.env);
     // gh said nothing: keep whatever was known rather than blanking a state that was true a minute ago.
-    const row: CacheRow = view ? { state: toState(view.state), title: view.title?.trim() || null, at: now } : { state: hit?.state ?? null, title: hit?.title ?? null, at: now };
+    const row: CacheRow = view
+      ? { state: toState(view.state), title: view.title?.trim() || null, ci: ciRollup(view.statusCheckRollup), at: now }
+      : { state: hit?.state ?? null, title: hit?.title ?? null, ci: hit?.ci ?? null, at: now };
     cache.set(url, row);
     out.set(url, row);
   }
@@ -223,6 +230,7 @@ export async function sessionArtifacts(s: Session, events: FocusEvent[], onScree
       state: (ticket.pr_state as PrState | null) ?? null,
       title: ticket.key ? `${ticket.key} — ${ticket.title}` : ticket.title,
       source: "ticket",
+      ci: (ticket.ci_state as CiState) ?? null,
     });
     seen.add(ticket.pr_url);
   }
@@ -236,7 +244,7 @@ export async function sessionArtifacts(s: Session, events: FocusEvent[], onScree
     });
     for (const p of lookup) {
       const st = states.get(p.url);
-      prs.push({ ...p, state: st?.state ?? null, title: st?.title ?? null, source: "feed" });
+      prs.push({ ...p, state: st?.state ?? null, title: st?.title ?? null, source: "feed", ci: st?.ci ?? null });
     }
   }
   return { prs, docs: found.docs };

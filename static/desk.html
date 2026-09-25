@@ -455,6 +455,8 @@
   .bmain { flex:1 1 58%; min-width:0; display:flex; flex-direction:column; gap:10px; }
   .bside { flex:0 0 322px; min-width:0; display:flex; flex-direction:column; gap:10px; }
   @media (max-width:860px) { .bcols { flex-direction:column; } .bside { flex:none; width:100%; } }
+  /* Robert docked takes half the window: below ~2000px what is left of the stage is a single column. */
+  @media (max-width:2000px) { body.chat-open:not(.chat-full) .bcols { flex-direction:column; } body.chat-open:not(.chat-full) .bside { flex:none; width:100%; } }
   .bcard { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:11px 14px 12px; }
   .bcard > h4 { display:flex; align-items:center; gap:8px; margin:0 0 8px; font-size:11px; font-weight:750;
     letter-spacing:.09em; text-transform:uppercase; color:var(--muted); }
@@ -769,7 +771,56 @@
 
   /* Robert lives where every chat lives: a column on the right, closed until you ask (⌘K). */
   .chat { width:0; flex:none; border-left:1px solid var(--line); background:var(--surface); display:none; flex-direction:column; overflow:hidden; }
-  body.chat-open .chat { display:flex; width:var(--chat-w,460px); }
+  /* It is the daily driver (Leo 2026-09-25): about twice the old 460px, and the rail and the terminal
+     give up the width. On a laptop it stops at half the window so the stage never vanishes. */
+  body.chat-open .chat { display:flex; width:clamp(460px, 52vw, var(--chat-w,920px)); }
+  body.chat-open:not(.chat-full) { --rail-w:clamp(240px, 18vw, 360px); }
+  /* Full screen (⤢ / ⌘⇧K): Robert takes the whole stage, the rail stays, ⤡ puts him back. */
+  body.chat-open.chat-full .stage { display:none; }
+  body.chat-open.chat-full .chat { width:auto; flex:1; border-left:0; }
+  body.no-terms:not(.mode-fleet) #chat-full { display:none; }
+  .chat-body { flex:1; min-height:0; display:flex; flex-direction:column; }
+  .chat-main { flex:1; min-height:0; display:flex; flex-direction:column; min-width:0; }
+  body.chat-full .chat-log, body.chat-full .chat-ask, body.chat-full .chat-work, body.chat-full .chat-hint, body.chat-full .chat-att,
+  body.chat-full .vcall { padding-left:max(14px, calc((100% - 820px) / 2)); padding-right:max(14px, calc((100% - 820px) / 2)); }
+  /* The panel (static/desk-cockpit.js): a strip over the conversation when docked, a column beside it
+     when Robert has the stage. One line per thing, a count per header, empty sections are not drawn. */
+  .ck { flex:none; max-height:40%; overflow-y:auto; overscroll-behavior:contain; padding:6px 12px 8px; border-bottom:1px solid var(--line);
+    background:var(--bg); display:grid; grid-template-columns:repeat(auto-fit, minmax(340px, 1fr)); gap:2px 20px; align-content:start; }
+  .ck[hidden] { display:none; }
+  body.chat-full .chat-body, body.no-terms:not(.mode-fleet) .chat-body { flex-direction:row; }
+  body.chat-full .ck, body.no-terms:not(.mode-fleet) .ck { order:2; width:clamp(320px, 28vw, 420px); max-height:none; border-bottom:0;
+    border-left:1px solid var(--line); grid-template-columns:1fr; padding:8px 14px 16px; }
+  .ck-sec { min-width:0; padding-bottom:4px; }
+  .ck-sec h4 { display:flex; align-items:baseline; gap:6px; margin:6px 6px 2px; font-size:11.5px; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--faint); font-weight:700; }
+  .ck-sec h4 b { color:var(--ink); letter-spacing:0; font-variant-numeric:tabular-nums; }
+  .ck-sec[data-sec="asks"] h4 b { color:var(--p-decide); }
+  .ck-row { display:flex; align-items:center; gap:8px; min-height:30px; padding:2px 6px; border-radius:7px; cursor:pointer; }
+  .ck-row:hover { background:var(--surface-2); }
+  .ck-row .dot.decide { background:var(--p-decide); }
+  .ck-row .dot.ok { background:var(--ok); } .ck-row .dot.bad { background:var(--danger); } .ck-row .dot.pend { background:var(--warn); }
+  .ck-row .dot.none { background:transparent; box-shadow:inset 0 0 0 1.5px var(--faint); }
+  .ck-t { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:14.5px; }
+  .ck-t b { font-weight:600; }
+  .ck-s { color:var(--muted); }
+  .ck-m { flex:none; font-size:12.5px; color:var(--faint); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .ck-b { flex:none; display:flex; gap:4px; }
+  .ck-btn { display:inline-block; max-width:150px; padding:0 10px; border-radius:999px; border:1px solid var(--line); background:var(--surface); color:var(--ink);
+    font:inherit; font-size:13px; line-height:22px; text-decoration:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+  .ck-btn:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
+  .ck-btn.go { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:600; }
+  .ck-btn[data-armed] { background:var(--danger); border-color:var(--danger); color:#fff; }
+  .ck-btn:disabled { opacity:.6; cursor:default; }
+  .ck-more { border:0; background:none; color:var(--accent); font:inherit; font-size:12.5px; font-weight:600; padding:1px 6px 2px 22px; cursor:pointer; }
+  .ck-card { padding:2px 0 6px 22px; }
+  .ck-today { display:flex; flex-wrap:wrap; align-items:center; gap:4px 14px; padding:3px 6px 5px; font-size:13.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .ck-today b { color:var(--ink); font-weight:700; }
+  .ck-u { display:inline-flex; align-items:center; gap:5px; }
+  .ck-u > i { display:inline-block; width:34px; height:5px; border-radius:3px; background:var(--line); overflow:hidden; }
+  .ck-u > i > i { display:block; height:100%; background:var(--ok); }
+  .ck-u.warn b { color:var(--warn); } .ck-u.warn > i > i { background:var(--warn); }
+  .ck-u.crit b { color:var(--danger); } .ck-u.crit > i > i { background:var(--danger); }
   .chat-head { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--line); }
   .chat-head strong { font-size:16.5px; }
   .chat-head .who { font-size:14px; color:var(--faint); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -1339,9 +1390,13 @@
       <button class="icon" id="chat-voice" title="Voice call — talk, he does it and answers out loud (⌘⇧V)">🎙</button>
       <button class="icon" id="chat-briefs" title="Briefs — what each project is and what you want from it; Robert keeps them current">📋</button>
       <button class="icon" id="chat-new" title="New conversation — keeps the transcript, drops his context">⟲</button>
+      <button class="icon" id="chat-full" title="Full screen — Robert takes the stage (⌘⇧K)">⤢</button>
       <button class="icon" id="chat-close" title="Close (⌘K / ⎋)">✕</button>
     </div>
     <div class="askpop" id="askpop" hidden></div>
+    <div class="chat-body">
+    <div class="ck" id="cockpit" hidden></div>
+    <div class="chat-main">
     <div class="chat-log" id="chat-log"></div>
     <div class="chat-work" id="chat-work" hidden>
       <span class="dots"><i></i><i></i><i></i></span>
@@ -1363,6 +1418,8 @@
       <button class="btn primary" id="chat-send">Ask</button>
     </form>
     <div class="chat-hint">⏎ send · ⇧⏎ newline · ⌘⏎ stop him &amp; send now · he reads the project from what you write — <code>#</code> to name one · ⌘V or drop a file to attach</div>
+    </div>
+    </div>
   </aside>
 </div>
 
@@ -1486,7 +1543,7 @@
       <div><kbd>N</kbd><span>new terminal: pick CLI + model, type what it should do, ⏎ · empty ⏎ = blank · <kbd>⇧N</kbd> the full dialog</span></div>
       <div><kbd>⇧L</kbd><span>new terminal, as a Lead — opens and drives its own terminals for this goal</span></div>
       <div><kbd>X</kbd><span>close the terminal you are in (goal done + kill; twice while it is working)</span></div>
-      <div><kbd>⌘K</kbd><span>Robert</span></div>
+      <div><kbd>⌘K</kbd><span>Robert · <kbd>⌘⇧K</kbd> full screen ↔ docked (⎋ in his box goes back too)</span></div>
       <div><kbd>⌘+</kbd>/<kbd>⌘-</kbd>/<kbd>⌘0</kbd><span>terminal font</span></div>
     </div>
     <div class="actions"><button class="btn" id="keys-close">Close</button></div>
@@ -1671,6 +1728,7 @@
 <script src="/desk-companion.js"></script>
 <script src="/desk-quick-actions.js"></script>
 <script src="/ask-card.js"></script>
+<script src="/desk-cockpit.js"></script>
 <script src="/tag-complete.js"></script>
 <script src="/chat-reply.js"></script>
 <script src="/vendor/xterm-addon-webgl.js"></script>
@@ -1878,6 +1936,7 @@ function render() {
   ensureActive();
   renderStage();
   syncBadge();
+  DeskCockpit.refresh(4000); // a terminal opened or ended: its PRs may have moved (renderCounts repaints the rest)
 }
 function renderCounts() {
   const live = S.sessions.filter((s) => s.live && !S.dismissed.has(s.id));
@@ -1915,7 +1974,7 @@ function rowEl(s) {
   el.className = "row"; el.dataset.sid = s.id;
   el.innerHTML = '<span class="stripe"></span><div class="main"><div class="t"><span class="dot"></span><span class="ws"></span><span class="txt"></span></div><div class="l"></div></div>' +
     '<span class="side"><span class="htag" hidden></span><span class="eye" hidden></span><span class="board" hidden></span><span class="workers" hidden></span><button type="button" class="fold" hidden></button><span class="age"></span><button class="x" title="Remove from the list">✕</button></span>';
-  el.onclick = (e) => { if (e.target.closest(".x, .fold")) return; select(s.id); };
+  el.onclick = (e) => { if (e.target.closest(".x, .fold")) return; pickTerminal(s.id); };
   qs(".fold", el).onclick = () => toggleLead(s.id);
   qs(".x", el).onclick = () => (byId(s.id)?.live ? kill(s.id, qs(".x", el)) : dismiss(s.id));
   return el;
@@ -5696,10 +5755,30 @@ function pickWs(ws) {
 function chatOpen(open) {
   document.body.classList.toggle("chat-open", open);
   localStorage.setItem("desk-chat", open ? "1" : "0");
-  if (open) { OV.unread = 0; qs("#fab-unread").hidden = true; loadRobertModel(); setTimeout(() => { qs("#chat-input").focus(); OV.log.scrollTop = OV.log.scrollHeight; }, 30); }
+  if (open) { OV.unread = 0; qs("#fab-unread").hidden = true; loadRobertModel(); DeskCockpit.wake(); setTimeout(() => { qs("#chat-input").focus(); OV.log.scrollTop = OV.log.scrollHeight; }, 30); }
 }
 const chatIsOpen = () => document.body.classList.contains("chat-open");
 qs("#chat-close").onclick = () => chatOpen(false);
+// Docked ↔ full screen, remembered per viewer. Full screen opens him if he was closed; ⤡ (or ⌘⇧K,
+// or ⎋ in his composer) is always one step back to docked.
+const chatIsFull = () => document.body.classList.contains("chat-full");
+function chatFull(full, andOpen = true) {
+  document.body.classList.toggle("chat-full", full);
+  try { localStorage.setItem("desk-chat-full", full ? "1" : "0"); } catch {}
+  const b = qs("#chat-full");
+  b.textContent = full ? "⤡" : "⤢";
+  b.title = full ? "Back to docked — the terminal returns (⌘⇧K)" : "Full screen — Robert takes the stage (⌘⇧K)";
+  if (full && andOpen && !chatIsOpen()) chatOpen(true);
+  DeskCockpit.wake();
+  OV.log.scrollTop = OV.log.scrollHeight;
+}
+qs("#chat-full").onclick = () => chatFull(!chatIsFull());
+try { if (localStorage.getItem("desk-chat-full") === "1") chatFull(true, false); } catch {}
+// A terminal you pick (on the rail or his panel) while he has the stage brings the stage back: that is where it lives.
+function pickTerminal(id) {
+  if (chatIsFull()) chatFull(false);
+  select(id);
+}
 qs("#btn-robert").onclick = () => chatOpen(!chatIsOpen());
 // Model Robert runs on (chat + wakes + watches). Same allowlist as a new Claude terminal; POST recycles the warm process.
 async function loadRobertModel() {
@@ -6065,6 +6144,34 @@ async function ovHistory(reload = false) {
 }
 // The Ask widget: cards in the log, and every open question behind "? N" (static/ask-card.js).
 AskCard.init({ api, toast, sessions: () => S.sessions, askOf, who: chipLabel, button: qs("#chat-asks"), panel: qs("#askpop"), log: OV.log });
+// The panel over (docked) or beside (full screen) his conversation: questions, stopped terminals, PRs,
+// today (static/desk-cockpit.js). Everything it lists the page already holds; it only reads PRs + spend.
+DeskCockpit.init({
+  el: qs("#cockpit"), api, toast, esc, arm, ask: AskCard,
+  isOpen: () => chatIsOpen() || document.body.classList.contains("no-terms"),
+  terminals: () => railOrder().filter((s) => !(folded(s) && !URGENT.includes(phaseOf(s))) && !(S.answered.get(s.id) > Date.now() - ANSWERED_MS))
+    .map((s) => ({ id: s.id, phase: phaseOf(s), title: title(s), ws: s.workspace_id ? wsName(s.workspace_id) : "", line: oneLiner(s).text, since: phaseSince(s) })),
+  jots: () => S.jots,
+  isLive: liveSession,
+  usage: () => uTops(),
+  open: pickTerminal,
+  input,
+  close: async (id) => {
+    const s = byId(id); if (!s) return;
+    try {
+      if (s.goal && !s.goal_done_at) await api("/sessions/" + id, { method: "PATCH", body: JSON.stringify({ goal_done: true, goal_done_all: true }) });
+      await api("/sessions/" + id + "/kill", { method: "POST" });
+    } catch (e) { return toast("couldn't close: " + e.message); }
+    toast("closed"); load();
+  },
+  openFollow,
+  reload: () => load(),
+  pin: (paint) => {
+    const L = OV.log, atEnd = L.scrollHeight - L.scrollTop - L.clientHeight < 40;
+    paint();
+    if (atEnd) L.scrollTop = L.scrollHeight;
+  },
+});
 chatOpen(localStorage.getItem("desk-chat") === "1");
 loadRobertModel();
 
@@ -6614,6 +6721,8 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && DICT.rec) { e.preventDefault(); return dictStop(false); }
   if (e.key === "Escape" && VC.on && vcSpeaking()) { e.preventDefault(); return vcSkip(); }
   if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") { e.preventDefault(); return chatOpen(!chatIsOpen()); }
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && e.shiftKey && e.key.toLowerCase() === "k") { e.preventDefault(); return chatFull(!(chatIsFull() && chatIsOpen())); }
+  if (e.key === "Escape" && chatIsFull() && chatIsOpen() && e.target?.id === "chat-input") { e.preventDefault(); return chatFull(false); }
   if (modeKey(e)) { e.preventDefault(); return setMode(S.mode === "focus" ? "term" : "focus"); }
   if (jumpKey(e)) { e.preventDefault(); return step(e.shiftKey ? -1 : 1, true); }
   if (e.key === "Escape" && chatIsOpen() && e.target?.id === "chat-input") return chatOpen(false);
@@ -6676,18 +6785,31 @@ function uAgo(iso) {
   return m < 1 ? "just now" : m < 60 ? m + "m ago" : m < 1440 ? Math.round(m / 60) + "h ago" : Math.round(m / 1440) + "d ago";
 }
 function uDismissed() { try { return JSON.parse(localStorage.getItem("desk-usage-dismissed") || "[]"); } catch { return []; } }
+// A CLI's worst window across its profiles — what its chip shows.
+function uTop(s, cli) {
+  let top = null;
+  for (const m of s.meters.filter((x) => x.cli === cli)) for (const w of m.windows) if (!top || w.usedPct > top.w.usedPct) top = { m, w };
+  return top;
+}
+const uTip = (top) => `${uWho(top.m)} · ${U_WIN[top.w.name] || top.w.name} ${Math.round(top.w.usedPct)}%${top.w.resetsAt ? " · resets " + uWhen(top.w.resetsAt) : ""} · ${uAgo(top.m.at)}`;
+// The same readings, for Robert's panel: only the CLIs that have one.
+function uTops() {
+  const s = U.snap; if (!s) return [];
+  return ["claude", "grok", "cursor"].map((cli) => ({ cli, top: uTop(s, cli) })).filter((x) => x.top)
+    .map(({ cli, top }) => ({ name: U_NAME[cli], pct: top.w.usedPct, level: uLevel(top.w.usedPct, s), tip: uTip(top) }));
+}
 function renderUsage() {
   const s = U.snap; if (!s) return;
+  DeskCockpit.render();
   const chips = [];
   let worst = null;
   for (const cli of ["claude", "grok", "cursor"]) {
     const ms = s.meters.filter((m) => m.cli === cli);
-    let top = null;
-    for (const m of ms) for (const w of m.windows) if (!top || w.usedPct > top.w.usedPct) top = { m, w };
+    const top = uTop(s, cli);
     if (top && (!worst || top.w.usedPct > worst.w.usedPct)) worst = top;
     const stale = top && Date.now() - Date.parse(top.m.at || 0) > 6 * 3600e3;
     const lv = top ? uLevel(top.w.usedPct, s) : "";
-    const tip = top ? `${uWho(top.m)} · ${U_WIN[top.w.name] || top.w.name} ${Math.round(top.w.usedPct)}%${top.w.resetsAt ? " · resets " + uWhen(top.w.resetsAt) : ""} · ${uAgo(top.m.at)}` : (ms[0]?.note || "no reading yet");
+    const tip = top ? uTip(top) : (ms[0]?.note || "no reading yet");
     chips.push(`<button class="uchip ${top ? lv : "none"}${stale ? " stale" : ""}" data-cli="${cli}" title="${esc(tip)}">${U_NAME[cli]} <b>${top ? Math.round(top.w.usedPct) + "%" : "—"}</b>${top ? `<span class="um"><i style="width:${Math.min(100, top.w.usedPct)}%"></i></span>` : ""}</button>`);
   }
   qs("#usage").innerHTML = chips.join("");

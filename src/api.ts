@@ -80,6 +80,7 @@ import { recall, renderRecall } from "./recall.js";
 import { recordRead, recordRecall, sessionFor, usageRoute } from "./memory-usage.js";
 import * as dreamRoutes from "./dream-routes.js";
 import * as inboxRoutes from "./inbox-routes.js";
+import { cockpitRoute } from "./desk-cockpit.js";
 import { inbox } from "./store/inbox.js";
 import { openConflicts } from "./memory-conflicts.js";
 import * as agentMemory from "./agent-memory.js";
@@ -1330,6 +1331,8 @@ export function startServer() {
     const r = await broadcast({ kind: "needs", title: "Chronos", body: "Push is wired. This is what a prompt will look like.", tag: "test", url: "/phone", actions: [{ action: "open", title: "Open", input: {} }], needs: 0, at: new Date().toISOString() });
     res.json(r);
   });
+  // The Robert panel's PRs + today's spend (src/desk-cockpit.ts). Read-only, scoped like /desk.
+  api.get("/desk/cockpit", cockpitRoute(focusEvents));
   api.get("/desk/digest", (req, res) => {
     const scope = callerScope(req);
     if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
