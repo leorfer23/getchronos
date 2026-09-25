@@ -98,7 +98,7 @@ test("POST /agent routes, refuses to guess, and answers with where it landed", (
   // `text` plus any attachment paths (chatAttachmentsBlock); the stored `you` stays the clean text.
   assert.match(api, /askManagerWeb\(prompt, \(t, kind\) => bus\.publish\(\{ topic: "agent\.delta", text: t, kind, ws, client, turn: turnId \}\), ws, \{ voice: !!req\.body\.voice, turn: turnId \}\)/);
   assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown\)/);
-  assert.match(api, /res\.json\(\{ reply, actions, ws, how: turn\.how \}\)/);
+  assert.match(api, /res\.json\(\{ reply, actions, ws, how: turn\.how, turn: turnId \}\)/);
   assert.match(api, /commitTurn\(surface, turn\)/);
 });
 
@@ -128,8 +128,8 @@ test("a tap on Telegram's routing question re-runs the same message on that proj
   assert.match(tgRouter, /if \(ns === "tr"\) \{\s*const ok = await answerRouteAsk\(op, id\);/);
 });
 
-test("the Desk renders one thread with a chip per row, and the composer shows the sticky project", () => {
-  // auto → ws=all; a picked project → that thread's own history (see desk-chat-scope.test.ts).
+test("the Desk renders one thread with a chip per row, routed by the daemon, never by the filter", () => {
+  // No filter → ws=all; a filtered project → that thread's own history (see desk-chat-scope.test.ts).
   assert.match(html, /: "\/agent\/history\?ws=all&limit=16"\)/);
   assert.match(html, /function setChip\(el, ws, chip = true\)/);
   // Both bubbles of a row carry the project even though only one shows the chip, or filtering to a
@@ -139,7 +139,7 @@ test("the Desk renders one thread with a chip per row, and the composer shows th
   assert.match(html, /if \(item\.picked\) \{ body\.ws = item\.ws; body\.route = false; \}/);
   // Every Robert row belongs here now — only an executive's own pane is a different thread.
   assert.match(html, /String\(e\.ws \|\| ""\)\.startsWith\("agent:"\)\) return;/);
-  assert.match(html, /api\("\/thread\/sticky", \{ method: "POST", body: JSON\.stringify\(\{ ws: OV\.sticky \}\) \}\)/);
+  assert.doesNotMatch(html, /api\("\/thread\/sticky"/);
   assert.match(html, /session: S\.active \|\| null/);
   assert.match(html, /if \(r\?\.how === "ask"\)/);
 });

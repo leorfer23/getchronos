@@ -132,6 +132,7 @@
   body.focus-only #mode [data-m="term"],
   body.focus-only #h-comp { display:none; }
   .rows { display:flex; flex-direction:column; gap:2px; }
+  .rail-new { display:block; width:100%; margin:0 0 10px; }
   /* Quick open: N (or + Terminal) drops a line at the top of the rail — client, CLI, model, what it
      should do, ⏎. Empty ⏎ is a blank terminal. The full dialog (brief, cwd…) sits behind ⋯ / ⇧N. */
   .quick { display:none; flex-wrap:wrap; gap:6px; align-items:center; padding:2px 4px 10px; }
@@ -1233,7 +1234,6 @@
   <span class="sp"></span>
   <button class="mchip" id="mac" hidden></button>
   <div class="usage" id="usage" title="Subscription usage — click for every profile and window"></div>
-  <button class="btn primary" id="btn-new" title="New terminal (N) — pick Claude / Cursor / Grok + model · ⇧N with a brief">+ Terminal</button>
   <div class="tools">
     <button class="icon" id="btn-inbox" title="Inbox — what needs you, per client">📥</button><span class="fab-unread" id="inbox-unread" hidden></span>
     <button class="icon" id="btn-robert" title="Robert (⌘K)">🤖</button><span class="fab-unread" id="fab-unread" hidden></span>
@@ -1246,6 +1246,7 @@
 
 <div class="desk">
   <aside class="rail" id="rail">
+    <button class="btn primary rail-new" id="btn-new" title="New terminal (N) — pick Claude / Cursor / Grok + model · ⇧N with a brief">+ Terminal</button>
     <form class="quick" id="quick"><select id="q-ws" title="Client"></select><select id="q-backend" class="cli" title="CLI — Claude, Cursor, Grok…"></select><select id="q-model" class="model" title="Model for that CLI"></select><select id="q-host" title="Which computer it runs on" hidden></select><input id="q-goal" placeholder="what should it do? · ⏎ · empty ⏎ = blank" autocomplete="off" spellcheck="false"><button type="button" class="icon" id="q-focus" title="Focus only — story and composer, no live terminal">◎</button><button type="button" class="icon" id="q-lead" title="Open as a Lead — it opens and drives its own terminals for this goal">◆</button><button type="button" class="icon" id="q-more" title="With a brief, cwd… (⇧N)">⋯</button></form>
     <div class="rows" id="rows"></div>
     <div class="empty" id="rail-empty" hidden>no open terminals</div>
@@ -1321,11 +1322,11 @@
     </div>
     <div class="chat-att" id="chat-att" hidden></div>
     <form class="chat-ask" id="chat-ask">
-      <select class="wspick" id="chat-ws" title="Which conversation you see and where your line goes. auto = every project in one log; I read where each line goes from what you type (#slug, a ticket key, a project name)"></select>
-      <textarea id="chat-input" rows="1" placeholder="what's everyone doing? · #atlas ship the loader"></textarea>
+      <select class="wspick" id="chat-ws" title="Which rows you see. Only a view: it never moves on its own and never decides where a line goes — Robert reads the project from what you write"></select>
+      <textarea id="chat-input" rows="1" placeholder="Ask Robert… · # to name a project"></textarea>
       <button class="btn primary" id="chat-send">Ask</button>
     </form>
-    <div class="chat-hint">⏎ send · ⇧⏎ newline · ⌘⏎ stop him &amp; send now · <code>#slug</code> picks the project, <code>#all</code> the shop · ⌘V or drop a file to attach</div>
+    <div class="chat-hint">⏎ send · ⇧⏎ newline · ⌘⏎ stop him &amp; send now · he reads the project from what you write — <code>#</code> to name one · ⌘V or drop a file to attach</div>
   </aside>
 </div>
 
@@ -1633,6 +1634,7 @@
 <script src="/term-links.js"></script>
 <script src="/desk-companion.js"></script>
 <script src="/desk-quick-actions.js"></script>
+<script src="/tag-complete.js"></script>
 <script src="/vendor/xterm-addon-webgl.js"></script>
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
@@ -1648,7 +1650,7 @@ const qsa = (s, r = document) => [...r.querySelectorAll(s)];
 const api = (p, opts) => fetch("/api" + p, {
   ...opts,
   headers: { "content-type": "application/json", ...(TOKEN ? { "x-mc-admin": TOKEN } : {}), ...(opts?.headers || {}) },
-}).then(async (r) => { if (!r.ok) throw new Error((await r.text()).slice(0, 200)); return r.status === 204 ? null : r.json(); });
+}).then(async (r) => { if (!r.ok) throw Object.assign(new Error((await r.text()).slice(0, 200)), { status: r.status }); return r.status === 204 ? null : r.json(); });
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 let toastT;
 function toast(msg) {
@@ -2566,7 +2568,6 @@ function qaFire(i) {
 // and it is worth a look before it goes.
 function qaAskRobert(s, a) {
   chatOpen(true);
-  pickWs(s.workspace_id || null);
   const inp = qs("#chat-input");
   inp.value = (a.text || "Have a look at this terminal and tell me what you'd do").trim() + " — terminal " + s.id.slice(0, 8);
   inp.dispatchEvent(new Event("input"));
@@ -4505,7 +4506,7 @@ async function openFromHash() {
 // ── Robert, in the corner ────────────────────────────────────────────────────────────────────
 // The same warm manager thread the Mission UI talks to (`/api/agent`), so what you tell him here he
 // remembers there. His answer streams over the bus the rail already uses.
-const OV = { log: qs("#chat-log"), pending: null, busy: false, unread: 0, queue: [], stopped: false, filter: null, sticky: null, histGen: 0, drawn: new Set() };
+const OV = { log: qs("#chat-log"), pending: null, busy: false, unread: 0, queue: [], stopped: false, filter: (() => { try { return localStorage.getItem("desk-chat-filter") || null; } catch { return null; } })(), sticky: null, histGen: 0, drawn: new Set() };
 // This tab's id on every turn it sends: the bus echoes it, so a line typed or spoken on the phone
 // (same "web" surface) is drawn here, and only the line this tab already drew is skipped.
 const CLIENT = "desk-" + Math.random().toString(36).slice(2, 12);
@@ -5571,12 +5572,11 @@ qs("#brief-save").onclick = () => saveBrief();
 qs("#brief-close").onclick = async () => { if (B.dirty) await saveBrief(); qs("#dlg-briefs").close(); };
 qs("#chat-briefs").onclick = () => openBriefs();
 qs("#btn-briefs").onclick = () => openBriefs();
-// ── one thread, N conversations, ONE scope ───────────────────────────────────────────────────
-// The composer's project picker is the scope of the whole log. "auto" shows every project's rows in
-// one timeline, each chipped with its project; a picked project shows that conversation ONLY — the
-// other Roberts keep talking, off screen, until you switch. A chip is a shortcut to the picker. The
-// conversations themselves never mix — each workspace has its own Robert, its own session and its
-// own recap (see src/thread-router.ts).
+// ── one thread, N conversations ─────────────────────────────────────────────────────────────────
+// You write in ONE chat and never pick a conversation: the daemon reads the project out of each line
+// and hands it to that project's own Robert (own session, own recap — see src/thread-router.ts), and
+// every row comes back chipped with where it landed. The composer's picker is only a VIEW filter —
+// yours alone: nothing he answers ever moves it, and your own exchanges stay on screen through it.
 const wsById = (id) => S.workspaces.find((w) => w.id === id) || null;
 function wsHue(key) {
   let h = 0;
@@ -5596,34 +5596,34 @@ function setChip(el, ws, chip = true) {
   c.className = "wsc";
   c.textContent = w ? "#" + w.slug : ws ? "#?" : "fleet";
   c.style.setProperty("--wsc", `hsl(${wsHue(w?.slug || "fleet")} 65% 55%)`);
-  c.title = w ? w.name + " — click to switch the thread here" : "the whole shop — click for every project";
+  c.title = w ? w.name + " — click to show only this project" : "the whole shop — click to show every project";
   el.prepend(c);
+  el.classList.toggle("hidden-ws", offFilter(el));
 }
-function ovLine(cls, text, ws, chip = true) {
+const offFilter = (el) => OV.filter !== null && !el._own && (el.dataset.ws || "") !== OV.filter;
+// `own`: a row of an exchange typed on this page — it shows whatever the filter is.
+function ovLine(cls, text, ws, chip = true, own = false) {
   const d = document.createElement("div");
   d.className = "bub " + cls;
+  d._own = own;
   d.innerHTML = mdChat(text);
   d._raw = text;
   dwEmbed(d);
   setChip(d, ws, chip);
-  // A row that arrives for another project while one is picked stays off screen.
-  if (OV.filter !== null && (d.dataset.ws || "") !== OV.filter) d.classList.add("hidden-ws");
   OV.log.appendChild(d);
   OV.log.scrollTop = OV.log.scrollHeight;
   return d;
 }
-// The scope is the picker: OV.filter always equals OV.sticky. Click a chip → pick that project (its
-// chip again, or "fleet" → back to auto). Hover → dim the rest, so you can see what belongs together
-// without switching.
+// Click a chip → show only that project (its chip again, or "fleet" → everything). Hover → dim the
+// rest, so you can see what belongs together without filtering.
 function applyWsFilter() {
-  OV.filter = OV.sticky || null;
-  for (const b of qsa(".bub", OV.log)) b.classList.toggle("hidden-ws", OV.filter !== null && (b.dataset.ws || "") !== OV.filter);
+  for (const b of qsa(".bub", OV.log)) b.classList.toggle("hidden-ws", offFilter(b));
 }
 OV.log.addEventListener("click", (e) => {
   const c = e.target.closest(".wsc");
   if (!c) return;
   const ws = c.parentElement.dataset.ws || "";
-  pickWs(ws && ws !== OV.sticky && wsById(ws) ? ws : null);
+  pickWs(ws && ws !== OV.filter && wsById(ws) ? ws : null);
 });
 OV.log.addEventListener("mouseover", (e) => {
   const c = e.target.closest(".wsc");
@@ -5636,32 +5636,22 @@ OV.log.addEventListener("mouseout", (e) => {
   for (const b of qsa(".bub", OV.log)) b.classList.remove("faded");
 });
 
-// The composer picker: which project the thread is on right now — and which conversation the log
-// shows. "auto" hands routing back to the router and shows every project.
 function renderWsPick() {
   const sel = qs("#chat-ws");
-  const cur = OV.sticky || "";
-  sel.innerHTML = `<option value="">auto</option>` + S.workspaces.map((w) => `<option value="${w.id}"${w.id === cur ? " selected" : ""}>→ ${esc(w.slug)}</option>`).join("");
+  const cur = OV.filter || "";
+  sel.innerHTML = `<option value="">all</option>` + S.workspaces.map((w) => `<option value="${w.id}"${w.id === cur ? " selected" : ""}>${esc(w.slug)}</option>`).join("");
   sel.value = cur;
   sel.classList.toggle("on", !!cur);
 }
 qs("#chat-ws").onchange = (e) => pickWs(e.target.value || null);
-// Switching project = switching conversation: the daemon's sticky moves with it, and the log is
-// redrawn from THAT thread's history (mid-turn it just narrows, so nothing in flight is lost).
-async function pickWs(ws) {
-  OV.sticky = ws || null;
+// The view filter (null = every project). Routing never reads it; the log is redrawn from that
+// project's own history (mid-turn it just narrows, so nothing in flight is lost).
+function pickWs(ws) {
+  OV.filter = ws || null;
+  try { if (OV.filter) localStorage.setItem("desk-chat-filter", OV.filter); else localStorage.removeItem("desk-chat-filter"); } catch {}
   renderWsPick();
   applyWsFilter();
-  try { await api("/thread/sticky", { method: "POST", body: JSON.stringify({ ws: OV.sticky }) }); }
-  catch (err) { toast("sticky: " + errMsg(err)); }
   if (!OV.busy && !OV.queue.length) ovHistory(true);
-}
-// Where his last answer landed IS the new sticky — and the new scope. A fleet-wide turn releases it.
-function noteLanding(ws) {
-  if (ws === undefined) return;
-  OV.sticky = ws || null;
-  renderWsPick();
-  applyWsFilter();
 }
 function chatOpen(open) {
   document.body.classList.toggle("chat-open", open);
@@ -5692,14 +5682,17 @@ qs("#chat-model").onchange = async () => {
   } catch (e) { toast(e.message); loadRobertModel(); }
 };
 qs("#chat-new").onclick = async () => {
-  // One thread, N conversations: this resets the one the thread is currently on, not all of them.
-  const w = OV.sticky ? wsById(OV.sticky) : null;
+  // One thread, N conversations: this resets one of them — the filtered project, else the one his
+  // last answer landed on — not all of them.
+  const target = OV.filter || OV.sticky || null;
+  const w = target ? wsById(target) : null;
   if (!confirm(`New conversation${w ? " for #" + w.slug : " (the whole shop)"}? He keeps the transcript but forgets the context.`)) return;
-  try { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: OV.sticky || null }) }); } catch (e) { return toast(e.message); }
-  OV.log.innerHTML = "";
+  try { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: target }) }); } catch (e) { return toast(e.message); }
+  if (OV.filter) OV.log.innerHTML = ""; else ovHistory(true);
   toast("new conversation" + (w ? " · #" + w.slug : ""));
 };
 const input0 = qs("#chat-input");
+TagComplete(input0, () => S.workspaces);
 input0.addEventListener("input", () => { input0.style.height = "auto"; input0.style.height = Math.min(input0.scrollHeight, window.innerHeight * 0.45) + "px"; });
 input0.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); return ask(true); }
@@ -5829,9 +5822,8 @@ async function ask(now) {
 }
 // Typed or spoken, a line goes in the same way.
 function queueAsk(text, now, spoken = false, atts = []) {
-  // On a picked project the line is chipped with it from the start (so the scope keeps it on screen);
-  // on auto the router decides where it lands, and the answer fills the chip in.
-  const bub = ovLine("you" + (OV.busy ? " queued" : ""), text, OV.sticky ?? undefined);
+  // The router decides where it lands; the answer fills the chip in.
+  const bub = ovLine("you" + (OV.busy ? " queued" : ""), text, undefined, true, true);
   if (spoken) bub.classList.add("voice");
   attBubble(bub, atts);
   OV.queue.push({ text, bub, atts });
@@ -5878,11 +5870,14 @@ async function flush() {
     if (VC.on) body.voice = true;
     const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
     if (r?.how === "ask") { item.bub.querySelector(".wsc")?.remove(); askWhere(r, item.text, item.atts); if (VC.on) vcAskWhere(r, item.text); }
-    else { setChip(item.bub, r?.ws ?? null); noteLanding(r?.ws ?? null); }
+    else { setChip(item.bub, r?.ws ?? null); OV.sticky = r?.ws ?? null; }
     runActions(r?.actions);
   } catch (err) {
-    ovLine("rob", OV.stopped ? "(stopped)" : "(failed: " + String(err.message).slice(0, 160) + ")", OV.sticky ?? null, false);
-    if (VC.on && !OV.stopped) vcEnqueue(VC.lang === "es" ? "Eso falló." : "That didn't go through.");
+    // The request dropped (tunnel, sleep) but the turn runs on in the daemon: his answer still
+    // arrives on the bus as agent.push, so this is a note, not a failure.
+    const dropped = err instanceof TypeError || [502, 503, 504, 520, 521, 522, 523, 524].includes(err.status);
+    ovLine("rob", OV.stopped ? "(stopped)" : dropped ? "(connection dropped — he is still on it, his answer lands here)" : "(failed: " + errMsg(err).slice(0, 160) + ")", null, false, true);
+    if (VC.on && !OV.stopped && !dropped) vcEnqueue(VC.lang === "es" ? "Eso falló." : "That didn't go through.");
   }
   finally {
     OV.busy = false;
@@ -5894,7 +5889,7 @@ async function flush() {
 // The router refused to guess. One line, the candidates as chips — tapping one re-sends the SAME
 // message on that project (nothing ran yet, so there is nothing to undo).
 function askWhere(r, text, atts) {
-  const d = ovLine("rob", r.reply, OV.sticky ?? null, false);
+  const d = ovLine("rob", r.reply, null, false, true);
   const row = document.createElement("div");
   row.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;margin-top:8px";
   for (const c of r.ask?.candidates || []) {
@@ -5905,7 +5900,7 @@ function askWhere(r, text, atts) {
     b.onclick = () => {
       row.remove();
       // Nothing ran, so the files it was sent with go in again with it.
-      const bub = ovLine("you", text, c.ws);
+      const bub = ovLine("you", text, c.ws, true, true);
       attBubble(bub, atts);
       OV.queue.push({ text, bub, ws: c.ws, picked: true, atts });
       flush();
@@ -5961,7 +5956,6 @@ function stepsBox(ws, turn, label) {
   box.innerHTML = `<button class="sh" type="button"></button><ol></ol>`;
   box._steps = [];
   setChip(box, ws, false);
-  if (OV.filter !== null && (box.dataset.ws || "") !== OV.filter) box.classList.add("hidden-ws");
   return box;
 }
 function addSteps(box, steps) {
@@ -5993,9 +5987,9 @@ OV.log.addEventListener("click", (e) => {
   const box = b.closest(".steps"); if (box.classList.contains("live")) return;
   box.classList.toggle("open");
 });
-// The log is one scope's history. auto → ws=all: every project's rows and the unscoped ones, one
-// timeline, each chipped with its project. A picked project → that thread's own last rows, so a
-// busy fleet cannot crowd it out. `reload` = the picker moved: redraw from scratch.
+// The log is the filter's history. No filter → ws=all: every project's rows and the unscoped ones,
+// one timeline, each chipped with its project. A filtered project → that thread's own last rows, so
+// a busy fleet cannot crowd it out. `reload` = the filter moved: redraw from scratch.
 async function ovHistory(reload = false) {
   try {
     if (!reload) {
@@ -6005,7 +5999,7 @@ async function ovHistory(reload = false) {
       applyWsFilter();
     }
     const gen = ++OV.histGen;
-    const h = await api(OV.sticky ? "/agent/history?ws=" + encodeURIComponent(OV.sticky) + "&limit=16" : "/agent/history?ws=all&limit=16");
+    const h = await api(OV.filter ? "/agent/history?ws=" + encodeURIComponent(OV.filter) + "&limit=16" : "/agent/history?ws=all&limit=16");
     if (gen !== OV.histGen) return; // the picker moved again while this was in flight
     if (reload) OV.log.innerHTML = "";
     for (const m of h.messages || []) {
@@ -6498,7 +6492,7 @@ function connectBus() {
     if (e.topic === "agent.delta" && e.text) {
       if (e.kind && e.kind !== "text") return ovWork(true, e.kind === "thinking" ? "thinking…" : String(e.text).replace(/\s+/g, " ").slice(0, 140));
       ovWork(true, "answering…");
-      if (!OV.pending) OV.pending = ovLine("rob pending", "", e.ws === undefined ? OV.sticky ?? undefined : e.ws, false);
+      if (!OV.pending) OV.pending = ovLine("rob pending", "", e.ws ?? null, false, e.client === CLIENT);
       OV.pending._raw = (OV.pending._raw || "") + e.text;
       OV.pending.innerHTML = mdChat(OV.pending._raw);
       OV.log.scrollTop = OV.log.scrollHeight;
@@ -6519,7 +6513,7 @@ function connectBus() {
       settleSteps(e.turn, e.steps, e.ws ?? null);
       if (e.reply) {
         // Your own turn's chip is on the line you typed, which this page already drew.
-        ovLine("rob", e.reply, e.ws ?? null, !fromHere && !e.you);
+        ovLine("rob", e.reply, e.ws ?? null, !fromHere && !e.you, fromHere);
         if (!chatIsOpen()) { OV.unread++; const b = qs("#fab-unread"); b.textContent = OV.unread; b.hidden = false; }
       }
       return;
