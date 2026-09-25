@@ -537,6 +537,12 @@ export const CONFIG = {
   terminalFailoverMax: Math.max(1, Number(process.env.CHRONOS_TERMINAL_FAILOVER_MAX ?? 3)),
   // Someone typed into it this recently → it is theirs; hold off and look again after the window.
   terminalFailoverTypingSec: Math.max(1, Number(process.env.CHRONOS_TERMINAL_FAILOVER_TYPING_SEC ?? 20)),
+  // A computer that has been offline this long with live Desk terminals on it (src/host-failover.ts):
+  // each one is reopened on an online computer — the brain first — with its conversation or a brief,
+  // and the old one is ended (end_reason host_failover). off → they wait for the host to come back.
+  hostFailover: !/^(off|0|false|no)$/i.test(process.env.CHRONOS_HOST_FAILOVER ?? "on"),
+  // Minutes a host must stay offline first: a laptop lid closed or a Wi-Fi blip must not move work.
+  hostFailoverGraceMin: ((g) => (Number.isFinite(g) ? Math.max(0, g) : 5))(Number(process.env.CHRONOS_HOST_FAILOVER_GRACE_MIN ?? 5)),
   // Minutes before a timed calendar event to fire a Mac + Telegram reminder (0 = off).
   reminderLeadMin: Number(process.env.CHRONOS_REMINDER_LEAD ?? 10),
   // Calendar noise filters (case-insensitive substring match). Hidden from agenda + reminders.

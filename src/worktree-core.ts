@@ -126,3 +126,48 @@ export function worktreeSandboxDirs(
   if (!repoPath || path.resolve(repoPath) === path.resolve(cwd)) return { readonly: [], grant: [] };
   return { readonly: [repoPath], grant: [path.join(repoPath, ".git"), path.join(repoPath, ".mc")] };
 }
+
+/**
+ * A worktree for `branch` AS IT IS ON ORIGIN, or null when origin has no such branch (or git fails).
+ *
+ * For work that moves to this checkout from another computer (host failover, src/host-failover.ts):
+ * the other Mac's worktree went down with it, and the only copy of its commits this machine can reach
+ * is what was pushed. Unlike ensureBranchWorktree — which creates a missing branch off the default
+ * branch — this never invents a branch: no pushed branch means null, and the caller decides.
+ * Reuses a worktree this checkout already has for the branch; an existing local branch is
+ * fast-forwarded to origin's when it can be (best-effort — a diverged local branch is left as is).
+ */
+export async function ensureOriginBranchWorktree(repoPath: string, branch: string): Promise<string | null> {
+  if (!repoPath || !branch || !fs.existsSync(repoPath) || !(await isGitRepo(repoPath))) return null;
+  try {
+    await git(repoPath, ["fetch", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`], 30_000);
+    await git(repoPath, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]);
+  } catch {
+    return null;
+  }
+  const existing = await existingWorktree(repoPath, branch);
+  if (existing && fs.existsSync(existing)) {
+    try { await git(existing, ["merge", "--ff-only", `origin/${branch}`], 30_000); } catch {}
+    return existing;
+  }
+  const root = worktreeRootFor(repoPath);
+  let wtPath = path.join(root, branch.replace(/\//g, "-"));
+  if (fs.existsSync(wtPath)) {
+    try { await git(repoPath, ["worktree", "prune"]); } catch {}
+    // A directory git does not know about: never write into it, take a sibling name instead.
+    if (fs.existsSync(wtPath)) wtPath = `${wtPath}-moved-${Date.now().toString(36)}`;
+  }
+  try {
+    fs.mkdirSync(root, { recursive: true });
+    const local = (await git(repoPath, ["branch", "--list", branch])) !== "";
+    if (local) {
+      await git(repoPath, ["worktree", "add", wtPath, branch], 30_000);
+      try { await git(wtPath, ["merge", "--ff-only", `origin/${branch}`], 30_000); } catch {}
+    } else {
+      await git(repoPath, ["worktree", "add", "--track", "-b", branch, wtPath, `origin/${branch}`], 30_000);
+    }
+    return fs.existsSync(wtPath) ? fs.realpathSync(wtPath) : null;
+  } catch {
+    return null;
+  }
+}
