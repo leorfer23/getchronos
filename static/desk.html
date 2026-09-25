@@ -903,6 +903,8 @@
   .ib-row .m { grid-column:3; grid-row:1; font-size:12.5px; color:var(--faint); text-align:right; white-space:nowrap; }
   .ib-row .acts { grid-column:3; grid-row:2; display:flex; gap:4px; justify-content:flex-end; }
   .ib-row .acts .btn { padding:1px 10px; font-size:13.5px; }
+  .ib-row .acts .ib-hours { width:84px; padding:1px 8px; font-size:13.5px; }
+  .ib-row .e { grid-column:2 / span 2; font-size:13px; color:var(--danger); overflow-wrap:anywhere; }
   .ib-row.urgent .t::before { content:"● "; color:var(--danger); }
   .ib-empty { padding:34px 0; text-align:center; color:var(--faint); }
   /* Memory: the workspace's memory tree on the left (index → topic branches, inbox, other memos), one memo on the right. */
@@ -1652,7 +1654,8 @@
 
 <!-- Inbox: per client, what needs you — Slack DMs/@mentions the triage filed, tracker items assigned to
      you, comments for you, status moves on your tasks. Nothing here starts on its own: Dispatch opens a
-     terminal that investigates and proposes; Later snoozes; ✕ dismisses. -->
+     terminal that investigates and proposes; ✓ Done closes it (and its tracker task, with your hours);
+     Later snoozes; ⋯ → Won't do mutes the task for good; ✕ dismisses. -->
 <dialog id="dlg-inbox">
   <div class="dlg">
     <h3>Inbox <span class="hint" id="ib-hint"></span></h3>
@@ -5568,8 +5571,13 @@ qs("#btn-memory").onclick = () => openMemory();
 // ── inbox ────────────────────────────────────────────────────────────────────────────────────
 // What needs you, per client (src/inbox.ts). The badge is the unread count across clients; the page
 // lists them grouped by client, newest first. A row starts nothing: Dispatch opens a terminal that
-// investigates and proposes (POST /inbox/:id/dispatch), Later snoozes it, ✕ lets it go.
-const IB = { counts: {}, items: [], ws: "", later: null, t: 0 };
+// investigates and proposes (POST /inbox/:id/dispatch), ✓ Done closes it — a tracker row asks for his
+// hours inline and closes the Jira/ClickUp task too (POST /inbox/:id/done) — Later snoozes it,
+// ⋯ → Won't do mutes its task so it never files again (POST /inbox/:id/wontdo), ✕ lets it go.
+// One row at a time is "open" (IB.open = {id, mode}: later | done | more); errors stay on their row.
+const IB = { counts: {}, items: [], ws: "", open: null, err: {}, hours: "", t: 0 };
+const ibTracker = (i) => !!i.ref && (i.source === "jira" || i.source === "clickup");
+const ibMode = (id) => IB.open && IB.open.id === id ? IB.open.mode : null;
 const IB_ICON = { slack: "💬", jira: "🔷", clickup: "✅" };
 function syncInboxBadge() {
   const n = Object.values(IB.counts).reduce((a, b) => a + b, 0);
@@ -5580,11 +5588,13 @@ async function loadInbox() {
   const r = await api("/inbox");
   IB.items = r.items || []; IB.counts = r.counts || {};
   syncInboxBadge();
-  if (qs("#dlg-inbox").open) renderInbox();
+  if (!qs("#dlg-inbox").open) return;
+  renderInbox();
+  if (IB.open?.mode === "done") qs("#ib-list .ib-hours")?.focus();
 }
 function loadInboxSoon() { clearTimeout(IB.t); IB.t = setTimeout(() => loadInbox().catch(() => {}), 250); }
 async function openInbox() {
-  IB.later = null;
+  IB.open = null; IB.err = {};
   qs("#dlg-inbox").showModal();
   renderInbox();
   try { await loadInbox(); } catch (e) { toast(errMsg(e)); }
@@ -5606,21 +5616,54 @@ function renderInbox() {
 }
 function ibRow(i) {
   const title = i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer" title="Open in ${esc(i.source)}">${esc(i.title)} ↗</a>` : esc(i.title);
-  const acts = IB.later === i.id
-    ? `<button class="btn" data-a="snooze" data-until="2h">2h</button><button class="btn" data-a="snooze" data-until="tomorrow 9:00">Tomorrow 9:00</button><button class="icon" data-a="back" title="Back">‹</button>`
-    : `<button class="btn primary" data-a="go" title="Open a terminal in this client that investigates and proposes — it answers no one">Dispatch</button><button class="btn" data-a="later" title="Snooze">Later</button><button class="icon" data-a="dismiss" title="Dismiss">✕</button>`;
+  const back = `<button class="icon" data-a="back" title="Back">‹</button>`;
+  const where = i.source === "jira" ? "Jira" : "ClickUp";
+  const mode = ibMode(i.id);
+  const acts = mode === "later"
+    ? `<button class="btn" data-a="snooze" data-until="2h">2h</button><button class="btn" data-a="snooze" data-until="tomorrow 9:00">Tomorrow 9:00</button>${back}`
+    : mode === "done"
+    ? `<input class="ib-hours" type="number" min="0" step="0.25" inputmode="decimal" placeholder="hours" value="${esc(IB.hours)}" title="Hours spent — optional · ⏎ closes"><button class="btn primary" data-a="close" title="Close the ${where} task${i.source === "jira" ? " " + esc(i.ref) : ""}">✓ Close in ${where}</button>${back}`
+    : mode === "more"
+    ? `<button class="btn" data-a="wontdo" title="Mute this task — nothing about it lands here again. Nothing is written to ${i.source === "slack" ? "Slack" : where}.">Won't do</button>${back}`
+    : `<button class="btn primary" data-a="go" title="Open a terminal in this client that investigates and proposes — it answers no one">Dispatch</button>` +
+      `<button class="btn" data-a="done" title="${ibTracker(i) ? `Close the ${where} task — asks for your hours` : "Resolve it"}">✓ Done</button>` +
+      `<button class="btn" data-a="later" title="Snooze">Later</button><button class="icon" data-a="more" title="More">⋯</button><button class="icon" data-a="dismiss" title="Dismiss">✕</button>`;
+  const err = IB.err[i.id] ? `<div class="e">${esc(IB.err[i.id])}</div>` : "";
   return `<div class="ib-row${i.urgent ? " urgent" : ""}" data-id="${esc(i.id)}"><span class="src" title="${esc(i.source)} · ${esc(i.kind)}">${IB_ICON[i.source] || "•"}</span>` +
     `<div class="t">${title}</div><div class="m">${i.actor ? esc(i.actor) + " · " : ""}${esc(age(i.created_at))}</div>` +
-    `<div class="w" title="${esc(i.why || "")}">${esc(i.why || "")}</div><div class="acts">${acts}</div></div>`;
+    `<div class="w" title="${esc(i.why || "")}">${esc(i.why || "")}</div><div class="acts">${acts}</div>${err}</div>`;
 }
+// ✓ Done: POST /inbox/:id/done. A tracker refusal (a Done screen that wants hours, a status that does
+// not exist) stays on the row; a close that went through but whose comment/time entry did not says so.
+async function ibDone(id, hours) {
+  const r = await api("/inbox/" + id + "/done", { method: "POST", body: JSON.stringify(hours ? { hours } : {}) });
+  IB.open = null; delete IB.err[id];
+  if (r.warning) toast(r.warning);
+  await loadInbox();
+}
+function ibFail(id, err) { IB.err[id] = errMsg(err); renderInbox(); }
 qs("#ib-ws").onclick = (e) => { const b = e.target.closest("[data-ws]"); if (!b) return; IB.ws = b.dataset.ws; renderInbox(); };
 qs("#ib-list").onclick = async (e) => {
   const b = e.target.closest("[data-a]"); if (!b) return;
   const id = b.closest("[data-id]").dataset.id;
   const a = b.dataset.a;
-  if (a === "later") { IB.later = id; return renderInbox(); }
-  if (a === "back") { IB.later = null; return renderInbox(); }
+  if (a === "later" || a === "more") { IB.open = { id, mode: a }; return renderInbox(); }
+  if (a === "back") { IB.open = null; delete IB.err[id]; return renderInbox(); }
+  const item = IB.items.find((i) => i.id === id);
+  if (a === "done" && item && ibTracker(item)) {
+    IB.open = { id, mode: "done" }; IB.hours = ""; renderInbox();
+    return qs(`#ib-list [data-id="${CSS.escape(id)}"] .ib-hours`)?.focus();
+  }
   b.disabled = true;
+  if (a === "done" || a === "close") {
+    const h = a === "close" ? Number(b.parentElement.querySelector(".ib-hours").value) : 0;
+    return ibDone(id, h > 0 ? h : 0).catch((err) => ibFail(id, err));
+  }
+  if (a === "wontdo") {
+    return api("/inbox/" + id + "/wontdo", { method: "POST", body: "{}" })
+      .then(() => { IB.open = null; delete IB.err[id]; return loadInbox(); })
+      .catch((err) => ibFail(id, err));
+  }
   try {
     if (a === "go") {
       const { session } = await api("/inbox/" + id + "/dispatch", { method: "POST", body: "{}" });
@@ -5629,9 +5672,17 @@ qs("#ib-list").onclick = async (e) => {
       return;
     }
     if (a === "dismiss") await api("/inbox/" + id + "/dismiss", { method: "POST", body: "{}" });
-    if (a === "snooze") { await api("/inbox/" + id + "/snooze", { method: "POST", body: JSON.stringify({ until: b.dataset.until }) }); IB.later = null; }
+    if (a === "snooze") { await api("/inbox/" + id + "/snooze", { method: "POST", body: JSON.stringify({ until: b.dataset.until }) }); IB.open = null; }
     await loadInbox();
   } catch (err) { b.disabled = false; toast(errMsg(err)); }
+};
+// The typed hours survive a repaint (another row landing while he types).
+qs("#ib-list").oninput = (e) => { if (e.target.classList.contains("ib-hours")) IB.hours = e.target.value; };
+// The hours prompt: ⏎ closes the task, Esc backs out (without closing the whole dialog).
+qs("#ib-list").onkeydown = (e) => {
+  if (!e.target.classList.contains("ib-hours")) return;
+  if (e.key === "Enter") { e.preventDefault(); e.target.parentElement.querySelector('[data-a="close"]').click(); }
+  if (e.key === "Escape") { e.preventDefault(); IB.open = null; renderInbox(); }
 };
 qs("#ib-close").onclick = () => qs("#dlg-inbox").close();
 qs("#btn-inbox").onclick = () => openInbox();

@@ -71,6 +71,22 @@ export async function fetchTasks(cfg: any): Promise<any[]> {
   return out;
 }
 
+// The ClickUp workspace ("team") a task lives in — time entries are filed per team, not per task.
+// cfg.team_id (team-scope sync) already says it; otherwise GET /task/{id} does, cached per list on
+// success only (every task of one list is in one team).
+const clickupTeam = new Map<string, string>();
+async function teamIdFor(cfg: any, taskId: string): Promise<string> {
+  if (cfg.team_id) return String(cfg.team_id);
+  const hit = clickupTeam.get(String(cfg.list_id));
+  if (hit) return hit;
+  const r = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, { headers: { Authorization: cfg.token } });
+  if (!r.ok) throw new Error(`clickup task ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  const id = (await r.json())?.team_id;
+  if (!id) throw new Error(`clickup task ${taskId} carries no team_id — set connector_config.team_id`);
+  if (cfg.list_id) clickupTeam.set(String(cfg.list_id), String(id));
+  return String(id);
+}
+
 export const clickup: Connector = {
   name: "clickup",
   async me(cfg) {
@@ -153,6 +169,26 @@ export const clickup: Connector = {
       body: JSON.stringify({ comment_text: body }),
     });
     if (!r.ok) throw new Error(`clickup comment ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  },
+
+  // One time entry of `hours`, ending now, on the token owner's timesheet. cfg.time_billable, when
+  // set, marks it billable (or not); otherwise ClickUp's own default applies.
+  async logTime(cfg, externalId, hours): Promise<void> {
+    const { token } = cfg;
+    if (!token) throw new Error("clickup connector needs { token }");
+    const team = await teamIdFor(cfg, externalId);
+    const duration = Math.round(hours * 3_600_000);
+    const r = await fetch(`https://api.clickup.com/api/v2/team/${team}/time_entries`, {
+      method: "POST",
+      headers: { Authorization: token, "content-type": "application/json" },
+      body: JSON.stringify({
+        tid: externalId,
+        start: Date.now() - duration,
+        duration,
+        ...(typeof cfg.time_billable === "boolean" ? { billable: cfg.time_billable } : {}),
+      }),
+    });
+    if (!r.ok) throw new Error(`clickup time entry ${r.status}: ${(await r.text()).slice(0, 200)}`);
   },
 
   async createTask(cfg, input) {

@@ -1023,3 +1023,8 @@ export const NewInboxItemSchema = z.object({
 });
 // Snooze until — same grammar as `mc pad follow`: 2h, +1d, tomorrow 9:00, monday 10, an ISO stamp.
 export const InboxSnoozeSchema = z.object({ until: z.string().trim().min(1).max(80) });
+/** ✓ Done on an inbox row: his hours on the task (Jira Hours Spent / a ClickUp time entry) and an optional comment. */
+export const InboxDoneSchema = z.object({
+  hours: z.number().positive().max(999).optional(),
+  comment: z.string().trim().max(4000).optional().transform((s) => s || undefined),
+});

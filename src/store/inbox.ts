@@ -8,7 +8,8 @@ import { now } from "./util.js";
  */
 export const INBOX_SOURCES = ["slack", "jira", "clickup"] as const;
 export const INBOX_KINDS = ["dm", "mention", "self_note", "assigned", "comment", "status"] as const;
-export const INBOX_STATES = ["new", "snoozed", "dismissed", "dispatched"] as const;
+/** `done`: he closed it (the tracker task too, for a tracker row). `muted`: Won't do — its ref files nothing again. */
+export const INBOX_STATES = ["new", "snoozed", "dismissed", "dispatched", "done", "muted"] as const;
 export type InboxSource = (typeof INBOX_SOURCES)[number];
 export type InboxKind = (typeof INBOX_KINDS)[number];
 export type InboxState = (typeof INBOX_STATES)[number];
@@ -72,7 +73,7 @@ export const inbox = {
   get(id: string): InboxItem | undefined {
     return db.prepare("SELECT * FROM inbox_items WHERE id=?").get(id) as InboxItem | undefined;
   },
-  /** Newest first. Default: what still needs him (`new`); `all` adds snoozed/dismissed/dispatched. */
+  /** Newest first. Default: what still needs him (`new`); `all` adds every other state. */
   list(filter: { workspace_id?: string | null; all?: boolean; limit?: number } = {}): InboxItem[] {
     wake();
     const where: string[] = [];
@@ -96,6 +97,20 @@ export const inbox = {
   },
   snooze(id: string, until: string): InboxItem | undefined {
     db.prepare("UPDATE inbox_items SET state='snoozed', snooze_until=?, updated_at=? WHERE id=? AND state IN ('new','snoozed')").run(until, now(), id);
+    return this.get(id);
+  },
+  /**
+   * Close a row as `done` or `muted`, and with it every other still-open row about the same tracker
+   * task (an older comment on a task he just closed is not news any more). Returns the row.
+   */
+  resolve(id: string, state: "done" | "muted"): InboxItem | undefined {
+    const row = this.get(id);
+    if (!row) return undefined;
+    const at = now();
+    db.prepare("UPDATE inbox_items SET state=?, snooze_until=NULL, updated_at=? WHERE id=?").run(state, at, id);
+    if (row.ref)
+      db.prepare("UPDATE inbox_items SET state=?, snooze_until=NULL, updated_at=? WHERE workspace_id=? AND source=? AND ref=? AND id<>? AND state IN ('new','snoozed')")
+        .run(state, at, row.workspace_id, row.source, row.ref, id);
     return this.get(id);
   },
   /** Take the row for a dispatch. False when it is already dispatched or dismissed — one press, one terminal. */

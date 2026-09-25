@@ -212,6 +212,40 @@ export async function pushHours(t: Ticket, hours: number): Promise<{ external_id
   return { external_id: t.external_id!, hours };
 }
 
+// Close a tracker task by its own id, with no Chronos ticket needed — the inbox's ✓ Done
+// (src/inbox-done.ts). Explicit operator action only. Order is idempotent writes first, so a failure
+// can simply be retried: Jira's Hours Spent field (set, not added) → the close → then the writes that
+// would double on a retry (a ClickUp time entry, the comment). Those come back as `warning` instead of
+// throwing: the task is closed by then, and a retry would log the time or post the comment twice.
+// The comment is his own words, so unlike pushComment it is not marked as pushed (it stays his prose).
+export async function closeExternal(
+  wsId: string,
+  system: string,
+  externalId: string,
+  opts: { hours?: number; comment?: string } = {},
+): Promise<{ target: string; warning?: string }> {
+  const ws = workspaces.get(wsId);
+  const conn = ws ? CONNECTORS[ws.ticket_connector] : undefined;
+  if (!conn || conn.name !== system) throw new Error(`this workspace has no ${system} connector (it syncs ${ws?.ticket_connector ?? "nothing"})`);
+  let cfg: Record<string, any>;
+  try { cfg = ws!.connector_config ? JSON.parse(ws!.connector_config) : {}; } catch { throw new Error(`${system} connector_config is not valid JSON`); }
+  const target = system === "clickup"
+    ? cfg.done_status ?? externalStatusFor("done", cfg) ?? "complete"
+    : externalStatusFor("done", cfg) ?? "Done";
+  const { hours, comment } = opts;
+  if (hours !== undefined && !conn.setHours && !conn.logTime) throw new Error(`${system} has no way to record hours`);
+  if (hours !== undefined && conn.setHours) await conn.setHours(cfg, externalId, hours);
+  await conn.pushStatus(cfg, externalId, target, hours);
+  const warnings: string[] = [];
+  if (hours !== undefined && !conn.setHours && conn.logTime) {
+    try { await conn.logTime(cfg, externalId, hours); } catch (e: any) { warnings.push(`closed, but the ${hours}h time entry failed: ${String(e?.message ?? e).slice(0, 200)}`); }
+  }
+  if (comment) {
+    try { await conn.addComment(cfg, externalId, comment); } catch (e: any) { warnings.push(`closed, but the comment failed: ${String(e?.message ?? e).slice(0, 200)}`); }
+  }
+  return { target, ...(warnings.length ? { warning: warnings.join("; ") } : {}) };
+}
+
 // Best-effort close on delete: push the tracker's mapped 'done' status so the upstream task doesn't
 // sit open forever. Never throws — the caller (the delete route) always tombstones the external id
 // regardless of whether this succeeds, so a failed/unmapped push never lets the ticket respawn.
