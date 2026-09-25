@@ -113,7 +113,7 @@ import { flowData } from "./flow.js";
 import { transcribe, audioFilename, transcribeFailure } from "./transcribe.js";
 import { speak, voiceFor, listVoices } from "./speak.js";
 import { askManagerWeb, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
-import { askLine, commitTurn, explainRoute, getSticky, resolveTurn, setSticky } from "./thread-router.js";
+import { askLine, commitTurn, explainRoute, getSticky, resolveTurnSmart, setSticky } from "./thread-router.js";
 import { robertWakes, leadEvents, leadSlices, memoryRelations, type RobertWake, type LeadEvent } from "./store.js";
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
 import { leadEventPayload, waitForLeadEvents } from "./robert-drive.js";
@@ -4484,7 +4484,7 @@ export function startServer() {
     // An explicit workspace selection wins; otherwise the thread router reads the workspace out of the
     // message (a #tag, a ticket key, a project name, the terminal on screen, or where the last one
     // landed). Each workspace answers on its OWN warm Robert, so no context can cross between them.
-    const turn = resolveTurn(req.body.text, {
+    const turn = await resolveTurnSmart(req.body.text, {
       selected: req.body.ws ?? null,
       route: req.body.route,
       surface,

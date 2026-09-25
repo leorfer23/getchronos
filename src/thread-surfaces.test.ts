@@ -89,7 +89,7 @@ test("the stored row carries the ROUTED workspace, so each recap stays that proj
 });
 
 test("POST /agent routes, refuses to guess, and answers with where it landed", () => {
-  assert.match(api, /const turn = resolveTurn\(req\.body\.text, \{/);
+  assert.match(api, /const turn = await resolveTurnSmart\(req\.body\.text, \{/);
   assert.match(api, /selected: req\.body\.ws \?\? null/);
   assert.match(api, /stagedSessionId: req\.body\.session \?\? null/);
   // An ask returns candidates instead of running a manager.
@@ -110,7 +110,7 @@ test("the debug and control routes exist and are admin-gated", () => {
 });
 
 test("Telegram runs the turn on the routed workspace's manager and says where it landed", () => {
-  assert.match(tg, /const turn = resolveTurn\(text, \{/);
+  assert.match(tg, /const turn = await resolveTurnSmart\(text, \{/);
   assert.match(tg, /selected: pick \? pick\.ws : activeWsForChat\(chat\)/);
   assert.match(tg, /if \(turn\.ask\) \{\s*await offerRoute\(chat, text, msgId, turn\.ask\);/);
   // The prefix appears only when he did NOT say where himself.
