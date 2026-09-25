@@ -108,6 +108,21 @@ test("a divider only cuts its own workspace's context", () => {
   assert.match(chat.contextBlock({ workspaceId: ws.id }), /scoped history/);
 });
 
+test("everywhere recap spans every workspace; only an unscoped divider cuts it", () => {
+  const acme = workspaces.create({ slug: "acme", name: "Acme", config_dir: "/tmp/acme" });
+  const globex = workspaces.create({ slug: "globex", name: "Globex", config_dir: "/tmp/globex" });
+  chat.add("before the shop divider", "a");
+  chat.divide();
+  chat.add("acme invoice", "a", "web", acme.id);
+  chat.divide(globex.id); // one project's new conversation
+  chat.add("globex retry", "b", "web", globex.id);
+  const block = chat.contextBlock({ everywhere: true });
+  assert.match(block, /across every workspace/);
+  assert.match(block, /acme invoice/);
+  assert.match(block, /globex retry/);
+  assert.doesNotMatch(block, /before the shop divider/);
+});
+
 test("deleting a workspace takes its conversation with it", () => {
   const ws = workspaces.create({ slug: "gone", name: "Gone", config_dir: "/tmp/gone" });
   chat.add("keep me", "a");

@@ -4497,6 +4497,10 @@ export function startServer() {
     }
     commitTurn(surface, turn);
     const ws = turn.ws;
+    // Auto-routed (no #tag, no hand pick): the fleet-wide Robert runs it, focused on the router's pick,
+    // so one untagged line can reach every project. The row still files under `ws` for the view filter.
+    // A #tag or a hand pick keeps that workspace's own Robert (its client profile, MCP and accounts).
+    const runWs = turn.routed && turn.how !== "tag" ? null : ws;
     const text = turn.text; // the #tag never reaches the model
     const client = req.body.client;
     const turnId = randomUUID();
@@ -4515,7 +4519,7 @@ export function startServer() {
       // Single operator → broadcast on the bus (no per-client routing). POST result stays authoritative.
       // client + turn on every delta: the page that asked (a Desk on a voice call) speaks its own turn's
       // sentences as they stream, and nobody else's.
-      const { reply, actions, steps } = await askManagerWeb(prompt, (t, kind) => bus.publish({ topic: "agent.delta", text: t, kind, ws, client, turn: turnId }), ws, { voice: !!req.body.voice, turn: turnId });
+      const { reply, actions, steps } = await askManagerWeb(prompt, (t, kind) => bus.publish({ topic: "agent.delta", text: t, kind, ws, client, turn: turnId }), runWs, { voice: !!req.body.voice, turn: turnId, focus: runWs ? null : ws });
       const row = chat.add(text, reply || "", "web", ws, steps, shown);
       chat.prune(2000);
       bus.publish({

@@ -96,7 +96,7 @@ test("POST /agent routes, refuses to guess, and answers with where it landed", (
   assert.match(api, /if \(turn\.ask\) \{[\s\S]*?ask: \{ why: turn\.ask\.why, candidates: turn\.ask\.candidates \}/);
   // The turn runs on the routed workspace's own manager, and the row is stored under it. `prompt` is
   // `text` plus any attachment paths (chatAttachmentsBlock); the stored `you` stays the clean text.
-  assert.match(api, /askManagerWeb\(prompt, \(t, kind\) => bus\.publish\(\{ topic: "agent\.delta", text: t, kind, ws, client, turn: turnId \}\), ws, \{ voice: !!req\.body\.voice, turn: turnId \}\)/);
+  assert.match(api, /askManagerWeb\(prompt, \(t, kind\) => bus\.publish\(\{ topic: "agent\.delta", text: t, kind, ws, client, turn: turnId \}\), runWs, \{ voice: !!req\.body\.voice, turn: turnId, focus: runWs \? null : ws \}\)/);
   assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown\)/);
   assert.match(api, /res\.json\(\{ reply, actions, ws, how: turn\.how, turn: turnId \}\)/);
   assert.match(api, /commitTurn\(surface, turn\)/);
@@ -116,7 +116,7 @@ test("Telegram runs the turn on the routed workspace's manager and says where it
   // The prefix appears only when he did NOT say where himself.
   assert.match(tg, /turn\.ws && turn\.how !== "tag" && turn\.how !== "selected" \? `#\$\{workspaces\.get\(turn\.ws\)\?\.slug \?\? "\?"\} · `/);
   // The routed workspace picks the warm manager, and the row is stored under it.
-  assert.match(tg, /const m = threadWs \? warmForChatWs\(chat, threadWs\) : warmForChat\(chat\)/);
+  assert.match(tg, /const m = runWs \? warmForChatWs\(chat, runWs\) : warmForChat\(chat\)/);
   assert.match(tg, /chatLog\.add\(body, storedReply, "telegram", threadWs\)/);
   assert.match(tg, /ws: threadWs,/);
 });
@@ -144,13 +144,16 @@ test("the Desk renders one thread with a chip per row, routed by the daemon, nev
   assert.match(html, /if \(r\?\.how === "ask"\)/);
 });
 
-test("Robert is told he only ever sees this project — and that a handoff is fleet-level", () => {
+test("Robert is told he reaches every project — the router's pick is a focus, never a fence", () => {
   const threads = fs.readFileSync(path.join(process.cwd(), "agents/_blocks/threads.md"), "utf8");
   const coord = fs.readFileSync(path.join(process.cwd(), "agents/_blocks/coordinator.md"), "utf8");
-  assert.equal(threads.trim().split("\n").length, 6);
-  assert.match(threads, /never claim knowledge of another project's work/);
-  assert.match(threads, /`#all`/);
-  assert.match(coord, /CROSS-PROJECT WORK IS FLEET-LEVEL/);
+  assert.match(threads, /There is no project you lack power over/);
+  assert.match(threads, /Never tell him to re-send with `#all`/);
+  assert.doesNotMatch(threads, /ask him to repeat it with `#all`/);
+  assert.match(coord, /CROSS-PROJECT WORK IS YOURS/);
+  assert.match(api, /const runWs = turn\.routed && turn\.how !== "tag" \? null : ws;/);
+  assert.match(api, /focus: runWs \? null : ws/);
+  assert.match(tg, /const runWs = focusWs \? null : threadWs;/);
   for (const surface of ["agents/robert/web.md", "agents/robert/telegram.md"])
     assert.match(fs.readFileSync(path.join(process.cwd(), surface), "utf8"), /\{\{> threads\}\}/, surface);
 });

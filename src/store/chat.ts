@@ -118,20 +118,26 @@ export const chat = {
    * Excludes the brand-new user line (not stored yet). Caps length so prompts stay small.
    */
   contextBlock(
-    opts: { limit?: number; maxChars?: number; workspaceId?: string | null } = {},
+    opts: { limit?: number; maxChars?: number; workspaceId?: string | null; everywhere?: boolean } = {},
   ): string {
     const limit = Math.min(Math.max(opts.limit ?? 12, 1), 40);
     const maxChars = opts.maxChars ?? 6000;
-    const all = this.recent(limit, opts.workspaceId ?? null) as Array<{
+    // everywhere = the one thread the operator sees (every workspace interleaved) — what the fleet-wide
+    // Robert reads on an auto-routed turn. Only an unscoped divider cuts it: one project's "new
+    // conversation" must not blank the whole shop's recap.
+    const all = (opts.everywhere ? this.recentAll(limit) : this.recent(limit, opts.workspaceId ?? null)) as Array<{
       you: string;
       reply: string;
       source?: string;
+      workspace_id?: string | null;
     }>;
-    const lastDivider = all.map((r) => r.source).lastIndexOf("divider");
+    const lastDivider = all.map((r) => (r.source === "divider" && (!opts.everywhere || !r.workspace_id) ? "divider" : "")).lastIndexOf("divider");
     const rows = lastDivider === -1 ? all : all.slice(lastDivider + 1);
     if (!rows.length) return "";
     const lines: string[] = [
-      "Operator↔manager thread for this workspace (web + Telegram + briefings). Use for continuity; do not re-introduce yourself.",
+      opts.everywhere
+        ? "Operator↔manager thread across every workspace (web + Telegram + briefings). Use for continuity; do not re-introduce yourself."
+        : "Operator↔manager thread for this workspace (web + Telegram + briefings). Use for continuity; do not re-introduce yourself.",
       "",
     ];
     for (const r of rows) {
