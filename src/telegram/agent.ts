@@ -717,6 +717,7 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
         reply: storedReply,
         at: row.created_at,
         source: "telegram",
+        id: row.id,
         ws: threadWs,
       });
     }
@@ -733,6 +734,7 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
           reply: err,
           at: row.created_at,
           source: "telegram",
+          id: row.id,
           ws: threadWs,
         });
       } catch {}

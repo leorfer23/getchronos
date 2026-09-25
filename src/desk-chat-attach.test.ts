@@ -122,10 +122,10 @@ test("the endpoints: upload is admin-gated raw bytes, the file comes back by id"
 test("the turn: paths go to the model, the stored line stays the words you typed", () => {
   // Ids in, paths rebuilt from our own rows — a client cannot name a path to be Read.
   assert.match(api, /\.map\(\(a\) => getChatAttachment\(a\.id\)\)/);
-  assert.match(api, /const prompt = text \+ chatAttachmentsBlock\(files\);/);
+  assert.match(api, /const prompt = quotePrompt\(quote\) \+ text \+ chatAttachmentsBlock\(files\);/);
   assert.match(api, /await askManagerWeb\(prompt,/);
   // `you` is the clean text; the display JSON rides beside it, on the row and on both bus events.
-  assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown\);/);
+  assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote\);/);
   assert.match(api, /topic: "agent\.asked", you: text,[^\n]*\.\.\.\(shown\.length \? \{ attachments: shown \} : \{\}\)/);
   assert.match(api, /\.\.\.\(shown\.length \? \{ attachments: shown \} : \{\}\),/);
 });
@@ -154,17 +154,17 @@ test("the strip is what is staged, and it empties into the line you send", () =>
   assert.match(html, /b\.onclick = \(\) => \{ ATT\.list\.splice\(Number\(b\.dataset\.drop\), 1\); renderAtt\(\); \}/);
   // Taken at send time, so a queued turn cannot pick up what was pasted while it waited.
   assert.match(html, /const atts = ATT\.list; ATT\.list = \[\]; renderAtt\(\);/);
-  assert.match(html, /queueAsk\(text \|\| "Look at the attachments\.", now, false, atts\)/);
-  assert.match(html, /OV\.queue\.push\(\{ text, bub, atts \}\)/);
+  assert.match(html, /queueAsk\(text \|\| "Look at the attachments\.", now, false, atts, RP\.take\(\)\)/);
+  assert.match(html, /OV\.queue\.push\(\{ text, bub, atts, quote \}\)/);
   assert.match(html, /if \(item\.atts\?\.length\) body\.attachments = item\.atts\.map\(\(a\) => \(\{ id: a\.id \}\)\);/);
   // The project the router could not guess: the files go in again with the re-sent line.
-  assert.match(html, /OV\.queue\.push\(\{ text, bub, ws: c\.ws, picked: true, atts \}\)/);
+  assert.match(html, /OV\.queue\.push\(\{ text, bub, ws: c\.ws, picked: true, atts, quote \}\)/);
 });
 
 test("thumbnails ride the bubble — live, from another surface, and after a reload", () => {
-  assert.match(html, /attBubble\(ovLine\("you", e\.you, e\.ws \?\? null\), e\.attachments\)/);
+  assert.match(html, /const yb = ovLine\("you", e\.you, e\.ws \?\? null\);\s*OV\.drawn\.set\(e\.turn, yb\); RP\.quote\(yb, e\.quote\); attBubble\(yb, e\.attachments\);/);
   assert.match(html, /atts = m\.attachments \? JSON\.parse\(m\.attachments\) : null/);
-  assert.match(html, /attBubble\(ovLine\("you", m\.you, ws\), atts\)/);
+  assert.match(html, /const yb = RP\.mark\(ovLine\("you", m\.you, ws\), m\.id, "you"\);[\s\S]{0,80}attBubble\(yb, atts\);/);
   // Admin-gated file route: an <img src> cannot carry the token, so each thumbnail is a blob this
   // page fetched with it — and a just-uploaded file is drawn from the bytes it already has.
   assert.match(html, /fetch\("\/api\/attachments\/chat\/" \+ encodeURIComponent\(id\), \{ headers: TOKEN \? \{ "x-mc-admin": TOKEN \} : \{\} \}\)/);

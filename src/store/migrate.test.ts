@@ -232,3 +232,14 @@ test("ensureLocalHost is idempotent and puts back a deleted local row", () => {
   assert.ok(db.prepare("SELECT 1 FROM hosts WHERE id = 'local'").get());
   db.close();
 });
+
+test("migration 140 adds chat_messages.reply_to + reply_quote, existing rows untouched", () => {
+  const db = new Database(":memory:");
+  applyUpTo(db, 139);
+  db.prepare(`INSERT INTO chat_messages (you,reply,created_at,source,workspace_id) VALUES ('hola','hey','2026-09-25T00:00:00.000Z','web',NULL)`).run();
+  applyUpTo(db, 140);
+  const row = db.prepare("SELECT reply_to, reply_quote FROM chat_messages").get() as { reply_to: number | null; reply_quote: string | null };
+  assert.equal(row.reply_to, null);
+  assert.equal(row.reply_quote, null);
+  db.close();
+});

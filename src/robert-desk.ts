@@ -13,7 +13,7 @@ export function postRobertToDesk(p: { body: string; ws: string | null; steps?: R
   try {
     const row = chat.add("", body, "robert", p.ws, p.steps ?? null);
     chat.prune(2000);
-    bus.publish({ topic: "agent.push", you: "", reply: body, at: row.created_at, source: "robert", ws: p.ws, turn: p.turn, steps: p.steps ?? [] });
+    bus.publish({ topic: "agent.push", you: "", reply: body, at: row.created_at, source: "robert", id: row.id, ws: p.ws, turn: p.turn, steps: p.steps ?? [] });
   } catch (e) {
     console.warn("[robert-desk] post failed", e);
   }

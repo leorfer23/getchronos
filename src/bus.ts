@@ -165,11 +165,11 @@ export type BusEvent = (
   // ws = the workspace thread the turn belongs to (null/absent = the unscoped Telegram+briefings thread)
   | { topic: "agent.delta"; text: string; kind?: "text" | "thinking" | "tool" | "tool_done"; ws?: string | null; client?: string; turn?: string }
   | { topic: "agent.turn.done"; ws?: string | null }
-  | { topic: "agent.push"; you: string; reply: string; at: string; source?: string; ws?: string | null; client?: string; turn?: string; steps?: unknown[]; attachments?: unknown[] }
+  | { topic: "agent.push"; you: string; reply: string; at: string; source?: string; ws?: string | null; client?: string; turn?: string; steps?: unknown[]; attachments?: unknown[]; id?: number; quote?: { id: number; side: string; text: string } }
   /** One move Robert made mid-turn (robert-steps.ts), live, so the Desk draws the trail as it happens. */
   | { topic: "agent.step"; ws: string | null; turn: string; step: unknown; label?: string | null }
   /** A turn started: what was said and by which page — other surfaces draw the line right away, not when he answers. */
-  | { topic: "agent.asked"; you: string; at: string; source?: string; ws?: string | null; client?: string; turn: string; attachments?: unknown[] }
+  | { topic: "agent.asked"; you: string; at: string; source?: string; ws?: string | null; client?: string; turn: string; attachments?: unknown[]; quote?: { id: number; side: string; text: string } }
 ) & { actor?: string };
 
 class Bus extends EventEmitter {

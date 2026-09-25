@@ -7,6 +7,40 @@ import { now } from "./util.js";
 // contextBlock() stops there, so the agent starts fresh while the display history stays intact.
 export type ChatSource = "web" | "telegram" | "heartbeat" | "robert" | "divider";
 
+// A line sent as a reply to one bubble. A row holds a whole exchange, so the bubble is the row plus
+// which half of it: "you" (the operator's line) or "reply" (Robert's). `text` is whatever the caller
+// holds — the whole parent for the model (quotePrompt), a one-line excerpt for display (stored).
+export type ChatQuoteSide = "you" | "reply";
+export type ChatQuote = { id: number; side: ChatQuoteSide; text: string };
+const QUOTE_SHOWN = 240; // the stored excerpt; the UI clamps it to one line
+const QUOTE_TO_MODEL = 1500; // enough of a long answer for him to know which point is being answered
+
+/** One line of plain text out of markdown: no emphasis marks, links as their words, whitespace collapsed. */
+export function quoteExcerpt(text: string, max = QUOTE_SHOWN): string {
+  const t = String(text ?? "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^[ \t]*(?:#{1,6}|>|[-*+]|\d+\.)[ \t]+/gm, "")
+    .replace(/\*\*|__|~~|[*`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
+}
+
+/**
+ * What Robert is told a reply is answering: the quoted bubble as a markdown quote above the words
+ * typed ("> Robert: …\n\n<reply>"), so a "yes, do that" lands on the comment it was about and not on
+ * whatever he said last. Empty for a line that is not a reply.
+ */
+export function quotePrompt(q: ChatQuote | null | undefined): string {
+  if (!q) return "";
+  let body = String(q.text ?? "").trim();
+  if (!body) return "";
+  if (body.length > QUOTE_TO_MODEL) body = body.slice(0, QUOTE_TO_MODEL).trimEnd() + " …";
+  const who = q.side === "reply" ? "Robert" : "Operator";
+  return body.split("\n").map((l, i) => "> " + (i ? "" : who + ": ") + l).join("\n") + "\n\n";
+}
+
 // Per-executive chat threads (the /app Chat panes). No executive uses them since a retirement left only Robert, who is per-workspace — the stored history is kept and still reads. Separate from
 // chat_messages on purpose: that table's workspace_id is a real FK to workspaces, and an exec
 // thread is not a workspace (see migration 93 for the bug this fixed). Display history only —
@@ -61,13 +95,30 @@ export const chat = {
     // chat log draws thumbnails from this column instead, so a reload shows the screenshot and not
     // a wall of paths.
     attachments: unknown[] | null = null,
+    // The bubble this line answers. The row keeps the parent's id plus a display excerpt, so the
+    // quote still draws after prune() has dropped the parent.
+    quote: ChatQuote | null = null,
   ): { id: number; created_at: string; source: ChatSource } {
     const ts = now();
     const r = db
-      .prepare(`INSERT INTO chat_messages (you,reply,created_at,source,workspace_id,steps,attachments) VALUES (?,?,?,?,?,?,?)`)
+      .prepare(`INSERT INTO chat_messages (you,reply,created_at,source,workspace_id,steps,attachments,reply_to,reply_quote) VALUES (?,?,?,?,?,?,?,?,?)`)
       .run(you, reply, ts, source, workspaceId, steps && steps.length ? JSON.stringify(steps) : null,
-        attachments && attachments.length ? JSON.stringify(attachments) : null);
+        attachments && attachments.length ? JSON.stringify(attachments) : null,
+        quote ? quote.id : null,
+        quote ? JSON.stringify({ side: quote.side, text: quoteExcerpt(quote.text) }) : null);
     return { id: Number(r.lastInsertRowid), created_at: ts, source };
+  },
+  /**
+   * The bubble a reply points at, whole — what quotePrompt gives the model. Null when the row is gone
+   * (pruned, cleared), is a divider, or that half of it is empty (a wake has no operator line).
+   */
+  quoteOf(id: number, side: ChatQuoteSide): ChatQuote | null {
+    const row = db.prepare(`SELECT you, reply, source FROM chat_messages WHERE id = ?`).get(id) as
+      | { you: string; reply: string; source: string }
+      | undefined;
+    if (!row || row.source === "divider") return null;
+    const text = String((side === "you" ? row.you : row.reply) ?? "").trim();
+    return text ? { id, side, text } : null;
   },
   // Oldest→newest window for one thread (dashboard renders chronologically). Dividers are included —
   // the UI draws them as "new conversation" lines.

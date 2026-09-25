@@ -30,7 +30,7 @@ test("switching the filter redraws the log from that project's own history — n
 
 test("where his answer lands never moves the filter; a chip is a shortcut to it", () => {
   assert.doesNotMatch(html, /noteLanding/);
-  assert.match(html, /else \{ setChip\(item\.bub, r\?\.ws \?\? null\); OV\.sticky = r\?\.ws \?\? null; \}/);
+  assert.match(html, /else \{ setChip\(item\.bub, r\?\.ws \?\? null\); OV\.sticky = r\?\.ws \?\? null; RP\.mark\(item\.bub, r\?\.id, "you"\); \}/);
   assert.match(html, /pickWs\(ws && ws !== OV\.filter && wsById\(ws\) \? ws : null\);/);
   // Asking about a terminal routes on its id in the text; the filter stays put.
   assert.doesNotMatch(html, /pickWs\(s\.workspace_id/);
@@ -40,7 +40,7 @@ test("your own exchanges show through the filter, whatever project they land on"
   assert.match(html, /const offFilter = \(el\) => OV\.filter !== null && !el\._own && \(el\.dataset\.ws \|\| ""\) !== OV\.filter;/);
   assert.match(html, /ovLine\("you" \+ \(OV\.busy \? " queued" : ""\), text, undefined, true, true\)/);
   assert.match(html, /OV\.pending = ovLine\("rob pending", "", e\.ws \?\? null, false, e\.client === CLIENT\);/);
-  assert.match(html, /ovLine\("rob", e\.reply, e\.ws \?\? null, !fromHere && !e\.you, fromHere\);/);
+  assert.match(html, /ovLine\("rob", e\.reply, e\.ws \?\? null, !fromHere && !e\.you, fromHere\), e\.id, "reply"\);/);
   assert.match(html, /const d = ovLine\("rob", r\.reply, null, false, true\);/);
 });
 

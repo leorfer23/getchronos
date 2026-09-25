@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, agentChat, chat, workspaces } from "./store.js";
+import { db, agentChat, chat, workspaces, quotePrompt, quoteExcerpt } from "./store.js";
 import { commitTurn, resolveTurn } from "./thread-router.js";
 
 beforeEach(() => db.exec("DELETE FROM chat_messages; DELETE FROM workspaces;"));
@@ -130,4 +130,46 @@ test("deleting a workspace takes its conversation with it", () => {
   db.prepare("DELETE FROM workspaces WHERE id = ?").run(ws.id);
   assert.deepEqual(chat.recent(99).map((r) => r.you), ["keep me"]);
   assert.equal(chat.recent(99, ws.id).length, 0);
+});
+
+// ── reply to one bubble ─────────────────────────────────────────────────────────────────────────
+test("a reply keeps the parent's id and a one-line excerpt; the words typed stay clean", () => {
+  const parent = chat.add("ship it?", "Two options:\n\n1. **merge** now\n2. wait for [CI](https://x.test)");
+  const q = chat.quoteOf(parent.id, "reply");
+  assert.ok(q);
+  assert.equal(q.side, "reply");
+  assert.match(q.text, /\*\*merge\*\*/, "quoteOf hands back the whole bubble, markdown and all");
+  const r = chat.add("the first one", "merging", "web", null, null, null, q);
+  const row = chat.recent(9).find((m) => m.id === r.id);
+  assert.equal(row.you, "the first one");
+  assert.equal(row.reply_to, parent.id);
+  assert.deepEqual(JSON.parse(row.reply_quote), { side: "reply", text: "Two options: merge now wait for CI" });
+  // A line that is not a reply carries neither.
+  const plain = chat.recent(9).find((m) => m.id === parent.id);
+  assert.equal(plain.reply_to, null);
+  assert.equal(plain.reply_quote, null);
+});
+
+test("quoteOf: the operator's half, and nothing for a gone row, a divider or an empty half", () => {
+  const r = chat.add("check the invoice", "done");
+  assert.deepEqual(chat.quoteOf(r.id, "you"), { id: r.id, side: "you", text: "check the invoice" });
+  const wake = chat.add("", "I restarted the stuck worker", "robert");
+  assert.equal(chat.quoteOf(wake.id, "you"), null, "a wake has no operator line");
+  assert.equal(chat.quoteOf(chat.divide().id, "reply"), null);
+  assert.equal(chat.quoteOf(999999, "reply"), null);
+});
+
+test("quotePrompt puts the quoted bubble above the reply, attributed", () => {
+  assert.equal(quotePrompt(null), "");
+  assert.equal(quotePrompt({ id: 1, side: "reply", text: "Merge now\nor wait?" }), "> Robert: Merge now\n> or wait?\n\n");
+  assert.equal(quotePrompt({ id: 1, side: "you", text: "check acme" }), "> Operator: check acme\n\n");
+  const long = quotePrompt({ id: 1, side: "reply", text: "x".repeat(5000) });
+  assert.ok(long.length < 1600 && long.includes(" …"), "a long answer is cut, and says so");
+});
+
+test("quoteExcerpt is one line of words, capped", () => {
+  assert.equal(quoteExcerpt("# Title\n> quoted\n- item `code` __b__"), "Title quoted item code b");
+  assert.equal(quoteExcerpt("keep snake_case and #slug"), "keep snake_case and #slug");
+  const cut = quoteExcerpt("word ".repeat(100));
+  assert.ok(cut.length <= 240 && cut.endsWith("…"));
 });

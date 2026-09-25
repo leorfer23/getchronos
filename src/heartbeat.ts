@@ -505,6 +505,7 @@ async function deliver(
       reply,
       at: row.created_at,
       source: "heartbeat",
+      id: row.id,
       ws: target?.id ?? null,
     });
   }

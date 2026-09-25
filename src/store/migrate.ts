@@ -1962,6 +1962,18 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     },
   },
 
+  {
+    version: 140,
+    name: "chat_messages.reply_to + reply_quote — a line sent as a reply to one bubble in Robert's chat",
+    // reply_to is the parent row's id (no FK: prune() drops old rows, and the reply must survive its
+    // parent). reply_quote is the display JSON {side, text}: which half of that row was quoted and a
+    // one-line excerpt, so a reload draws the quote even once the parent has been pruned. `you` stays
+    // the words typed; the quoted parent Robert was given is rebuilt from the parent row at turn time.
+    up: (db) => db.exec(`
+      ALTER TABLE chat_messages ADD COLUMN reply_to INTEGER;
+      ALTER TABLE chat_messages ADD COLUMN reply_quote TEXT;`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
