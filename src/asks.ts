@@ -172,17 +172,17 @@ export async function answerAsk(
 ): Promise<{ ok: true; ask: Ask } | { ok: false; error: string; status?: number }> {
   const cur = resolveAsk(idOrPrefix);
   if (!cur) return { ok: false, error: "ask not found" };
+  // Robert's own question is the operator's to answer — an agent answering it would be Robert
+  // answering himself.
+  if (isAgentAnswer(by) && isRobertAsk(cur)) {
+    return { ok: false, error: "Robert asked this one — only the operator answers it", status: 403 };
+  }
   // Hard gate: "robert" is the one distinctive `by` Robert's auto-answer path uses (see
   // agents/_blocks/coordinator.md — it literally passes by:"robert"), and `lead:<id8>` is a Lead
   // answering one of its own workers (LEADS.md). Both are AGENTS deciding for the operator, so a
   // workspace that requires human answers outranks both — a Lead is not a way around a policy that
   // stops Robert. Every other `by` (human, telegram, an operator's own name) is a human action and
   // always passes, policy or not. The ask stays OPEN, so the refusal parks it rather than losing it.
-  // Robert's own question is the operator's to answer — an agent answering it would be Robert
-  // answering himself.
-  if (isAgentAnswer(by) && isRobertAsk(cur)) {
-    return { ok: false, error: "Robert asked this one — only the operator answers it", status: 403 };
-  }
   if (isAgentAnswer(by)) {
     const ws = cur.workspace_id ? workspaces.get(cur.workspace_id) : undefined;
     if (ws?.ask_policy === "escalate") {
