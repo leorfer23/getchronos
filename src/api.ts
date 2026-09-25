@@ -4516,7 +4516,7 @@ export function startServer() {
         ...(shown.length ? { attachments: shown } : {}),
       });
       bus.publish({ topic: "agent.turn.done", ws });
-      res.json({ reply, actions, ws, how: turn.how });
+      res.json({ reply, actions, ws, how: turn.how, turn: turnId });
     } catch (e: any) {
       const err = "⚠️ " + String(e?.message ?? e);
       const row = chat.add(text, err, "web", ws, null, shown);

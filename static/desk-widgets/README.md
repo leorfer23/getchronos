@@ -77,7 +77,7 @@ that throws shows nothing, so handle the empty case yourself.
 | `chipLabel(session)` | a session's short title, clipped the way the rail clips it |
 | `toast(msg)` | the one-line notice at the bottom of the page |
 | `stage(sessionId)` | put that terminal on the stage (leaves the board, like clicking the rail) |
-| `pickWs(wsId)` | point Robert's thread at that client (`null` = auto) |
+| `pickWs(wsId)` | filter the chat log to that client (`null` = every client) — a view only, routing is automatic |
 | `wsName(wsId)` / `wsColor(wsId)` | a client's name and its stable colour |
 | `byId(sessionId)` | one session row out of `S.sessions` |
 

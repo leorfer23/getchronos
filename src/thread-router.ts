@@ -379,8 +379,8 @@ export function commitTurn(surface: string, t: ResolvedTurn): void {
 
 /** One line the surface can show when the router has to ask. */
 export function askLine(r: Route): string {
-  const names = r.candidates.map((c) => `#${c.slug}`).join(" · ");
-  return `Which project? ${names} — or prefix with #slug next time.`;
+  // Every surface draws the candidates as tappable choices, so the line only asks.
+  return r.candidates.length ? "Which project is this about?" : "Which project is this about? I couldn't tell.";
 }
 
 /** Debug view for GET /api/thread/route — the decision plus everything it weighed. */

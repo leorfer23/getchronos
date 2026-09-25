@@ -400,7 +400,7 @@
     <div class="chat" id="chat"></div>
     <div class="composer">
       <button class="mic" id="r-mic" aria-label="Talk">🎤</button>
-      <textarea id="r-composer" rows="1" placeholder="Ask Robert…" autocapitalize="sentences" enterkeyhint="send"></textarea>
+      <textarea id="r-composer" rows="1" placeholder="Ask Robert… · # to name a project" autocapitalize="sentences" enterkeyhint="send"></textarea>
       <button class="send" id="r-send" aria-label="Send">➤</button>
     </div>
   </div>
@@ -418,6 +418,7 @@
 <script src="/vendor/xterm-addon-fit.js"></script>
 <script src="/term-links.js"></script>
 <script src="/desk-quick-actions.js"></script>
+<script src="/tag-complete.js"></script>
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
 <script>
@@ -441,7 +442,7 @@ const api = (p, opts) => {
   });
   return send()
     .catch((err) => (method === "GET" && err instanceof TypeError ? new Promise((r) => setTimeout(r, 1200)).then(send) : Promise.reject(err)))
-    .then(async (r) => { if (!r.ok) throw new Error((await r.text()).slice(0, 200)); return r.status === 204 ? null : r.json(); });
+    .then(async (r) => { if (!r.ok) throw Object.assign(new Error((await r.text()).slice(0, 200)), { status: r.status }); return r.status === 204 ? null : r.json(); });
 };
 
 let toastT;
@@ -1682,14 +1683,15 @@ fcomposer.addEventListener("input", () => { fcomposer.style.height = ""; fcompos
 })();
 
 // ── Robert ──────────────────────────────────────────────────────────────────
-// The desk manager: one thread across every client, and he reads the wall himself (`mc desk
-// digest`) when asked, so "kill everything in Acme and open a PR terminal on Globex" is one
-// message. Replies stream over the bus (agent.delta) and land whole on agent.push.
-const R = { busy: false, pending: null, loaded: false, ws: localStorage.getItem("phone-robert-ws") || null, outbox: [] };
-// With no client picked, the daemon routes each message to the right project's Robert (#tag, ticket
-// key, project name) — so his events come back stamped with THAT project, not with the null we asked
-// on. Unscoped means "any of them"; a picked client still only hears itself.
-const ourThread = (ws) => (R.ws ? (ws || null) === R.ws : !String(ws || "").startsWith("agent:"));
+// ONE chat, same as the Desk's: you never pick a conversation — the daemon reads the project out of
+// each line (#tag, ticket key, project name, where the last one landed) and hands it to that
+// project's own Robert, asking only when it cannot tell. The strip is a VIEW filter (R.ws), nothing
+// more: it never decides where a line goes, and your own exchanges show through it.
+// Replies stream over the bus (agent.delta) and land whole on agent.push — the push, not the POST
+// response, is what draws his answer, so a long turn that outlives the tunnel's request timeout
+// still arrives. One bubble per turn (R.pend), so two turns streaming at once never mix or cut.
+const R = { busy: false, mine: null, mineYou: null, pend: new Map(), seen: new Set(), lost: false, loaded: false, ws: localStorage.getItem("phone-robert-ws") || null, outbox: [] };
+const ourThread = (ws) => !String(ws || "").startsWith("agent:") && (!R.ws || (ws || null) === R.ws);
 const md = (t) => (window.DOMPurify && window.marked) ? DOMPurify.sanitize(marked.parse(t || "")) : esc(t);
 // An 8-char id in his text is a terminal he is talking about: a chip that opens its story.
 function mdRob(text) {
@@ -1706,12 +1708,10 @@ function bubble(kind, text) {
 async function robertHistory() {
   if (R.loaded) return; R.loaded = true;
   qs("#chat").innerHTML = "";
-  try { const h = await api("/agent/history?limit=20" + (R.ws ? "&ws=" + encodeURIComponent(R.ws) : "")); for (const m of h.messages || []) { if (m.you) bubble("you", m.you); if (m.reply) bubble("rob", m.reply); } }
+  try { const h = await api("/agent/history?limit=20&ws=" + encodeURIComponent(R.ws || "all")); for (const m of h.messages || []) { if (m.source === "divider") continue; if (m.you) bubble("you", m.you); if (m.reply) bubble("rob", m.reply); } }
   catch {}
   qs("#chat").scrollTop = qs("#chat").scrollHeight;
 }
-// One thread per scope: "All" is the desk-wide manager; a client chip talks to that client's own
-// manager (same `ws` the Desk's per-workspace chat uses), so the question is scoped for him.
 function renderRStrip() {
   const chip = (id, name) => `<button class="chip${(R.ws || null) === id ? " on" : ""}" data-rws="${id || ""}">${esc(name)}</button>`;
   qs("#rstrip").innerHTML = chip(null, "All") + S.workspaces.map((w) => chip(w.id, w.name)).join("");
@@ -1720,10 +1720,9 @@ qs("#rstrip").onclick = (e) => {
   const c = e.target.closest("[data-rws]"); if (!c) return;
   fx.tap(); R.ws = c.dataset.rws || null;
   if (R.ws) localStorage.setItem("phone-robert-ws", R.ws); else localStorage.removeItem("phone-robert-ws");
-  if (R.pending) { R.pending.remove(); R.pending = null; }
+  R.mine = null; R.pend.clear();
   R.loaded = false; renderRStrip(); robertHistory();
   for (const q of R.outbox) { q.el.classList.add("queued"); qs("#chat").appendChild(q.el); }
-  api("/agent/warm", { method: "POST", body: JSON.stringify({ ws: R.ws }) }).catch(() => {});
 };
 function showRobert() {
   show("v-robert", "in-right");
@@ -1732,7 +1731,7 @@ function showRobert() {
 }
 qs("#btn-robert").onclick = () => { fx.tap(); showRobert(); };
 qs("#r-back").onclick = () => { fx.tap(); show("v-home", "in-left"); renderHome(); };
-qs("#r-reset").onclick = () => confirmSheet("Start a new thread with Robert?", "New thread", async () => { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: R.ws }) }); qs("#chat").innerHTML = ""; toast("new thread"); });
+qs("#r-reset").onclick = () => confirmSheet(R.ws ? `Start a new thread with Robert on ${wsName(R.ws)}?` : "Start a new desk-wide thread with Robert?", "New thread", async () => { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: R.ws }) }); qs("#chat").innerHTML = ""; toast("new thread"); });
 const rComposer = qs("#r-composer");
 // This tab's id on each turn: the Desk draws a line it did not type itself (the bus echoes the id).
 const CLIENT = "phone-" + Math.random().toString(36).slice(2, 12);
@@ -1744,29 +1743,56 @@ function askRobert() {
   if (!text) return;
   rComposer.value = ""; rComposer.style.height = "";
   fx.send(); const el = bubble("you", text);
-  if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, ws: R.ws, el }); return; }
-  deliverRobert(text, R.ws, el);
+  if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el }); return; }
+  deliverRobert(text, el);
 }
-async function deliverRobert(text, ws, el) {
+// `ws` only when you tapped a project on his "which one?" line — that is as explicit as a #tag.
+async function deliverRobert(text, el, ws) {
   R.busy = true; el.classList.remove("queued");
-  if (!R.pending) R.pending = bubble("rob pending", "");
+  R.mineYou = el;
+  if (!R.mine) R.mine = bubble("rob pending", "");
   try {
-    const r = await api("/agent", { method: "POST", body: JSON.stringify({ text, ws, client: CLIENT }) });
-    if (R.pending) { R.pending.remove(); R.pending = null; }
-    if (r?.reply) { fx.reply(); bubble("rob", r.reply); }
+    const body = { text, client: CLIENT };
+    if (ws !== undefined) { body.ws = ws; body.route = false; }
+    const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
+    if (r?.how === "ask") { dropMine(); askWhere(r, text); return; }
+    // The push normally drew it already; this covers a bus that was down for the whole turn.
+    if (r?.reply && !(r.turn && R.seen.has(r.turn))) { if (r.turn) R.seen.add(r.turn); dropMine(); fx.reply(); bubble("rob", r.reply); }
     // He can put a terminal on your screen: `UI {"op":"select","id"}` after his reply.
     const sel = (r?.actions || []).find((a) => a.op === "select" || a.op === "focus_terminal");
     if (sel) { await load(); const want = String(sel.id || sel.match || "").toLowerCase(); const s = S.sessions.find((x) => x.id.startsWith(want)) || S.sessions.find((x) => x.live && sTitle(x).toLowerCase().includes(want)); if (s) openFocus(s.id); }
   } catch (err) {
-    if (R.pending) { R.pending.remove(); R.pending = null; }
-    fx.fail(); bubble("rob", "(failed: " + String(err.message).slice(0, 160) + ")");
+    // The request died (tunnel timeout on a long turn, the phone slept) but the turn runs on in the
+    // daemon: keep his bubble, let agent.push fill it, and reread the thread once the bus is back.
+    if (err instanceof TypeError || [502, 503, 504, 520, 521, 522, 523, 524].includes(err.status)) {
+      R.lost = true;
+      if (R.mine) R.mine.textContent = "still on it — connection dropped, his answer will land here";
+    } else { dropMine(); fx.fail(); bubble("rob", "(failed: " + String(err.message).slice(0, 160) + ")"); }
   } finally {
     R.busy = false; reloadSoon();
     const next = R.outbox.shift();
-    if (next) deliverRobert(next.text, next.ws, next.el);
+    if (next) deliverRobert(next.text, next.el);
   }
 }
+function dropMine() { if (R.mine) { R.mine.remove(); R.mine = null; } }
+// The router could not tell which project: his line, with the projects as chips. A tap re-sends the
+// SAME message there (nothing ran yet, so there is nothing to undo).
+function askWhere(r, text) {
+  const d = bubble("rob", r.reply);
+  const row = document.createElement("div");
+  row.className = "rstrip"; row.style.cssText = "padding:8px 0 0;background:none;border:0;flex-wrap:wrap";
+  row.innerHTML = (r.ask?.candidates || []).map((c) => `<button class="chip" data-ws="${esc(c.ws || "")}">${esc(c.name || c.slug)}</button>`).join("");
+  row.onclick = (e) => {
+    const b = e.target.closest("[data-ws]"); if (!b) return;
+    fx.tap(); row.remove();
+    const el = bubble("you", text);
+    if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el }); return; }
+    deliverRobert(text, el, b.dataset.ws || null);
+  };
+  d.appendChild(row); qs("#chat").scrollTop = qs("#chat").scrollHeight;
+}
 qs("#r-send").onclick = askRobert;
+TagComplete(rComposer, () => S.workspaces);
 rComposer.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askRobert(); } });
 rComposer.addEventListener("input", () => { rComposer.style.height = ""; rComposer.style.height = Math.min(140, rComposer.scrollHeight) + "px"; });
 
@@ -1893,21 +1919,33 @@ const reloadSoon = () => { clearTimeout(reloadT); reloadT = setTimeout(() => loa
 function connectBus() {
   if (!TOKEN) return;
   const ws = new WebSocket(`${WS_SCHEME}//${location.host}/ws?token=${encodeURIComponent(TOKEN)}&topics=${encodeURIComponent(BUS_TOPICS)}`);
-  ws.onopen = () => { busRetry = 1000; qs("#bus-dot").className = "dot working"; };
+  ws.onopen = () => {
+    busRetry = 1000; qs("#bus-dot").className = "dot working";
+    // A turn whose request dropped may have finished while the bus was down too: reread the thread.
+    if (R.lost) { R.lost = false; R.loaded = false; R.mine = null; R.pend.clear(); robertHistory(); }
+  };
   ws.onclose = () => { qs("#bus-dot").className = "dot"; setTimeout(connectBus, busRetry); busRetry = Math.min(busRetry * 2, 20000); };
   ws.onmessage = (ev) => {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     if (e.topic === "agent.delta") {
-      if (!e.text || !ourThread(e.ws)) return;
-      if (!R.pending) R.pending = bubble("rob pending", "");
-      R.pending._raw = (R.pending._raw || "") + e.text; R.pending.innerHTML = mdRob(R.pending._raw);
+      // Only his words: thinking and tool lines are not the answer.
+      const mine = e.client === CLIENT;
+      if (!e.text || (e.kind && e.kind !== "text") || !(mine || ourThread(e.ws))) return;
+      const key = e.turn || "?";
+      let b = R.pend.get(key);
+      if (!b) { b = mine && R.mine ? R.mine : bubble("rob pending", ""); if (mine) R.mine = null; R.pend.set(key, b); }
+      b._raw = (b._raw || "") + e.text; b.innerHTML = mdRob(b._raw);
       qs("#chat").scrollTop = qs("#chat").scrollHeight; return;
     }
     if (e.topic === "agent.push") {
-      if (e.source === "divider" || !ourThread(e.ws)) return;
-      if (R.pending) { R.pending.remove(); R.pending = null; }
-      // Only echo pushes that did not come back through askRobert's own response (busy = ours).
-      if (e.reply && !R.busy) { fx.reply(); bubble("rob", e.reply); }
+      const mine = e.client === CLIENT;
+      if (e.source === "divider" || !(mine || ourThread(e.ws))) return;
+      if (e.turn && R.seen.has(e.turn)) return;
+      if (e.turn) R.seen.add(e.turn);
+      const b = R.pend.get(e.turn || "?"); if (b) { b.remove(); R.pend.delete(e.turn || "?"); }
+      if (mine) { dropMine(); R.lost = false; if (e.you && !R.mineYou?.isConnected) bubble("you", e.you); }
+      else if (e.you) bubble("you", e.you); // said on the Desk (or another phone)
+      if (e.reply) { fx.reply(); bubble("rob", e.reply); }
       return;
     }
     if (e.topic === "focus.event") {
@@ -2015,7 +2053,7 @@ function handleHash() {
   history.replaceState(null, "", location.pathname);
   const go = () => {
     if (h.startsWith("s=")) { const id = h.slice(2); if (byId(id)) openFocus(id); else toast("that terminal is gone"); }
-    else if (h.startsWith("robert")) { const ws = h.split("=")[1] || null; R.ws = ws; R.loaded = false; showRobert(); }
+    else if (h.startsWith("robert")) { R.loaded = false; showRobert(); } // the filter is yours: a notification never moves it
   };
   if (S.loaded) go(); else document.addEventListener("phone:loaded", go, { once: true });
 }

@@ -56,8 +56,9 @@ test("voice goes to the Mac: the mic posts raw audio to /api/transcribe with the
 
 test("Robert: the desk-wide manager is one tap from home, with the same thread as the Desk", () => {
   assert.match(html, /id="btn-robert"/);
-  assert.match(html, /api\("\/agent", \{ method: "POST", body: JSON\.stringify\(\{ text, ws, client: CLIENT \}\)/);
-  assert.match(html, /api\("\/agent\/history\?limit=20" \+ \(R\.ws \?/);
+  assert.match(html, /const body = \{ text, client: CLIENT \};/);
+  assert.match(html, /api\("\/agent", \{ method: "POST", body: JSON\.stringify\(body\) \}\)/);
+  assert.match(html, /api\("\/agent\/history\?limit=20&ws=" \+ encodeURIComponent\(R\.ws \|\| "all"\)\)/);
   assert.match(html, /talkMic\(qs\("#r-mic"\)/);
   // His replies are markdown from a model: sanitized before they touch the DOM.
   assert.match(html, /DOMPurify\.sanitize\(marked\.parse/);
@@ -100,12 +101,19 @@ test("answer chips on the card go through the input door; a select's extra optio
 
 
 
-test("Robert is scoped per client with the ws the Desk uses, and streams only that scope", () => {
-  assert.match(html, /api\("\/agent", \{ method: "POST", body: JSON\.stringify\(\{ text, ws, client: CLIENT \}\)/);
-  // A picked client still hears only itself. With none picked the daemon routes the turn to a
-  // project's own Robert, so its events come back stamped with THAT project — still this thread.
-  assert.match(html, /const ourThread = \(ws\) => \(R\.ws \? \(ws \|\| null\) === R\.ws : !String\(ws \|\| ""\)\.startsWith\("agent:"\)\)/);
-  assert.match(html, /if \(!e\.text \|\| !ourThread\(e\.ws\)\) return;/);
+test("Robert on the phone is one routed chat: the strip only filters, and his answer comes off the bus", () => {
+  // No conversation picker: a line carries a ws only when you tapped a project on his "which one?".
+  assert.match(html, /if \(ws !== undefined\) \{ body\.ws = ws; body\.route = false; \}/);
+  assert.match(html, /if \(r\?\.how === "ask"\) \{ dropMine\(\); askWhere\(r, text\); return; \}/);
+  // The strip filters what you see; your own turns show through it.
+  assert.match(html, /const ourThread = \(ws\) => !String\(ws \|\| ""\)\.startsWith\("agent:"\) && \(!R\.ws \|\| \(ws \|\| null\) === R\.ws\);/);
+  assert.match(html, /if \(!e\.text \|\| \(e\.kind && e\.kind !== "text"\) \|\| !\(mine \|\| ourThread\(e\.ws\)\)\) return;/);
+  // One bubble per turn: a second turn streaming at once never cuts or mixes into yours.
+  assert.match(html, /let b = R\.pend\.get\(key\);/);
+  // A request the tunnel dropped mid-turn waits for the push instead of failing.
+  assert.match(html, /if \(err instanceof TypeError \|\| \[502, 503, 504, 520, 521, 522, 523, 524\]\.includes\(err\.status\)\) \{\s*R\.lost = true;/);
+  assert.match(html, /if \(R\.lost\) \{ R\.lost = false; R\.loaded = false;/);
+  assert.match(html, /TagComplete\(rComposer, \(\) => S\.workspaces\);/);
   assert.match(html, /id="rstrip"/);
 });
 
@@ -315,8 +323,8 @@ test("Robert on the phone: an 8-char id becomes a chip that opens the story; sel
 
 test("Robert on the phone: a message typed mid-turn parks in an outbox and goes out when the turn lands — never refused, never a dead button", () => {
   const html = fs.readFileSync(new URL("../static/phone.html", import.meta.url), "utf8");
-  assert.match(html, /if \(R\.busy\) \{ el\.classList\.add\("queued"\); R\.outbox\.push\(\{ text, ws: R\.ws, el \}\); return; \}/);
-  assert.match(html, /const next = R\.outbox\.shift\(\);\s*if \(next\) deliverRobert\(next\.text, next\.ws, next\.el\);/);
+  assert.match(html, /if \(R\.busy\) \{ el\.classList\.add\("queued"\); R\.outbox\.push\(\{ text, el \}\); return; \}/);
+  assert.match(html, /const next = R\.outbox\.shift\(\);\s*if \(next\) deliverRobert\(next\.text, next\.el\);/);
   assert.doesNotMatch(html, /qs\("#r-send"\)\.disabled = true/, "the send button is never disabled while he answers");
   assert.match(html, /\.bub\.you\.queued \{ opacity:\.55; \}/);
 });

@@ -224,7 +224,7 @@ test("a work request with no signal and no sticky asks, offering every project p
   assert.equal(r.how, "ask");
   assert.equal(r.ws, null);
   assert.deepEqual(r.candidates.map((c) => c.slug), ["atlas", "cedar", "all"]);
-  assert.match(askLine(r), /#atlas · #cedar · #all — or prefix with #slug/);
+  assert.equal(askLine(r), "Which project is this about?");
 });
 
 test("small talk with nothing sticky is harmless on the unscoped manager", () => {
