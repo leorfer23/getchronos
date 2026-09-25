@@ -315,10 +315,10 @@ test("new work is one sheet: client + a sentence; voice settings remain; Plan to
   assert.match(html, /<button id="btn-tomorrow">/);
 });
 
-test("Robert on the phone: an 8-char id becomes a chip that opens the story; select puts one on screen", () => {
+test("Robert on the phone: an 8-char id becomes a chip that opens the story; he never moves the screen", () => {
   assert.match(html, /function mdRob\(text\)/);
   assert.match(html, /a\[href\^="#sel="\]/);
-  assert.match(html, /\(a\) => a\.op === "select" \|\| a\.op === "focus_terminal"/);
+  assert.doesNotMatch(html, /a\.op === "select"|a\.op === "focus_terminal"/, "nothing he says moves the operator's screen");
 });
 
 test("Robert on the phone: a message typed mid-turn parks in an outbox and goes out when the turn lands — never refused, never a dead button", () => {

@@ -1800,9 +1800,6 @@ async function deliverRobert(text, el, ws, quote) {
     RP.mark(el, r?.id, "you");
     // The push normally drew it already; this covers a bus that was down for the whole turn.
     if (r?.reply && !(r.turn && R.seen.has(r.turn))) { if (r.turn) R.seen.add(r.turn); dropMine(); fx.reply(); RP.mark(bubble("rob", r.reply), r.id, "reply"); }
-    // He can put a terminal on your screen: `UI {"op":"select","id"}` after his reply.
-    const sel = (r?.actions || []).find((a) => a.op === "select" || a.op === "focus_terminal");
-    if (sel) { await load(); const want = String(sel.id || sel.match || "").toLowerCase(); const s = S.sessions.find((x) => x.id.startsWith(want)) || S.sessions.find((x) => x.live && sTitle(x).toLowerCase().includes(want)); if (s) openFocus(s.id); }
   } catch (err) {
     // The request died (tunnel timeout on a long turn, the phone slept) but the turn runs on in the
     // daemon: keep his bubble, let agent.push fill it, and reread the thread once the bus is back.

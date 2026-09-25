@@ -876,8 +876,11 @@ function spawnAgent(ask: Ask, model?: string): Promise<string> {
 }
 
 // Lift `UI {json}` directives (one per line) out of a web-agent reply. Returns the spoken text (UI lines
-// removed) + the parsed directive list the browser will execute against the live dashboard.
+// removed) + the directives the daemon acts on. Only `ask` survives: Robert never moves the operator's
+// screen (select, focus, view, workspace, jobs) — he names the terminal or ticket and the operator taps
+// it. Any other op is still lifted out of the reply, then dropped.
 export type UiAction = { op: string; [k: string]: unknown };
+const UI_OPS = new Set(["ask"]);
 // Tolerant: models drift on the literal prefix (UI / UID / UI: / ui) and sometimes drop it entirely,
 // emitting a bare `{"op":...}` line. Accept any line whose JSON payload carries a string `op`.
 const UI_RE = /^ui\S*\s*[:-]?\s*(\{.*\})\s*$/i;
@@ -891,7 +894,7 @@ export function scanUiActions(text: string): { reply: string; actions: UiAction[
     if (json) {
       try {
         const a = JSON.parse(json);
-        if (a && typeof a.op === "string") { actions.push(a); continue; }
+        if (a && typeof a.op === "string") { if (UI_OPS.has(a.op)) actions.push(a); continue; }
       } catch {}
     }
     keep.push(line);
@@ -1309,8 +1312,8 @@ const briefRules = () =>
   `FLEET NOW: every desk turn opens with the live fleet — one line per open terminal (id · client · state · goal · ` +
   `what it asks). Answer "who needs me / what's running" from it directly; read \`mc desk digest\` or ` +
   `\`mc session focus <id>\` only when you need what a terminal actually said. Name a terminal by its goal in ` +
-  `plain words and add its 8-char id in parentheses — the Desk turns that id into a chip that opens it. To put ` +
-  `one on his screen, end with \`UI {"op":"select","id":"<full or 8-char id>"}\`.\n`;
+  `plain words and add its 8-char id in parentheses — the Desk turns that id into a chip that opens it. Never ` +
+  `move his screen: he taps the chip himself.\n`;
 
 
 const memoryRules = (agent: string) =>

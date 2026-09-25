@@ -4761,20 +4761,6 @@ function dwEmbed(bub) {
   }
 }
 
-// What he asked the page to do after his reply: put a terminal on the stage. A terminal he just
-// opened may not be in S.sessions yet — reload once and look again.
-async function runActions(actions) {
-  for (const a of actions || []) {
-    if (a.op === "jobs") { openJobs(a.id ? String(a.id) : null); continue; }
-    if (a.op !== "select" && a.op !== "focus_terminal") continue;
-    const want = String(a.id || a.match || "").toLowerCase();
-    if (!want) continue;
-    const find = () => S.sessions.find((x) => x.id.startsWith(want)) || S.sessions.find((x) => x.live && title(x).toLowerCase().includes(want));
-    let s = find();
-    if (!s) { await load(); s = find(); }
-    if (s) select(s.id);
-  }
-}
 qs("#chat-log").addEventListener("click", (e) => {
   const a = e.target.closest('a[href^="#sel="]'); if (!a) return;
   e.preventDefault();
@@ -5995,7 +5981,6 @@ async function flush() {
     const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
     if (r?.how === "ask") { item.bub.querySelector(".wsc")?.remove(); askWhere(r, item.text, item.atts, item.quote); if (VC.on) vcAskWhere(r, item.text); }
     else { setChip(item.bub, r?.ws ?? null); OV.sticky = r?.ws ?? null; RP.mark(item.bub, r?.id, "you"); }
-    runActions(r?.actions);
   } catch (err) {
     // The request dropped (tunnel, sleep) but the turn runs on in the daemon: his answer still
     // arrives on the bus as agent.push, so this is a note, not a failure.
