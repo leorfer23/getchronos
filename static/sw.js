@@ -1,10 +1,10 @@
 /* Chronos phone service worker: push notifications with answer buttons, the app-icon badge, and an
  * offline shell so the page opens instantly and shows the last list while it reconnects.
  * Served at /sw.js with no-store (src/api.ts), scope "/". */
-const VERSION = "v9";
+const VERSION = "v10";
 const SHELL = "chronos-shell-" + VERSION;
 const SHELL_URLS = ["/phone", "/phone.html", "/phone.webmanifest", "/phone-icon.png",
-  "/vendor/xterm.css", "/vendor/xterm.js", "/vendor/xterm-addon-fit.js", "/term-links.js", "/tag-complete.js", "/chat-reply.js",
+  "/vendor/xterm.css", "/vendor/xterm.js", "/vendor/xterm-addon-fit.js", "/term-links.js", "/tag-complete.js", "/chat-reply.js", "/ask-card.js",
   "/vendor/marked.min.js", "/vendor/purify.min.js"];
 
 self.addEventListener("install", (e) => {

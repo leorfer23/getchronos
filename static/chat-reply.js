@@ -10,6 +10,7 @@
   const excerpt = (t, max = 240) => {
     const s = String(t ?? "")
       .replace(/```[\s\S]*?```/g, " ")
+      .replace(/^::ask [0-9a-f-]{8,36}::$/gm, "a question for you") // an Ask card (static/ask-card.js)
       .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
       .replace(/^[ \t]*(?:#{1,6}|>|[-*+]|\d+\.)[ \t]+/gm, "")
       .replace(/\*\*|__|~~|[*`]/g, "")

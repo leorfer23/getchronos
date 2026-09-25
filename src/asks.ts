@@ -15,6 +15,8 @@ import { isReadOnlyRun } from "./runner.js";
 import { reportAgentState } from "./agent-lifecycle.js";
 import { notify, esc } from "./telegram/api.js";
 import { kb, type Btn } from "./telegram/keyboards.js";
+import { postRobertToDesk } from "./robert-desk.js";
+import { askMarker, isRobertAsk } from "./robert-asks.js";
 
 function parseOptions(ask: Ask): string[] {
   try {
@@ -43,7 +45,7 @@ export const isAgentAnswer = (by: string): boolean => by === "robert" || by.star
  * sit open for a long time; it's cleared explicitly on answer, or superseded by the paused-run state
  * once the run exits) and Telegram card. The asks row itself is what the ticket timeline renders.
  */
-export async function notifyAskCreated(ask: Ask, job: Job | undefined): Promise<void> {
+export async function notifyAskCreated(ask: Ask, job: Job | undefined, opts: { desk?: boolean } = {}): Promise<void> {
   const tk = ask.ticket_id ? tickets.get(ask.ticket_id) : undefined;
   bus.publish({
     topic: "ask.created",
@@ -89,6 +91,11 @@ export async function notifyAskCreated(ask: Ask, job: Job | undefined): Promise<
       .catch((e) => console.error("[asks] robert triage failed", e));
     return;
   }
+
+  // It is the operator's from the start, so it is a card in the Desk chat too — the live Ask widget,
+  // not a sentence he has to scroll back for. Robert's own asks skip this: his reply already carries
+  // the card, in the bubble where he asked.
+  if (opts.desk !== false) postRobertToDesk({ body: askMarker(ask.id), ws: ask.workspace_id ?? null });
 
   const card = askCard(ask, job);
   await notify(card.text, card.keyboard, { board: false }).catch((e) =>
@@ -165,6 +172,11 @@ export async function answerAsk(
 ): Promise<{ ok: true; ask: Ask } | { ok: false; error: string; status?: number }> {
   const cur = resolveAsk(idOrPrefix);
   if (!cur) return { ok: false, error: "ask not found" };
+  // Robert's own question is the operator's to answer — an agent answering it would be Robert
+  // answering himself.
+  if (isAgentAnswer(by) && isRobertAsk(cur)) {
+    return { ok: false, error: "Robert asked this one — only the operator answers it", status: 403 };
+  }
   // Hard gate: "robert" is the one distinctive `by` Robert's auto-answer path uses (see
   // agents/_blocks/coordinator.md — it literally passes by:"robert"), and `lead:<id8>` is a Lead
   // answering one of its own workers (LEADS.md). Both are AGENTS deciding for the operator, so a
@@ -212,6 +224,9 @@ export async function answerAsk(
     reportAgentState(updated.session_id, { state: "working", state_label: null, blocked_reason: null, ttl_ms: null });
   }
 
+  // Robert asked it himself, in a turn that is long over: the answer reaches him as a queued wake.
+  if (isRobertAsk(updated)) tellRobertAnswered(updated);
+
   // Parked run: the process already exited 0 and we only kept status=paused so the open ask
   // stayed visible on the fleet board. Once that ask is answered, the park is over — finalize to
   // success so activeByWorkspace / rollup drop it. The resume below is a NEW run; leaving the
@@ -240,6 +255,21 @@ export async function answerAsk(
   }
 
   return { ok: true, ask: updated };
+}
+
+/**
+ * The operator answered a question Robert raised. A wake, not a direct turn: it is durable across a
+ * restart, and it queues behind whatever he is doing instead of racing it. Late import — the wake
+ * queue imports the manager, which is a long way from the asks layer.
+ */
+function tellRobertAnswered(ask: Ask): void {
+  const say =
+    `The operator answered the question you asked him (ask \`${ask.id.slice(0, 8)}\`).\n` +
+    `Q: ${ask.question}\nA: ${ask.answer}\n` +
+    `Act on it now, the way you said you would when you asked.`;
+  void import("./wake-queue.js")
+    .then((m) => m.enqueueWake({ topic: "ask.answered", key: `robert-ask:${ask.id}`, workspace_id: ask.workspace_id, payload: { say } }))
+    .catch((e) => console.error("[asks] robert wake failed", e));
 }
 
 /**

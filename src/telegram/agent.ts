@@ -1493,7 +1493,11 @@ export async function askManagerWeb(
   void import("../supervision-guard.js")
     .then((g) => g.checkSupervision())
     .catch((e) => console.warn("[agent] supervision check", e?.message ?? e));
-  return { ...scanUiActions(reply || ""), steps, turn };
+  // An `ask` directive is a question for the operator: filed as an asks row and swapped for its live
+  // card in the reply (src/robert-asks.ts). Late import — the asks layer sits far below the manager.
+  const { liftRobertAsks } = await import("../robert-asks.js");
+  const { reply: shown, actions } = liftRobertAsks(scanUiActions(reply || ""), realWsId ?? opts?.focus ?? null);
+  return { reply: shown, actions, steps, turn };
 }
 
 // ── The named executives (none, while Robert is the only executive) ───────────────────────────────────────────────

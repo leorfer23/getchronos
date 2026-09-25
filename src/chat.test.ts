@@ -170,6 +170,7 @@ test("quotePrompt puts the quoted bubble above the reply, attributed", () => {
 test("quoteExcerpt is one line of words, capped", () => {
   assert.equal(quoteExcerpt("# Title\n> quoted\n- item `code` __b__"), "Title quoted item code b");
   assert.equal(quoteExcerpt("keep snake_case and #slug"), "keep snake_case and #slug");
+  assert.equal(quoteExcerpt("Need your go.\n\n::ask 0123abcd-4567-89ab-cdef-0123456789ab::"), "Need your go. a question for you");
   const cut = quoteExcerpt("word ".repeat(100));
   assert.ok(cut.length <= 240 && cut.endsWith("…"));
 });

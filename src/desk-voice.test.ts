@@ -94,4 +94,5 @@ test("speakable turns chat markdown into words", () => {
   assert.equal(speakable('**Done** — opened abcd1234.\nUI {"op":"select","id":"abcd1234"}'), "Done — opened the loader fix.");
   assert.equal(speakable("- atlas · 2 waiting\n- see https://x.y/z 🚀"), "atlas, 2 waiting see a link");
   assert.equal(speakable("```\ncode\n```ok"), "ok");
+  assert.equal(speakable("Need your call.\n\n::ask 0123abcd-4567-89ab-cdef-0123456789ab::"), "Need your call.", "an Ask card is on screen, not read out");
 });

@@ -27,6 +27,7 @@ import { postRobertToDesk } from "./robert-desk.js";
 import type { RobertStep } from "./robert-steps.js";
 import { esc, notify, notifyInfo } from "./telegram/api.js";
 import { kb, type Btn } from "./telegram/keyboards.js";
+import { askMarker } from "./robert-asks.js";
 
 /** How long an ask may sit with Robert before it becomes the operator's anyway. The agent is blocked. */
 export const TRIAGE_DEADLINE_MIN = Number(process.env.CHRONOS_ASK_TRIAGE_MIN ?? 3);
@@ -95,11 +96,26 @@ export function triagePrompt(ask: Ask, escalateOnly: boolean): string {
   );
 }
 
-/** The card the operator gets when Robert hands the question up. */
-export async function escalateAsk(ask: Ask, robertNote: string | null): Promise<void> {
+/**
+ * The card the operator gets when Robert hands the question up — on the phone, and as the live Ask
+ * card in the Desk chat. `desk.line` is what Robert says above the card (his triage turn passes its
+ * steps along so the thread shows how he got there); the deadline sweeper and the escalate route
+ * pass nothing and the card goes up under a plain line.
+ */
+export async function escalateAsk(
+  ask: Ask,
+  robertNote: string | null,
+  desk: { line?: string; steps?: RobertStep[]; turn?: string } = {},
+): Promise<void> {
   const cur = asks.get(ask.id);
   if (!cur || cur.status !== "open" || cur.escalated_at) return;
   asks.escalate(cur.id, robertNote);
+  postRobertToDesk({
+    body: `${desk.line ?? "**A question for you**"}\n\n${askMarker(cur.id)}`,
+    ws: cur.workspace_id ?? null,
+    steps: desk.steps,
+    turn: desk.turn,
+  });
   const short = id8(cur.id);
   const options: string[] = (() => {
     try {
@@ -168,21 +184,20 @@ export async function triageAsk(askId: string): Promise<void> {
   // No verdict at all (a failed turn, or prose where a decision belonged) → the operator's, with whatever he
   // did say attached. The failure mode of this whole path must be "the operator gets asked", never "the
   // terminal waits forever".
+  // The card carries who asked and what; the line above it is only what Robert makes of it.
   if (!verdict) {
-    desk("**Passed a question to you** — I couldn't settle it.");
-    await escalateAsk(after, reply ? reply.slice(0, 300) : null);
+    await escalateAsk(after, reply ? reply.slice(0, 300) : null, { line: "**Passed a question to you** — I couldn't settle it.", steps, turn });
     return;
   }
   if (verdict.kind === "escalate" || escalateOnly) {
-    desk(`**Passed a question to you** — ${verdict.text.slice(0, 300)}`);
-    await escalateAsk(after, verdict.text.slice(0, 300));
+    await escalateAsk(after, verdict.text.slice(0, 300), { line: `**Passed a question to you** — ${verdict.text.slice(0, 300)}`, steps, turn });
     return;
   }
 
   const { answerAsk } = await import("./asks.js"); // late: asks.ts routes back into this module
   const out = await answerAsk(after.id, verdict.text, "robert");
   if (!out.ok) {
-    await escalateAsk(after, verdict.text.slice(0, 300));
+    await escalateAsk(after, verdict.text.slice(0, 300), { line: `**Passed a question to you** — ${verdict.text.slice(0, 300)}`, steps, turn });
     return;
   }
   asks.setTriage(after.id, verdict.text.slice(0, 300));
