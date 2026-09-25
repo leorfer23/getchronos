@@ -33,6 +33,8 @@ import { installClaudeHooks, installCursorHooks, installGrokHooks } from "../ter
 import { sandboxAvailable, sandboxWrap, workspaceSandboxAllow } from "../sandbox.js";
 import { niceWrap } from "../machine.js";
 import { ensureDropDir, saveDrop } from "../drops.js";
+import { ModeTracker } from "../term-modes.js";
+import { typeSeed } from "../term-seed.js";
 import { locateTranscript, transcriptIsJsonl, type FocusCtx } from "../focus.js";
 import type { AgentBackend } from "../backends/types.js";
 import { ensureRoot, hostBaseEnv, isDir, mainCheckouts, remoteKey, resolveRepos, safeRef, signalName, vetoReason } from "./resolve.js";
@@ -41,10 +43,6 @@ import type { WorkSource } from "./status.js";
 
 export { remoteKey };
 
-/** Same negotiation terminal.ts does for a local seed — see its typeSeed for the two failure modes. */
-const SEED_MIN_MS = 2500;
-const SEED_QUIET_MS = 1200;
-const SEED_MAX_MS = 20000;
 /** Transcript poll cadence (focus.ts polls its own tails at 700ms). */
 const TRANSCRIPT_MS = 700;
 const TRANSCRIPT_MAX_READ = 1 << 20;
@@ -98,6 +96,8 @@ type Chan = {
   exit: { code: number | null; signal: string | null } | null;
   exitSent: boolean;
   lastOut: number;
+  /** DEC modes the CLI has set — its seed waits for bracketed paste (term-seed.ts). */
+  modes: ModeTracker;
   forgetT?: NodeJS.Timeout;
   tail: TranscriptTail | null;
   workspace: { id: string; slug: string } | null;
@@ -285,10 +285,11 @@ export class HostTerminals {
 
     const term = pty.spawn(cmd, cmdArgs, { name: "xterm-color", cols: spec.cols, rows: spec.rows, cwd, env });
     const ch = this.allocCh();
-    const c: Chan = { ch, sessionId: spec.session_id, pty: term, ring: new Ring(undefined, ch), streaming: !!this.link?.online(), exit: null, exitSent: false, lastOut: Date.now(), tail: null, workspace: spec.workspace, backend: backend.name, cwd, startedAt: Date.now() };
+    const c: Chan = { ch, sessionId: spec.session_id, pty: term, ring: new Ring(undefined, ch), streaming: !!this.link?.online(), exit: null, exitSent: false, lastOut: Date.now(), modes: new ModeTracker(), tail: null, workspace: spec.workspace, backend: backend.name, cwd, startedAt: Date.now() };
     this.chans.set(ch, c);
     term.onData((d) => {
       c.lastOut = Date.now();
+      c.modes.feed(d);
       for (const part of chunk(Buffer.from(d, "utf8"))) {
         const f = c.ring.append(part);
         if (c.streaming) this.link?.sendData(ch, f.seq, f.bytes);
@@ -310,7 +311,8 @@ export class HostTerminals {
       );
       c.tail.start();
     }
-    if (spec.seed) this.typeSeed(c, spec.seed.text, spec.seed.enter_after_ms);
+    // Type-then-Enter next to the pty (HOSTS.md: "no jitter"): the same negotiation as a local seed.
+    if (spec.seed) typeSeed({ write: (d) => c.pty.write(d), lastOut: () => c.lastOut, modes: c.modes, gone: () => !!c.exit }, spec.seed.text, backend.name, { enterMs: spec.seed.enter_after_ms });
     return { ch, pid: term.pid, cols: spec.cols, rows: spec.rows, cwd };
   }
 
@@ -345,24 +347,6 @@ export class HostTerminals {
     if (backend === "grok" && ensureGrokTrustedCwd(cwd, path.join(this.home, ".grok")) === "added") console.log(`[host] pre-trusted ${cwd} for grok`);
     await syncAgentsMd(cwd, this.o.root, this.home);
     void spec;
-  }
-
-  // Type-then-Enter next to the pty (HOSTS.md: "no jitter"): the same wait-for-quiet as terminal.ts.
-  private typeSeed(c: Chan, seed: string, enterMs: number): void {
-    const started = Date.now();
-    const line = seed.replace(/\r?\n/g, " ");
-    const tick = setInterval(() => {
-      const waited = Date.now() - started;
-      if (c.exit) return void clearInterval(tick);
-      if (waited < SEED_MIN_MS) return;
-      if (Date.now() - c.lastOut < SEED_QUIET_MS && waited < SEED_MAX_MS) return;
-      clearInterval(tick);
-      try {
-        c.pty.write(line);
-        setTimeout(() => { try { if (!c.exit) c.pty.write("\r"); } catch {} }, enterMs).unref?.();
-      } catch {}
-    }, 250);
-    tick.unref?.();
   }
 
   // ───────────── frames from the brain ─────────────
