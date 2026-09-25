@@ -246,11 +246,10 @@
   .row .t .dot { display:none; }
   .row .l.blocked .lt, .row .l.decide .lt { color:var(--ink); font-weight:600; }
   .row .l.your_turn .lt { color:var(--ink); }
-  /* Band labels: the first row of each band says what the band is. */
+  /* Workspace labels: the first row of each workspace group names it. */
   .row[data-band]:not([data-band=""]) { margin-top:15px; position:relative; }
   .row[data-band]:not([data-band=""])::before { content:attr(data-band); position:absolute; top:-14px; left:9px; font-size:10px;
     font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:var(--faint); }
-  .row[data-band="needs you"]::before { color:var(--danger); }
   .rows > .row[data-band]:not([data-band=""]):first-child { margin-top:12px; }
   .rail h3 { display:flex; align-items:center; gap:8px; margin:16px 6px 4px; font-size:12.5px; letter-spacing:.09em;
     text-transform:uppercase; color:var(--faint); font-weight:700; cursor:pointer; user-select:none; }
@@ -1774,16 +1773,19 @@ function oneLiner(s) {
   if (!s.live && s.end_reason) return { text: "↪ " + s.end_reason, cls: "" };
   return { text: S.focus.get(s.id) || s.summary || s.title || "", cls: "" };
 }
-// The rail's order: whoever needs you first, then what is finished, then what is working — and
-// inside a band, who has waited longest. That order IS the triage queue; J/K walk it.
+// Phase urgency — still colours a row and drives ⌘J's needs-you walk, but no longer orders the rail.
 function rank(s) {
   return PH[phaseOf(s)]?.rank ?? 9;
 }
 // How long it has been in its current phase: "decide · 14m" is the number that matters.
 const phaseSince = (s) => (s.status?.since ? s.status.since : rank(s) <= 3 && s.last_out ? s.last_out : Date.parse(s.created_at));
+// The rail's order (Leo 2026-09-25): grouped by workspace so a client's terminals sit together, then
+// oldest first inside the group — a row keeps its place instead of jumping every time its phase moves.
+// Terminals with no workspace go last.
+const railWs = (s) => (s.workspace_id ? wsName(s.workspace_id) : "");
 function railOrder() {
   return S.sessions.filter((s) => s.live && !S.dismissed.has(s.id))
-    .sort((a, b) => (rank(a) - rank(b)) || (phaseSince(a) - phaseSince(b)) || a.created_at.localeCompare(b.created_at));
+    .sort((a, b) => (!a.workspace_id - !b.workspace_id) || railWs(a).localeCompare(railWs(b)) || (a.workspace_id || "").localeCompare(b.workspace_id || "") || a.created_at.localeCompare(b.created_at));
 }
 // A Lead's workers fold under it (Leo 2026-09-18: sub agents must not bloat the rail). Folded is the
 // default; ▸ N unfolds one Lead. A worker that is blocked or deciding lifts its whole group to that
@@ -1797,12 +1799,9 @@ function railView() {
   const kids = new Map();
   for (const s of all) if (s.lead_id && onRail.has(s.lead_id)) kids.set(s.lead_id, [...(kids.get(s.lead_id) || []), s]);
   const top = all.filter((s) => !(s.lead_id && onRail.has(s.lead_id)));
-  const groupRank = (s) => Math.min(rank(s), ...(kids.get(s.id) || []).filter((w) => URGENT.includes(phaseOf(w))).map(rank));
-  const at = new Map(top.map((s, i) => [s.id, i]));
-  top.sort((a, b) => (groupRank(a) - groupRank(b)) || (at.get(a.id) - at.get(b.id)));
   const rows = [];
   for (const s of top) { rows.push(s); if (S.leadOpen.has(s.id)) rows.push(...(kids.get(s.id) || [])); }
-  return { rows, groupRank, onRail };
+  return { rows, onRail };
 }
 function toggleLead(id, open = !S.leadOpen.has(id)) {
   if (open === S.leadOpen.has(id)) return;
@@ -1949,18 +1948,18 @@ function reconcile(host, list, build, paint) {
   for (const el of [...host.children]) if (el.dataset.sid && !keep.has(el.dataset.sid)) el.remove();
 }
 function renderRail() {
-  const { rows, groupRank, onRail } = railView();
+  const { rows, onRail } = railView();
   reconcile(qs("#rows"), rows, rowEl, paintRow);
-  // Label a band only when there is more than one: a rail that is all "in flight" needs no heading.
-  // A Lead's unfolded workers ride inside its group and never open a band of their own.
+  // The first row of each workspace group carries its name — only when more than one workspace is
+  // on the rail. A Lead's unfolded workers ride inside its group and never open one of their own.
   const isKid = (s) => !!s.lead_id && onRail.has(s.lead_id);
-  const bandOf = (r) => Object.values(PH).find((p) => p.rank === r)?.band || "";
+  const bandOf = (s) => (s.workspace_id ? wsName(s.workspace_id) || "unknown client" : "no client");
   const top = rows.filter((s) => !isKid(s));
-  const several = new Set(top.map((s) => bandOf(groupRank(s)))).size > 1;
+  const several = new Set(top.map(bandOf)).size > 1;
   let last = null;
   for (const s of rows) {
     const el = qs('[data-sid="' + s.id + '"]', qs("#rows"));
-    const b = isKid(s) ? null : bandOf(groupRank(s));
+    const b = isKid(s) ? null : bandOf(s);
     if (el) el.dataset.band = several && b !== null && b !== last ? b : "";
     if (b !== null) last = b;
   }
