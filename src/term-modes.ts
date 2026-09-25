@@ -30,6 +30,11 @@ export class ModeTracker {
     if (tail.length < CARRY_MAX && !CSI_DONE.test(tail) && (tail.length === 1 || tail[1] === "[")) this.carry = tail;
   }
 
+  /** Has the stream turned this mode on (and not back off)? 2004 = the TUI takes bracketed paste. */
+  isOn(n: number): boolean {
+    return this.modes.get(n) === true;
+  }
+
   /** Escape sequences that put a fresh terminal into the stream's current modes. */
   preamble(): string {
     let out = "";

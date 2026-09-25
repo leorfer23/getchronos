@@ -7,6 +7,7 @@ import { detectPrompt, renderScreen, type DeskPrompt } from "./desk-prompt.js";
 import { FLUSH_MS, clampRate, fanOut, type TermClient } from "./term-fanout.js";
 import { ScreenMirror, type Screen } from "./term-screen.js";
 import { ModeTracker } from "./term-modes.js";
+import { pasteOf, seedEnterMsFor, typeSeed } from "./term-seed.js";
 import { sessions, sessionGoals, workspaces, repos, tickets, runs, jobs, notes as notesStore, kv } from "./store.js";
 import { backendAllowed, getBackend, workspaceBackends } from "./backends/index.js";
 import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow } from "./sandbox.js";
@@ -882,7 +883,8 @@ export async function openSession(
     // A revive's continue-nudge is not the terminal's first prompt: keep the one it was opened with.
     if (!opts.resumeId) sessions.setMeta(row.id, { first_prompt: seed });
     // A remote host types it itself, next to the pty (it rode in the SpawnSpec).
-    if (!remote) typeSeed(entry, seed, seedEnterMsFor(backend.name));
+    // (term-seed.ts: wait for the input box, then one paste and its own Enter.)
+    if (!remote) typeSeed({ write: (d) => entry.pty.write(d), lastOut: () => entry.lastOut, modes: entry.modes, gone: () => live.get(row.id) !== entry }, seed, backend.name);
   }
 
   indexSession(row.id);
@@ -1113,49 +1115,6 @@ function markBusy(id: string, entry: Live) {
   }, QUIET_MS);
 }
 
-// Handing a booting CLI its first prompt is not a `write()` — it's a small negotiation, and getting it
-// wrong is silent: the card comes up, the goal is on it, and the agent never starts.
-//
-// Two failures, both seen on the wall:
-//   · Type too early and the keystrokes land on a splash screen that is still repainting, so half the
-//     prompt is eaten and what survives can trip a slash command.
-//   · Send the text and its Enter in one write and a TUI in bracketed-paste mode reads the trailing
-//     \r as a newline INSIDE the paste — the prompt sits there, full and unsent, forever.
-// So: wait for the boot chatter to stop (with a floor, and a ceiling for a CLI that never settles),
-// type the prompt, then press Enter by itself.
-const SEED_MIN_MS = 2500;    // never before this: no CLI is ready sooner
-const SEED_QUIET_MS = 1200;  // "the splash screen stopped moving"
-const SEED_MAX_MS = 20000;   // a CLI that keeps painting (spinner) still gets its prompt
-const SEED_ENTER_MS = 250;   // Enter as its own keystroke, after the paste has landed
-
-/**
- * How long after the paste the Enter goes. cursor-agent folds a pasted seed into a "[Pasted text #1]"
- * chip and swallows a key that arrives while it is still doing that: at 250ms the seed sat in its
- * prompt unsent (m2, 2026-09-24 — one more Enter by hand and the run went through). claude and grok
- * submit fine at 250ms, so only cursor waits longer.
- */
-export function seedEnterMsFor(backend: string): number {
-  return backend === "cursor-agent" || backend === "cursor" ? 1200 : SEED_ENTER_MS;
-}
-
-function typeSeed(entry: Live, seed: string, enterMs = SEED_ENTER_MS) {
-  const started = Date.now();
-  const line = seed.replace(/\r?\n/g, " ");
-  const tick = setInterval(() => {
-    const waited = Date.now() - started;
-    if (waited < SEED_MIN_MS) return;
-    if (Date.now() - entry.lastOut < SEED_QUIET_MS && waited < SEED_MAX_MS) return;
-    clearInterval(tick);
-    try {
-      entry.pty.write(line);
-      setTimeout(() => { try { entry.pty.write("\r"); } catch {} }, enterMs).unref?.();
-    } catch {
-      // pty died while we waited — the session already ended, nothing to seed
-    }
-  }, 250);
-  tick.unref?.();
-}
-
 async function readPrompt(e: Live): Promise<DeskPrompt | null> {
   try { await e.screen.settle(); return detectPrompt(e.screen.snapshot().lines); }
   catch {
@@ -1369,6 +1328,8 @@ const KEYS: Record<NamedKey, string> = {
 };
 export const INPUT_WINDOW_MS = 60_000;
 export const KEY_GAP_MS = 120;
+/** From here on sendInput's text is a paste, not typing (≈ a tty's MAX_INPUT; see term-seed.ts). */
+export const PASTE_MIN = 1000;
 export const INPUT_MAX = Number(process.env.CHRONOS_TERM_INPUT_MAX ?? 12);
 const inputLog = new Map<string, number[]>();
 
@@ -1407,7 +1368,12 @@ export function sendInput(
   }
   if (req.text) {
     // One line: a pty is a stream, and a stray newline mid-text submits half a thought.
-    writeTo(id, req.text.replace(/\r?\n/g, " "));
+    const line = req.text.replace(/\r?\n/g, " ");
+    // A long message (a Lead's brief, Robert's handoff) goes as one bracketed paste when the TUI takes
+    // one, so it lands whole instead of by the CLI's guess at how fast it was typed. A short answer
+    // stays keystrokes: a menu reads "1" as a key, not as pasted text.
+    const e = live.get(id)!;
+    writeTo(id, pasteOf(line, line.length >= PASTE_MIN && e.modes.isOn(2004)));
     if (req.enter !== false) setTimeout(() => writeTo(id, "\r"), 200).unref?.();
   }
   // Persisted by activity.ts like every other bus event — who typed what into whose terminal is
