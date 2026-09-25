@@ -82,6 +82,20 @@ export type BusEvent = (
   // Link down is NOT process dead: a host's terminals keep running through a Wi-Fi drop.
   | { topic: "host.online"; host_id: string; name: string; via: string }
   | { topic: "host.offline"; host_id: string; name: string; reason: string }
+  // A live terminal on a computer that stayed offline past the grace was reopened elsewhere
+  // (src/host-failover.ts). `session_id` is the ended one (end_reason host_failover), `to_session_id`
+  // the terminal that continues it. mode: "resume" = its conversation came along, "brief" = a new chat
+  // seeded with what it was doing. "stuck" = no computer could take it; it stays on its host.
+  | {
+      topic: "session.host_failover";
+      session_id: string;
+      workspace_id: string | null;
+      from_host: string;
+      to_host: string | null;
+      to_session_id: string | null;
+      mode: "resume" | "brief" | "stuck";
+      reason: string;
+    }
   // The operator changed a host from the Desk: name, policy, drain/enable, revoke.
   | { topic: "host.updated"; host_id: string; status: string; actor?: string }
   // A Lead closed its own done workers (`POST /leads/me/close-done`).

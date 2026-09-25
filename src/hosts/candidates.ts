@@ -94,6 +94,9 @@ export type OpenIntent = {
   agentSessionId?: string | null;
   resumeAgent?: boolean;
   replaces?: string | null;
+  /** Host failover (src/host-failover.ts): takes over a terminal on an offline computer. Admission-
+   *  exempt like `replaces`, but never sticky to that computer. */
+  movedFrom?: string | null;
 };
 
 /**
@@ -175,7 +178,7 @@ export function placeRequest(o: OpenIntent, openedBy: string): PlaceRequest {
     // Same rule the brain-only admission check always used: "operator" (or nothing) is the operator.
     opened_by: openedBy && openedBy !== "operator" ? "agent" : "operator",
     fresh: sticky ? sticky.fresh : true,
-    exempt_admission: !!o.replaces,
+    exempt_admission: !!o.replaces || !!o.movedFrom,
   };
 }
 

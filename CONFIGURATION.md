@@ -490,6 +490,8 @@ On the brain:
 | `CHRONOS_HOST_REPO_URL` | `repository` in package.json, else `https://github.com/leorfer23/getchronos` | what the git join command clones on a new Mac |
 | `CHRONOS_HOST_INSTALL` | `git` | how the join command installs Chronos on a new Mac: `git` (clone + `npm ci` into `$HOME/.chronos-host/app`) or `npm` (`npx -y getchronos@<the brain's version> host join …` — only once the package is published) |
 | `CHRONOS_HOST_TRANSCRIPTS` | `<hostlink dir>/transcripts` | where the brain mirrors remote terminals' CLI transcripts (one `<session>.jsonl` each), which Focus and the usage ledger read |
+| `CHRONOS_HOST_FAILOVER` | on | a computer offline for longer than the grace below with live Desk terminals on it: each one is reopened on an online computer (the brain first, when it has the repo) — a claude terminal resumes its mirrored conversation, any other gets a brief — and the old one is ended with `end_reason` `host_failover`. When the host comes back its copy is killed, never resumed. One line per host in the Desk chat (`src/host-failover.ts`). `off` = they wait for the host |
+| `CHRONOS_HOST_FAILOVER_GRACE_MIN` | `5` | minutes a host must stay offline before its terminals move (counted from the brain's boot too, so a restart never moves work that simply has not reconnected yet). A lid closed for a minute or a Wi-Fi blip moves nothing |
 | `CHRONOS_PLACEMENT` | `auto` | the kill switch, for terminals AND headless runs. `auto`: sticky, then pinned, else most headroom. `pinned`: Phase 3 — only a pinned or sticky terminal leaves the brain, and no new run does. `local`: every new terminal and run starts on the brain and a pin to another computer is refused (409); work that already lives on a host (a terminal, a ticket worktree, a resumed transcript) still goes back there |
 | `CHRONOS_BRAIN_RESERVE` | `25` | headroom points (0–100 scale: half CPU against `CHRONOS_MAX_LOAD_PER_CORE`, half free RAM, minus 25/50 for memory pressure warning/critical) taken off the brain's score before computers are compared, so the brain — which also runs the daemon, the Desk and Robert — takes overflow, not first pick. `0` = the brain competes as an equal |
 
@@ -645,6 +647,8 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_HOST_CERT_FP` | — | `src/hostd/index.ts` |
 | `CHRONOS_HOST_AUTO_CLONE` | `0` | `src/hostd/index.ts` |
 | `CHRONOS_HOST_DENY` | — | `src/hostd/inventory.ts` |
+| `CHRONOS_HOST_FAILOVER` | `"on"` | `src/config.ts` |
+| `CHRONOS_HOST_FAILOVER_GRACE_MIN` | `5` | `src/config.ts` |
 | `CHRONOS_HOST_HOME` | `~/.chronos-host` | `src/hostd/env.ts` |
 | `CHRONOS_HOST_ID` | — | `src/hostd/index.ts` |
 | `CHRONOS_HOST_LISTEN` | — | `src/config.ts` |

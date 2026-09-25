@@ -297,7 +297,7 @@ function wsOfSession(id: string) {
   return wsId ? workspaces.get(wsId) : undefined;
 }
 
-function resolveCwd(s: { repo_id?: string | null; workspace_id?: string | null }): string {
+export function resolveCwd(s: { repo_id?: string | null; workspace_id?: string | null }): string {
   if (s.repo_id) {
     const r = repos.get?.(s.repo_id) as any;
     if (r?.path && fs.existsSync(r.path)) return r.path;
@@ -436,6 +436,10 @@ export async function openSession(
     resumeAgent?: boolean;
     /** A live terminal this one is about to replace (failover) — not counted against the cap. */
     replaces?: string | null;
+    /** A live terminal on an OFFLINE computer this one takes over (host failover, host-failover.ts):
+     *  not counted against the cap and admission-exempt — but NOT sticky to its
+     *  host the way `replaces` is, because that host is exactly where it cannot run. */
+    movedFrom?: string | null;
     /** More than one finish line, in the order they should be worked (src/goals.ts). The first one
      *  becomes the card's goal; `mc goal done` walks the rest. */
     goals?: Array<string | { text: string; kind?: GoalKind | null }> | null;
@@ -486,7 +490,7 @@ export async function openSession(
     // worktree always has a live session on it — and must not be refused by the seat it is taking.
     const live = sessions
       .list({ workspace_id: opts.workspace_id, status: "live" })
-      .filter((x) => x.id !== opts.replaces);
+      .filter((x) => x.id !== opts.replaces && x.id !== opts.movedFrom);
     if (opts.lead_id) {
       const n = live.filter((x) => x.lead_id === opts.lead_id).length;
       const cap = CONFIG.leadDrive.maxWorkers;
