@@ -215,7 +215,11 @@
       L.btn.title = n ? n + " question" + (n > 1 ? "s" : "") + " waiting on you" : "nothing waiting on you";
     }
     if (L.open) drawList();
+    subs.forEach(function (fn) { try { fn(L.items); } catch (e) {} });
   }
+  // Other places that list the same questions (the Desk's Robert panel) follow the count from here.
+  var subs = [];
+  function onChange(fn) { subs.push(fn); }
   function drawList() {
     var p = L.panel;
     var keep = new Set();
@@ -281,5 +285,10 @@
     setInterval(function () { if (document.visibilityState !== "hidden") load(); }, 60000);
   }
 
-  root.AskCard = { MARK: MARK, TOPICS: TOPICS, init: init, embed: embed, onEvent: onEvent, recount: recount, toggle: toggle, collect: collect, html: html, fromAsk: fromAsk, termBody: termBody };
+  root.AskCard = {
+    MARK: MARK, TOPICS: TOPICS, init: init, embed: embed, onEvent: onEvent, recount: recount, toggle: toggle, collect: collect, html: html, fromAsk: fromAsk, termBody: termBody,
+    // For another list of the same questions: what is waiting, a live card for one, the click/submit
+    // wiring for wherever those cards sit, and the one answer path.
+    items: function () { return L.items.slice(); }, onChange: onChange, host: host, wire: wire, answer: answer,
+  };
 })(typeof window !== "undefined" ? window : globalThis);

@@ -10,7 +10,8 @@ test("a Lead's workers fold under it: folded by default, ▸ N unfolds, remember
   assert.match(html, /for \(const s of top\) \{ rows\.push\(s\); if \(S\.leadOpen\.has\(s\.id\)\) rows\.push\(\.\.\.\(kids\.get\(s\.id\) \|\| \[\]\)\); \}/);
   assert.match(html, /localStorage\.setItem\("desk-lead-open", JSON\.stringify\(\[\.\.\.S\.leadOpen\]\)\);/);
   assert.match(html, /fold\.textContent = \(open \? "▾ " : "▸ "\) \+ kids\.length;/);
-  assert.match(html, /if \(e\.target\.closest\("\.x, \.fold"\)\) return; select\(s\.id\);/);
+  // pickTerminal = select, plus: a rail click while Robert has the whole stage brings the stage back.
+  assert.match(html, /if \(e\.target\.closest\("\.x, \.fold"\)\) return; pickTerminal\(s\.id\);/);
 });
 
 test("a wall behind a fold still surfaces: the fold turns red, ⌘J unfolds it", () => {
