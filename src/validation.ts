@@ -964,6 +964,9 @@ export const AgentTextSchema = z.object({
   /** Files already uploaded to POST /agent/attach, riding this turn. Ids only — the server rebuilds
    *  the paths it hands the model from its own rows, so a client cannot name a path to be Read. */
   attachments: z.array(z.object({ id: z.string().trim().min(1).max(64) })).max(10).optional(),
+  /** The bubble this line answers: a chat row and which half of it. The quoted text is read back from
+   *  that row, never taken from the client. */
+  replyTo: z.object({ id: z.number().int().positive(), side: z.enum(["you", "reply"]) }).nullish(),
 });
 export const SpeakSchema = z.object({ text: z.string().trim().min(1).max(4000), lang: z.enum(["en", "es"]).optional() });
 export const ThreadStickySchema = z.object({ ws: z.string().nullish(), surface: z.string().trim().max(24).optional() });

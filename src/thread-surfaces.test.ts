@@ -97,8 +97,8 @@ test("POST /agent routes, refuses to guess, and answers with where it landed", (
   // The turn runs on the routed workspace's own manager, and the row is stored under it. `prompt` is
   // `text` plus any attachment paths (chatAttachmentsBlock); the stored `you` stays the clean text.
   assert.match(api, /askManagerWeb\(prompt, \(t, kind\) => bus\.publish\(\{ topic: "agent\.delta", text: t, kind, ws, client, turn: turnId \}\), runWs, \{ voice: !!req\.body\.voice, turn: turnId, focus: runWs \? null : ws \}\)/);
-  assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown\)/);
-  assert.match(api, /res\.json\(\{ reply, actions, ws, how: turn\.how, turn: turnId \}\)/);
+  assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote\)/);
+  assert.match(api, /res\.json\(\{ reply, actions, ws, how: turn\.how, turn: turnId, id: row\.id \}\)/);
   assert.match(api, /commitTurn\(surface, turn\)/);
 });
 

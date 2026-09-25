@@ -419,6 +419,7 @@
 <script src="/term-links.js"></script>
 <script src="/desk-quick-actions.js"></script>
 <script src="/tag-complete.js"></script>
+<script src="/chat-reply.js"></script>
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
 <script>
@@ -1701,14 +1702,14 @@ function mdRob(text) {
 qs("#chat").addEventListener("click", (e) => { const a = e.target.closest('a[href^="#sel="]'); if (!a) return; e.preventDefault(); fx.tap(); const id = a.getAttribute("href").slice(5); if (byId(id)) openFocus(id); else toast("that terminal is gone"); });
 function bubble(kind, text) {
   const log = qs("#chat"); const d = document.createElement("div");
-  d.className = "bub " + kind;
+  d.className = "bub " + kind; d._raw = text;
   if (kind === "rob") d.innerHTML = mdRob(text); else d.textContent = text;
   log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
 }
 async function robertHistory() {
   if (R.loaded) return; R.loaded = true;
   qs("#chat").innerHTML = "";
-  try { const h = await api("/agent/history?limit=20&ws=" + encodeURIComponent(R.ws || "all")); for (const m of h.messages || []) { if (m.source === "divider") continue; if (m.you) bubble("you", m.you); if (m.reply) bubble("rob", m.reply); } }
+  try { const h = await api("/agent/history?limit=20&ws=" + encodeURIComponent(R.ws || "all")); for (const m of h.messages || []) { if (m.source === "divider") continue; if (m.you) RP.quote(RP.mark(bubble("you", m.you), m.id, "you"), ChatReply.fromRow(m)); if (m.reply) RP.mark(bubble("rob", m.reply), m.id, "reply"); } }
   catch {}
   qs("#chat").scrollTop = qs("#chat").scrollHeight;
 }
@@ -1733,6 +1734,8 @@ qs("#btn-robert").onclick = () => { fx.tap(); showRobert(); };
 qs("#r-back").onclick = () => { fx.tap(); show("v-home", "in-left"); renderHome(); };
 qs("#r-reset").onclick = () => confirmSheet(R.ws ? `Start a new thread with Robert on ${wsName(R.ws)}?` : "Start a new desk-wide thread with Robert?", "New thread", async () => { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: R.ws }) }); qs("#chat").innerHTML = ""; toast("new thread"); });
 const rComposer = qs("#r-composer");
+// Tap a bubble → ↩ → it is quoted above the composer and the next line answers it (static/chat-reply.js).
+const RP = ChatReply({ log: qs("#chat"), input: rComposer, before: rComposer.closest(".composer"), onMissing: () => toast("that message is further back than the chat shows") });
 // This tab's id on each turn: the Desk draws a line it did not type itself (the bus echoes the id).
 const CLIENT = "phone-" + Math.random().toString(36).slice(2, 12);
 // A message typed while he is mid-turn is not lost and not refused: it parks in an outbox (dimmed
@@ -1742,22 +1745,26 @@ function askRobert() {
   const text = rComposer.value.trim();
   if (!text) return;
   rComposer.value = ""; rComposer.style.height = "";
-  fx.send(); const el = bubble("you", text);
-  if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el }); return; }
-  deliverRobert(text, el);
+  const quote = RP.take();
+  fx.send(); const el = RP.quote(bubble("you", text), quote);
+  if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el, quote }); return; }
+  deliverRobert(text, el, undefined, quote);
 }
 // `ws` only when you tapped a project on his "which one?" line — that is as explicit as a #tag.
-async function deliverRobert(text, el, ws) {
+// `quote` = the bubble this line answers.
+async function deliverRobert(text, el, ws, quote) {
   R.busy = true; el.classList.remove("queued");
   R.mineYou = el;
   if (!R.mine) R.mine = bubble("rob pending", "");
   try {
     const body = { text, client: CLIENT };
     if (ws !== undefined) { body.ws = ws; body.route = false; }
+    if (quote) body.replyTo = { id: quote.id, side: quote.side };
     const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
-    if (r?.how === "ask") { dropMine(); askWhere(r, text); return; }
+    if (r?.how === "ask") { dropMine(); askWhere(r, text, quote); return; }
+    RP.mark(el, r?.id, "you");
     // The push normally drew it already; this covers a bus that was down for the whole turn.
-    if (r?.reply && !(r.turn && R.seen.has(r.turn))) { if (r.turn) R.seen.add(r.turn); dropMine(); fx.reply(); bubble("rob", r.reply); }
+    if (r?.reply && !(r.turn && R.seen.has(r.turn))) { if (r.turn) R.seen.add(r.turn); dropMine(); fx.reply(); RP.mark(bubble("rob", r.reply), r.id, "reply"); }
     // He can put a terminal on your screen: `UI {"op":"select","id"}` after his reply.
     const sel = (r?.actions || []).find((a) => a.op === "select" || a.op === "focus_terminal");
     if (sel) { await load(); const want = String(sel.id || sel.match || "").toLowerCase(); const s = S.sessions.find((x) => x.id.startsWith(want)) || S.sessions.find((x) => x.live && sTitle(x).toLowerCase().includes(want)); if (s) openFocus(s.id); }
@@ -1771,13 +1778,13 @@ async function deliverRobert(text, el, ws) {
   } finally {
     R.busy = false; reloadSoon();
     const next = R.outbox.shift();
-    if (next) deliverRobert(next.text, next.el);
+    if (next) deliverRobert(next.text, next.el, undefined, next.quote);
   }
 }
 function dropMine() { if (R.mine) { R.mine.remove(); R.mine = null; } }
 // The router could not tell which project: his line, with the projects as chips. A tap re-sends the
 // SAME message there (nothing ran yet, so there is nothing to undo).
-function askWhere(r, text) {
+function askWhere(r, text, quote) {
   const d = bubble("rob", r.reply);
   const row = document.createElement("div");
   row.className = "rstrip"; row.style.cssText = "padding:8px 0 0;background:none;border:0;flex-wrap:wrap";
@@ -1785,9 +1792,9 @@ function askWhere(r, text) {
   row.onclick = (e) => {
     const b = e.target.closest("[data-ws]"); if (!b) return;
     fx.tap(); row.remove();
-    const el = bubble("you", text);
-    if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el }); return; }
-    deliverRobert(text, el, b.dataset.ws || null);
+    const el = RP.quote(bubble("you", text), quote);
+    if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el, quote }); return; }
+    deliverRobert(text, el, b.dataset.ws || null, quote);
   };
   d.appendChild(row); qs("#chat").scrollTop = qs("#chat").scrollHeight;
 }
@@ -1943,9 +1950,9 @@ function connectBus() {
       if (e.turn && R.seen.has(e.turn)) return;
       if (e.turn) R.seen.add(e.turn);
       const b = R.pend.get(e.turn || "?"); if (b) { b.remove(); R.pend.delete(e.turn || "?"); }
-      if (mine) { dropMine(); R.lost = false; if (e.you && !R.mineYou?.isConnected) bubble("you", e.you); }
-      else if (e.you) bubble("you", e.you); // said on the Desk (or another phone)
-      if (e.reply) { fx.reply(); bubble("rob", e.reply); }
+      if (mine) { dropMine(); R.lost = false; if (e.you && !R.mineYou?.isConnected) RP.quote(RP.mark(bubble("you", e.you), e.id, "you"), e.quote); }
+      else if (e.you) RP.quote(RP.mark(bubble("you", e.you), e.id, "you"), e.quote); // said on the Desk (or another phone)
+      if (e.reply) { fx.reply(); RP.mark(bubble("rob", e.reply), e.id, "reply"); }
       return;
     }
     if (e.topic === "focus.event") {

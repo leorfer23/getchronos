@@ -104,7 +104,7 @@ test("answer chips on the card go through the input door; a select's extra optio
 test("Robert on the phone is one routed chat: the strip only filters, and his answer comes off the bus", () => {
   // No conversation picker: a line carries a ws only when you tapped a project on his "which one?".
   assert.match(html, /if \(ws !== undefined\) \{ body\.ws = ws; body\.route = false; \}/);
-  assert.match(html, /if \(r\?\.how === "ask"\) \{ dropMine\(\); askWhere\(r, text\); return; \}/);
+  assert.match(html, /if \(r\?\.how === "ask"\) \{ dropMine\(\); askWhere\(r, text, quote\); return; \}/);
   // The strip filters what you see; your own turns show through it.
   assert.match(html, /const ourThread = \(ws\) => !String\(ws \|\| ""\)\.startsWith\("agent:"\) && \(!R\.ws \|\| \(ws \|\| null\) === R\.ws\);/);
   assert.match(html, /if \(!e\.text \|\| \(e\.kind && e\.kind !== "text"\) \|\| !\(mine \|\| ourThread\(e\.ws\)\)\) return;/);
@@ -323,8 +323,8 @@ test("Robert on the phone: an 8-char id becomes a chip that opens the story; sel
 
 test("Robert on the phone: a message typed mid-turn parks in an outbox and goes out when the turn lands — never refused, never a dead button", () => {
   const html = fs.readFileSync(new URL("../static/phone.html", import.meta.url), "utf8");
-  assert.match(html, /if \(R\.busy\) \{ el\.classList\.add\("queued"\); R\.outbox\.push\(\{ text, el \}\); return; \}/);
-  assert.match(html, /const next = R\.outbox\.shift\(\);\s*if \(next\) deliverRobert\(next\.text, next\.el\);/);
+  assert.match(html, /if \(R\.busy\) \{ el\.classList\.add\("queued"\); R\.outbox\.push\(\{ text, el, quote \}\); return; \}/);
+  assert.match(html, /const next = R\.outbox\.shift\(\);\s*if \(next\) deliverRobert\(next\.text, next\.el, undefined, next\.quote\);/);
   assert.doesNotMatch(html, /qs\("#r-send"\)\.disabled = true/, "the send button is never disabled while he answers");
   assert.match(html, /\.bub\.you\.queued \{ opacity:\.55; \}/);
 });

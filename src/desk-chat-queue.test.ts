@@ -19,7 +19,7 @@ test("the composer accepts a message while he is working", () => {
   // No bail-on-busy, and nothing disables the send button any more.
   assert.doesNotMatch(html, /if \(!text \|\| OV\.busy\) return/);
   assert.doesNotMatch(html, /#chat-send"\)\.disabled/);
-  assert.match(html, /OV\.queue\.push\(\{ text, bub, atts \}\)/); // atts: whatever was pasted/dropped for this line
+  assert.match(html, /OV\.queue\.push\(\{ text, bub, atts, quote \}\)/); // atts: whatever was pasted/dropped for this line
   // Queued messages are visibly queued, and go in one at a time, in order.
   assert.match(html, /ovLine\("you" \+ \(OV\.busy \? " queued" : ""\), text, undefined, true, true\)/);
   assert.match(html, /const item = OV\.queue\.shift\(\)/);

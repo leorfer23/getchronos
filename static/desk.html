@@ -1635,6 +1635,7 @@
 <script src="/desk-companion.js"></script>
 <script src="/desk-quick-actions.js"></script>
 <script src="/tag-complete.js"></script>
+<script src="/chat-reply.js"></script>
 <script src="/vendor/xterm-addon-webgl.js"></script>
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
@@ -4506,7 +4507,7 @@ async function openFromHash() {
 // ── Robert, in the corner ────────────────────────────────────────────────────────────────────
 // The same warm manager thread the Mission UI talks to (`/api/agent`), so what you tell him here he
 // remembers there. His answer streams over the bus the rail already uses.
-const OV = { log: qs("#chat-log"), pending: null, busy: false, unread: 0, queue: [], stopped: false, filter: (() => { try { return localStorage.getItem("desk-chat-filter") || null; } catch { return null; } })(), sticky: null, histGen: 0, drawn: new Set() };
+const OV = { log: qs("#chat-log"), pending: null, busy: false, unread: 0, queue: [], stopped: false, filter: (() => { try { return localStorage.getItem("desk-chat-filter") || null; } catch { return null; } })(), sticky: null, histGen: 0, drawn: new Map() };
 // This tab's id on every turn it sends: the bus echoes it, so a line typed or spoken on the phone
 // (same "web" surface) is drawn here, and only the line this tab already drew is skipped.
 const CLIENT = "desk-" + Math.random().toString(36).slice(2, 12);
@@ -5693,6 +5694,8 @@ qs("#chat-new").onclick = async () => {
 };
 const input0 = qs("#chat-input");
 TagComplete(input0, () => S.workspaces);
+// ↩ on a bubble: quote it above the composer; the next line answers it (static/chat-reply.js).
+const RP = ChatReply({ log: OV.log, input: input0, before: qs("#chat-att"), onMissing: () => toast("that message is further back than the chat shows") });
 input0.addEventListener("input", () => { input0.style.height = "auto"; input0.style.height = Math.min(input0.scrollHeight, window.innerHeight * 0.45) + "px"; });
 input0.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); return ask(true); }
@@ -5818,15 +5821,16 @@ async function ask(now) {
   const atts = ATT.list; ATT.list = []; renderAtt();
   // A screenshot with nothing typed is still a turn, and a turn needs words: the router reads the
   // project out of them, and the model has to be told what it is looking at.
-  queueAsk(text || "Look at the attachments.", now, false, atts);
+  queueAsk(text || "Look at the attachments.", now, false, atts, RP.take());
 }
-// Typed or spoken, a line goes in the same way.
-function queueAsk(text, now, spoken = false, atts = []) {
+// Typed or spoken, a line goes in the same way. `quote` = the bubble it answers (RP.take()).
+function queueAsk(text, now, spoken = false, atts = [], quote = null) {
   // The router decides where it lands; the answer fills the chip in.
   const bub = ovLine("you" + (OV.busy ? " queued" : ""), text, undefined, true, true);
   if (spoken) bub.classList.add("voice");
+  RP.quote(bub, quote);
   attBubble(bub, atts);
-  OV.queue.push({ text, bub, atts });
+  OV.queue.push({ text, bub, atts, quote });
   if (OV.busy) { ovWork(true); return now ? stopTurn() : undefined; }
   flush();
 }
@@ -5863,14 +5867,16 @@ async function flush() {
     const body = { text: item.text, session: S.active || null, client: CLIENT };
     // Ids only — the daemon rebuilds the paths it hands him from its own rows.
     if (item.atts?.length) body.attachments = item.atts.map((a) => ({ id: a.id }));
+    // A reply: the row and the half of it. The daemon reads the quoted words back from that row.
+    if (item.quote) body.replyTo = { id: item.quote.id, side: item.quote.side };
     // A candidate he tapped is as explicit as a selector — including "#all", which must NOT route
     // again (it has no signal, so it would just ask the same question forever).
     if (item.picked) { body.ws = item.ws; body.route = false; }
     // On a call his answer is read out, so he answers short and spoken.
     if (VC.on) body.voice = true;
     const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
-    if (r?.how === "ask") { item.bub.querySelector(".wsc")?.remove(); askWhere(r, item.text, item.atts); if (VC.on) vcAskWhere(r, item.text); }
-    else { setChip(item.bub, r?.ws ?? null); OV.sticky = r?.ws ?? null; }
+    if (r?.how === "ask") { item.bub.querySelector(".wsc")?.remove(); askWhere(r, item.text, item.atts, item.quote); if (VC.on) vcAskWhere(r, item.text); }
+    else { setChip(item.bub, r?.ws ?? null); OV.sticky = r?.ws ?? null; RP.mark(item.bub, r?.id, "you"); }
     runActions(r?.actions);
   } catch (err) {
     // The request dropped (tunnel, sleep) but the turn runs on in the daemon: his answer still
@@ -5888,7 +5894,7 @@ async function flush() {
 }
 // The router refused to guess. One line, the candidates as chips — tapping one re-sends the SAME
 // message on that project (nothing ran yet, so there is nothing to undo).
-function askWhere(r, text, atts) {
+function askWhere(r, text, atts, quote = null) {
   const d = ovLine("rob", r.reply, null, false, true);
   const row = document.createElement("div");
   row.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;margin-top:8px";
@@ -5901,8 +5907,9 @@ function askWhere(r, text, atts) {
       row.remove();
       // Nothing ran, so the files it was sent with go in again with it.
       const bub = ovLine("you", text, c.ws, true, true);
+      RP.quote(bub, quote);
       attBubble(bub, atts);
-      OV.queue.push({ text, bub, ws: c.ws, picked: true, atts });
+      OV.queue.push({ text, bub, ws: c.ws, picked: true, atts, quote });
       flush();
     };
     row.appendChild(b);
@@ -6007,11 +6014,13 @@ async function ovHistory(reload = false) {
       const ws = m.workspace_id ?? null;
       if (m.you) {
         let atts = null; try { atts = m.attachments ? JSON.parse(m.attachments) : null; } catch {}
-        attBubble(ovLine("you", m.you, ws), atts);
+        const yb = RP.mark(ovLine("you", m.you, ws), m.id, "you");
+        RP.quote(yb, ChatReply.fromRow(m));
+        attBubble(yb, atts);
       }
       let steps = null; try { steps = m.steps ? JSON.parse(m.steps) : null; } catch {}
       if (steps?.length) { const box = stepsBox(ws, "h" + m.id, m.source === "robert" ? "woken" : ""); addSteps(box, steps); OV.log.appendChild(box); }
-      if (m.reply) ovLine("rob", m.reply, ws, !m.you);
+      if (m.reply) RP.mark(ovLine("rob", m.reply, ws, !m.you), m.id, "reply");
     }
   } catch {}
 }
@@ -6479,7 +6488,8 @@ function connectBus() {
     // Someone else (the phone) just said something to him: draw it now, not when he answers.
     if (e.topic === "agent.asked") {
       if (e.client === CLIENT || !e.you) return;
-      OV.drawn.add(e.turn); attBubble(ovLine("you", e.you, e.ws ?? null), e.attachments);
+      const yb = ovLine("you", e.you, e.ws ?? null);
+      OV.drawn.set(e.turn, yb); RP.quote(yb, e.quote); attBubble(yb, e.attachments);
       if (!chatIsOpen()) { OV.unread++; const b = qs("#fab-unread"); b.textContent = OV.unread; b.hidden = false; }
       return ovWork(true, "thinking…");
     }
@@ -6508,12 +6518,14 @@ function connectBus() {
       // On a call he reads out his answers to this page, and anything he raises on his own — not
       // the replies to what you said on the phone.
       if (VC.on && e.reply && (fromHere || !e.you)) vcFinal(e, fromHere);
-      const drawn = !!e.turn && OV.drawn.delete(e.turn);
-      if (!fromHere && !drawn && e.you) attBubble(ovLine("you", e.you, e.ws ?? null), e.attachments);
+      const drawn = e.turn ? OV.drawn.get(e.turn) : null;
+      if (e.turn) OV.drawn.delete(e.turn);
+      if (drawn) RP.mark(drawn, e.id, "you");
+      if (!fromHere && !drawn && e.you) { const yb = RP.mark(ovLine("you", e.you, e.ws ?? null), e.id, "you"); RP.quote(yb, e.quote); attBubble(yb, e.attachments); }
       settleSteps(e.turn, e.steps, e.ws ?? null);
       if (e.reply) {
         // Your own turn's chip is on the line you typed, which this page already drew.
-        ovLine("rob", e.reply, e.ws ?? null, !fromHere && !e.you, fromHere);
+        RP.mark(ovLine("rob", e.reply, e.ws ?? null, !fromHere && !e.you, fromHere), e.id, "reply");
         if (!chatIsOpen()) { OV.unread++; const b = qs("#fab-unread"); b.textContent = OV.unread; b.hidden = false; }
       }
       return;

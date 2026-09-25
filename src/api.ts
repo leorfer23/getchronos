@@ -9,7 +9,7 @@ import { WebSocketServer } from "ws";
 import { CONFIG } from "./config.js";
 import { serveHtml } from "./static-html.js";
 import { bus } from "./bus.js";
-import { activity, agentChat, asks, board, calEvents, calendars, chat, connectorSyncs, egressLog, events, ideas, jobs, jots, launches, lessons, repos, reviews, runs, searchIndex, sessions, sessionGoals, skills, steps, tickets, ticketLinks, triggers, watches, workspaces, workspaceVars, repoAccelerators, isAcceleratorTool, accelTelemetry } from "./store.js";
+import { activity, agentChat, asks, board, calEvents, calendars, chat, quotePrompt, quoteExcerpt, connectorSyncs, egressLog, events, ideas, jobs, jots, launches, lessons, repos, reviews, runs, searchIndex, sessions, sessionGoals, skills, steps, tickets, ticketLinks, triggers, watches, workspaces, workspaceVars, repoAccelerators, isAcceleratorTool, accelTelemetry } from "./store.js";
 import { accelStatus } from "./accel/status.js";
 import { buildGraphify, queryGraphify, GraphifyError } from "./accel/graphify.js";
 import { postToBoard } from "./board.js";
@@ -4511,16 +4511,21 @@ export function startServer() {
       .filter((a): a is ChatAttachment => !!a);
     // Two different texts on purpose: `prompt` carries the absolute paths the model Reads, `text` is
     // what the operator typed and is what gets stored and drawn. The thumbnails come from `shown`.
-    const prompt = text + chatAttachmentsBlock(files);
+    // A reply to one bubble: the quoted text comes from that row (the client sends an id and a side),
+    // goes above the words typed so he knows which comment is being answered, and is kept off `text`.
+    // A parent that is gone just makes this an ordinary line.
+    const quote = req.body.replyTo ? chat.quoteOf(req.body.replyTo.id, req.body.replyTo.side) : null;
+    const quoted = quote ? { id: quote.id, side: quote.side, text: quoteExcerpt(quote.text) } : null;
+    const prompt = quotePrompt(quote) + text + chatAttachmentsBlock(files);
     const shown = files.map((a) => ({ id: a.id, url: a.url, mime: a.mime, name: a.name }));
-    bus.publish({ topic: "agent.asked", you: text, at: new Date().toISOString(), source: surface, ws, client, turn: turnId, ...(shown.length ? { attachments: shown } : {}) });
+    bus.publish({ topic: "agent.asked", you: text, at: new Date().toISOString(), source: surface, ws, client, turn: turnId, ...(shown.length ? { attachments: shown } : {}), ...(quoted ? { quote: quoted } : {}) });
     try {
       // Stream TEXT deltas to the dashboard so it can speak sentence-by-sentence while the turn runs.
       // Single operator → broadcast on the bus (no per-client routing). POST result stays authoritative.
       // client + turn on every delta: the page that asked (a Desk on a voice call) speaks its own turn's
       // sentences as they stream, and nobody else's.
       const { reply, actions, steps } = await askManagerWeb(prompt, (t, kind) => bus.publish({ topic: "agent.delta", text: t, kind, ws, client, turn: turnId }), runWs, { voice: !!req.body.voice, turn: turnId, focus: runWs ? null : ws });
-      const row = chat.add(text, reply || "", "web", ws, steps, shown);
+      const row = chat.add(text, reply || "", "web", ws, steps, shown, quote);
       chat.prune(2000);
       bus.publish({
         topic: "agent.push",
@@ -4532,13 +4537,16 @@ export function startServer() {
         client,
         turn: turnId,
         steps,
+        id: row.id,
         ...(shown.length ? { attachments: shown } : {}),
+        ...(quoted ? { quote: quoted } : {}),
       });
       bus.publish({ topic: "agent.turn.done", ws });
-      res.json({ reply, actions, ws, how: turn.how, turn: turnId });
+      // id = the row: both bubbles of this exchange can now be replied to.
+      res.json({ reply, actions, ws, how: turn.how, turn: turnId, id: row.id });
     } catch (e: any) {
       const err = "⚠️ " + String(e?.message ?? e);
-      const row = chat.add(text, err, "web", ws, null, shown);
+      const row = chat.add(text, err, "web", ws, null, shown, quote);
       bus.publish({
         topic: "agent.push",
         you: text,
@@ -4548,7 +4556,9 @@ export function startServer() {
         ws,
         client,
         turn: turnId,
+        id: row.id,
         ...(shown.length ? { attachments: shown } : {}),
+        ...(quoted ? { quote: quoted } : {}),
       });
       bus.publish({ topic: "agent.turn.done", ws });
       res.status(500).json({ error: String(e?.message ?? e) });
