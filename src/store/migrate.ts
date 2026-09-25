@@ -1938,6 +1938,30 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     },
   },
 
+  {
+    version: 139,
+    name: "workspaces.auto_merge_prs + session_prs — merge a terminal's own PR when its CI goes green",
+    // Desk terminals open PRs with `gh pr create`; nothing tracked them (tickets are retired). One row
+    // per PR a terminal was seen to produce (its Focus feed, or the URL the Desk read off its screen),
+    // so the PR is still polled after the terminal ends. src/terminal-automerge.ts owns the rules.
+    up: (db) => {
+      db.exec("ALTER TABLE workspaces ADD COLUMN auto_merge_prs INTEGER NOT NULL DEFAULT 0");
+      db.exec(`CREATE TABLE IF NOT EXISTS session_prs (
+        url TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        cwd TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'open',
+        ci_state TEXT,
+        skip_reason TEXT,
+        merge_error TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      )`);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_session_prs_open ON session_prs(state, workspace_id)");
+    },
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

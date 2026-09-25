@@ -102,6 +102,7 @@ export interface Workspace {
   auto_build: number; // 1 = auto-dispatch the build agent once a ticket is planned (trust; skips human plan-gate)
   auto_review: number; // 1 = auto-dispatch an AI reviewer to QA each finished build (approve/changes)
   merge_gate: number; // 1 = after the PR opens, an agent reviews it, fixes small gaps, and merges when clean
+  auto_merge_prs: number; // 1 = squash-merge a PR a Desk terminal opened once its CI is green (terminal-automerge.ts)
   // 1 = steer-capable backends spawn with streaming stdin so `mc tell` / POST /runs/:id/steer
   // reach the LIVE run instead of waiting for its next checkpoint. See runner.ts steerRun.
   live_steer: number;
@@ -161,6 +162,7 @@ export interface NewWorkspace {
   auto_build?: boolean;
   auto_review?: boolean;
   merge_gate?: boolean;
+  auto_merge_prs?: boolean;
   live_steer?: boolean;
   placement?: "brain" | "hosts" | null;
   plan_panel?: boolean;
