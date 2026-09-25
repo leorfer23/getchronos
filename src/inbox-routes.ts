@@ -9,6 +9,8 @@
  *  POST /inbox/:id/dismiss                operator only
  *  POST /inbox/:id/snooze {until}         operator only
  *  POST /inbox/:id/dispatch               operator only — the ONE door from a row to a terminal
+ *  POST /inbox/:id/done {hours?, comment?} operator only — close the tracker task too (src/inbox-done.ts)
+ *  POST /inbox/:id/wontdo                 operator only — mute the task: it files nothing again
  *
  * Every :id route checks the row's workspace against the caller's scope first (CLAUDE.md gotcha #4),
  * so another client's token gets the same 404 an unknown id does, never a 403 that confirms it exists.
@@ -21,7 +23,8 @@ import { inbox, workspaces, type InboxItem } from "./store.js";
 import { addInboxItem } from "./inbox.js";
 import { dispatchInboxItem, InboxDispatchError } from "./inbox-dispatch.js";
 import { parseFollowUpAt } from "./jot-followup.js";
-import { InboxSnoozeSchema, NewInboxItemSchema } from "./validation.js";
+import { doneInboxItem, InboxDoneError, wontdoInboxItem } from "./inbox-done.js";
+import { InboxDoneSchema, InboxSnoozeSchema, NewInboxItemSchema } from "./validation.js";
 
 type Req = express.Request;
 type Res = express.Response;
@@ -84,7 +87,7 @@ function operatorRow(req: Req, res: Res): InboxItem | null {
   const item = inbox.get(req.params.id);
   if (!item) { res.status(404).json({ error: "not found" }); return null; }
   if (!checkScope(req, res, item.workspace_id)) return null;
-  if (!isAdmin(req)) { res.status(403).json({ error: "the inbox is the operator's — dismiss, snooze and dispatch are admin-only" }); return null; }
+  if (!isAdmin(req)) { res.status(403).json({ error: "the inbox is the operator's — dismiss, snooze, dispatch, done and won't do are admin-only" }); return null; }
   return item;
 }
 
@@ -119,4 +122,27 @@ export async function dispatchRoute(req: Req, res: Res): Promise<void> {
   } catch (e: any) {
     res.status(e instanceof InboxDispatchError ? e.status : 400).json({ error: String(e?.message ?? e) });
   }
+}
+
+/** POST /inbox/:id/done {hours?, comment?} — 200 {item, target, warning?}; a tracker refusal leaves the row as it was. */
+export async function doneRoute(req: Req, res: Res): Promise<void> {
+  const item = operatorRow(req, res);
+  if (!item) return;
+  const p = InboxDoneSchema.safeParse(req.body ?? {});
+  if (!p.success) {
+    res.status(400).json({ error: "invalid request body — " + p.error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ") });
+    return;
+  }
+  try {
+    res.json(await doneInboxItem(item.id, p.data));
+  } catch (e: any) {
+    res.status(e instanceof InboxDoneError ? e.status : 500).json({ error: String(e?.message ?? e) });
+  }
+}
+
+/** POST /inbox/:id/wontdo — mute the row's task; nothing is written to the tracker. */
+export function wontdoRoute(req: Req, res: Res): void {
+  const item = operatorRow(req, res);
+  if (!item) return;
+  res.json(wontdoInboxItem(item.id));
 }

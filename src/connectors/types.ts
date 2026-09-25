@@ -49,6 +49,9 @@ export interface Connector {
   // carry hours as an ordinary field (Jira: the "Hours Spent" custom field in Details). Connectors
   // that have no such field leave this undefined and callers report "not supported".
   setHours?(cfg: Record<string, any>, externalId: string, hours: number): Promise<void>;
+  // Optional: ADD a time entry of `hours` to the external task, for trackers that keep time as a log
+  // rather than a field (ClickUp). Not idempotent — two calls log twice — so it is not setHours.
+  logTime?(cfg: Record<string, any>, externalId: string, hours: number): Promise<void>;
   // Optional: create a brand-new external task (Idea Pool promote with external:true). Local-first
   // promote never depends on this — failures are logged, local ticket stays.
   createTask?(

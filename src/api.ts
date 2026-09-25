@@ -1758,6 +1758,8 @@ export function startServer() {
   api.post("/inbox/:id/dismiss", inboxRoutes.dismissRoute);
   api.post("/inbox/:id/snooze", inboxRoutes.snoozeRoute);
   api.post("/inbox/:id/dispatch", inboxRoutes.dispatchRoute);
+  api.post("/inbox/:id/done", inboxRoutes.doneRoute);
+  api.post("/inbox/:id/wontdo", inboxRoutes.wontdoRoute);
 
   // Pairs of remembered facts a judge found to disagree. Read-only and workspace-walled, same as
   // recall: a conflict quotes two pieces of this workspace's memory.

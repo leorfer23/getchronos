@@ -336,6 +336,10 @@ const HELP = `mc — Mission Control backlog CLI
                                      file a "needs you" row in this workspace's inbox (a notification only —
                                      work starts when the operator presses Dispatch; --urgent pings his phone)
   mc inbox list [--all] [--json]    this workspace's inbox (every client's from the operator's shell)
+  mc inbox done <id> [--hours N] [--comment "…"]   (operator) resolve a row; a Jira/ClickUp row closes its
+                                     task too, logging N hours (Jira Hours Spent / a ClickUp time entry)
+  mc inbox wontdo <id>              (operator) mute the row's task — it never files here again; the
+                                     tracker is not touched. <id> may be the 8-char prefix \`inbox list\` prints
   mc ask "question" [--options "a,b,c"] [--wait <min>]   ask the operator a question, wait for an answer
                                      (min 5, 0 = fire-and-forget; on timeout, follow the printed parking
                                      instructions — you'll be resumed automatically once it's answered)
@@ -2714,7 +2718,35 @@ async function heavy(argv) {
       return console.log(`📨 → ${who}`);
     }
     // The workspace inbox (src/inbox.ts): `add` files one "needs you" row (the Slack triage job's
-    // only write), `list` reads them. Bare `mc inbox` stays the run mailbox check below.
+    // only write), `list` reads them, `done`/`wontdo` are the operator finishing one
+    // (src/inbox-done.ts). Bare `mc inbox` stays the run mailbox check below.
+    if (cmd === "inbox" && (pos[1] === "done" || pos[1] === "wontdo")) {
+      const want = pos[2] || die(`usage: mc inbox ${pos[1]} <id>${pos[1] === "done" ? " [--hours N] [--comment \"…\"]" : ""}`);
+      const H = adminHeaders();
+      // A full id goes straight through; a prefix is looked up among the newest rows.
+      let id = want;
+      if (want.length < 36) {
+        const hits = (await req("GET", "/inbox?all=1", undefined, H)).items.filter((i) => i.id.startsWith(want));
+        if (!hits.length) die(`no inbox row ${want}`);
+        if (hits.length > 1) die(`${want} matches ${hits.length} rows — use more of the id`);
+        id = hits[0].id;
+      }
+      if (pos[1] === "wontdo") {
+        const it = await req("POST", "/inbox/" + id + "/wontdo", {}, H);
+        return console.log(`🔇 muted${it.ref ? " " + it.ref : ""} — ${it.title.slice(0, 70)}`);
+      }
+      let hours;
+      if (opt.hours !== undefined) {
+        hours = Number(opt.hours);
+        if (!(hours > 0)) die("--hours needs a positive number (e.g. 1.5)");
+      }
+      const r = await req("POST", "/inbox/" + id + "/done", {
+        ...(hours !== undefined ? { hours } : {}), ...(opt.comment ? { comment: opt.comment } : {}),
+      }, H);
+      console.log(`✓ done${r.target ? ` — ${r.item.ref} → ${r.target}${hours !== undefined ? ` (${hours}h)` : ""}` : ""} — ${r.item.title.slice(0, 70)}`);
+      if (r.warning) console.log(`⚠ ${r.warning}`);
+      return;
+    }
     if (cmd === "inbox" && (pos[1] === "add" || pos[1] === "list" || pos[1] === "ls")) {
       const wsId = opt.workspace || process.env.MC_WORKSPACE;
       if (pos[1] === "add") {

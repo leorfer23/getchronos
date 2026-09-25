@@ -43,12 +43,34 @@ export function safeUrl(u: string | null | undefined): string | null {
 export const shouldPush = (i: Pick<InboxItem, "source" | "kind" | "urgent">): boolean =>
   i.source === "slack" && (i.kind === "dm" || i.kind === "mention") && !!i.urgent;
 
+// ───────────────────────────── Won't do / Done memory ─────────────────────────────
+// Per (workspace, source, ref), in kv like the tracker snapshot. A mute is Won't do: that task files
+// nothing ever again — new comments, status moves, a re-assign. A closed label is what Done pushed
+// the task to, so the next sync's "your task moved → Done" is recognised as his own echo.
+
+const refKey = (kind: "mute" | "closed", wsId: string, source: string, ref: string) => `inbox.${kind}:${wsId}:${source}:${ref}`;
+
+export function muteRef(wsId: string, source: string, ref: string): void {
+  kv.set(refKey("mute", wsId, source, ref), new Date().toISOString());
+}
+export const isMuted = (wsId: string, source: string, ref: string | null | undefined): boolean =>
+  !!ref && kv.get(refKey("mute", wsId, source, ref)) !== undefined;
+
+export function rememberClosed(wsId: string, source: string, ref: string, label: string): void {
+  kv.set(refKey("closed", wsId, source, ref), label);
+}
+const closedEcho = (wsId: string, source: string, t: ExternalTask): boolean => {
+  const label = kv.get(refKey("closed", wsId, source, t.id));
+  return !!label && label.trim().toLowerCase() === (t.statusRaw ?? "").trim().toLowerCase();
+};
+
 /**
  * File one item. Guards and caps every external field, dedups on (workspace, source, key), and — for
  * an urgent Slack DM/mention only — pushes it to the operator's phone. Returns the row, or null when
- * this key was already filed (so a re-run of the triage or a re-sync is silent).
+ * this key was already filed (so a re-run of the triage or a re-sync is silent) or its task is muted.
  */
 export function addInboxItem(n: NewInboxItem): InboxItem | null {
+  if (isMuted(n.workspace_id, n.source, n.ref)) return null;
   const where = `inbox ${n.source}`;
   const g = (s: string | null | undefined, cap: number) => {
     const t = (s ?? "").trim();
@@ -189,7 +211,10 @@ export function emitTrackerInbox(
     const raw = kv.get(snapKey(wsId, source));
     if (raw) prev = JSON.parse(raw) as TrackerSnapshot;
   } catch { prev = null; }
-  const { items, next } = diffTracker(prev, tasks, me, source, ctx);
+  const { items, next } = diffTracker(prev, tasks, me, source, {
+    ...ctx,
+    selfStatus: (t) => closedEcho(wsId, source, t) || !!ctx.selfStatus?.(t),
+  });
   let added = 0;
   for (const d of items) if (addInboxItem({ ...d, workspace_id: wsId })) added++;
   kv.set(snapKey(wsId, source), JSON.stringify(next));

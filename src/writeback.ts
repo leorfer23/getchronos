@@ -181,12 +181,13 @@ export async function decideWriteback(ticketId: string, approve: boolean): Promi
  *
  * The one status:"done" source this deliberately ignores is connectors/index.ts's sync reconcile,
  * tagged `actor: "connector-sync"` — that fires when the TRACKER told Chronos the ticket is done, so
- * proposing to tell the tracker back would be an odd echo of itself, not a write-back.
+ * proposing to tell the tracker back would be an odd echo of itself, not a write-back. Same for the
+ * inbox's ✓ Done (`actor: "inbox-done"`, src/inbox-done.ts): it closed the tracker task first.
  */
 export function startWriteback(): void {
   bus.on("event", (e: any) => {
     if (e.topic !== "ticket.updated" || e.status !== "done") return;
-    if (e.actor === "connector-sync") return;
+    if (e.actor === "connector-sync" || e.actor === "inbox-done") return;
     const t = tickets.get(e.ticket_id);
     if (!t) return;
     proposeWriteback(t).catch((err) => console.warn(`[writeback] propose failed for ${t.key}:`, err?.message ?? err));
