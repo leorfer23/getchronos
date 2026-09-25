@@ -130,8 +130,10 @@ test("Robert's own question is the operator's: an agent answer is refused, the o
   const out = await answerAsk(a.id.slice(0, 8), "Yes", "operator");
   assert.equal(out.ok, true);
   assert.equal(asks.get(a.id)!.answer, "Yes");
-  await settle();
-  const wake = db.prepare("SELECT * FROM robert_wakes WHERE key = ?").get(`robert-ask:${a.id}`) as any;
+  // The wake is filed behind a late import (asks.ts → wake-queue.ts): wait for it in real time, not ticks.
+  const wakeRow = () => db.prepare("SELECT * FROM robert_wakes WHERE key = ?").get(`robert-ask:${a.id}`) as any;
+  for (let i = 0; i < 200 && !wakeRow(); i++) await new Promise((r) => setTimeout(r, 10));
+  const wake = wakeRow();
   assert.ok(wake, "a durable wake was queued");
   assert.equal(wake.workspace_id, ws.id);
   assert.match(JSON.parse(wake.payload).say, /Q: Deploy acme to prod\?\nA: Yes/);
@@ -146,7 +148,7 @@ test("an ordinary terminal ask answered from the card does not wake Robert", asy
   assert.equal(isRobertAsk(a), false);
   const out = await answerAsk(a.id, "go", "operator");
   assert.equal(out.ok, true);
-  await settle();
+  await new Promise((r) => setTimeout(r, 200));
   assert.equal(robertWakes.unacked().length, 0);
 });
 

@@ -90,7 +90,7 @@
       return '<div class="askc done gone" data-akey="' + esc(it.key) + '"><span class="ak-q1">' + esc(it.question) + '</span><span class="ak-a">dropped</span></div>';
     }
     if (it.status === "answered") {
-      return '<div class="askc done" data-akey="' + esc(it.key) + '" title="' + esc(it.who + " asked: " + it.question) + '">' +
+      return '<div class="askc done" data-akey="' + esc(it.key) + '" title="' + esc(it.who + " asked: " + it.question + (it.answer ? "\n→ " + it.answer : "")) + '">' +
         '<span class="ak-ok">✓</span><span class="ak-q1">' + esc(it.question) + '</span>' +
         '<span class="ak-a">' + esc(it.answer || "answered") + (it.by && it.by !== "operator" && it.by !== "human" ? ' <i>· ' + esc(it.by) + '</i>' : "") + '</span></div>';
     }
