@@ -77,6 +77,8 @@ import { proseSamples } from "./store/prose.js";
 import { recall, renderRecall } from "./recall.js";
 import { recordRead, recordRecall, sessionFor, usageRoute } from "./memory-usage.js";
 import * as dreamRoutes from "./dream-routes.js";
+import * as inboxRoutes from "./inbox-routes.js";
+import { inbox } from "./store/inbox.js";
 import { openConflicts } from "./memory-conflicts.js";
 import * as agentMemory from "./agent-memory.js";
 import { isMemoryAgent } from "./agent-memory.js";
@@ -1219,6 +1221,8 @@ export function startServer() {
       // Saved launches ride along for the same reason the jots do: the chips sit on the client
       // header the wall is about to paint.
       launches: launches.list().filter((l) => !scope.ws || l.workspace_id === scope.ws),
+      // Unread inbox rows per client — the badge on the bar. The rows themselves load when the inbox opens.
+      inbox: inbox.counts(scope.ws),
       sessions: rows.map((s) => {
         // sessionActivity() already defaults to {live:false, quiet:true, ...} for an id never in the
         // pty registry, which is every cloud session — no pty exists to read bytes from. Its state
@@ -1739,6 +1743,15 @@ export function startServer() {
   api.get("/workspaces/:id/dream/runs", dreamRoutes.runsRoute);
   api.post("/workspaces/:id/dream/runs/:run/undo", dreamRoutes.undoRoute);
   api.post("/dream/run", dreamRoutes.runNowRoute);
+
+  // The workspace inbox (src/inbox.ts, src/inbox-routes.ts): what needs the operator, per client.
+  // Rows are notifications; POST /inbox/:id/dispatch (admin) is the only door from one to a terminal.
+  api.get("/inbox", inboxRoutes.listAllRoute);
+  api.get("/workspaces/:id/inbox", inboxRoutes.listRoute);
+  api.post("/workspaces/:id/inbox", inboxRoutes.addRoute);
+  api.post("/inbox/:id/dismiss", inboxRoutes.dismissRoute);
+  api.post("/inbox/:id/snooze", inboxRoutes.snoozeRoute);
+  api.post("/inbox/:id/dispatch", inboxRoutes.dispatchRoute);
 
   // Pairs of remembered facts a judge found to disagree. Read-only and workspace-walled, same as
   // recall: a conflict quotes two pieces of this workspace's memory.

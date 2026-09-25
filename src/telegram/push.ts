@@ -23,16 +23,9 @@ export function registerPush() {
       if (!run) return;
       const job = jobs.get(run.job_id);
       const ws = job?.workspace_id ? workspaces.get(job.workspace_id) : undefined;
-      // Slack triage runs are mostly empty — stay silent unless they actually filed tickets.
-      if (job?.name?.startsWith("slack-triage:")) {
-        const since = run.started_at;
-        const fresh = since ? tickets.list({ workspace_id: job.workspace_id! }).filter((t) => t.created_at >= since) : [];
-        if (fresh.length) {
-          await notify(`🎫 <b>${ws ? esc(ws.name) : "Slack"}</b> · ${fresh.length} new from Slack\n` +
-            fresh.slice(0, 6).map((t) => `<code>${esc(t.key)}</code> ${esc(t.title.slice(0, 50))}`).join("\n"));
-        }
-        return; // never send the generic run push for triage
-      }
+      // Slack triage files into the workspace inbox (src/inbox.ts), which pushes the urgent DMs and
+      // mentions itself, one by one, as they are filed. The run's own outcome is never news.
+      if (job?.name?.startsWith("slack-triage:")) return;
       // Respect the job's notify policy, and skip if a live ticker already rendered the final state.
       if (!shouldNotify(job?.notify, e.status) || hasTicker(e.run_id)) return;
       const tk = job?.ticket_id ? tickets.get(job.ticket_id) : undefined;

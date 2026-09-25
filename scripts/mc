@@ -332,6 +332,10 @@ const HELP = `mc — Mission Control backlog CLI
   mc tell <ticket|run|agent> "message"   send a message to a worker's mailbox (no MC_RUN needed)
                                      ticket key is preferred — durable across park/resume/retry
   mc inbox                          manual mailbox check for this run (rarely needed — see 📨 above)
+  mc inbox add --kind dm|mention|self_note --title "…" --key <dedup> [--why "…"] [--url <link>] [--actor NAME] [--body "…"|-] [--source slack] [--urgent]
+                                     file a "needs you" row in this workspace's inbox (a notification only —
+                                     work starts when the operator presses Dispatch; --urgent pings his phone)
+  mc inbox list [--all] [--json]    this workspace's inbox (every client's from the operator's shell)
   mc ask "question" [--options "a,b,c"] [--wait <min>]   ask the operator a question, wait for an answer
                                      (min 5, 0 = fire-and-forget; on timeout, follow the printed parking
                                      instructions — you'll be resumed automatically once it's answered)
@@ -2708,6 +2712,39 @@ async function heavy(argv) {
       const r = await req("POST", "/messages", { to: target, text });
       const who = r.resolved.kind === "ticket" ? r.resolved.ticket_key : (r.resolved.ticket_key || r.resolved.run_id.slice(0, 8));
       return console.log(`📨 → ${who}`);
+    }
+    // The workspace inbox (src/inbox.ts): `add` files one "needs you" row (the Slack triage job's
+    // only write), `list` reads them. Bare `mc inbox` stays the run mailbox check below.
+    if (cmd === "inbox" && (pos[1] === "add" || pos[1] === "list" || pos[1] === "ls")) {
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (pos[1] === "add") {
+        if (!wsId) die("inbox add needs --workspace or MC_WORKSPACE");
+        const kind = opt.kind || die('inbox add needs --kind dm|mention|self_note (tracker kinds: assigned|comment|status)');
+        const title = opt.title || pos.slice(2).join(" ") || die('inbox add needs --title "<what is being asked>"');
+        const key = opt.key || opt.url || die("inbox add needs --key <dedup key: channel:ts or the permalink>");
+        const body = opt.body === "-" ? (await readStdin()).trim() : opt.body;
+        // Only his own shell (no MC_SESSION) is the operator; a job files with its workspace token.
+        const tok = process.env.MC_SESSION || process.env.MC_RUN ? null : adminToken();
+        const r = await req("POST", "/workspaces/" + wsId + "/inbox", {
+          source: opt.source || "slack", kind, key, title,
+          ...(opt.why ? { why: opt.why } : {}), ...(body ? { body } : {}), ...(opt.url ? { url: opt.url } : {}),
+          ...(opt.actor ? { actor: opt.actor } : {}), ...(opt.ref ? { ref: opt.ref } : {}),
+          ...(opt.urgent === "true" ? { urgent: true } : {}),
+        }, tok ? { "x-mc-admin": tok } : undefined);
+        return console.log(r.duplicate ? "already in the inbox" : `inbox ✓ ${r.id.slice(0, 8)}${r.urgent ? " (urgent — pushed)" : ""}`);
+      }
+      const q = new URLSearchParams({ ...(opt.all ? { all: "1" } : {}) });
+      const r = wsId
+        ? await req("GET", "/workspaces/" + wsId + "/inbox" + (q.size ? "?" + q : ""))
+        : await req("GET", "/inbox" + (q.size ? "?" + q : ""));
+      if (opt.json) return console.log(JSON.stringify(r.items, null, 2));
+      if (!r.items.length) return console.log("(nothing needs you)");
+      for (const i of r.items) {
+        const st = i.state === "new" ? "" : ` [${i.state}]`;
+        console.log(`${i.id.slice(0, 8)}  ${i.source.padEnd(7)} ${i.kind.padEnd(9)} ${i.title.slice(0, 70)}${st}${i.actor ? "  — " + i.actor : ""}`);
+        if (i.why) console.log(`          ${i.why.slice(0, 110)}`);
+      }
+      return;
     }
     if (cmd === "inbox") {
       const runId = process.env.MC_RUN || die("mc inbox only works inside a dispatched run");

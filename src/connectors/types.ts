@@ -8,6 +8,8 @@ export interface ExternalComment {
   author_id?: string;
   body: string;
   created: string | null; // ISO
+  /** Tracker ids of the people the comment @mentions (Jira ADF mention nodes / ClickUp tag blocks). */
+  mentions?: string[];
 }
 
 // A task pulled from an external tracker (Jira/ClickUp). External is the source of truth:
@@ -23,6 +25,8 @@ export interface ExternalTask {
   description: string | null;
   priority: string | null; // normalized P0..P3
   assignee: string | null; // display name
+  /** Tracker ids of every assignee — what the inbox compares against Connector.me(). */
+  assignee_ids?: string[];
   labels: string[];
   due: string | null; // ISO / date string
   comments: ExternalComment[];
@@ -153,8 +157,17 @@ export function adfToText(node: any): string {
   if (!node) return "";
   if (typeof node === "string") return node;
   if (Array.isArray(node)) return node.map(adfToText).join("");
-  let out = node.type === "text" ? String(node.text ?? "") : "";
+  let out = node.type === "text" ? String(node.text ?? "") : node.type === "mention" ? String(node.attrs?.text ?? "") : "";
   if (node.content) out += adfToText(node.content);
   if (node.type === "paragraph" || node.type === "heading" || node.type === "listItem") out += "\n";
+  return out;
+}
+
+// Tracker ids of everyone a Jira ADF body @mentions — the mention nodes adfToText renders as "@Name".
+export function adfMentions(node: any, out: string[] = []): string[] {
+  if (!node || typeof node !== "object") return out;
+  if (Array.isArray(node)) { for (const n of node) adfMentions(n, out); return out; }
+  if (node.type === "mention" && node.attrs?.id && !out.includes(String(node.attrs.id))) out.push(String(node.attrs.id));
+  if (node.content) adfMentions(node.content, out);
   return out;
 }

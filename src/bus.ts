@@ -139,6 +139,8 @@ export type BusEvent = (
   | { topic: "jot.updated"; jot_id: string; workspace_id: string }
   /** A scheduled follow-up opened a terminal on a note (src/jot-followup.ts). */
   | { topic: "jot.followup"; jot_id: string; workspace_id: string; session_id: string }
+  /** The workspace inbox changed (src/inbox.ts): a row filed, dismissed, snoozed or dispatched. */
+  | { topic: "inbox.updated"; workspace_id: string; item_id: string }
   | { topic: "launch.updated"; launch_id: string; workspace_id: string }
   | { topic: "launch.ran"; launch_id: string; workspace_id: string; session_id: string }
   | { topic: "focus.event"; session_id: string; event: unknown }
