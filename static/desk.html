@@ -5899,11 +5899,12 @@ async function ask(now) {
 // Typed or spoken, a line goes in the same way. `quote` = the bubble it answers (RP.take()).
 function queueAsk(text, now, spoken = false, atts = [], quote = null) {
   // The router decides where it lands; the answer fills the chip in.
+  // Snapshot the staged terminal NOW — a queued line must not pick up whatever is on stage later.
   const bub = ovLine("you" + (OV.busy ? " queued" : ""), text, undefined, true, true);
   if (spoken) bub.classList.add("voice");
   RP.quote(bub, quote);
   attBubble(bub, atts);
-  OV.queue.push({ text, bub, atts, quote });
+  OV.queue.push({ text, bub, atts, quote, session: S.active || null });
   if (OV.busy) { ovWork(true); return now ? stopTurn() : undefined; }
   flush();
 }
@@ -5956,9 +5957,9 @@ async function flush() {
   let hold = false;
   try {
     // No ws: the daemon routes this turn to the right project's Robert (#tag, ticket key, project
-    // name, the terminal on the stage, or wherever the last message landed). `session` is that
-    // terminal — the weakest signal there is, and only used when the text names nothing.
-    const body = { text: item.text, session: S.active || null, client: CLIENT };
+    // name, the terminal that was staged when this line was typed, or wherever the last message
+    // landed). `surface: "desk"` keeps sticky off the phone's thread.
+    const body = { text: item.text, session: item.session ?? null, client: CLIENT, surface: "desk" };
     // Ids only — the daemon rebuilds the paths it hands him from its own rows.
     if (item.atts?.length) body.attachments = item.atts.map((a) => ({ id: a.id }));
     // A reply: the row and the half of it. The daemon reads the quoted words back from that row.
@@ -6011,7 +6012,7 @@ function askWhere(r, text, atts, quote = null) {
       const bub = ovLine("you", text, c.ws, true, true);
       RP.quote(bub, quote);
       attBubble(bub, atts);
-      OV.queue.push({ text, bub, ws: c.ws, picked: true, atts, quote });
+      OV.queue.push({ text, bub, ws: c.ws, picked: true, atts, quote, session: S.active || null });
       flush();
     };
     row.appendChild(b);
@@ -6356,7 +6357,7 @@ function vcPicked(n, text) {
   if (!c) return false;
   const bub = ovLine("you", p.text, c.ws);
   bub.classList.add("voice");
-  OV.queue.push({ text: p.text, bub, ws: c.ws, picked: true });
+  OV.queue.push({ text: p.text, bub, ws: c.ws, picked: true, session: S.active || null });
   flush();
   return true;
 }

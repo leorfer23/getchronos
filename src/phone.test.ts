@@ -56,7 +56,7 @@ test("voice goes to the Mac: the mic posts raw audio to /api/transcribe with the
 
 test("Robert: the desk-wide manager is one tap from home, with the same thread as the Desk", () => {
   assert.match(html, /id="btn-robert"/);
-  assert.match(html, /const body = \{ text, client: CLIENT \};/);
+  assert.match(html, /const body = \{ text, client: CLIENT, surface: "phone" \};/);
   assert.match(html, /api\("\/agent", \{ method: "POST", body: JSON\.stringify\(body\) \}\)/);
   assert.match(html, /api\("\/agent\/history\?limit=40&ws=all"\)/);
   assert.match(html, /talkMic\(qs\("#r-mic"\)/);
@@ -113,7 +113,9 @@ test("Robert on the phone is one routed chat: no strip filter, answer comes off 
   // One bubble per turn: a second turn streaming at once never cuts or mixes into yours.
   assert.match(html, /let b = R\.pend\.get\(key\);/);
   // Accepted turn: keep busy until agent.push; a lost push re-reads history.
-  assert.match(html, /if \(r\?\.accepted && r\?\.turn\) \{ robAwait\(r\.turn\); hold = true; return; \}/);
+  // Accepted turn: bind pending bubble to the turn id, then wait for agent.push.
+  assert.match(html, /R\.pend\.set\(r\.turn, b\); R\.mine = null; R\.pend\.delete\("\?"\)/);
+  assert.match(html, /robAwait\(r\.turn\); hold = true; return;/);
   assert.match(html, /if \(R\.awaitTurn && \(R\.awaitTurn === e\.turn \|\| R\.awaitTurn === "lost"\)\) robRelease/);
   assert.match(html, /robertHistory\(\)\.finally\(\(\) => \{ if \(waiting\) robRelease\(null\); \}\)/);
   assert.match(html, /TagComplete\(rComposer, \(\) => S\.workspaces\);/);

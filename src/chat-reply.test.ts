@@ -64,7 +64,7 @@ test("Desk: the quote rides the next typed line, every stored bubble is marked",
   assert.match(desk, /if \(item\.quote\) body\.replyTo = \{ id: item\.quote\.id, side: item\.quote\.side \};/);
   // Picking a project on his "which one?" line re-sends the same reply.
   assert.match(desk, /askWhere\(r, item\.text, item\.atts, item\.quote\)/);
-  assert.match(desk, /OV\.queue\.push\(\{ text, bub, ws: c\.ws, picked: true, atts, quote \}\)/);
+  assert.match(desk, /OV\.queue\.push\(\{ text, bub, ws: c\.ws, picked: true, atts, quote, session: S\.active \|\| null \}\)/);
   // History: both halves marked, the reply's quote drawn.
   assert.match(desk, /const yb = RP\.mark\(ovLine\("you", m\.you, ws\), m\.id, "you"\);\s*RP\.quote\(yb, ChatReply\.fromRow\(m\)\);/);
   assert.match(desk, /if \(m\.reply\) RP\.mark\(ovLine\("rob", m\.reply, ws, !m\.you\), m\.id, "reply"\);/);

@@ -1800,14 +1800,20 @@ async function deliverRobert(text, el, ws, quote) {
   if (!R.mine) R.mine = bubble("rob pending", "");
   let hold = false;
   try {
-    const body = { text, client: CLIENT };
+    // `surface: "phone"` keeps sticky off the Desk's thread — both defaulted to "web" before.
+    const body = { text, client: CLIENT, surface: "phone" };
     if (ws !== undefined) { body.ws = ws; body.route = false; }
     if (quote) body.replyTo = { id: quote.id, side: quote.side };
     const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
     if (r?.how === "ask") { dropMine(); askWhere(r, text, quote); return; }
     if (r?.ws) R.sticky = r.ws;
-    // Accepted: keep busy until agent.push for this turn. No reply rides the POST any more.
-    if (r?.accepted && r?.turn) { robAwait(r.turn); hold = true; return; }
+    // Accepted: keep busy until agent.push for this turn. Bind the pending bubble to the turn id
+    // so early deltas keyed on "?" and later ones on the UUID share one bubble.
+    if (r?.accepted && r?.turn) {
+      const b = R.mine || R.pend.get("?");
+      if (b) { R.pend.set(r.turn, b); R.mine = null; R.pend.delete("?"); }
+      robAwait(r.turn); hold = true; return;
+    }
     RP.mark(el, r?.id, "you");
     // Legacy sync fallback (older daemon): draw from the POST if the push has not already.
     if (r?.reply && !(r.turn && R.seen.has(r.turn))) { if (r.turn) R.seen.add(r.turn); dropMine(); fx.reply(); RP.mark(bubble("rob", r.reply), r.id, "reply"); }

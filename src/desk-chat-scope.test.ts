@@ -14,7 +14,9 @@ test("no workspace view filter: the line goes out with no ws, the router decides
   assert.doesNotMatch(html, /OV\.filter/);
   assert.doesNotMatch(html, /api\("\/thread\/sticky"/);
   // The line goes out with no ws: the router reads the project from the text / sticky / reply.
-  assert.match(html, /const body = \{ text: item\.text, session: S\.active \|\| null, client: CLIENT \};/);
+  assert.match(html, /const body = \{ text: item\.text, session: item\.session \?\? null, client: CLIENT, surface: "desk" \};/);
+  // Snapshot the staged terminal at enqueue so a queued line does not pick up a later stage.
+  assert.match(html, /OV\.queue\.push\(\{ text, bub, atts, quote, session: S\.active \|\| null \}\)/);
 });
 
 test("history is one timeline across every project", () => {

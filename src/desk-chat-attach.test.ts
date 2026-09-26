@@ -155,10 +155,10 @@ test("the strip is what is staged, and it empties into the line you send", () =>
   // Taken at send time, so a queued turn cannot pick up what was pasted while it waited.
   assert.match(html, /const atts = ATT\.list; ATT\.list = \[\]; renderAtt\(\);/);
   assert.match(html, /queueAsk\(text \|\| "Look at the attachments\.", now, false, atts, RP\.take\(\)\)/);
-  assert.match(html, /OV\.queue\.push\(\{ text, bub, atts, quote \}\)/);
+  assert.match(html, /OV\.queue\.push\(\{ text, bub, atts, quote, session: S\.active \|\| null \}\)/);
   assert.match(html, /if \(item\.atts\?\.length\) body\.attachments = item\.atts\.map\(\(a\) => \(\{ id: a\.id \}\)\);/);
   // The project the router could not guess: the files go in again with the re-sent line.
-  assert.match(html, /OV\.queue\.push\(\{ text, bub, ws: c\.ws, picked: true, atts, quote \}\)/);
+  assert.match(html, /OV\.queue\.push\(\{ text, bub, ws: c\.ws, picked: true, atts, quote, session: S\.active \|\| null \}\)/);
 });
 
 test("thumbnails ride the bubble — live, from another surface, and after a reload", () => {
