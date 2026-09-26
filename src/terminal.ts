@@ -515,7 +515,10 @@ export async function openSession(
   // the reason is a client boundary rather than a preference: cursor, grok and opencode have no
   // per-workspace config dir, so on a client workspace they would run that client's work through the
   // one shared login every other workspace uses.
-  if (opts.workspace_id && opts.backend) {
+  // Failover stand-ins (`replaces`) are exempt: the degrade ladder is an explicit operator choice
+  // (workspace.fallback_backend + CHRONOS_TERMINAL_FALLBACK_BACKENDS) and must not be stranded by the
+  // Desk picker's allowlist — same rule as terminal-failover.failoverUsable.
+  if (opts.workspace_id && opts.backend && !opts.replaces) {
     const ws0 = workspaces.get(opts.workspace_id);
     if (ws0 && !backendAllowed(ws0.backends, opts.backend)) {
       throw new Error(

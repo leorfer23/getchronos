@@ -45,6 +45,10 @@ test("isAuthError: dead credentials on a profile", () => {
   assert.equal(isAuthError(new Error("OAuth token expired")), true);
   assert.equal(isAuthError("invalid api key"), true);
   assert.equal(isAuthError("request failed: 401"), true);
+  assert.equal(
+    isAuthError("Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable."),
+    true,
+  );
 });
 
 test("isAuthError: limits and ordinary failures are not auth", () => {

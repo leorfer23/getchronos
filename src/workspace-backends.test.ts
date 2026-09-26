@@ -83,6 +83,16 @@ describe("backendAllowed", () => {
     assert.equal(backendAllowed(JSON.stringify(["claude-code"]), "mock"), false);
   });
 
+  test("cursor and cursor-agent are one CLI on an allow-list", () => {
+    // The failover ladder and CONFIG defaults say `cursor`; workspaces often list `cursor-agent`.
+    // Exact-string matching used to refuse the alias and strand a walled terminal.
+    const list = JSON.stringify(["claude-code", "cursor-agent"]);
+    assert.equal(backendAllowed(list, "cursor"), true);
+    assert.equal(backendAllowed(list, "cursor-agent"), true);
+    assert.equal(backendAllowed(list, "grok"), false);
+    assert.equal(backendAllowed(JSON.stringify(["claude-code", "cursor"]), "cursor-agent"), true);
+  });
+
   test("no explicit backend is allowed — the workspace default applies", () => {
     assert.equal(backendAllowed(claudeOnly, null), true);
     assert.equal(backendAllowed(claudeOnly, undefined), true);

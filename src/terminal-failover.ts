@@ -12,9 +12,10 @@
  *      `/model <agent.modelFallback>` and a short "continue". The conversation and its context stay.
  *   2. Claude itself walled (session/usage limit, the fallback model walled too, or step 1 already
  *      tried) → a NEW terminal on the next backend (workspace.fallback_backend, then
- *      CHRONOS_TERMINAL_FALLBACK_BACKENDS), same workspace/cwd/ticket/goal, seeded with the goal and a
+ *      CHRONOS_TERMINAL_FALLBACK_BACKENDS), same workspace/cwd/ticket/goal/HOST, seeded with the goal and a
  *      replay of the old terminal's Focus feed. The old one is closed with an end_reason that points at
- *      the stand-in. A stand-in that walls too walks to the next backend; nothing is ever retried.
+ *      the stand-in. Sticky (`replaces`): if the walled terminal was on m2, the stand-in opens on m2 —
+ *      never a silent move to the brain. A stand-in that walls too walks to the next backend; nothing is ever retried.
  *
  * Detection is read off the settled frame at the quiet flip (the same moment desk-prompt reads a
  * question), and only counts a line in the CLI's own voice sitting at the bottom of the frame with
@@ -23,8 +24,11 @@
 import fs from "node:fs";
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
-import { sessions, workspaces } from "./store.js";
-import { backendAllowed, backendInstalled, getBackend, hasBackend } from "./backends/index.js";
+import { LOCAL_HOST_ID, sessions, tickets, workspaces } from "./store.js";
+import { backendInstalled, getBackend, hasBackend } from "./backends/index.js";
+import { childEnv } from "./child-env.js";
+import { placementCandidates } from "./hosts/candidates.js";
+import { cliFor } from "./hosts/placement.js";
 import { isCreditWallError, isProviderLimitError } from "./manager-fallback.js";
 import { renderLinesReplay } from "./replay.js";
 import {
@@ -32,7 +36,7 @@ import {
   type NamedKey,
 } from "./terminal.js";
 import type { DeskPrompt, PromptOption } from "./desk-prompt.js";
-import type { Session } from "./types.js";
+import type { Session, Workspace } from "./types.js";
 
 // ──────────────────────────── the wall, off the frame ────────────────────────────
 
@@ -172,6 +176,56 @@ export function fallbackChain(ws: { fallback_backend?: string | null } | undefin
   return out;
 }
 
+/**
+ * May this failover step open a stand-in on `backend`?
+ *
+ * The Desk picker allowlist must NOT strand a walled terminal: Galley had
+ * `fallback_backend=grok` with `backends=["claude-code","cursor-agent"]`, so the ladder decided
+ * "no fallback left" while the operator had already named grok as the degrade target. Failover is
+ * emergency degrade — the chain (workspace.fallback_backend + CHRONOS_TERMINAL_FALLBACK_BACKENDS)
+ * is the operator's choice; the picker list still gates new terminals and job dispatch.
+ *
+ * The stand-in is sticky to the walled terminal's computer (HOSTS.md → sticky / `replaces`). So
+ * "is grok installed?" means on THAT host (m2/m5), not on the brain's PATH — otherwise a brain with
+ * grok would try to open a stand-in on m2 that has no grok, or skip a backend m2 actually has.
+ *
+ * Cursor needs a key in the spawn env (headless `cursor-agent -p` ignores interactive login). Skip
+ * it when neither the workspace vars nor the daemon carry CURSOR_API_KEY.
+ */
+export function failoverUsable(
+  backend: string,
+  ws: Workspace | null | undefined,
+  installed: (b: string) => boolean = backendInstalled,
+  /** The walled terminal's host — stand-ins must run there. null/local → brain install check. */
+  hostId?: string | null,
+  hostCanRun: (hostId: string, backend: string, cursorKey: boolean) => boolean = hostHasCli,
+): boolean {
+  const cursorKey = cursorKeyPresent(ws);
+  if (canonBackend(backend) === "cursor-agent" && !cursorKey) return false;
+  if (!hostId || hostId === LOCAL_HOST_ID) return installed(backend);
+  return hostCanRun(hostId, backend, cursorKey);
+}
+
+function cursorKeyPresent(ws: Workspace | null | undefined): boolean {
+  if (process.env.CURSOR_API_KEY) return true;
+  try { return !!childEnv(ws).CURSOR_API_KEY; } catch { return false; }
+}
+
+/**
+ * Does this computer have the CLI for `backend` (and a login, unless cursor + key)? Reads the live
+ * placement candidate list (what the host last reported). Offline → false: credit-wall failover
+ * stays sticky and waits; host-failover.ts is what moves work when the computer is gone.
+ */
+export function hostHasCli(hostId: string, backend: string, cursorKey = false): boolean {
+  const h = placementCandidates().find((c) => c.id === hostId);
+  if (!h?.online || h.status === "disabled") return false;
+  const cli = cliFor(canonBackend(backend));
+  if (!cli) return true; // mock / no CLI name
+  if (!h.clis.includes(cli)) return false;
+  if (h.unauthed?.includes(cli) && !(cli === "cursor-agent" && cursorKey)) return false;
+  return true;
+}
+
 // ──────────────────────────── the stand-in's first prompt ────────────────────────────
 
 // The quoted wall and replay go into a seed that the stand-in's CLI echoes onto its own frame; lower
@@ -196,6 +250,8 @@ export function standInSeed(i: {
   brief: string | null;
   cwd: string;
   replay: string | null;
+  ticketKey?: string | null;
+  branch?: string | null;
 }): string {
   const what = i.wall.kind === "credit" ? "ran out of credits" : "hit its usage limit";
   return [
@@ -203,6 +259,8 @@ export function standInSeed(i: {
       `${what} (the CLI said: "${defang(i.wall.line)}") and cannot continue, so the work moves to you on ${i.to}. ` +
       `Same workspace, same working directory (${i.cwd}), same card — do not open another terminal.`,
     i.goal ? `Goal: ${i.goal}` : null,
+    i.ticketKey ? `Ticket: ${i.ticketKey}` : null,
+    i.branch ? `Branch: ${i.branch}` : null,
     i.brief ? `What the previous terminal was asked:\n${defang(i.brief)}` : null,
     i.replay
       ? defang(i.replay)
@@ -227,6 +285,8 @@ export interface FailoverOps {
   kill(id: string, reason: string): void;
   feed(id: string): string[];
   installed(backend: string): boolean;
+  /** Does this computer have the CLI (and login) for the backend? Defaults to hostHasCli. */
+  hostCanRun(hostId: string, backend: string, cursorKey: boolean): boolean;
   wake(w: { topic: string; key: string; subject?: string | null; workspace_id?: string | null; payload?: unknown }): void;
   notify(text: string, level: "info" | "alert"): void;
   later(ms: number, fn: () => void): NodeJS.Timeout;
@@ -241,6 +301,7 @@ const defaultOps: FailoverOps = {
   kill: killSession,
   feed: (id) => focusEvents(id).map((e) => `${e.kind}: ${e.text}`),
   installed: backendInstalled,
+  hostCanRun: hostHasCli,
   // Lazy: wake-queue pulls in Robert's whole agent, and this module is imported by terminal-prompts.
   wake: (w) => void import("./wake-queue.js").then((m) => m.enqueueWake(w)).catch(() => {}),
   notify: (text, level) =>
@@ -348,14 +409,26 @@ export async function onTerminalQuiet(id: string, now = Date.now()): Promise<Qui
     modelFallback: CONFIG.agent.modelFallback,
     chain: fallbackChain(ws),
     tried: st.lineage.tried,
-    usable: (b) => ops.installed(b) && backendAllowed(ws?.backends, b),
+    usable: (b) => failoverUsable(b, ws, ops.installed, s.host_id, ops.hostCanRun),
     modelFor: (b) =>
       (ws?.fallback_backend && canonBackend(ws.fallback_backend) === canonBackend(b) ? ws.fallback_model ?? null : null) ??
       (CONFIG.agent.fallbackBackend && canonBackend(CONFIG.agent.fallbackBackend) === canonBackend(b) ? CONFIG.agent.fallbackModel ?? null : null),
   });
 
   if (step.step === "model") return swapModel(s, st, wall, model, step.to, now);
-  if (step.step === "give_up") return giveUp(s, st, wall, model, step.why);
+  if (step.step === "give_up") {
+    let why = step.why;
+    if (s.host_id && s.host_id !== LOCAL_HOST_ID) {
+      const h = placementCandidates().find((c) => c.id === s.host_id);
+      const name = h?.name || s.host_id;
+      if (h && !h.online) {
+        why = `${name} is offline — stand-in must stay on that computer (host failover moves it after the grace, or wait for it to reconnect)`;
+      } else {
+        why = `${why} on ${name}`;
+      }
+    }
+    return giveUp(s, st, wall, model, why);
+  }
   return handOff(s, st, wall, model, step, ws);
 }
 
@@ -396,6 +469,13 @@ async function handOff(
 ): Promise<QuietOutcome> {
   st.busy = true;
   try {
+    // Claude's "Usage limit reached · continuing automatically at 7pm · esc to cancel" holds the
+    // seat until the reset. Cancel that wait so the profile is free and the stand-in is the one
+    // that keeps working — otherwise the old terminal sits there until kill, and Robert sees a
+    // give_up wake about a wall that was already supposed to move.
+    if (/\besc to cancel\b/i.test(wall.line)) {
+      try { ops.send(s.id, { key: "esc" }); } catch {}
+    }
     let step: FailoverStep = { step: "backend", ...first };
     while (step.step === "backend") {
       const to = step.to;
@@ -434,7 +514,7 @@ async function handOff(
           wall: wall.kind, backend: s.backend, model: from, modelTried: true,
           attempts: st.lineage.attempts, max: CONFIG.terminalFailoverMax, modelFallback: null,
           chain: fallbackChain(ws), tried: st.lineage.tried,
-          usable: (b) => ops.installed(b) && backendAllowed(ws?.backends, b),
+          usable: (b) => failoverUsable(b, ws, ops.installed, s.host_id, ops.hostCanRun),
           modelFor: () => null,
         });
       }
@@ -460,11 +540,14 @@ async function openStandIn(s: Session, wall: Wall, from: string | null, to: stri
     feed,
     `A Desk terminal on ${s.backend}${from ? "/" + from : ""} ${wall.kind === "credit" ? "ran out of credits" : "hit its usage limit"}`,
     "its Focus feed",
-    6000,
+    8000,
   );
+  const ticket = s.ticket_id ? tickets.get(s.ticket_id) : undefined;
   const seed = standInSeed({
     from: s.backend, fromModel: from, to, wall, goal: s.goal ?? s.spawn_goal ?? null,
     brief: originalBrief(s.first_prompt), cwd, replay,
+    ticketKey: ticket?.key ?? null,
+    branch: s.branch ?? null,
   });
   return ops.open({
     workspace_id: s.workspace_id,
