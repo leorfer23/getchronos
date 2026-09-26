@@ -11,9 +11,8 @@
 <link rel="manifest" href="/phone.webmanifest">
 <link rel="icon" href="/phone-icon.png">
 <link rel="apple-touch-icon" href="/phone-icon.png">
-<link rel="stylesheet" href="/vendor/xterm.css">
 <title>Chronos</title>
-<meta name="chronos-build" content="2026-09-11a">
+<meta name="chronos-build" content="2026-09-26a">
 <style>
   :root {
     --bg:#0C0F0B; --surface:#151A16; --surface-2:#1E2520; --raised:#262E28; --ink:#E9EFEA; --muted:#98A59D;
@@ -121,33 +120,13 @@
   .skel.card { height:74px; }
   .skel.row { height:58px; border-radius:14px; }
 
-  /* ── terminal screen ──────────────────────────────────────────────────────── */
+  /* ── shared chrome (Focus + Robert) ───────────────────────────────────────── */
   .thead { padding:calc(var(--sat) + 8px) 8px 8px; display:grid; grid-template-columns:var(--tap) 1fr var(--tap); align-items:center; gap:4px; background:var(--surface); border-bottom:1px solid var(--line); }
   .thead .ic { width:var(--tap); height:var(--tap); display:flex; align-items:center; justify-content:center; font-size:26px; border-radius:14px; }
   .thead .tt { min-width:0; text-align:center; }
   .thead .tt b { display:block; font-size:16.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .thead .tt small { display:flex; justify-content:center; align-items:center; gap:6px; color:var(--muted); font-size:13px; }
-  .term-wrap { flex:1; min-height:0; position:relative; background:var(--term-bg); overflow:hidden; touch-action:none; }
-  .term-host { position:absolute; inset:0; padding:6px 0 0 8px; }
-  .term-host .xterm { pointer-events:none; }
-  .term-host .xterm * { pointer-events:none; }
-  .term-host .xterm-helper-textarea { pointer-events:none; opacity:0; width:0; height:0; }
-  .term-host .xterm { height:100%; }
-  .term-host .xterm-viewport { overflow-y:auto !important; }
-  .term-off { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px; color:var(--muted); background:rgba(12,15,11,.85); text-align:center; padding:24px; }
-  .banner { margin:0; padding:12px 16px; background:var(--warn-soft); color:var(--warn); font-size:15.5px; line-height:1.35; border-top:1px solid #4A3D18; max-height:34vh; overflow-y:auto; white-space:pre-wrap; }
-  .banner.blocked { background:var(--danger-soft); color:var(--danger); border-color:#5A2A22; }
-  .banner .opts { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
-  .banner .opts button { height:44px; padding:0 16px; border-radius:12px; background:rgba(0,0,0,.35); color:var(--ink); font-size:15.5px; font-weight:700; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .banner .opts button.no { color:var(--danger); }
-  .banner .lbl { display:block; font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; opacity:.8; margin-bottom:3px; }
-  .quick { display:flex; gap:8px; padding:10px 12px 4px; overflow-x:auto; scrollbar-width:none; background:var(--surface); }
-  .quick::-webkit-scrollbar { display:none; }
-  .qk { flex:none; height:44px; min-width:56px; padding:0 14px; border-radius:12px; background:var(--surface-2); font-size:16px; font-weight:700; }
-  .qk.on { background:var(--accent); color:var(--accent-ink); }
-  .qk.enter { background:var(--accent-soft); color:var(--accent); }
-  .qk.qa { background:var(--bg); border:1px solid var(--line); font-weight:600; }
-  .composer { display:flex; gap:8px; align-items:flex-end; padding:8px 12px calc(var(--sab) + 10px); background:var(--surface); }
+  .composer { display:flex; gap:8px; align-items:flex-end; padding:8px 12px calc(var(--sab) + 10px); background:var(--surface); position:relative; }
   .composer textarea { flex:1; min-height:48px; max-height:140px; resize:none; border-radius:16px; border:1px solid var(--line); background:var(--bg); padding:12px 14px; font-size:17px; line-height:1.3; outline:none; }
   .composer textarea:focus { border-color:var(--accent); }
   .composer .mic { width:48px; height:48px; border-radius:50%; background:var(--surface-2); color:var(--ink); font-size:22px; display:flex; align-items:center; justify-content:center; flex:none; user-select:none; -webkit-user-select:none; }
@@ -171,17 +150,15 @@
   .rb-lvl i { width:4px; height:30px; border-radius:2px; background:var(--danger); transform:scaleY(.1); transition:transform .09s linear; }
   #recbar:not([data-state="rec"]) .rb-lvl { display:none; }
   @keyframes recblink { 50% { opacity:.3; } }
-  .composer { position:relative; }
   .composer .send { width:48px; height:48px; border-radius:50%; background:var(--accent); color:var(--accent-ink); font-size:22px; display:flex; align-items:center; justify-content:center; flex:none; }
   .composer .send:disabled { opacity:.35; }
-  .swipe-hint { position:absolute; bottom:8px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,.6); color:var(--muted); font-size:12.5px; padding:4px 10px; border-radius:999px; pointer-events:none; opacity:0; transition:opacity .3s; }
-  .swipe-hint.show { opacity:1; }
+  .field.row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .field .hint { font-weight:500; text-transform:none; letter-spacing:0; color:var(--faint); }
 
   /* ── focus screen ─────────────────────────────────────────────────────────── */
-  .fhead { grid-template-columns:var(--tap) 1fr var(--tap) var(--tap); }
+  .fhead { grid-template-columns:var(--tap) 1fr var(--tap); }
   .fstrips { background:var(--surface); border-bottom:1px solid var(--line); }
   .fstrips .strip { margin:0; padding:8px 12px 10px; }
-  .fstrips .strip .chip.cl { height:40px; font-size:14px; padding:0 12px; background:var(--accent-soft); color:var(--accent); }
   .tchip { flex:none; height:40px; padding:0 12px; border-radius:12px; background:var(--surface-2); font-size:14px; font-weight:600; display:inline-flex; align-items:center; gap:7px; max-width:230px; }
   .tchip span.l { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .tchip.on { background:var(--raised); box-shadow:inset 0 0 0 1.5px var(--accent); }
@@ -192,6 +169,24 @@
   .vchip.diff { color:var(--muted); font-family:ui-monospace,"Roboto Mono",Menlo,monospace; }
   .vchip.diff b { color:var(--accent); font-weight:700; } .vchip.diff i { color:var(--danger); font-style:normal; }
   .fscroll { flex:1; min-height:0; overflow-y:auto; padding:14px 16px 24px; -webkit-overflow-scrolling:touch; touch-action:pan-y; }
+  .fgoal { flex:none; padding:10px 16px 12px; background:var(--surface); border-bottom:1px solid var(--line); }
+  .fgoal[hidden] { display:none; }
+  .fgoal .ghead { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+  .fgoal .lbl { font-size:12px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); flex:1; }
+  .fgoal .ghead button { border:0; background:none; color:var(--accent); font:inherit; font-size:14px; font-weight:700; padding:4px 0; }
+  .fgoal .gt { font-size:17px; font-weight:700; line-height:1.35; }
+  .fgoal .gt.muted { font-weight:500; color:var(--muted); }
+  .fgoal .gsub { color:var(--muted); font-size:13.5px; margin-top:6px; }
+  .frow { display:grid; grid-template-columns:64px 1fr; gap:8px 10px; align-items:start; padding:8px 0; border-bottom:1px solid var(--line); }
+  .frow:last-child { border-bottom:0; }
+  .frow time { font-size:11.5px; color:var(--faint); font-variant-numeric:tabular-nums; line-height:1.3; padding-top:3px; }
+  .fblock.factivity .lbl { display:flex; align-items:center; gap:8px; }
+  .fblock .lbl time { margin-left:auto; font-weight:500; text-transform:none; letter-spacing:0; color:var(--faint); font-size:12px; }
+  .rwork { flex:none; display:flex; align-items:center; gap:10px; padding:8px 14px; background:var(--surface); border-top:1px solid var(--line); color:var(--muted); font-size:14.5px; }
+  .rwork[hidden] { display:none; }
+  .rwork .dots { display:inline-flex; gap:3px; }
+  .rwork .dots i { width:5px; height:5px; border-radius:50%; background:var(--accent); opacity:.35; }
+  body.blink .rwork .dots i:nth-child(1) { opacity:1; } body.blink .rwork .dots i:nth-child(2) { opacity:.7; } body.blink .rwork .dots i:nth-child(3) { opacity:.4; }
   .fstatus { display:flex; align-items:center; gap:10px; flex-wrap:nowrap; margin-bottom:14px; min-width:0; }
   .fstatus .st { flex:none; }
   .fstatus .st { display:inline-flex; align-items:center; gap:8px; font-weight:800; font-size:17px; }
@@ -249,15 +244,6 @@
   .skel.fl { height:20px; border-radius:6px; margin:8px 0; }
 
   /* ── robert ───────────────────────────────────────────────────────────────── */
-  .plan-row { border:1px solid var(--line); border-radius:14px; padding:10px 12px; margin-bottom:10px; }
-  .plan-row .head { display:flex; align-items:center; gap:10px; min-height:44px; }
-  .plan-row .head .name { font-size:17px; font-weight:700; flex:1; }
-  .plan-row .steer { display:flex; gap:8px; align-items:flex-end; margin-top:8px; position:relative; }
-  .plan-row .steer textarea { flex:1; min-height:48px; border-radius:12px; border:1px solid var(--line); background:var(--bg); padding:10px 12px; font-size:15.5px; resize:vertical; }
-  .plan-row.off .steer { display:none; }
-  .plan-row .mic { width:44px; height:44px; border-radius:50%; background:var(--surface-2); font-size:20px; display:flex; align-items:center; justify-content:center; flex:none; user-select:none; -webkit-user-select:none; }
-  .plan-row .mic.rec { background:var(--danger); color:#fff; animation:recpulse 1s ease-in-out infinite; }
-  .plan-row .mic.busy { background:var(--warn-soft); color:var(--warn); }
   .rstrip { display:flex; gap:8px; overflow-x:auto; scrollbar-width:none; padding:10px 14px 4px; background:var(--surface); border-bottom:1px solid var(--line); }
   .rstrip::-webkit-scrollbar { display:none; }
   .rstrip .chip { flex:none; height:38px; padding:0 14px; font-size:14.5px; }
@@ -279,7 +265,8 @@
   .bub.pending:empty::after { content:"thinking…"; }
   .chat .day { align-self:center; color:var(--faint); font-size:12.5px; }
   /* The Ask widget (static/ask-card.js) — the Desk's, at thumb size. */
-  #v-robert .thead { grid-template-columns:var(--tap) 1fr auto var(--tap); }
+  #v-robert .thead { grid-template-columns:var(--tap) 1fr auto auto var(--tap); }
+  #v-robert .rmodel { max-width:92px; height:36px; margin-right:2px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font-size:13px; font-weight:700; padding:0 8px; -webkit-appearance:none; appearance:none; }
   .askn { height:36px; padding:0 13px; border-radius:999px; background:var(--warn-soft); color:var(--warn); font-size:15px; font-weight:800; font-variant-numeric:tabular-nums; }
   .askn[hidden] { display:none; }
   .askn.on { background:var(--warn); color:var(--bg); }
@@ -357,7 +344,6 @@
       <section class="group" id="g-needs"><h2>Needs you <span class="n"></span></h2><div class="cards"><div class="skel card"></div></div></section>
       <section class="group" id="g-finished"><h2>Finished <span class="n"></span><button data-k="close-done" hidden>close done</button></h2><div class="cards"></div></section>
       <section class="group" id="g-working"><h2>Working <span class="n"></span></h2><div class="cards"><div class="skel card"></div></div></section>
-      <section class="group" id="g-recent"><h2>Recent <span class="n"></span><button data-k="toggle-ended">show</button></h2><div class="cards" hidden></div></section>
     </div>
     <div class="hbar">
       <button class="big primary" id="btn-new">＋ New</button>
@@ -370,10 +356,10 @@
     <div class="thead fhead">
       <button class="ic" id="f-back" aria-label="Back">‹</button>
       <div class="tt"><b id="f-title"></b><small><span class="dot" id="f-dot"></span><span id="f-sub"></span></small></div>
-      <button class="ic" id="f-raw" aria-label="Raw terminal" title="Raw terminal" style="font-size:21px">⌨</button>
       <button class="ic" id="f-more" aria-label="More">⋯</button>
     </div>
     <div class="fstrips"><div class="strip" id="f-strip"></div></div>
+    <div class="fgoal" id="f-goal" hidden></div>
     <div class="fscroll" id="f-scroll"><div id="f-body"></div></div>
     <div class="fbar" id="f-bar"></div>
     <div class="composer">
@@ -383,54 +369,21 @@
     </div>
   </div>
 
-  <!-- ── TERMINAL ─────────────────────────────────────────────────────────── -->
-  <div id="v-term" class="view" hidden>
-    <div class="thead">
-      <button class="ic" id="t-back" aria-label="Back">‹</button>
-      <div class="tt"><b id="t-title"></b><small><span class="dot" id="t-dot"></span><span id="t-sub"></span></small></div>
-      <button class="ic" id="t-more" aria-label="More">⋯</button>
-    </div>
-    <div class="term-wrap" id="term-wrap">
-      <div class="term-host" id="term-host"></div>
-      <div class="term-off" id="term-off" hidden><div id="term-off-msg"></div><button class="big primary" id="term-reopen" style="width:220px">Reopen</button></div>
-      <div class="swipe-hint" id="swipe-hint"></div>
-    </div>
-    <div class="banner" id="banner" hidden><span class="lbl" id="banner-lbl">waiting for you</span><span id="banner-text"></span><div class="opts" id="banner-opts"></div></div>
-    <div class="quick" id="quick">
-      <button class="qk enter" data-key="enter">Enter ⏎</button>
-      <button class="qk" data-text="y">y</button>
-      <button class="qk" data-text="n">n</button>
-      <button class="qk" data-key="esc">Esc</button>
-      <button class="qk" data-key="up">↑</button>
-      <button class="qk" data-key="down">↓</button>
-      <button class="qk" data-k="\x1b[D">←</button>
-      <button class="qk" data-k="\x1b[C">→</button>
-      <button class="qk" data-key="tab">Tab</button>
-      <button class="qk" data-key="ctrl-c">Ctrl‑C</button>
-      <button class="qk" id="qk-ctrl">Ctrl</button>
-      <button class="qk" data-k="\x1b[5~">PgUp</button>
-      <button class="qk" data-k="\x1b[6~">PgDn</button>
-    </div>
-    <div class="composer">
-      <button class="mic" id="mic" aria-label="Talk">🎤</button>
-      <textarea id="composer" rows="1" placeholder="Type to the agent…" autocapitalize="off" autocomplete="off" spellcheck="false" enterkeyhint="send"></textarea>
-      <button class="send" id="send" aria-label="Send">➤</button>
-    </div>
-  </div>
-
   <!-- ── ROBERT ───────────────────────────────────────────────────────────── -->
   <div id="v-robert" class="view" hidden>
     <div class="thead">
       <button class="ic" id="r-back" aria-label="Back">‹</button>
-      <div class="tt"><b>Robert</b><small><span class="dot working"></span><span>runs the whole desk</span></small></div>
+      <div class="tt"><b>Robert</b><small><span class="dot working" id="r-dot"></span><span id="r-sub">one chat · # to name a project</span></small></div>
+      <select id="r-model" class="rmodel" title="Model Robert uses — chat, wakes, watches" aria-label="Robert model"></select>
       <button class="askn" id="r-asks" hidden>? 0</button>
       <button class="ic" id="r-reset" aria-label="New thread" title="New thread">↺</button>
     </div>
     <div class="askpop" id="r-askpop" hidden></div>
     <div class="chat" id="chat"></div>
+    <div class="rwork" id="r-work" hidden><span class="dots"><i></i><i></i><i></i></span><span id="r-work-what">thinking…</span></div>
     <div class="composer">
       <button class="mic" id="r-mic" aria-label="Talk">🎤</button>
-      <textarea id="r-composer" rows="1" placeholder="Ask Robert… · # to name a project" autocapitalize="sentences" enterkeyhint="send"></textarea>
+      <textarea id="r-composer" rows="1" placeholder="Ask Robert… · #atlas to pin a project" autocapitalize="sentences" enterkeyhint="send"></textarea>
       <button class="send" id="r-send" aria-label="Send">➤</button>
     </div>
   </div>
@@ -444,9 +397,6 @@
   <div id="toast"></div>
 </div>
 
-<script src="/vendor/xterm.js"></script>
-<script src="/vendor/xterm-addon-fit.js"></script>
-<script src="/term-links.js"></script>
 <script src="/desk-quick-actions.js"></script>
 <script src="/ask-card.js"></script>
 <script src="/tag-complete.js"></script>
@@ -454,10 +404,8 @@
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
 <script>
-// Chronos on a phone. A dashboard first (what needs me, what is working, my notes), one fullscreen
-// terminal when you tap in, and a chat-style composer because typing raw keystrokes into xterm on a
-// phone keyboard is how you lose an afternoon. Same daemon, same API, same admin token as /desk —
-// same origin, so a token pasted once into the Desk works here too.
+// Chronos on a phone: home (what needs you), Focus (the story of one terminal — no raw PTY), and
+// Robert (one chat, routed by #tags). Same daemon and admin token as /desk.
 const qs = (s, r = document) => r.querySelector(s);
 const qsa = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -521,12 +469,10 @@ const fmtAgo = (iso) => { if (!iso) return ""; const m = Math.round((Date.now() 
 
 // ── state ───────────────────────────────────────────────────────────────────
 const S = {
-  workspaces: [], backends: [], sessions: [], ended: [],
-  current: null,          // session id on the terminal screen
-  showEnded: false,
+  workspaces: [], backends: [], sessions: [],
+  current: null,          // session id on Focus
   fontSize: Number(localStorage.getItem("phone-font") || 13),
   ctrl: false,
-  filter: localStorage.getItem("phone-ws") || null,   // client strip: null = all
   loaded: false,
 };
 // Preferences that are not sound: voice behaviour. Kept next to the fx flag in localStorage.
@@ -538,13 +484,10 @@ const PREFS = {
   // Claude Code draws its own input box (separator, ❯ prompt, separator, status line) in the last
   // rows of the pty. We have a composer, so those rows are cropped off the bottom — unless the
   // agent is showing a menu or a y/n there, which you need to see.
-  get hideBox() { return localStorage.getItem("phone-hidebox") !== "off"; },
-  set hideBox(v) { localStorage.setItem("phone-hidebox", v ? "on" : "off"); },
   // Triage: after Close / Continue / an answer, the next terminal comes up on its own.
   get advance() { return localStorage.getItem("phone-advance") !== "off"; },
   set advance(v) { localStorage.setItem("phone-advance", v ? "on" : "off"); },
 };
-const BOX_ROWS = 4; // Claude Code's box at rest: separator, ❯ line, separator, status. Measured live below.
 const wsName = (id) => S.workspaces.find((w) => w.id === id)?.name || "—";
 // One colour per client, the same index-based palette the Desk uses, so a client looks the same on both.
 const WS_COLORS = ["#56B693", "#B392E8", "#E0A44A", "#6FA8DC", "#E486A6", "#9DC45C", "#5CC6C6", "#D98C55"];
@@ -566,7 +509,7 @@ function rank(s) { return PH_RANK[phaseOf(s)] ?? 9; }
 const phaseSince = (s) => (s.status?.since ? s.status.since : s.last_out || Date.parse(s.created_at));
 const needsCount = () => S.sessions.filter((x) => x.live && !isWorker(x) && ["blocked", "decide", "your_turn"].includes(phaseOf(x))).length;
 const byRank = (a, b) => (rank(a) - rank(b)) || (phaseSince(a) - phaseSince(b)) || String(a.created_at).localeCompare(String(b.created_at));
-const byId = (id) => S.sessions.find((s) => s.id === id) || S.ended.find((s) => s.id === id);
+const byId = (id) => S.sessions.find((s) => s.id === id);
 // Leads only (LEADS.md). A terminal a live Lead opened is that Lead's to drive: its stops wake the
 // Lead, not the operator, and a dozen worker cards is exactly the bloat a phone cannot carry. So the
 // home list shows Leads and ordinary terminals, and a Lead's card carries its workers as a count.
@@ -609,22 +552,10 @@ async function input(id, body) {
 const optionBody = (o) => ({ keys: [...Array(Math.abs(o.offset)).fill(o.offset > 0 ? "down" : "up"), "enter"] });
 
 async function load() {
-  const [d, ended] = await Promise.all([
-    api("/desk"),
-    api("/sessions?status=ended&limit=100").catch(() => []),
-  ]);
+  const d = await api("/desk");
   S.workspaces = d.workspaces; S.backends = d.backends; S.sessions = d.sessions;
-  // No time window: Recent is "the last N terminals that ended", however long ago that was. A 24h cut
-  // meant a quiet morning showed an empty list next to a count of terminals you had just closed.
-  const liveIds = new Set(S.sessions.filter((s) => s.live).map((s) => s.id));
-  const rows = Array.isArray(ended) ? ended : ended.sessions || [];
-  S.ended = rows
-    .filter((s) => !liveIds.has(s.id) && s.ended_at)
-    .map((s) => ({ ...s, state: "ended", live: false }))
-    .sort((a, b) => Date.parse(b.ended_at) - Date.parse(a.ended_at));
   const first = !S.loaded;
   S.loaded = true;
-  if (S.filter && !S.workspaces.some((w) => w.id === S.filter)) S.filter = null;
   renderHome();
   badge(needsCount());
   AskCard.recount();
@@ -633,10 +564,6 @@ async function load() {
 }
 
 // ── home ────────────────────────────────────────────────────────────────────
-function setFilter(ws) {
-  S.filter = ws; if (ws) localStorage.setItem("phone-ws", ws); else localStorage.removeItem("phone-ws");
-  renderHome();
-}
 function renderHome() {
   const live = S.sessions.filter((s) => s.live && !isWorker(s)).sort(byRank);
   const needs = live.filter((s) => rank(s) <= 1);
@@ -692,13 +619,8 @@ function renderHome() {
   fill("#g-finished", fin, "nothing to close");
   qs('[data-k="close-done"]').hidden = !fin.some((s) => phaseOf(s) === "review");
   fill("#g-working", working, "nothing running");
-  const e = qs("#g-recent"), recent = S.ended.filter((s) => !isWorker(s)).slice(0, 20);
-  e.querySelector(".n").textContent = recent.length || "";
-  e.querySelector("button").textContent = S.showEnded ? "hide" : "show";
-  e.querySelector(".cards").hidden = !S.showEnded;
-  e.querySelector(".cards").innerHTML = recent.length ? recent.map(card).join("") : `<div class="empty">nothing ended lately</div>`;
 }
-// Close = goal reached + kill, reopenable from Recent (Undo on the toast).
+// Close = goal reached + kill; Undo on the toast reopens it.
 async function closeSession(id) {
   const s = byId(id); if (!s) return;
   try {
@@ -725,7 +647,6 @@ qs("#home").addEventListener("click", async (e) => {
   }
   if (t.dataset.open) { fx.tap(); return openFocus(t.dataset.open); }
   if (t.dataset.k === "close-done") { fx.tap(); return confirmSheet("Close every finished terminal?", "Close all", async () => { for (const s of S.sessions.filter((x) => x.live && phaseOf(x) === "review")) { try { await api("/sessions/" + s.id + "/kill", { method: "POST" }); } catch {} } fx.success(); await load(); }); }
-  if (t.dataset.k === "toggle-ended") { S.showEnded = !S.showEnded; return renderHome(); }
 });
 // Pull to refresh at the top of the list; long-press a card for its menu without opening it.
 (() => {
@@ -803,15 +724,96 @@ function confirmSheet(text, label, fn) {
 function wsChips(sel) {
   return `<div class="seg" id="ws-seg">${S.workspaces.map((w) => `<button type="button" class="chip${w.id === sel ? " on" : ""}" data-ws="${w.id}">${esc(w.name)}</button>`).join("")}</div>`;
 }
+// Same short labels + remembered CLI/model keys as the Desk — a pick on either surface sticks.
+const BACKEND_LABEL = { "claude-code": "Claude", "cursor-agent": "Cursor", grok: "Grok", codex: "Codex", opencode: "OpenCode", "openai-api": "OpenAI", "cursor-cloud": "Cursor Cloud" };
+function backendKind(name) { return S.backends.find((b) => b.name === name)?.kind || "local"; }
+function backendLabel(name) { const lbl = BACKEND_LABEL[name] || String(name || "").replace(/-code$/, "").replace(/-agent$/, ""); return backendKind(name) === "cloud" ? "☁ " + lbl : lbl; }
+function backendsFor(wsId) {
+  const w = S.workspaces.find((x) => x.id === wsId);
+  const allowed = w?.backends || S.backends.map((b) => b.name);
+  return S.backends.filter((b) => allowed.includes(b.name));
+}
+function fillBackendSelect(sel, wsId, prefer) {
+  const w = S.workspaces.find((x) => x.id === wsId);
+  const list = backendsFor(wsId);
+  const want = prefer || localStorage.getItem("desk-backend:" + (wsId || "")) || w?.default_backend || list[0]?.name || "";
+  sel.innerHTML = list.map((b) => '<option value="' + esc(b.name) + '"' + (b.name === want ? " selected" : "") + ">" + esc(backendLabel(b.name)) + "</option>").join("");
+  if (want && ![...sel.options].some((o) => o.value === want) && list[0]) sel.value = list[0].name;
+}
+function fillModelSelect(sel, backend, prefer) {
+  const b = S.backends.find((x) => x.name === backend);
+  const models = b?.models || [];
+  const want = prefer ?? localStorage.getItem("desk-model:" + (backend || "")) ?? "";
+  sel.innerHTML = ['<option value="">default</option>'].concat(models.map((m) => '<option value="' + esc(m) + '"' + (m === want ? " selected" : "") + ">" + esc(m) + "</option>")).join("");
+  if (want && ![...sel.options].some((o) => o.value === want)) sel.value = "";
+}
+function fillCwdSelect(sel, wsId) {
+  const w = S.workspaces.find((x) => x.id === wsId);
+  const repos = w?.repos || [];
+  if (!repos.length) { sel.innerHTML = '<option value="">default</option>'; return; }
+  const want = localStorage.getItem("desk-cwd:" + (wsId || "")) || w?.default_dir || "";
+  sel.innerHTML = ['<option value="">default</option>'].concat(repos.map((r) => '<option value="' + esc(r.path) + '"' + (r.path === want ? " selected" : "") + ">" + esc(r.name || r.path) + "</option>")).join("");
+}
+function rememberCli(wsId, backend, model, cwd) {
+  if (wsId && backend) localStorage.setItem("desk-backend:" + wsId, backend);
+  if (backend) localStorage.setItem("desk-model:" + backend, model || "");
+  if (wsId && cwd !== undefined) localStorage.setItem("desk-cwd:" + wsId, cwd || "");
+}
 function newTermSheet(wsId) {
   const w0 = S.workspaces.find((w) => w.id === wsId) || S.workspaces[0];
-  const b = sheet(`<h3>New</h3>
-    <div class="field">${wsChips(w0?.id)}</div>
-    <div class="field"><textarea id="f-goal" placeholder="What should it do? Empty = a blank terminal."></textarea></div>
-    <div class="btns"><button class="big primary wide" id="f-open">Open</button></div>`);
+  const b = sheet(`<h3>New terminal</h3>
+    <div class="field"><label>Client</label>${wsChips(w0?.id)}</div>
+    <div class="field row2">
+      <div><label>CLI</label><select id="f-backend"></select></div>
+      <div><label>Model</label><select id="f-model"></select></div>
+    </div>
+    <div class="field"><label>Where</label><select id="f-cwd"></select></div>
+    <div class="field"><label>Goal <span class="hint">— optional · one per line = several</span></label><textarea id="f-goal" rows="2" placeholder="What should it do? Empty = blank."></textarea></div>
+    <div class="field"><label>Kind</label><select id="f-kind"><option value="pr">PR</option><option value="investigation">Investigation</option><option value="qa">QA</option></select></div>
+    <div class="field"><label>Description <span class="hint">— first prompt into the terminal</span></label><textarea id="f-desc" rows="2" placeholder="Branch, error, what you tried…"></textarea></div>
+    <div class="toggle" style="border:0;padding:0 2px 10px"><div>Focus only<small>story + composer, no live terminal</small></div><button type="button" class="sw" id="f-focus" aria-label="Focus only"></button></div>
+    <div class="btns">
+      <button class="big secondary" id="f-blank">Blank</button>
+      <button class="big primary" id="f-open">Open</button>
+      <button class="big secondary wide" id="f-lead" title="Opens and drives its own terminals for this goal">◆ Open as Lead</button>
+    </div>`);
   let cur = w0?.id;
-  qs("#ws-seg", b).onclick = (e) => { const c = e.target.closest("[data-ws]"); if (c) { fx.tap(); cur = c.dataset.ws; qsa("[data-ws]", b).forEach((x) => x.classList.toggle("on", x === c)); } };
-  qs("#f-open", b).onclick = () => { const w = S.workspaces.find((x) => x.id === cur); const goal = qs("#f-goal", b).value.trim(); spawn({ workspace_id: cur, backend: w?.default_backend || undefined, goal: goal || null }); };
+  const sync = () => {
+    fillBackendSelect(qs("#f-backend", b), cur);
+    fillModelSelect(qs("#f-model", b), qs("#f-backend", b).value);
+    fillCwdSelect(qs("#f-cwd", b), cur);
+  };
+  sync();
+  qs("#ws-seg", b).onclick = (e) => {
+    const c = e.target.closest("[data-ws]"); if (!c) return;
+    fx.tap(); cur = c.dataset.ws; qsa("[data-ws]", b).forEach((x) => x.classList.toggle("on", x === c)); sync();
+  };
+  qs("#f-backend", b).onchange = () => fillModelSelect(qs("#f-model", b), qs("#f-backend", b).value);
+  qs("#f-focus", b).onclick = () => { fx.tap(); qs("#f-focus", b).classList.toggle("on"); };
+  const bodyFrom = (opts = {}) => {
+    const backend = qs("#f-backend", b).value || null;
+    const model = qs("#f-model", b).value.trim() || null;
+    const cwd = qs("#f-cwd", b).value || null;
+    const goal = qs("#f-goal", b).value.trim();
+    const desc = qs("#f-desc", b).value.trim();
+    const focus = qs("#f-focus", b).classList.contains("on");
+    rememberCli(cur, backend, model, cwd);
+    return {
+      workspace_id: cur, backend, model,
+      ...(cwd ? { cwd } : {}),
+      ...(opts.blank ? {} : { goal: goal || null, goal_kind: goal ? qs("#f-kind", b).value : null, description: desc || null }),
+      ...(opts.lead ? { role: "lead" } : {}),
+      ...(focus ? { focus_only: true } : {}),
+    };
+  };
+  qs("#f-blank", b).onclick = () => spawn(bodyFrom({ blank: true }));
+  qs("#f-open", b).onclick = () => spawn(bodyFrom());
+  qs("#f-lead", b).onclick = () => {
+    const goal = qs("#f-goal", b).value.trim();
+    if (!goal) { fx.fail(); return toast("a Lead needs a goal"); }
+    if (goal.split("\n").filter((l) => l.trim()).length > 1) { fx.fail(); return toast("a Lead is for one goal"); }
+    spawn(bodyFrom({ lead: true }));
+  };
   setTimeout(() => qs("#f-goal", b).focus(), 80);
 }
 async function spawn(body) {
@@ -823,7 +825,7 @@ async function spawn(body) {
     if (id) openFocus(id);
   } catch (err) { fx.fail(); toast("open failed: " + err.message); }
 }
-qs("#btn-new").onclick = () => { fx.tap(); newTermSheet(S.filter); };
+qs("#btn-new").onclick = () => { fx.tap(); newTermSheet(null); };
 
 function settingsSheet() {
   const row = (k, label, sub, on) => `<div class="toggle"><div>${label}<small>${sub}</small></div><button class="sw${on ? " on" : ""}" data-pref="${k}" aria-label="${label}"></button></div>`;
@@ -832,9 +834,7 @@ function settingsSheet() {
     ${row("push", "Notifications", "a terminal needs you, or Robert answers — answer from the tray", false)}
     <div id="push-status" style="color:var(--muted);font-size:14px;margin:-6px 0 10px 4px"></div>
     ${row("autosend", "Auto-send voice", "release the mic and it sends — no review step", PREFS.autoSend)}
-    ${row("hidebox", "Hide the terminal's input box", "Claude Code's ❯ line and status bar — the composer replaces them", PREFS.hideBox)}
     ${row("advance", "Next terminal after an action", "Close, Continue or an answer moves you on — swipe through the queue", PREFS.advance)}
-    <div class="menu" style="margin:14px 0 4px"><button id="btn-tomorrow"><span class="i">🌙</span>Plan tomorrow…</button></div>
     <div class="field" style="margin-top:14px"><label>Voice language</label><div class="seg" id="lang-seg">
       ${[["", "Auto"], ["es", "Español"], ["en", "English"]].map(([v, l]) => `<button type="button" class="chip${PREFS.lang === v ? " on" : ""}" data-lang="${v}">${l}</button>`).join("")}
     </div></div>
@@ -848,14 +848,12 @@ function settingsSheet() {
   };
   paintPush();
   b.addEventListener("click", async (e) => {
-    const t = e.target.closest("[data-pref],[data-lang],[data-forget],[data-push-test],[data-reload],#btn-tomorrow"); if (!t) return;
-    if (t.id === "btn-tomorrow") { fx.tap(); return tomorrowSheet(); }
+    const t = e.target.closest("[data-pref],[data-lang],[data-forget],[data-push-test],[data-reload]"); if (!t) return;
     if (t.hasAttribute("data-reload")) { fx.tap(); toast("reloading…"); try { const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k))); } catch {} try { const r = await navigator.serviceWorker?.getRegistration(); await r?.update(); } catch {} location.reload(); return; }
     if (t.hasAttribute("data-push-test")) { fx.tap(); try { const r = await api("/push/test", { method: "POST", body: "{}" }); toast(`sent to ${r.sent} device${r.sent === 1 ? "" : "s"}`); } catch (err) { toast(err.message); } return; }
     if (t.dataset.pref === "push") { fx.tap(); pushStatus.textContent = "…"; try { await PUSH.toggle(); } catch (err) { fx.fail(); toast(String(err.message).slice(0, 120)); } return paintPush(); }
     if (t.dataset.pref === "fx") { t.classList.toggle("on", fx.toggle()); return; }
     if (t.dataset.pref === "autosend") { PREFS.autoSend = !PREFS.autoSend; fx.tap(); t.classList.toggle("on", PREFS.autoSend); return; }
-    if (t.dataset.pref === "hidebox") { PREFS.hideBox = !PREFS.hideBox; fx.tap(); t.classList.toggle("on", PREFS.hideBox); refit(); return; }
     if (t.dataset.pref === "advance") { PREFS.advance = !PREFS.advance; fx.tap(); t.classList.toggle("on", PREFS.advance); return; }
     if (t.dataset.lang !== undefined) { PREFS.lang = t.dataset.lang; fx.tap(); qsa("[data-lang]", b).forEach((c) => c.classList.toggle("on", c === t)); return; }
     if (t.hasAttribute("data-forget")) { localStorage.removeItem("mc-token"); location.reload(); }
@@ -863,56 +861,12 @@ function settingsSheet() {
 }
 qs("#btn-settings").onclick = () => { fx.tap(); settingsSheet(); };
 
-// ── plan tomorrow ───────────────────────────────────────────────────────────
-// Same rule as the daemon's nextWorkday(): after 4am it is tomorrow, and weekends roll to Monday.
-function nextWorkday(now = new Date()) {
-  const d = new Date(now);
-  if (d.getHours() >= 4) d.setDate(d.getDate() + 1);
-  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
-  const p = (n) => String(n).padStart(2, "0");
-  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()); // local date, not UTC
-}
-function tomorrowSheet() {
-  let saved = []; try { saved = JSON.parse(localStorage.getItem("mc-plan-ws") || "[]"); } catch {}
-  const on = new Set(saved.length ? saved : S.workspaces.filter((w) => w.kind === "client" && w.default_dir).map((w) => w.id));
-  const b = sheet(`<h3>Plan tomorrow</h3>
-    <div class="field"><label>For</label><input type="date" id="plan-date" value="${nextWorkday()}"></div>
-    <p style="color:var(--muted);font-size:14.5px;margin:0 0 12px">Each ticked client gets a planner terminal that reads the tracker, the last terminals, PRs and memos, and files the day's cards. Steering goes to the top of its brief — say it or type it.</p>
-    <div id="plan-rows">${S.workspaces.filter((w) => !w.archived).map((w) => `<div class="plan-row${on.has(w.id) ? "" : " off"}" data-ws="${w.id}">
-      <div class="head"><button type="button" class="sw${on.has(w.id) ? " on" : ""}" data-tick aria-label="${esc(w.name)}"></button><span class="name">${esc(w.name)}</span></div>
-      <div class="steer"><textarea placeholder="What should weigh in for ${esc(w.name)}? Optional."></textarea><button type="button" class="mic" aria-label="Talk">🎤</button></div>
-    </div>`).join("")}</div>
-    <div class="btns"><button class="big secondary" data-cancel>Cancel</button><button class="big primary" id="plan-ok">Plan</button></div>`);
-  for (const row of qsa(".plan-row", b)) {
-    const ta = qs("textarea", row);
-    talkMic(qs(".mic", row), (text) => { ta.value = (ta.value ? ta.value.replace(/\s*$/, " ") : "") + text; });
-    qs("[data-tick]", row).onclick = (e) => { fx.tap(); const sw = e.currentTarget; sw.classList.toggle("on"); row.classList.toggle("off", !sw.classList.contains("on")); };
-  }
-  qs("[data-cancel]", b).onclick = closeSheet;
-  qs("#plan-ok", b).onclick = async () => {
-    const picked = qsa(".plan-row", b).filter((r) => !r.classList.contains("off"));
-    if (!picked.length) { fx.fail(); return toast("tick at least one client"); }
-    const workspaces = picked.map((r) => r.dataset.ws), steering = {};
-    for (const r of picked) { const t = qs("textarea", r).value.trim(); if (t) steering[r.dataset.ws] = t; }
-    localStorage.setItem("mc-plan-ws", JSON.stringify(workspaces));
-    const ok = qs("#plan-ok", b); ok.disabled = true; ok.textContent = "opening…";
-    try {
-      const r = await api("/nextday", { method: "POST", body: JSON.stringify({ workspaces, steering, date: qs("#plan-date", b).value }) });
-      closeSheet(); fx.success();
-      toast("planning " + r.date.slice(5) + " in " + r.planned.map((p) => wsName(p.workspace_id)).join(", ") + (r.errors?.length ? " · failed: " + r.errors.map((x) => wsName(x.workspace_id)).join(", ") : ""));
-      await load();
-    } catch (err) { fx.fail(); toast("plan failed: " + String(err.message).slice(0, 120)); ok.disabled = false; ok.textContent = "Plan"; }
-  };
-}
-
 function moreSheet(id = S.current) {
   const s = byId(id); if (!s) return;
   const u = s.usage || {}, ubits = [u.turns ? u.turns + " turns" : "", u.context_tokens ? kTok(u.context_tokens) + " ctx" : "", u.cost_usd ? (u.cost_estimated ? "est. $" : "$") + u.cost_usd.toFixed(2) : "", s.backend].filter(Boolean).join(" · ");
   const b = sheet(`<h3 style="font-size:18px;margin-bottom:4px">${esc(goalTitle(s))}</h3><p style="color:var(--muted);font-size:14px;margin:0 0 14px">${esc(ubits)}</p><div class="menu">
     ${s.live && s.goal ? `<button data-a="done"><span class="i">${s.goal_done_at ? "↺" : "✓"}</span>${s.goal_done_at ? "Goal not done" : "Goal done"}</button>` : ""}
     ${s.live ? `<button data-a="goal"><span class="i">✎</span>${s.goal ? "Edit goal" : "Set goal"}</button>` : ""}
-    <button data-a="font"><span class="i">Aa</span>Font size · ${S.fontSize}px</button>
-    ${s.live ? `<button data-a="box"><span class="i">▭</span>${PREFS.hideBox ? "Show" : "Hide"} the terminal's input box</button>` : ""}
     ${s.live ? `<button data-a="kill" class="danger"><span class="i">■</span>Kill terminal</button>` : `<button data-a="reopen"><span class="i">▶</span>Reopen</button>`}
     <button class="cancel" data-a="x">Cancel</button></div>`);
   qs(".menu", b).onclick = async (e) => {
@@ -920,8 +874,6 @@ function moreSheet(id = S.current) {
     if (a === "x") return closeSheet();
     if (a === "done") { closeSheet(); await api("/sessions/" + s.id, { method: "PATCH", body: JSON.stringify({ goal_done: !s.goal_done_at }) }).catch((err) => toast(err.message)); return load(); }
     if (a === "goal") return goalSheet(s);
-    if (a === "box") { PREFS.hideBox = !PREFS.hideBox; closeSheet(); refit(); return; }
-    if (a === "font") { S.fontSize = S.fontSize >= 17 ? 11 : S.fontSize + 2; localStorage.setItem("phone-font", S.fontSize); applyFont(); return moreSheet(id); }
     if (a === "kill") { fx.warn(); return confirmSheet("Kill this terminal?", "Kill", async () => { await api("/sessions/" + s.id + "/kill", { method: "POST" }); fx.warn(); toast("killed"); await load(); if (S.current === s.id) showHome(); }); }
     if (a === "reopen") { closeSheet(); return reopen(s.id); }
   };
@@ -941,274 +893,48 @@ async function reopen(id) {
   catch (err) { fx.fail(); toast("couldn't reopen: " + err.message); }
 }
 
-// ── terminal screen ─────────────────────────────────────────────────────────
-// One xterm instance, re-pointed at whichever session you tapped: a phone shows one terminal at a
-// time, so keeping a parsed screen per session would spend memory on things nobody can see.
-let term = null, fit = null, sock = null, sentCols = 0, sentRows = 0;
-function ensureTerm() {
-  if (term) return;
-  term = new Terminal({
-    fontSize: S.fontSize, fontFamily: 'ui-monospace,"Roboto Mono",Menlo,monospace', cursorBlink: false,
-    scrollback: 3000, convertEol: false, allowProposedApi: true, disableStdin: true,
-    theme: { background: "#0C0F0B", foreground: "#C7D8C0", cursor: "#56B693", selectionBackground: "#2E7D6455" },
-  });
-  fit = new FitAddon.FitAddon(); term.loadAddon(fit);
-  try { TermLinks.register(term, (_e, uri) => window.open(uri, "_blank", "noopener,noreferrer")); } catch {}
-  term.open(qs("#term-host"));
-  // disableStdin keeps the daemon from seeing stray keystrokes, but xterm's hidden textarea would
-  // still pull the keyboard up on every tap of the output. Never focus it: the composer owns input.
-  // Belt and braces: xterm focuses this textarea on any tap of its element, which pulls the soft
-  // keyboard up. Disabled cannot take focus; readonly + inputmode=none cover a browser that focuses
-  // it anyway; and a focus that still lands is bounced straight back out.
-  const ta = term.textarea;
-  if (ta) {
-    ta.setAttribute("inputmode", "none"); ta.setAttribute("tabindex", "-1"); ta.setAttribute("readonly", ""); ta.setAttribute("aria-hidden", "true");
-    ta.disabled = true;
-    ta.addEventListener("focus", () => { ta.blur(); composerFocusGuard(); });
-  }
-}
-// If something did pull the keyboard up on a terminal tap, drop it: nothing in the terminal takes typing.
-function composerFocusGuard() { const a = document.activeElement; if (a && a !== composer && a.closest?.("#term-wrap")) a.blur(); }
-function applyFont() { if (!term) return; term.options.fontSize = S.fontSize; refit(true); }
-function cellHeight() {
-  try { const h = term._core._renderService.dimensions.css.cell.height; if (h > 0) return h; } catch {}
-  const sc = qs("#term-host .xterm-screen"); return sc && term.rows ? sc.clientHeight / term.rows : 18;
-}
-// How tall the TUI's input box is right now, read off the screen: the last separator run that has
-// a ❯ line under it, down to the bottom. A draft that wraps, or history browsing, makes it taller
-// than the resting four rows; a permission dialog is not a box and gets 0 (you need to see it).
-const SEP = (t) => t.length >= 8 && (t.match(/[─━]/g) || []).length >= t.replace(/\s/g, "").length * 0.6;
-function measureBox() {
-  if (!term) return BOX_ROWS;
-  const b = term.buffer.active, rows = term.rows, top = b.baseY;
-  const line = (i) => { const l = b.getLine(top + i); return l ? l.translateToString(true).trim() : ""; };
-  let s2 = -1, prompt = -1, s1 = -1;
-  for (let i = rows - 1; i >= Math.max(0, rows - 14); i--) {
-    const t = line(i);
-    if (s2 < 0) { if (SEP(t)) s2 = i; continue; }
-    if (prompt < 0) { if (/^[❯>›]/.test(t)) prompt = i; else if (SEP(t)) return 0; continue; }
-    if (SEP(t)) { s1 = i; break; }
-  }
-  // No box on screen right now (Claude Code hides it while you are scrolled up, and while it
-  // streams a long answer): null, meaning "keep whatever you had". Only a dialog forces zero.
-  if (s1 < 0 || prompt < 0) return null;
-  return rows - s1;
-}
-// The crop in force. Only the watcher below moves it, after the measurement has settled — every
-// other refit (header repaint, keyboard, orientation) reuses it, so none of them can resize the
-// pty on a measurement that was mid-redraw.
-let settledCrop = BOX_ROWS, lastCrop = 0, lastTouch = 0;
-function cropRows() {
-  const s = byId(S.current);
-  const p = s?.prompt && typeof s.prompt === "object" ? s.prompt : null;
-  const dialog = s?.live && s.state === "waiting" && (p?.kind === "select" || p?.kind === "yn");
-  if (!(PREFS.hideBox && s?.live && !dialog)) return (lastCrop = 0);
-  return (lastCrop = settledCrop);
-}
-// The box grows and shrinks as the agent redraws. Following it means a refit, and a refit is a pty
-// resize: the TUI repaints its whole frame and drops its scroll position. So: only when the
-// measurement has held the same new value for a while, and never while a finger is on the screen
-// or just after — a resize under a drag is what made "scroll does nothing".
-let cropT = 0, cropSeen = null, cropSince = 0;
-function watchCrop() {
-  clearTimeout(cropT);
-  cropT = setTimeout(() => {
-    if (!term || !S.current || !PREFS.hideBox) return;
-    const m = measureBox(); if (m == null) return;
-    const want = Math.min(12, m);
-    if (want !== cropSeen) { cropSeen = want; cropSince = Date.now(); }
-    if (want === settledCrop) return;
-    if (Date.now() - cropSince < 1200 || Date.now() - lastTouch < 2000) { watchCrop(); return; }
-    settledCrop = want;
-    refit(true);
-  }, 350);
-}
-let refitT = 0;
-function refit(force = false) {
-  if (!term) return;
-  // Never resize the pty under a finger: the TUI repaints and drops its scroll. Come back later.
-  if (!force && Date.now() - lastTouch < 2000) { clearTimeout(refitT); refitT = setTimeout(() => refit(), 2100); return; }
-  const host = qs("#term-host"), wrap = qs("#term-wrap");
-  host.style.top = ""; host.style.bottom = ""; // measure the clip at its true size first
-  try { fit.fit(); } catch {}
-  const cell = cellHeight(), rows0 = term.rows, crop = cropRows();
-  // Rows sit flush with the bottom of the clip: whatever fraction of a row the clip has to spare
-  // goes above the first row, so the cropped band is exactly the last `crop` rows and nothing peeks.
-  const pad = parseFloat(getComputedStyle(host).paddingTop) || 0;
-  const spare = Math.max(0, wrap.clientHeight - pad - rows0 * cell);
-  host.style.top = spare + "px";
-  host.style.bottom = -(crop * cell) + "px";
-  try { fit.fit(); } catch {}
-  sendSize();
-}
-function sendSize() {
-  if (!sock || sock.readyState !== 1 || !term || (term.cols === sentCols && term.rows === sentRows)) return;
-  sentCols = term.cols; sentRows = term.rows;
-  sock.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));
-}
-function sendRaw(d) {
-  if (!sock || sock.readyState !== 1) return toast("not connected");
-  sock.send(JSON.stringify({ t: "in", d }));
-}
-function detach() {
-  clearTimeout(reconnT); clearTimeout(replayT);
-  if (sock) { try { sock.onclose = null; sock.close(); } catch {} sock = null; }
-  sentCols = sentRows = 0;
-}
-// The socket dies whenever Android parks the app for a while. Coming back to a dead socket used
-// to leave a black pane behind an easy-to-miss "Disconnected." — now it reconnects on its own
-// (backoff up to 10s), says so, and re-checks with the daemon whether the terminal is still alive.
-let reconnT = 0, reconnDelay = 1000, gotBytes = false, replayT = 0;
-function attach(id, { quiet = false } = {}) {
-  detach();
-  const s = byId(id);
-  qs("#term-off").hidden = !!s?.live;
-  if (!s?.live) { qs("#term-off-msg").textContent = "This terminal has ended."; return; }
-  gotBytes = false;
-  sock = new WebSocket(`${WS_SCHEME}//${location.host}/term?id=${encodeURIComponent(id)}&token=${encodeURIComponent(TOKEN)}`);
-  sock.onopen = () => {
-    sentCols = sentRows = 0; reconnDelay = 1000; refit(true);
-    // A replay that never comes (or an empty one) still deserves a frame: ask the pty to repaint.
-    clearTimeout(replayT); replayT = setTimeout(() => { if (!gotBytes && sock?.readyState === 1) sock.send(JSON.stringify({ t: "refresh" })); }, 1500);
-  };
-  sock.onmessage = (e) => { if (S.current === id) { gotBytes = true; qs("#term-off").hidden = true; term.write(e.data); watchCrop(); } };
-  sock.onclose = (e) => {
-    if (S.current !== id) return;
-    if (e.code === 4404) { const x = byId(id); if (x) x.live = false; qs("#term-off").hidden = false; qs("#term-off-msg").textContent = "This terminal has ended."; qs("#term-reopen").hidden = false; return; }
-    qs("#term-off").hidden = false; qs("#term-off-msg").textContent = "Reconnecting…"; qs("#term-reopen").hidden = true;
-    clearTimeout(reconnT);
-    reconnT = setTimeout(() => { if (S.current === id && !document.hidden) { load().catch(() => {}).finally(() => { if (S.current === id) attach(id, { quiet: true }); }); } }, reconnDelay);
-    reconnDelay = Math.min(reconnDelay * 2, 10000);
-  };
-  if (!quiet) qs("#term-off").hidden = true;
-}
-function openTerm(id) {
-  const s = byId(id); if (!s) return toast("not found");
-  const fromTerm = !qs("#v-term").hidden, fromFocus = !qs("#v-focus").hidden;
-  S.current = id; S.ctrl = false; qs("#qk-ctrl").classList.remove("on");
-  // Show the view BEFORE opening xterm: opened inside display:none it measures a zero-width glyph
-  // and paints nothing, ever, at 300+ columns. From the story it stacks (back returns there).
-  show("v-term", fromTerm || fromFocus ? "fade" : "in-right", fromFocus);
-  ensureTerm();
-  term.reset();
-  renderTermHead();
-  // A timer, not requestAnimationFrame: rAF never fires while the tab is in the background, and a
-  // PWA resumed from the switcher can open a terminal before it is painted.
-  settledCrop = BOX_ROWS; cropSeen = null;
-  setTimeout(() => { refit(true); attach(id); }, 30);
-}
+// ── no raw PTY on the phone ─────────────────────────────────────────────────
+// Focus is the only way into a terminal here. The Desk still has the raw screen;
+// this surface answers questions, steers with the composer, and talks to Robert.
+function detach() {}
+function attach() {}
+function openTerm(id) { if (id) openFocus(id); }
+function renderTermHead() {}
+function refit() {}
+function applyFont() {}
+function sendRaw() {}
+function crop() {}
+const composer = null; // legacy name; Focus/Robert have their own composers
+
 function paint(view, dir) {
   for (const v of qsa(".view")) { v.hidden = v.id !== view; v.classList.remove("in-right", "in-left", "fade"); }
   const el = qs("#" + view); void el.offsetWidth; el.classList.add(dir);
 }
-function show(view, dir, stack = false) {
+function show(view, dir, _stack = false) {
   paint(view, dir);
-  // History mirrors the screens: one entry for "not home" (the back gesture pops it and lands on
-  // home; a second back leaves the app), a second one when the raw terminal is opened over the
-  // story so back returns to the story. Terminal→terminal (swipe, chip) replaces rather than stacks.
   const depth = history.state?.depth || 0;
   if (view === "v-home") { if (depth) history.go(-depth); }
   else if (!depth) history.pushState({ view, depth: 1 }, "", location.pathname);
-  else if (stack) history.pushState({ view, depth: depth + 1 }, "", location.pathname);
-  else history.replaceState({ view, depth }, "", location.pathname);
+  else history.replaceState({ view, depth: 1 }, "", location.pathname);
 }
 window.addEventListener("popstate", () => {
-  // Back with a sheet up closes the sheet; back on the raw terminal returns to its story; back on
-  // a screen goes home; back on home is the browser's.
   if (qs("#sheets").firstChild) { qs("#sheets").innerHTML = ""; return; }
-  const st = history.state;
-  if (st?.view === "v-focus" && S.current && qs("#v-focus").hidden) { detach(); paint("v-focus", "in-left"); qs("#composer").blur(); renderFocus(); return; }
-  if (!st?.view && qs("#v-home").hidden) { detach(); S.current = null; F.id = null; for (const v of qsa(".view")) v.hidden = v.id !== "v-home"; qs("#v-home").classList.add("in-left"); renderHome(); }
+  if (!history.state?.view && qs("#v-home").hidden) {
+    S.current = null; F.id = null;
+    for (const v of qsa(".view")) v.hidden = v.id !== "v-home";
+    qs("#v-home").classList.add("in-left"); renderHome();
+  }
 });
 function showHome() {
-  detach(); S.current = null;
+  S.current = null; F.id = null;
   show("v-home", "in-left");
-  qs("#composer").blur();
   renderHome();
 }
-function renderTermHead() {
-  const s = byId(S.current); if (!s) return;
-  qs("#t-title").textContent = goalTitle(s);
-  qs("#t-sub").textContent = `${wsName(s.workspace_id)} · ${stateWord(s)}`;
-  qs("#t-dot").className = "dot " + s.state;
-  const text = s.live ? promptText(s) : null;
-  const b = qs("#banner");
-  b.hidden = !text;
-  if (text) {
-    b.classList.toggle("blocked", s.state === "blocked");
-    qs("#banner-lbl").textContent = s.state === "blocked" ? "blocked" : s.prompt?.kind === "turn" ? "turn finished" : "waiting for you";
-    qs("#banner-text").textContent = text;
-    const p = s.prompt && typeof s.prompt === "object" ? s.prompt : null;
-    const opts = qs("#banner-opts");
-    if (p?.kind === "select" && p.options?.length) {
-      opts.innerHTML = p.options.slice(0, 6).map((o, i) => `<button data-opt="${i}" class="${i === p.options.length - 1 && p.options.length > 1 ? "no" : ""}">${esc(o.label)}</button>`).join("");
-      opts.onclick = (e) => { const bt = e.target.closest("[data-opt]"); if (bt) { fx.send(); input(s.id, optionBody(p.options[Number(bt.dataset.opt)])); } };
-    } else if (p?.kind === "yn") {
-      opts.innerHTML = `<button data-yn="y">Yes</button><button data-yn="n" class="no">No</button>`;
-      opts.onclick = (e) => { const bt = e.target.closest("[data-yn]"); if (bt) { fx.send(); input(s.id, { text: bt.dataset.yn, enter: true }); } };
-    } else opts.innerHTML = "";
-  }
-  qs("#term-reopen").hidden = !!s.live;
-  renderQuick(s);
-  refit();
-}
-// The Desk's quick actions (src/quick-actions.ts), in front of the key strip. Text only: "say what
-// to change" is the composer right below, and ending a terminal / handing it to Robert are moves the
-// ⋯ sheet and the Robert tab already own — a phone is for answering, not for administering. They ride
-// the strip's own data-text road, so a tap is the same POST the composer makes.
-const QK_KEYS = qs("#quick").innerHTML;
-const PQA = { list: QuickActions.defaults() };
-api("/desk/quick-actions").then((r) => { if (Array.isArray(r?.actions)) { PQA.list = r.actions; if (S.current) renderQuick(byId(S.current)); } }).catch(() => {});
-function renderQuick(s) {
-  const acts = s && s.live ? QuickActions.visible(PQA.list, phaseOf(s), false).filter((a) => a.kind === "text" || a.kind === "approve") : [];
-  const html = acts.map((a) => `<button class="qk qa" data-text="${esc(a.text)}" title="${esc(a.text)}">${esc(a.label)}</button>`).join("") + QK_KEYS;
-  // renderTermHead runs on every repaint; rebuilding the strip each time would scroll it back to the
-  // start and drop the sticky Ctrl the operator just armed.
-  if (PQA.html === html) return;
-  PQA.html = html;
-  qs("#quick").innerHTML = html;
-  qs("#qk-ctrl").classList.toggle("on", !!S.ctrl);
-}
-qs("#t-back").onclick = () => { fx.tap(); if ((history.state?.depth || 0) > 1) history.back(); else showHome(); };
-qs("#t-more").onclick = () => { fx.tap(); moreSheet(S.current); };
-qs("#term-reopen").onclick = () => reopen(S.current);
 
-// Quick keys. Pointer-down instead of click so the composer keeps focus (and the keyboard stays up)
-// while you tap Enter / y / arrows; Ctrl is a sticky modifier applied to the next composer character.
-qs("#quick").addEventListener("pointerdown", (e) => {
-  const b = e.target.closest("button"); if (!b) return;
-  e.preventDefault();
-  fx.tap();
-  if (b.id === "qk-ctrl") { S.ctrl = !S.ctrl; b.classList.toggle("on", S.ctrl); return; }
-  if (b.dataset.key) return input(S.current, { key: b.dataset.key });
-  if (b.dataset.text) return input(S.current, { text: b.dataset.text, enter: true });
-  const k = b.dataset.k.replace(/\\x1b/g, "\x1b").replace(/\\r/g, "\r").replace(/\\t/g, "\t").replace(/\\x03/g, "\x03");
-  sendRaw(k);
-});
-const composer = qs("#composer");
-function sendComposer() {
-  const v = composer.value;
-  fx.send();
-  if (!v) return input(S.current, { key: "enter" });
-  if (S.ctrl && v.length === 1 && /[a-z]/i.test(v)) { sendRaw(String.fromCharCode(v.toUpperCase().charCodeAt(0) - 64)); S.ctrl = false; qs("#qk-ctrl").classList.remove("on"); }
-  else input(S.current, { text: v, enter: true });
-  composer.value = ""; composer.style.height = "";
-}
-qs("#send").onclick = sendComposer;
-composer.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendComposer(); } });
-composer.addEventListener("input", () => { composer.style.height = ""; composer.style.height = Math.min(140, composer.scrollHeight) + "px"; });
-composer.addEventListener("paste", () => setTimeout(() => composer.dispatchEvent(new Event("input")), 0));
 
-// Voice: tap 🎤 once and it listens until you say so — no finger on the glass, the screen kept
-// awake (Wake Lock) so the phone does not lock mid-sentence. The bar at the bottom is the whole
-// control: ✕ throws the audio away (also while it transcribes), Send/Done hands it to whisper.
-// Holding the mic still works walkie-talkie style: let go after a long press and it finishes.
-// The audio goes to the daemon's /api/transcribe (whisper.cpp on the Mac — nothing leaves the
-// house) and is kept until the words come back: a failed transcribe offers Retry, never a loss.
-//
 // One microphone stream for the page, opened on the first tap and kept warm: getUserMedia is the
-// slow part (permission plumbing + device open, up to a second) and paying it per tap ate the
-// first word. Released when the page hides or after two idle minutes, never mid-recording.
+// slow part and paying it per tap ate the first word. Released when the page hides or after two
+// idle minutes, never mid-recording.
 let micStream = null, micIdleT = 0;
 async function micReady() {
   if (micStream && micStream.getTracks().some((t) => t.readyState === "live")) return micStream;
@@ -1221,7 +947,7 @@ const REC_MIME = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus
 const REC_MAX_MS = 10 * 60 * 1000, HOLD_MS = 700;
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) { if (!V.state) micRelease(); }
-  else if (V.state) wake(true); // the browser drops a wake lock whenever the page hides
+  else { if (V.state) wake(true); warmRobert(); } // the browser drops a wake lock whenever the page hides
 });
 async function wake(on) {
   try {
@@ -1372,7 +1098,6 @@ const dictateInto = (ta, send) => (text) => {
   if (PREFS.autoSend) send(); else ta.focus();
 };
 const autoSend = () => PREFS.autoSend;
-talkMic(qs("#mic"), dictateInto(composer, () => sendComposer()), autoSend);
 talkMic(qs("#f-mic"), dictateInto(qs("#f-composer"), () => sendFocusComposer()), autoSend);
 talkMic(qs("#r-mic"), dictateInto(qs("#r-composer"), () => askRobert()), autoSend);
 // On the home screen the mic makes a note: the words become the title, you pick the client and save.
@@ -1399,19 +1124,16 @@ const goalTitle = (s) => s.goal || sTitle(s);
 function renderCurrent() {
   if (!S.current) return;
   if (isFocusUp()) renderFocus();
-  else if (!qs("#v-term").hidden) renderTermHead();
 }
-// The triage queue: what needs a decision — blocked, waiting, goal-done — in that order, narrowed
-// to the client filter. Working terminals are not in it (nothing to decide yet); they stay one tap
-// away on the strip and on home. The one on screen is never hidden from its own strip.
+// The triage queue: what needs a decision — blocked, waiting, goal-done — in that order.
+// Working terminals are not in it (nothing to decide yet); they stay one tap away on the strip.
 const QUEUE = new Set(["blocked", "waiting", "done"]);
 function focusOrder(keep) {
-  const live = S.sessions.filter((x) => x.live && QUEUE.has(x.state)).sort((a, b) => (ORDER[a.state] ?? 9) - (ORDER[b.state] ?? 9));
-  return live.filter((x) => !S.filter || x.workspace_id === S.filter || x.id === keep);
+  return S.sessions.filter((x) => x.live && QUEUE.has(x.state)).sort((a, b) => (ORDER[a.state] ?? 9) - (ORDER[b.state] ?? 9));
 }
 function stripOrder(keep) {
   const list = focusOrder(keep);
-  for (const x of S.sessions) if (x.live && x.state === "working" && (!S.filter || x.workspace_id === S.filter)) list.push(x);
+  for (const x of S.sessions) if (x.live && x.state === "working") list.push(x);
   const cur = byId(keep);
   if (cur && !list.some((x) => x.id === keep)) list.push(cur);
   return list;
@@ -1459,30 +1181,50 @@ function foldActs(acts) {
   if (n.other) bits.push(`${n.other} tool call${n.other === 1 ? "" : "s"}`);
   return bits.join(" · ") || `${acts.length} steps`;
 }
-// The story as items: say / you / a run of tool calls. Seed prompt dropped when the goal shows it.
+// The story as items with timestamps. Seed prompt dropped when the goal shows it.
 function storyItems(evs, s) {
-  const items = []; let acts = [], prevUser = "";
-  const flush = () => { if (acts.length) { items.push({ kind: "acts", acts }); acts = []; } };
+  const items = []; let acts = [], actTs = null;
+  const flush = () => {
+    if (acts.length) { items.push({ kind: "acts", acts, texts: acts.map((a) => a.text), ts: actTs, seq: acts[acts.length - 1].seq }); acts = []; actTs = null; }
+  };
   const firstUser = evs.find((e) => e.kind === "user");
+  let prevUser = "";
   for (const e of evs) {
     if (e.kind === "act") {
       const link = /^printed\s+(\S+)$/.exec(String(e.text || "").trim());
-      if (link) { flush(); items.push({ kind: "link", text: link[1], seq: e.seq }); continue; }
-      const a = cleanAct(e.text); if (a) acts.push(a); continue;
+      if (link) { flush(); items.push({ kind: "link", text: link[1], seq: e.seq, ts: e.ts }); continue; }
+      const a = cleanAct(e.text); if (!a) continue;
+      acts.push({ text: a, seq: e.seq, ts: e.ts });
+      actTs = e.ts || actTs;
+      continue;
     }
-    // A failed tool call (focus.ts): the one line here the agent did not choose to write.
-    if (e.kind === "error") { flush(); items.push({ kind: "err", text: e.text, seq: e.seq }); continue; }
+    if (e.kind === "error") { flush(); items.push({ kind: "err", text: e.text, seq: e.seq, ts: e.ts }); continue; }
     if (e.kind === "user") {
       if (e === firstUser && s.spawn_goal) continue;
       if (SYS_LINE.test(e.text)) continue;
       const t = cleanUser(e.text); if (!t || norm(t) === prevUser) continue;
-      prevUser = norm(t); flush(); items.push({ kind: "you", text: t, seq: e.seq }); continue;
+      prevUser = norm(t); flush(); items.push({ kind: "you", text: t, seq: e.seq, ts: e.ts }); continue;
     }
-    if (e.kind === "say" || e.kind === "understanding" || e.kind === "result") { flush(); items.push({ kind: "say", text: e.text, seq: e.seq }); }
+    if (e.kind === "say" || e.kind === "understanding" || e.kind === "result") {
+      flush(); items.push({ kind: e.kind === "result" ? "result" : "say", text: e.text, seq: e.seq, ts: e.ts });
+    }
   }
   flush();
   return items;
 }
+const fmtClock = (ts) => {
+  if (!ts) return "";
+  const d = new Date(typeof ts === "number" && ts < 1e12 ? ts * 1000 : ts);
+  if (isNaN(d)) return "";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+};
+const fmtWhenShort = (ts) => {
+  if (!ts) return "";
+  const d = new Date(typeof ts === "number" && ts < 1e12 ? ts * 1000 : ts);
+  if (isNaN(d)) return "";
+  const ago = fmtAgo(d.toISOString());
+  return fmtClock(ts) + (ago && ago !== "now" ? " · " + ago : "");
+};
 // Head + tail of a long text: the verdict and the question live at the end.
 function headTail(t) {
   const paras = t.split(/\n\s*\n/).filter((p) => p.trim());
@@ -1518,87 +1260,95 @@ function renderFocus() {
   qs("#f-dot").className = "dot " + s.state;
   const queue = focusOrder(s.id), pos = queue.findIndex((x) => x.id === s.id);
   qs("#f-sub").textContent = `${pos >= 0 ? pos + 1 + " / " + queue.length + " · " : ""}${wsName(s.workspace_id)} · ${word}`;
-  // One strip: the client (tap → switch) then the queue, then the working ones.
   const strip = stripOrder(s.id);
-  qs("#f-strip").innerHTML = `<button class="chip cl" data-fclient>${esc(S.filter ? wsName(S.filter) : "All")} ▾</button>` +
-    strip.map((x) => `<button class="tchip${x.id === s.id ? " on" : ""}${x.state === "working" ? " dim" : ""}" data-fs="${x.id}"><span class="dot ${x.state}"></span><span class="l">${esc(clip(goalTitle(x), 26))}</span></button>`).join("");
+  qs("#f-strip").innerHTML = strip.map((x) => `<button class="tchip${x.id === s.id ? " on" : ""}${x.state === "working" ? " dim" : ""}" data-fs="${x.id}"><span class="dot ${x.state}"></span><span class="l">${esc(clip(goalTitle(x), 26))}</span></button>`).join("");
   qs("#f-strip .tchip.on")?.scrollIntoView({ inline: "center", block: "nearest" });
   qs("#v-focus .composer").hidden = !s.live;
+
+  // Sticky goal above the scroll — always visible while you read activity.
+  const started = s.spawn_goal || s.first_prompt || "";
+  const goal = s.goal || started;
+  const gEl = qs("#f-goal");
+  if (goal) {
+    gEl.hidden = false;
+    gEl.innerHTML = `<div class="ghead"><span class="lbl">Goal</span>${s.live ? `<button data-fa="goal">${s.goal ? "edit" : "set"}</button>` : ""}</div>`
+      + `<div class="gt">${esc(clip(goal, 280))}</div>`
+      + (started && s.goal && norm(started) !== norm(s.goal) ? `<div class="gsub">started as: ${esc(clip(started, 160))}</div>` : "");
+  } else {
+    gEl.hidden = !s.live;
+    gEl.innerHTML = s.live ? `<div class="ghead"><span class="lbl">Goal</span><button data-fa="goal">set</button></div><div class="gt muted">what should this terminal finish?</div>` : "";
+  }
 
   const u = s.usage || {};
   const evs = F.events;
   const last = (k) => { for (let i = evs.length - 1; i >= 0; i--) if (evs[i].kind === k) return evs[i]; return null; };
   const lastUser = last("user");
   const after = (e) => !!e && (!lastUser || e.seq > lastUser.seq);
-  const res = last("result"), und = last("understanding");
-  // Latest = the agent's newest message since yours; the longest of them when several (a short
-  // "Now checking…" narration line should not outrank the reply above it).
+  const res = last("result");
   const says = evs.filter((e) => (e.kind === "say" || e.kind === "result" || e.kind === "understanding") && after(e));
   const latest = says.length ? says.reduce((a, b) => (b.text.length > a.text.length ? b : a)) : null;
   const freshRes = after(res) ? res : null;
-  const headline = freshRes ? { key: "res", cls: "result", lbl: "Result", text: stripLead(freshRes.text, "result") }
-    : latest ? { key: "res", cls: "latest", lbl: "Latest", text: stripLead(stripLead(latest.text, "understanding"), "result") }
-    : res ? { key: "res", cls: "prev", lbl: "Previous result", text: stripLead(res.text, "result") }
+  const headline = freshRes ? { key: "res", cls: "result", lbl: "Result", text: stripLead(freshRes.text, "result"), ts: freshRes.ts }
+    : latest ? { key: "res", cls: "latest", lbl: "Latest", text: stripLead(stripLead(latest.text, "understanding"), "result"), ts: latest.ts }
+    : res ? { key: "res", cls: "prev", lbl: "Previous result", text: stripLead(res.text, "result"), ts: res.ts }
     : s.summary ? { key: "res", cls: "prev", lbl: "Summary", text: s.summary } : null;
 
   const bits = [s.live ? fmtAgo(s.created_at) + " ago" : "ended " + fmtAgo(s.ended_at) + " ago"];
   if (u.turns) bits.push(`${u.turns} turn${u.turns === 1 ? "" : "s"}`);
   if (u.cost_usd) bits.push((u.cost_estimated ? "est. " : "") + "$" + u.cost_usd.toFixed(2));
   let out = `<div class="fstatus"><span class="st"><span class="dot ${s.state}"></span>${esc(word)}</span><span class="bits">${esc(bits.join(" · "))}</span></div>`;
-  // Validation chips: diff size and the links the agent left (PR, artifact).
   const la = s.lines_added || u.lines_added, lr = s.lines_removed || u.lines_removed;
   const vchips = (la || lr ? `<span class="vchip diff"><b>+${la || 0}</b> <i>−${lr || 0}</i></span>` : "") + linkChips(headline?.text);
   if (vchips) out += `<div class="vchips">${vchips}</div>`;
 
-  // What it wants from you — first, with the buttons that answer it. A finished turn has no
-  // question (the TUI's last line is its status bar); the bar's Continue covers it.
   if (s.live && (s.state === "waiting" || s.state === "blocked")) {
     const q = p?.question && p.kind !== "turn" ? p.question : "";
     if (q || s.state === "blocked") {
       const lbl = s.state === "blocked" ? (s.state_label || REASON[s.blocked_reason] || "blocked")
         : p?.kind === "select" ? "pick one" : p?.kind === "yn" ? "yes or no?" : "asked you";
-      const body = q || (REASON[s.blocked_reason] ? "" : String(s.blocked_reason || "").replace(/_/g, " ")) || "the agent reported it is blocked — open the terminal";
+      const body = q || (REASON[s.blocked_reason] ? "" : String(s.blocked_reason || "").replace(/_/g, " ")) || "the agent reported it is blocked — reply below";
       let opts = "";
       if (p?.kind === "select" && p.options?.length) opts = p.options.map((o, i) => `<button data-fopt="${i}" class="${i === p.options.length - 1 && p.options.length > 1 ? "no" : ""}">${esc(o.label)}</button>`).join("");
       else if (p?.kind === "yn") opts = `<button data-fyn="y" class="go">Yes</button><button data-fyn="n" class="no">No</button>`;
-      else if (q) opts = `<button data-ftype class="go">Reply ⌨</button>`;
+      else if (q) opts = `<button data-ftype class="go">Reply</button>`;
       out += `<section class="fblock fatt${s.state === "blocked" ? " blocked" : ""}"><span class="lbl">${esc(lbl)}</span><div class="q">${esc(body)}</div>${opts ? `<div class="opts">${opts}</div>` : ""}</section>`;
     }
   }
-  const clampBlock = (key, cls, lbl, text, tail = "") => {
+  const clampBlock = (key, cls, lbl, text, ts) => {
     const open = F.open.has(key);
-    return `<section class="fblock clamp${open ? " open" : ""} ${cls}" data-clamp="${key}"><span class="lbl">${lbl}<button data-clamp-btn="${key}">${open ? "less" : "more"}</button></span><div class="t">${md(open ? text : headTail(text))}</div>${tail}</section>`;
+    const when = ts ? `<time>${esc(fmtWhenShort(ts))}</time>` : "";
+    return `<section class="fblock clamp${open ? " open" : ""} ${cls}" data-clamp="${key}"><span class="lbl">${lbl}${when}<button data-clamp-btn="${key}">${open ? "less" : "more"}</button></span><div class="t">${md(open ? text : headTail(text))}</div></section>`;
   };
-  if (F.loaded && headline) out += clampBlock(headline.key, headline.cls, headline.lbl, headline.text);
-  // The goal, in the agent's sharpened words, with what you typed to start it underneath.
-  const started = s.spawn_goal || s.first_prompt || "";
-  const goal = s.goal || started;
-  if (goal) out += `<section class="fblock goal"><span class="lbl">Goal${s.live ? `<button data-fa="goal">${s.goal ? "edit" : "set"}</button>` : ""}</span><div class="t">${esc(clip(goal, 400))}</div>${started && s.goal && norm(started) !== norm(s.goal) ? `<div class="sub">started as: ${esc(clip(started, 200))}</div>` : ""}</section>`;
-  if (!F.loaded) out += `<section class="fblock"><span class="lbl">Latest</span><div class="skel fl"></div><div class="skel fl" style="width:70%"></div></section>`;
+  if (F.loaded && headline) out += clampBlock(headline.key, headline.cls, headline.lbl, headline.text, headline.ts);
+
+  if (!F.loaded) out += `<section class="fblock"><span class="lbl">Activity</span><div class="skel fl"></div><div class="skel fl" style="width:70%"></div></section>`;
   else {
-    if (und && after(und) && !freshRes && !latest) out += clampBlock("und", "und", "Understood", stripLead(und.text, "understanding"));
     const items = storyItems(evs, s);
-    // Default: the last three things said (yours and the agent's), tool runs folded between them.
-    const N = 3; let shown = items;
-    if (!F.all) { let n = 0, i = items.length; while (i > 0 && n < N) { i--; if (items[i].kind !== "acts") n++; } shown = items.slice(i); }
-    const line = (it) => it.kind === "acts"
-      ? (F.all ? it.acts.filter((a) => !isNoiseAct(a)).map((a) => `<div class="fl act mono">${esc(a)}</div>`).join("") : `<div class="fl acts">${esc(foldActs(it.acts))}</div>`)
-      : it.kind === "you" ? `<div class="fl you">${esc(clip(it.text, 240))}</div>`
-      : it.kind === "err" ? `<div class="fl err mono">${esc(clip(it.text, 240))}</div>`
-      : it.kind === "link" ? `<div class="fl link"><a href="${esc(it.text)}" target="_blank" rel="noopener">${esc(it.text)} ↗</a></div>`
-      : `<div class="fl say">${md(stripLead(stripLead(it.text, "understanding"), "result"))}</div>`;
-    const said = items.filter((x) => x.kind !== "acts").length;
-    out += `<section class="fblock"><span class="lbl">Progress · ${said} message${said === 1 ? "" : "s"}${items.length > shown.length || F.all ? `<button data-fa="all">${F.all ? "last " + N : "show all"}</button>` : ""}</span>`
+    // Newest first — how the work is going, with clocks so you feel the pace.
+    const N = 14;
+    const ordered = items.slice().reverse();
+    const shown = F.all ? ordered : ordered.slice(0, N);
+    const line = (it) => {
+      const when = it.ts ? `<time>${esc(fmtWhenShort(it.ts))}</time>` : "";
+      if (it.kind === "acts") {
+        const texts = it.texts || it.acts || [];
+        const body = F.all
+          ? texts.filter((a) => !isNoiseAct(a)).map((a) => `<div class="fl act mono">${esc(a)}</div>`).join("")
+          : `<div class="fl acts">${esc(foldActs(texts))}</div>`;
+        return `<div class="frow act">${when}${body}</div>`;
+      }
+      if (it.kind === "you") return `<div class="frow you">${when}<div class="fl you">${esc(clip(it.text, 240))}</div></div>`;
+      if (it.kind === "err") return `<div class="frow err">${when}<div class="fl err mono">${esc(clip(it.text, 240))}</div></div>`;
+      if (it.kind === "link") return `<div class="frow link">${when}<div class="fl link"><a href="${esc(it.text)}" target="_blank" rel="noopener">${esc(it.text)} ↗</a></div></div>`;
+      const label = it.kind === "result" ? "result" : "said";
+      return `<div class="frow say">${when}<div class="fl say" data-kind="${label}">${md(stripLead(stripLead(it.text, "understanding"), "result"))}</div></div>`;
+    };
+    out += `<section class="fblock factivity"><span class="lbl">Activity · newest first${items.length > shown.length || F.all ? `<button data-fa="all">${F.all ? "top " + N : "show all · " + items.length}</button>` : ""}</span>`
       + (shown.length ? shown.map(line).join("") : `<div class="fempty">${s.live ? "nothing reported yet" : "no transcript found"}</div>`) + `</section>`;
   }
   const body = qs("#f-body"); body.innerHTML = out; tidyLinks(body);
-  // The fade only when something is actually hidden under the clamp.
   for (const c of qsa(".fblock.clamp:not(.open)", body)) { const t = qs(".t", c); c.classList.toggle("over", t.scrollHeight > t.clientHeight + 2); }
 
-  // The bar: at most three big buttons, each one moves you on. Continue nudges a finished turn
-  // (never a question, never a finished goal); Stop is Esc (interrupts the turn, keeps the
-  // session); Close = goal done + kill, reopenable from Ended (Undo on the toast, and a second tap
-  // to confirm while the agent is still working). Kill without ticking lives behind ⋯.
   const menuPrompt = s.live && s.state === "waiting" && p && p.kind !== "turn";
   const bar = [];
   if (!s.live) bar.push(`<button class="fa primary" data-fa="reopen">▶ Reopen</button>`, `<button class="fa" data-fa="next">Next ›</button>`);
@@ -1607,7 +1357,7 @@ function renderFocus() {
     const close = `<button class="fa ${armed ? "warn" : s.state === "done" ? "primary" : "ok"}" data-fa="close">${armed ? "Close? tap again" : "✓ Close"}</button>`;
     if (s.state === "done") bar.push(close);
     else if (s.state === "working") bar.push(`<button class="fa warn" data-fa="stop">⎋ Stop</button>`, close);
-    else if (s.state === "blocked") bar.push(`<button class="fa primary" data-fa="raw">⌨ Open terminal</button>`, close);
+    else if (s.state === "blocked") bar.push(`<button class="fa primary" data-fa="reply">Reply</button>`, close);
     else { if (!menuPrompt) bar.push(`<button class="fa primary" data-fa="continue">▶ Continue</button>`); bar.push(close); }
     bar.push(`<button class="fa" data-fa="next">Next ›</button>`);
   }
@@ -1633,7 +1383,7 @@ async function focusAction(a) {
   if (a === "all") { fx.tap(); F.all = !F.all; return renderFocus(); }
   if (a === "goal") { fx.tap(); return goalSheet(s); }
   if (a === "reopen") { fx.tap(); return reopen(s.id); }
-  if (a === "raw") { fx.tap(); return openTerm(s.id); }
+  if (a === "reply") { fx.tap(); return qs("#f-composer").focus(); }
   if (a === "next") { fx.tick(); return advance(s.id, ""); }
   if (a === "continue") { fx.send(); input(s.id, { text: "continue", enter: true }); return advance(s.id, "continued"); }
   if (a === "stop") { fx.warn(); return input(s.id, { key: "esc" }); }
@@ -1665,31 +1415,14 @@ qs("#f-body").addEventListener("click", (e) => {
   if (t.hasAttribute("data-ftype")) { fx.tap(); return qs("#f-composer").focus(); }
 });
 qs("#f-bar").addEventListener("click", (e) => { const t = e.target.closest("[data-fa]"); if (t) focusAction(t.dataset.fa); });
+qs("#f-goal").addEventListener("click", (e) => { const t = e.target.closest("[data-fa]"); if (t) focusAction(t.dataset.fa); });
 qs("#f-strip").addEventListener("click", (e) => {
-  const t = e.target.closest("[data-fs],[data-fclient]"); if (!t) return;
+  const t = e.target.closest("[data-fs]"); if (!t) return;
   fx.tap();
-  if (t.dataset.fs) { if (t.dataset.fs !== F.id) openFocus(t.dataset.fs, "fade"); return; }
-  clientSheet();
+  if (t.dataset.fs !== F.id) openFocus(t.dataset.fs, "fade");
 });
-// Switching client from the story: narrow the queue, and if the one on screen is not in that
-// client, jump to its first terminal (needs-you first) — that is what "switch" means here.
-function clientSheet() {
-  const liveAll = S.sessions.filter((x) => x.live);
-  const count = (ws, st) => liveAll.filter((x) => (!ws || x.workspace_id === ws) && x.state === st).length;
-  const chip = (id, name) => { const a = count(id, "waiting") + count(id, "blocked"), d = count(id, "done"), w = count(id, "working");
-    return `<button class="chip${(S.filter || null) === id ? " on" : ""}" data-ws="${id || ""}">${esc(name)}<span class="c">${a ? `<i style="background:var(--warn)"></i>${a}` : ""}${d ? `<i style="background:var(--blue)"></i>${d}` : ""}${w ? `<i style="background:var(--accent)"></i>${w}` : ""}</span></button>`; };
-  const b = sheet(`<h3>Client</h3><div class="seg">${chip(null, "All") + S.workspaces.map((w) => chip(w.id, w.name)).join("")}</div><p style="color:var(--muted);font-size:14px;margin:12px 0 0">● needs you · ● finished · ● working</p>`);
-  b.addEventListener("click", (e) => {
-    const c = e.target.closest("[data-ws]"); if (!c) return;
-    fx.tap(); closeSheet(); setFilter(c.dataset.ws || null);
-    const s = byId(F.id);
-    if (s && S.filter && s.workspace_id !== S.filter) { const first = focusOrder(null)[0] || stripOrder(null)[0]; if (first) return openFocus(first.id, "fade"); }
-    renderFocus();
-  });
-}
 qs("#f-back").onclick = () => { fx.tap(); showHome(); };
 qs("#f-more").onclick = () => { fx.tap(); moreSheet(F.id); };
-qs("#f-raw").onclick = () => { fx.tap(); openTerm(F.id); };
 const fcomposer = qs("#f-composer");
 function sendFocusComposer() {
   const v = fcomposer.value.trim(); if (!v) return;
@@ -1729,7 +1462,7 @@ const ourThread = (ws) => !String(ws || "").startsWith("agent:");
 const md = (t) => (window.DOMPurify && window.marked) ? DOMPurify.sanitize(marked.parse(t || "")) : esc(t);
 // An 8-char id in his text is a terminal he is talking about: a chip that opens its story.
 function mdRob(text) {
-  const withChips = String(text ?? "").replace(/\b([0-9a-f]{8})\b/g, (m, id8) => { const s = byId(id8) || S.sessions.find((x) => x.id.startsWith(id8)) || S.ended.find((x) => x.id.startsWith(id8)); return s ? `[${sTitle(s).slice(0, 36).replace(/[\[\]]/g, "")}](#sel=${s.id})` : m; });
+  const withChips = String(text ?? "").replace(/\b([0-9a-f]{8})\b/g, (m, id8) => { const s = byId(id8) || S.sessions.find((x) => x.id.startsWith(id8)); return s ? `[${sTitle(s).slice(0, 36).replace(/[\[\]]/g, "")}](#sel=${s.id})` : m; });
   return md(withChips);
 }
 qs("#chat").addEventListener("click", (e) => { const a = e.target.closest('a[href^="#sel="]'); if (!a) return; e.preventDefault(); fx.tap(); const id = a.getAttribute("href").slice(5); if (byId(id)) openFocus(id); else toast("that terminal is gone"); });
@@ -1749,8 +1482,36 @@ async function robertHistory() {
 function showRobert() {
   show("v-robert", "in-right");
   robertHistory();
-  api("/agent/warm", { method: "POST", body: JSON.stringify({ ws: R.sticky }) }).catch(() => {});
+  loadRobertModel();
+  warmRobert(true);
 }
+// Pre-boot Robert's Claude process so the first ask skips cold start. Aggressive: fleet + sticky,
+// on app open, when the app comes back, and again when you open his chat.
+function warmRobert(force = false) {
+  if (!TOKEN) return;
+  const now = Date.now();
+  if (!force && warmRobert._at && now - warmRobert._at < 20_000) return;
+  warmRobert._at = now;
+  api("/agent/warm", { method: "POST", body: JSON.stringify({ ws: null }) }).catch(() => {});
+  if (R.sticky) api("/agent/warm", { method: "POST", body: JSON.stringify({ ws: R.sticky }) }).catch(() => {});
+}
+async function loadRobertModel() {
+  const sel = qs("#r-model"); if (!sel) return;
+  try {
+    const r = await api("/agent/model");
+    const models = r.models?.length ? r.models : ["opus", "sonnet", "fable", "haiku"];
+    const cur = r.model || "opus";
+    sel.innerHTML = models.map((m) => '<option value="' + esc(m) + '"' + (m === cur ? " selected" : "") + ">" + esc(m) + "</option>").join("");
+  } catch {}
+}
+qs("#r-model").onchange = async () => {
+  const model = qs("#r-model").value;
+  try {
+    await api("/agent/model", { method: "POST", body: JSON.stringify({ model }) });
+    toast("Robert → " + model);
+    warmRobert(true);
+  } catch (e) { toast(e.message); loadRobertModel(); }
+};
 qs("#btn-robert").onclick = () => { fx.tap(); showRobert(); };
 // The Ask widget: cards in his thread, and every open question behind "? N" (static/ask-card.js).
 AskCard.init({ api, toast, sessions: () => S.sessions, askOf, who: (s) => sTitle(s).slice(0, 40), button: qs("#r-asks"), panel: qs("#r-askpop"), log: qs("#chat") });
@@ -1766,24 +1527,39 @@ const CLIENT = "phone-" + Math.random().toString(36).slice(2, 12);
 // serialises his turns anyway; what was missing was a place on the phone to hold the next one.
 // `ws` on an outbox item is only set when you tapped a project on his "which one?" line — preserve
 // it so a queued pick does not re-ask or land on the sticky of a different turn.
+function robWork(on, what) {
+  const strip = qs("#r-work");
+  if (!strip) return;
+  const q = R.outbox.length;
+  const busy = on || R.busy || q > 0;
+  strip.hidden = !busy;
+  const label = what || (R.busy ? "thinking…" : "queued…");
+  qs("#r-work-what").textContent = label + (q ? ` · ${q} waiting` : "");
+  const dot = qs("#r-dot"); if (dot) dot.className = "dot " + (R.busy ? "working" : q ? "waiting" : "ended");
+  const sub = qs("#r-sub"); if (sub && !R.busy && !q) sub.textContent = "one chat · # to name a project";
+}
 function askRobert() {
   const text = rComposer.value.trim();
   if (!text) return;
   rComposer.value = ""; rComposer.style.height = "";
   const quote = RP.take();
   fx.send(); const el = RP.quote(bubble("you", text), quote);
-  if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el, quote }); return; }
+  if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el, quote }); robWork(true, "queued…"); return; }
   deliverRobert(text, el, undefined, quote);
 }
 function robRelease(turn) {
   if (turn && R.awaitTurn && turn !== R.awaitTurn) return;
   clearTimeout(R.awaitT); R.awaitT = 0; R.awaitTurn = null;
-  R.busy = false; reloadSoon();
+  R.busy = false;
   const next = R.outbox.shift();
+  robWork(!!next, next ? "sending next…" : "");
+  reloadSoon();
   if (next) deliverRobert(next.text, next.el, next.ws, next.quote);
+  else robWork(false);
 }
 function robAwait(turn) {
   R.awaitTurn = turn;
+  robWork(true, "thinking…");
   clearTimeout(R.awaitT);
   // Push lost: re-read the thread and free the composer. Covers a long Opus turn + a quiet bus.
   R.awaitT = setTimeout(() => {
@@ -1797,6 +1573,7 @@ function robAwait(turn) {
 async function deliverRobert(text, el, ws, quote) {
   R.busy = true; el.classList.remove("queued"); R.awaitTurn = null;
   R.mineYou = el;
+  robWork(true, "thinking…");
   if (!R.mine) R.mine = bubble("rob pending", "");
   let hold = false;
   try {
@@ -1805,7 +1582,7 @@ async function deliverRobert(text, el, ws, quote) {
     if (ws !== undefined) { body.ws = ws; body.route = false; }
     if (quote) body.replyTo = { id: quote.id, side: quote.side };
     const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
-    if (r?.how === "ask") { dropMine(); askWhere(r, text, quote); return; }
+    if (r?.how === "ask") { dropMine(); robWork(false); askWhere(r, text, quote); return; }
     if (r?.ws) R.sticky = r.ws;
     // Accepted: keep busy until agent.push for this turn. Bind the pending bubble to the turn id
     // so early deltas keyed on "?" and later ones on the UUID share one bubble.
@@ -1851,121 +1628,7 @@ TagComplete(rComposer, () => S.workspaces);
 rComposer.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askRobert(); } });
 rComposer.addEventListener("input", () => { rComposer.style.height = ""; rComposer.style.height = Math.min(140, rComposer.scrollHeight) + "px"; });
 
-// Swipe between sessions on the output area: the same order as the home list, so left/right walks
-// "needs you" first, then working.
-(() => {
-  let x0 = 0, y0 = 0, t0 = 0, ly = 0, lt = 0, acc = 0, axis = null, vel = 0, inertia = 0;
-  const wrap = qs("#term-wrap");
-  const stop = (e) => { e.stopPropagation(); if (e.cancelable) e.preventDefault(); };
-  // Where a drag goes depends on what the TUI is doing. Claude Code lives on the alternate screen
-  // with mouse tracking on, so xterm holds no scrollback to move — the app scrolls itself from the
-  // wheel reports a desktop mouse would send. So a row of finger travel becomes one wheel report
-  // (SGR or X10 encoding, whichever the app asked for), at the finger's cell. On the alternate
-  // screen without mouse tracking a page of travel becomes PgUp/PgDn; on the normal screen it is
-  // xterm's own scrollback.
-  let fx0 = 0, fy0 = 0; // last finger position, for the report's cell
-  const wheel = (up, n) => {
-    const enc = (term._core?.mouseStateService?.activeEncoding || "SGR").toUpperCase();
-    const host = qs("#term-host").getBoundingClientRect(), cw = host.width / term.cols;
-    const col = Math.max(1, Math.min(term.cols, Math.floor((fx0 - host.left) / cw) + 1));
-    const row = Math.max(1, Math.min(term.rows, Math.floor((fy0 - host.top) / cellHeight()) + 1));
-    const btn = up ? 64 : 65;
-    const seq = enc === "SGR" ? `\x1b[<${btn};${col};${row}M` : "\x1b[M" + String.fromCharCode(32 + btn, 32 + Math.min(col, 223), 32 + Math.min(row, 223));
-    if (sock?.readyState === 1) sock.send(JSON.stringify({ t: "in", d: seq.repeat(n) }));
-  };
-  const scrollBy = (px) => {
-    if (!term) return;
-    acc += px;
-    const cell = cellHeight(), rows = Math.trunc(acc / cell);
-    if (!rows) return;
-    acc -= rows * cell;
-    const mode = term.modes?.mouseTrackingMode || "none";
-    if (mode !== "none") return wheel(rows > 0, Math.min(Math.abs(rows), 12));
-    if (term.buffer.active.type === "alternate") {
-      pageAcc += rows;
-      const pages = Math.trunc(pageAcc / Math.max(1, term.rows - 2));
-      if (pages) { pageAcc -= pages * (term.rows - 2); if (sock?.readyState === 1) sock.send(JSON.stringify({ t: "in", d: (pages > 0 ? "\x1b[5~" : "\x1b[6~").repeat(Math.min(Math.abs(pages), 3)) })); }
-      return;
-    }
-    term.scrollLines(-rows);
-  };
-  let pageAcc = 0;
-  // xterm's pointer events are off here (a tap must never pull the keyboard up), so the browser's own
-  // long-press selection never fires. A held finger that does not move opens the screen as plain
-  // selectable text instead (copySheet), with the whole thing one tap away.
-  let lp = 0, lpFired = false;
-  const lpClear = () => { if (lp) { clearTimeout(lp); lp = 0; } };
-  wrap.addEventListener("touchstart", (e) => {
-    stop(e); cancelAnimationFrame(inertia); lastTouch = Date.now();
-    const t = e.touches[0]; x0 = fx0 = t.clientX; y0 = ly = fy0 = t.clientY; t0 = lt = Date.now(); acc = 0; pageAcc = 0; axis = null; vel = 0;
-    lpFired = false; lpClear();
-    if (e.touches.length === 1) lp = setTimeout(() => { lp = 0; lpFired = true; fx.tap(); copySheet(); }, 550);
-  }, { capture: true, passive: false });
-  wrap.addEventListener("touchmove", (e) => {
-    stop(e);
-    const t = e.touches[0]; const mx = t.clientX - x0, my = t.clientY - y0;
-    if (axis === null && (Math.abs(mx) > 8 || Math.abs(my) > 8)) axis = Math.abs(my) >= Math.abs(mx) ? "y" : "x";
-    if (axis !== null) lpClear();
-    if (axis !== "y") return;
-    const now = Date.now(), dy = t.clientY - ly;
-    lastTouch = now; fx0 = t.clientX; fy0 = t.clientY;
-    if (now > lt) vel = dy / (now - lt);
-    ly = t.clientY; lt = now;
-    scrollBy(dy);
-  }, { capture: true, passive: false });
-  wrap.addEventListener("touchend", (e) => {
-    stop(e); lastTouch = Date.now(); lpClear();
-    if (lpFired) { lpFired = false; return; }
-    if (axis === "y") {
-      // A flick keeps going: same feel as any list on the phone.
-      let v = vel * 16, last = performance.now();
-      const step = (now) => { const dt = now - last; last = now; v *= Math.pow(0.94, dt / 16); if (Math.abs(v) < 0.3) return; scrollBy(v); inertia = requestAnimationFrame(step); };
-      if (Math.abs(v) > 2) inertia = requestAnimationFrame(step);
-      return;
-    }
-    const t = e.changedTouches[0]; const dx = t.clientX - x0, dy = t.clientY - y0;
-    if (axis !== "x" || Date.now() - t0 > 600 || Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2) return;
-    const order = S.sessions.filter((s) => s.live).sort((a, b) => (ORDER[a.state] ?? 9) - (ORDER[b.state] ?? 9));
-    const i = order.findIndex((s) => s.id === S.current);
-    const next = order[i + (dx < 0 ? 1 : -1)];
-    if (!next) { fx.fail(); hint(dx < 0 ? "last terminal" : "first terminal"); return; }
-    fx.tick(); hint(`${i + (dx < 0 ? 2 : 0)} / ${order.length}`); openTerm(next.id);
-  }, { capture: true, passive: false });
-  wrap.addEventListener("touchcancel", (e) => { stop(e); lpClear(); }, { capture: true, passive: false });
-  // A synthetic click after a tap still reaches the element; keep it from focusing anything.
-  wrap.addEventListener("mousedown", (e) => { e.preventDefault(); }, { capture: true });
-  wrap.addEventListener("focusin", (e) => { if (e.target !== wrap) { e.target.blur?.(); } }, { capture: true });
-  let hT; function hint(t) { const h = qs("#swipe-hint"); h.textContent = t; h.classList.add("show"); clearTimeout(hT); hT = setTimeout(() => h.classList.remove("show"), 900); }
-})();
-
-// The terminal's text as text: every line xterm holds for this session (scrollback included on the
-// normal screen; just the visible rows on a TUI's alternate screen), blank runs collapsed.
-function screenText() {
-  if (!term) return "";
-  const b = term.buffer.active, out = [];
-  for (let i = 0; i < b.length; i++) { const l = b.getLine(i); if (l) out.push(l.translateToString(true)); }
-  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-}
-async function copyText(text) {
-  try { await navigator.clipboard.writeText(text); return true; } catch {}
-  try {
-    const ta = document.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
-    document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length); const ok = document.execCommand("copy"); ta.remove(); return ok;
-  } catch { return false; }
-}
-function copySheet() {
-  const text = screenText();
-  if (!text) return toast("nothing on screen yet");
-  const b = sheet(`<h3>Copy</h3>
-    <div class="btns"><button class="big primary wide" id="cp-all">Copy all</button></div>
-    <pre class="copytext" id="cp-text"></pre>`);
-  qs("#cp-text", b).textContent = text;
-  qs("#cp-all", b).onclick = async () => { fx.tap(); if (await copyText(text)) { fx.success(); toast("copied"); closeSheet(); } else { fx.fail(); toast("couldn't copy — select the text instead"); } };
-}
-
 // Keyboard up/down changes the visible area: refit so the pty's rows match what you can see.
-(window.visualViewport || window).addEventListener("resize", () => { clearTimeout(window.__rf); window.__rf = setTimeout(() => refit(true), 80); });
-window.addEventListener("orientationchange", () => setTimeout(() => refit(true), 300));
 
 // ── live updates ────────────────────────────────────────────────────────────
 const BUS_TOPICS = ["session.status", "session.activity", "agent.state", "session.started", "session.ended", "session.updated", "session.usage", "agent.delta", "agent.push", "ask.created", "ask.answered", "focus.event"].join(",");
@@ -2080,17 +1743,20 @@ function connectBus() {
     reloadSoon();
   };
 }
-// Back from the background: the socket may have died. Reset the screen before reattaching, or the
-// server's scrollback replay lands on top of what is already there.
-// Coming back: refresh the list, and if a terminal is up, reset the screen and reattach so the
-// replay lands on a clean frame (not on top of a stale one), then refit for whatever the viewport
-// is now. pageshow covers the app switcher / bfcache path where visibilitychange does not fire.
+// Coming back from the background: refresh the list, re-warm Robert, and reload Focus if open.
+// pageshow covers the app switcher / bfcache path where visibilitychange does not fire.
 function resume() {
   if (document.hidden) return;
+  warmRobert();
   reloadSoon();
-  if (S.current && isFocusUp()) { const id = S.current; api("/sessions/" + id + "/focus").then((r) => { if (F.id !== id) return; for (const ev of r.events || []) if (ev && !F.seen.has(ev.seq)) { F.seen.add(ev.seq); F.events.push(ev); } F.events.sort((a, b) => a.seq - b.seq); F.loaded = true; renderFocus(); }).catch(() => {}); }
-  else if (S.current) { const id = S.current; term?.reset(); attach(id); setTimeout(() => { if (S.current === id) refit(true); }, 350); }
-  else if (typeof connectBus === "function" && qs("#bus-dot").className === "dot") connectBus();
+  if (S.current && isFocusUp()) {
+    const id = S.current;
+    api("/sessions/" + id + "/focus").then((r) => {
+      if (F.id !== id) return;
+      for (const ev of r.events || []) if (ev && !F.seen.has(ev.seq)) { F.seen.add(ev.seq); F.events.push(ev); }
+      F.events.sort((a, b) => a.seq - b.seq); F.loaded = true; renderFocus();
+    }).catch(() => {});
+  } else if (typeof connectBus === "function" && qs("#bus-dot").className === "dot") connectBus();
 }
 document.addEventListener("visibilitychange", resume);
 window.addEventListener("pageshow", (e) => { if (e.persisted) resume(); });
@@ -2160,7 +1826,14 @@ else {
   if (history.state?.view || history.state?.sheet) history.replaceState(null, "", location.pathname);
   PUSH.ready();
   handleHash();
-  load().then(connectBus).catch((err) => {
+  // Warm + prefetch Robert before the first tap — cold Claude is the slow part, not the tunnel.
+  warmRobert(true);
+  loadRobertModel();
+  load().then(() => {
+    connectBus();
+    robertHistory(); // cache his thread so opening Robert is instant
+    warmRobert(true);
+  }).catch((err) => {
     qs("#brand-sub").textContent = "can't reach the daemon";
     if (/401|403/.test(err.message)) { localStorage.removeItem("mc-token"); tokenSheet(); } else toast(err.message);
   });

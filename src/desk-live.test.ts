@@ -121,3 +121,19 @@ test("jobs: a full-screen page — board by client with run strips, runs feed, u
   assert.match(html, /if \(location\.hash === "#jobs"\) return openJobs\(\);/, "/desk#jobs opens straight to it");
   assert.match(html, /if \(e\.key === "Escape"\) \{ e\.preventDefault\(\); e\.stopPropagation\(\); return jobsBack\(\); \}/, "esc walks back one step at a time");
 });
+
+test("▶ Run and follow-up ▶ Now open a spawn picker (CLI/model/where/kind) like New terminal", () => {
+  assert.match(html, /<dialog id="dlg-run-jot">/);
+  assert.match(html, /id="rj-backend"/);
+  assert.match(html, /id="rj-model"/);
+  assert.match(html, /id="rj-cwd"/);
+  assert.match(html, /id="rj-kind"/);
+  assert.match(html, /id="rj-focus"/);
+  assert.match(html, /function openRunJot\(j, mode = "run"/);
+  assert.match(html, /openRunJot\(j, "run", btn\)/);
+  assert.match(html, /openRunJot\(j, "follow", null, check\)/);
+  assert.match(html, /api\("\/jots\/" \+ j\.id \+ "\/run", \{ method: "POST", body: JSON\.stringify\(body\) \}\)/);
+  assert.match(html, /api\("\/jots\/" \+ j\.id \+ "\/follow-up\/now", \{ method: "POST", body: JSON\.stringify\(body\) \}\)/);
+  const cockpit = fs.readFileSync(path.join(process.cwd(), "static/desk-cockpit.js"), "utf8");
+  assert.match(cockpit, /C\.openRunJot\(x\.j, "follow"\)/);
+});

@@ -1498,7 +1498,35 @@
     <label>What should the agent check? <span class="hint">— optional; otherwise: is it still open, what changed, what's next</span>
       <textarea name="check" rows="3" id="fu-check"></textarea></label>
     <div class="hint" style="font-size:13px">At that time Chronos opens a terminal on this note. It writes what it found back onto the note, then resolves it, schedules the next look, or asks you.</div>
-    <div class="actions"><button class="btn danger" type="button" id="fu-clear">Cancel follow-up</button><button class="btn" type="button" id="fu-now" title="Open the follow-up terminal right now">▶ Now</button><button class="btn" type="button" id="fu-close">Close</button><button class="btn primary" value="ok">Schedule</button></div>
+    <div class="actions"><button class="btn danger" type="button" id="fu-clear">Cancel follow-up</button><button class="btn" type="button" id="fu-now" title="Pick CLI + model, then open the follow-up terminal now">▶ Now…</button><button class="btn" type="button" id="fu-close">Close</button><button class="btn primary" value="ok">Schedule</button></div>
+  </form>
+</dialog>
+
+<!-- ▶ Run / ▶ Now: same spawn controls as New terminal (CLI, model, where, kind, focus). The note
+     already carries the goal + brief; this is only how and where it opens. -->
+<dialog id="dlg-run-jot">
+  <form class="dlg" method="dialog" id="form-run-jot">
+    <h3 id="rj-h">▶ Run</h3>
+    <div class="hint" id="rj-title" style="margin-top:-6px;font-size:14px"></div>
+    <div class="row">
+      <label>CLI <select id="rj-backend" title="Claude, Cursor, Grok…"></select></label>
+      <label>Model <select id="rj-model" title="Models for the selected CLI. Empty = that CLI's default."></select></label>
+    </div>
+    <div class="row">
+      <label>Where <select id="rj-cwd"></select></label>
+      <label>Kind
+        <select id="rj-kind" title="What done looks like. The agent is told this in its first prompt.">
+          <option value="pr">PR</option>
+          <option value="investigation">Investigation</option>
+          <option value="qa">QA</option>
+        </select>
+      </label>
+    </div>
+    <label class="check"><input type="checkbox" id="rj-focus"> Focus only <span class="hint">— story and composer, no live terminal</span></label>
+    <div class="actions">
+      <button class="btn" type="button" id="rj-cancel">Cancel</button>
+      <button class="btn primary" value="ok" id="rj-go">Open</button>
+    </div>
   </form>
 </dialog>
 
@@ -3685,11 +3713,74 @@ function jotFollowState(j) {
   return Date.parse(j.follow_up_at) <= Date.now() ? "due" : "set";
 }
 async function runJotNow(j, btn) {
-  if (btn) { btn.disabled = true; btn.textContent = "opening…"; }
-  try { const { session } = await api("/jots/" + j.id + "/run", { method: "POST", body: JSON.stringify({}) }); await load(); select(session.id); }
-  catch (e) { toast("run failed: " + e.message); }
-  finally { if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || "▶ run"; } }
+  // Opens the spawn picker (CLI / model / where / kind) — same controls as New terminal.
+  openRunJot(j, "run", btn);
 }
+let rjJot = null, rjMode = "run", rjBtn = null, rjCheck = null;
+function syncRunJotCli() {
+  const j = rjJot; if (!j) return;
+  const w = S.workspaces.find((x) => x.id === j.workspace_id);
+  fillBackendSelect(qs("#rj-backend"), j.workspace_id);
+  const backend = qs("#rj-backend").value;
+  const saved = localStorage.getItem("desk-model:" + (backend || ""));
+  fillModelSelect(qs("#rj-model"), backend, saved != null ? saved : (w?.default_model || undefined));
+  qs("#rj-cwd").innerHTML = '<option value="">default</option>' + (w?.repos || []).map((r) => '<option value="' + esc(r.path) + '">' + esc(r.name) + "</option>").join("");
+  syncCloudGate(qs("#rj-backend"), j.workspace_id);
+}
+function openRunJot(j, mode = "run", btn = null, check = null) {
+  rjJot = j; rjMode = mode; rjBtn = btn; rjCheck = check;
+  qs("#rj-h").textContent = mode === "follow" ? "▶ Follow up now" : "▶ Run";
+  qs("#rj-title").textContent = (S.workspaces.find((w) => w.id === j.workspace_id)?.name || "") + " · " + j.title;
+  qs("#rj-kind").value = mode === "follow" ? "investigation" : "pr";
+  qs("#rj-focus").checked = sessionStorage.getItem("desk-quick-focus") === "1";
+  syncRunJotCli();
+  qs("#dlg-run-jot").showModal();
+  setTimeout(() => qs("#rj-go").focus(), 40);
+}
+qs("#rj-backend").onchange = () => {
+  fillModelSelect(qs("#rj-model"), qs("#rj-backend").value);
+  if (rjJot) syncCloudGate(qs("#rj-backend"), rjJot.workspace_id);
+};
+qs("#rj-cwd").onchange = () => { if (rjJot) syncCloudGate(qs("#rj-backend"), rjJot.workspace_id); };
+qs("#rj-cancel").onclick = () => qs("#dlg-run-jot").close("cancel");
+qs("#form-run-jot").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const j = rjJot; if (!j) return;
+  const backend = qs("#rj-backend").value || undefined;
+  const model = qs("#rj-model").value.trim() || null;
+  const cwd = qs("#rj-cwd").value || undefined;
+  const goal_kind = qs("#rj-kind").value || null;
+  const focus = qs("#rj-focus").checked;
+  sessionStorage.setItem("desk-quick-focus", focus ? "1" : "");
+  rememberCli(j.workspace_id, backend, model);
+  const body = {
+    ...(backend ? { backend } : {}),
+    model,
+    ...(cwd ? { cwd } : {}),
+    goal_kind,
+    ...(focus ? { focus_only: true } : {}),
+  };
+  const btn = rjBtn, mode = rjMode, check = rjCheck;
+  qs("#dlg-run-jot").close("ok");
+  if (btn) { btn.disabled = true; btn.textContent = "opening…"; }
+  try {
+    if (mode === "follow") {
+      if (check !== null && check !== (j.follow_up_check || "")) {
+        await api("/jots/" + j.id + "/follow-up", { method: "POST", body: JSON.stringify({ at: null, check: check || null }) });
+      }
+      const { session } = await api("/jots/" + j.id + "/follow-up/now", { method: "POST", body: JSON.stringify(body) });
+      await load(); select(session.id);
+    } else {
+      const { session } = await api("/jots/" + j.id + "/run", { method: "POST", body: JSON.stringify(body) });
+      await load(); select(session.id);
+    }
+  } catch (err) {
+    toast((mode === "follow" ? "follow-up" : "run") + " failed: " + err.message);
+    load();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || (mode === "follow" ? "▶ Now…" : "▶ run"); }
+  }
+});
 async function patchJot(id, body) {
   try { await api("/jots/" + id, { method: "PATCH", body: JSON.stringify(body) }); } catch (e) { toast(e.message); }
   load();
@@ -3879,15 +3970,11 @@ async function sendFollow(at) {
 }
 qs("#fu-close").onclick = () => qs("#dlg-follow").close("cancel");
 qs("#fu-clear").onclick = () => { qs("#dlg-follow").close("cancel"); sendFollow(null); };
-qs("#fu-now").onclick = async () => {
+qs("#fu-now").onclick = () => {
   const j = fuJot; if (!j) return;
-  qs("#dlg-follow").close("cancel");
   const check = qs("#fu-check").value.trim();
-  try {
-    if (check !== (j.follow_up_check || "")) await api("/jots/" + j.id + "/follow-up", { method: "POST", body: JSON.stringify({ at: null, check: check || null }) });
-    const { session } = await api("/jots/" + j.id + "/follow-up/now", { method: "POST", body: JSON.stringify({}) });
-    await load(); select(session.id);
-  } catch (e) { toast("follow-up failed: " + e.message); load(); }
+  qs("#dlg-follow").close("cancel");
+  openRunJot(j, "follow", null, check);
 };
 qs("#form-follow").addEventListener("submit", (e) => {
   const v = qs("#fu-at").value;
@@ -4163,7 +4250,10 @@ async function syncCloudGate(sel, wsId) {
   if (!opt) return;
   const gen = ++cloudGateGen;
   const w = S.workspaces.find((x) => x.id === wsId);
-  const cwd = qs("#f-cwd")?.value || "";
+  // Prefer the Where select in the same dialog (New vs Run jot); fall back to New's.
+  const dlg = sel.closest("dialog");
+  const cwdEl = dlg ? (qs("#rj-cwd", dlg) || qs("#f-cwd", dlg)) : qs("#f-cwd");
+  const cwd = cwdEl?.value || "";
   const repo = (w?.repos || []).find((r) => r.path === cwd);
   const fallback = () => { if (sel.value === "cursor-cloud") { const alt = [...sel.options].find((o) => !o.disabled); if (alt) sel.value = alt.value; } };
   if (!repo || !repo.git_remote) {
@@ -6152,6 +6242,7 @@ DeskCockpit.init({
     toast("closed"); load();
   },
   openFollow,
+  openRunJot,
   reload: () => load(),
   pin: (paint) => {
     const L = OV.log, atEnd = L.scrollHeight - L.scrollTop - L.clientHeight < 40;

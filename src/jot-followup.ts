@@ -155,8 +155,24 @@ export function followUpBrief(j: Jot, wsName: string): string {
  * Open the follow-up terminal for one due note. Claims the row first so no second sweep can take
  * it; if the terminal cannot open (seat cap, busy machine), puts the time back a bit later instead
  * of losing the follow-up.
+ *
+ * `overrides` are only for a manual ▶ Now from the Desk — the timer sweep leaves them empty and
+ * uses the client's defaults (investigation).
  */
-export async function fireFollowUp(id: string, nowMs = Date.now(), opener: typeof openSession = openSession): Promise<Session | null> {
+export type FollowUpSpawnOverrides = {
+  backend?: string;
+  model?: string | null;
+  cwd?: string;
+  goal_kind?: "pr" | "investigation" | "qa" | null;
+  focus_only?: boolean;
+};
+
+export async function fireFollowUp(
+  id: string,
+  nowMs = Date.now(),
+  opener: typeof openSession = openSession,
+  overrides: FollowUpSpawnOverrides = {},
+): Promise<Session | null> {
   const nowIso = new Date(nowMs).toISOString();
   if (!jots.claimFollowUp(id, nowIso)) return null;
   const j = jots.get(id)!;
@@ -165,13 +181,15 @@ export async function fireFollowUp(id: string, nowMs = Date.now(), opener: typeo
     const session = await opener({
       workspace_id: j.workspace_id,
       goal: `Follow up: ${j.title}`.slice(0, 400),
-      goal_kind: "investigation",
+      goal_kind: overrides.goal_kind ?? "investigation",
       goal_source: "human",
       description: followUpBrief(j, ws?.name ?? "this client"),
-      backend: ws?.default_backend ?? undefined,
-      model: null,
+      backend: overrides.backend ?? ws?.default_backend ?? undefined,
+      model: overrides.model ?? null,
       created_by: "follow-up",
       role: "human",
+      ...(overrides.cwd ? { cwd: overrides.cwd } : {}),
+      ...(overrides.focus_only ? { focus_only: true } : {}),
     } as any);
     jots.followedUpBy(id, session.id);
     bus.publish({ topic: "jot.updated", jot_id: id, workspace_id: j.workspace_id });

@@ -3295,13 +3295,14 @@ export function startServer() {
   });
 
   // "Follow up now": the same terminal the timer would open, without waiting for it.
-  api.post("/jots/:id/follow-up/now", requireAdmin, async (req, res) => {
+  // Body accepts the same spawn overrides as ▶ Run (CLI / model / cwd / kind / focus_only).
+  api.post("/jots/:id/follow-up/now", requireAdmin, validate(RunJotSchema), async (req, res) => {
     const j = jots.get(req.params.id);
     if (!j) return res.status(404).json({ error: "not found" });
     if (j.status === "done") return res.status(409).json({ error: "note is done — reopen it first" });
     const nowMs = Date.now();
     jots.setFollowUp(j.id, new Date(nowMs).toISOString());
-    const session = await fireFollowUp(j.id, nowMs);
+    const session = await fireFollowUp(j.id, nowMs, undefined, req.body ?? {});
     if (!session) return res.status(409).json({ error: "couldn't open a terminal now (seat cap or busy machine) — it will retry in 15 minutes" });
     res.status(201).json({ jot: jots.get(j.id), session });
   });

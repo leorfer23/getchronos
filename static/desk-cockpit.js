@@ -192,6 +192,7 @@
     if (x.kind === "jot") {
       if (name === "fuopen") return C.open(x.j.follow_up_session);
       if (name === "funow") {
+        if (C.openRunJot) return C.openRunJot(x.j, "follow");
         b.disabled = true; b.textContent = "opening…";
         try { var r = await C.api("/jots/" + x.j.id + "/follow-up/now", { method: "POST", body: "{}" }); hide(k); await C.reload(); if (r && r.session) C.open(r.session.id); }
         catch (err) { b.disabled = false; b.textContent = "Now"; C.toast(String(err.message || err).slice(0, 140)); }

@@ -87,6 +87,27 @@ test("a due follow-up opens one terminal, is claimed exactly once, and records w
   assert.match(opened[0].description, new RegExp(`mc pad follow ${j.id.slice(0, 8)}`));
 });
 
+test("a manual follow-up/now can override CLI, model, cwd, kind, focus_only", async () => {
+  const ws = mkWs();
+  const j = jots.create({ workspace_id: ws.id, title: "check the PR" });
+  jots.setFollowUp(j.id, new Date(NOW - 1000).toISOString());
+  const opened: any[] = [];
+  const opener = (async (o: any) => { opened.push(o); return { id: "sess-ov" } as any; }) as any;
+  await fireFollowUp(j.id, NOW, opener, {
+    backend: "cursor-agent",
+    model: "sonnet",
+    cwd: "/tmp/repo",
+    goal_kind: "pr",
+    focus_only: true,
+  });
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].backend, "cursor-agent");
+  assert.equal(opened[0].model, "sonnet");
+  assert.equal(opened[0].cwd, "/tmp/repo");
+  assert.equal(opened[0].goal_kind, "pr");
+  assert.equal(opened[0].focus_only, true);
+});
+
 test("a follow-up that cannot open a terminal is put back, not lost", async () => {
   const ws = mkWs();
   const j = jots.create({ workspace_id: ws.id, title: "t" });
