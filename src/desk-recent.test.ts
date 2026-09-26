@@ -48,7 +48,7 @@ test("an ended row can reach the stage, and ✕ on it stays removed", () => {
   assert.match(desk, /const known = new Set\(\[\.\.\.d\.sessions, \.\.\.S\.ended\]\.map\(\(x\) => x\.id\)\);/);
 });
 
-test("the phone's Recent shows the same 20, with no time window", () => {
-  assert.match(phone, /recent = S\.ended\.filter\(\(s\) => !isWorker\(s\)\)\.slice\(0, 20\);/);
-  assert.doesNotMatch(phone, /const cut = Date\.now\(\) - 24 \* 3600 \* 1000;/);
+test("the phone has no Recent — live triage only; Desk keeps Recent", () => {
+  assert.doesNotMatch(phone, /id="g-recent"|S\.ended|toggle-ended/);
+  assert.doesNotMatch(phone, /\/sessions\?status=ended/);
 });

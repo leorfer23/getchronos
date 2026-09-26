@@ -35,7 +35,13 @@ export function jotWritePolicy(
  */
 export async function runJot(
   id: string,
-  overrides: { backend?: string; model?: string | null; cwd?: string; goal_kind?: "pr" | "investigation" | "qa" | null } = {},
+  overrides: {
+    backend?: string;
+    model?: string | null;
+    cwd?: string;
+    goal_kind?: "pr" | "investigation" | "qa" | null;
+    focus_only?: boolean;
+  } = {},
 ): Promise<{ jot: Jot; session: Session }> {
   const jot = jots.get(id);
   if (!jot) throw new Error("jot not found");
@@ -52,6 +58,7 @@ export async function runJot(
     created_by: "operator",
     role: "human",
     ...(overrides.cwd ? { cwd: overrides.cwd } : {}),
+    ...(overrides.focus_only ? { focus_only: true } : {}),
   } as any);
 
   // Record the link before returning: the Desk repaints off this row, and a run whose session the

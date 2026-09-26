@@ -150,6 +150,18 @@ test("a staged terminal routes a message that names nothing — but never overri
   assert.equal(route("en atlas, kill it", { uiWorkspace: cedar.id }).ws, atlas.id);
 });
 
+test("replying to a bubble sticks to that bubble's project — stronger than sticky, weaker than a #tag", () => {
+  rememberRoute("test", route("#cedar deploy it"));
+  assert.equal(getSticky("test")?.ws, cedar.id);
+  // Bare "yes" answering an Atlas bubble stays on Atlas even though sticky is Cedar.
+  const r = route("yes, do that", { replyWorkspace: atlas.id });
+  assert.equal(r.ws, atlas.id);
+  assert.equal(r.how, "sticky");
+  assert.match(r.why, /replying on #atlas/);
+  // An explicit #tag still wins.
+  assert.equal(route("#cedar never mind", { replyWorkspace: atlas.id }).ws, cedar.id);
+});
+
 // ── c. fleet intents ─────────────────────────────────────────────────────────────────────────────
 
 test("fleet-wide questions with no workspace signal go unscoped", () => {

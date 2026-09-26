@@ -11,7 +11,8 @@ export type ChatSource = "web" | "telegram" | "heartbeat" | "robert" | "divider"
 // which half of it: "you" (the operator's line) or "reply" (Robert's). `text` is whatever the caller
 // holds — the whole parent for the model (quotePrompt), a one-line excerpt for display (stored).
 export type ChatQuoteSide = "you" | "reply";
-export type ChatQuote = { id: number; side: ChatQuoteSide; text: string };
+/** `workspace_id` is the parent's project — the router uses it so a reply stays on that thread. */
+export type ChatQuote = { id: number; side: ChatQuoteSide; text: string; workspace_id?: string | null };
 const QUOTE_SHOWN = 240; // the stored excerpt; the UI clamps it to one line
 const QUOTE_TO_MODEL = 1500; // enough of a long answer for him to know which point is being answered
 
@@ -114,12 +115,12 @@ export const chat = {
    * (pruned, cleared), is a divider, or that half of it is empty (a wake has no operator line).
    */
   quoteOf(id: number, side: ChatQuoteSide): ChatQuote | null {
-    const row = db.prepare(`SELECT you, reply, source FROM chat_messages WHERE id = ?`).get(id) as
-      | { you: string; reply: string; source: string }
+    const row = db.prepare(`SELECT you, reply, source, workspace_id FROM chat_messages WHERE id = ?`).get(id) as
+      | { you: string; reply: string; source: string; workspace_id: string | null }
       | undefined;
     if (!row || row.source === "divider") return null;
     const text = String((side === "you" ? row.you : row.reply) ?? "").trim();
-    return text ? { id, side, text } : null;
+    return text ? { id, side, text, workspace_id: row.workspace_id ?? null } : null;
   },
   // Oldest→newest window for one thread (dashboard renders chronologically). Dividers are included —
   // the UI draws them as "new conversation" lines.

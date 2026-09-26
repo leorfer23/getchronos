@@ -104,7 +104,7 @@ test("the fixture widget is in NEITHER shipped registry", () => {
 test("ctx is exactly the ten keys the README documents", () => {
   assert.match(
     html,
-    /window\.DeskWidgets = \{ S, api, esc, chipLabel, toast, stage: \(id\) => select\(id\), pickWs, wsName, wsColor, byId \};/,
+    /window\.DeskWidgets = \{ S, api, esc, chipLabel, toast, stage: \(id\) => select\(id\), wsName, wsColor, byId \};/,
   );
 });
 

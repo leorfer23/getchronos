@@ -3295,13 +3295,14 @@ export function startServer() {
   });
 
   // "Follow up now": the same terminal the timer would open, without waiting for it.
-  api.post("/jots/:id/follow-up/now", requireAdmin, async (req, res) => {
+  // Body accepts the same spawn overrides as ▶ Run (CLI / model / cwd / kind / focus_only).
+  api.post("/jots/:id/follow-up/now", requireAdmin, validate(RunJotSchema), async (req, res) => {
     const j = jots.get(req.params.id);
     if (!j) return res.status(404).json({ error: "not found" });
     if (j.status === "done") return res.status(409).json({ error: "note is done — reopen it first" });
     const nowMs = Date.now();
     jots.setFollowUp(j.id, new Date(nowMs).toISOString());
-    const session = await fireFollowUp(j.id, nowMs);
+    const session = await fireFollowUp(j.id, nowMs, undefined, req.body ?? {});
     if (!session) return res.status(409).json({ error: "couldn't open a terminal now (seat cap or busy machine) — it will retry in 15 minutes" });
     res.status(201).json({ jot: jots.get(j.id), session });
   });
@@ -4498,14 +4499,20 @@ export function startServer() {
   // "connection dropped" on phone/Desk even though Robert kept working server-side.
   api.post("/agent", requireAdmin, validate(AgentTextSchema), async (req, res) => {
     const surface = req.body.surface || "web";
+    // A reply to one bubble: read the parent first so its project can steer the router (below a
+    // #tag / text signal, above sticky). The quoted words themselves never re-route — only the
+    // parent's workspace_id does.
+    const quote = req.body.replyTo ? chat.quoteOf(req.body.replyTo.id, req.body.replyTo.side) : null;
     // An explicit workspace selection wins; otherwise the thread router reads the workspace out of the
-    // message (a #tag, a ticket key, a project name, the terminal on screen, or where the last one
-    // landed). Each workspace answers on its OWN warm Robert, so no context can cross between them.
+    // message (a #tag, a ticket key, a project name, the terminal on screen, the bubble being
+    // answered, or where the last one landed). Each workspace answers on its OWN warm Robert, so no
+    // context can cross between them.
     const turn = await resolveTurnSmart(req.body.text, {
       selected: req.body.ws ?? null,
       route: req.body.route,
       surface,
       stagedSessionId: req.body.session ?? null,
+      replyWorkspace: quote?.workspace_id ?? null,
     });
     // Two projects match, or a work request with nothing to go on: offer the choice rather than guess.
     // Nothing has run yet, so the tap just re-sends the same text with a ws. Sync on purpose: no turn
@@ -4516,8 +4523,9 @@ export function startServer() {
     commitTurn(surface, turn);
     const ws = turn.ws;
     // Auto-routed (no #tag, no hand pick): the fleet-wide Robert runs it, focused on the router's pick,
-    // so one untagged line can reach every project. The row still files under `ws` for the view filter.
-    // A #tag or a hand pick keeps that workspace's own Robert (its client profile, MCP and accounts).
+    // so one untagged line can reach every project. The row still files under `ws` so chips can show
+    // which project it landed on. A #tag or a hand pick keeps that workspace's own Robert (its client
+    // profile, MCP and accounts).
     const runWs = turn.routed && turn.how !== "tag" ? null : ws;
     const text = turn.text; // the #tag never reaches the model
     const client = req.body.client;
@@ -4532,7 +4540,6 @@ export function startServer() {
     // A reply to one bubble: the quoted text comes from that row (the client sends an id and a side),
     // goes above the words typed so he knows which comment is being answered, and is kept off `text`.
     // A parent that is gone just makes this an ordinary line.
-    const quote = req.body.replyTo ? chat.quoteOf(req.body.replyTo.id, req.body.replyTo.side) : null;
     const quoted = quote ? { id: quote.id, side: quote.side, text: quoteExcerpt(quote.text) } : null;
     const prompt = quotePrompt(quote) + text + chatAttachmentsBlock(files);
     const shown = files.map((a) => ({ id: a.id, url: a.url, mime: a.mime, name: a.name }));

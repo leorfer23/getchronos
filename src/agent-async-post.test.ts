@@ -56,7 +56,8 @@ test("Phone holds the outbox on the turn id until agent.push (or a history re-re
   assert.match(phone, /awaitTurn: null, awaitT: 0/);
   assert.match(phone, /function robAwait\(turn\)/);
   assert.match(phone, /function robRelease\(turn\)/);
-  assert.match(phone, /if \(r\?\.accepted && r\?\.turn\) \{ robAwait\(r\.turn\); hold = true; return; \}/);
+  assert.match(phone, /if \(r\?\.accepted && r\?\.turn\) \{[\s\S]*?robAwait\(r\.turn\); hold = true; return;/);
+  assert.match(phone, /R\.pend\.set\(r\.turn, b\); R\.mine = null; R\.pend\.delete\("\?"\)/);
   assert.match(phone, /if \(R\.awaitTurn && \(R\.awaitTurn === e\.turn \|\| R\.awaitTurn === "lost"\)\) robRelease/);
   assert.match(phone, /robertHistory\(\)\.finally\(\(\) => \{ if \(waiting\) robRelease\(null\); \}\)/);
   assert.doesNotMatch(phone, /connection dropped/);

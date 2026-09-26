@@ -56,6 +56,12 @@ export type RouteCtx = {
   stagedSessionId?: string | null;
   /** A workspace the client already knows the turn is about (staged terminal's client). */
   uiWorkspace?: string | null;
+  /**
+   * The bubble this line answers. Stronger than sticky / the staged terminal, weaker than a #tag
+   * or a signal in the text — a "yes, do that" on an Atlas reply stays on Atlas even if the last
+   * untagged line was Cedar.
+   */
+  replyWorkspace?: string | null;
   now?: number;
 };
 
@@ -321,6 +327,12 @@ export function routeMessage(text: string, ctx: RouteCtx = {}): Route {
     return { ...base, ws: null, how: "fleet", confidence: 0.7, text: body, why: "fleet-wide question" };
   }
 
+  // c'. the bubble this line answers — stronger than sticky / the staged terminal.
+  if (ctx.replyWorkspace && workspaces.get(ctx.replyWorkspace)) {
+    const w = workspaces.get(ctx.replyWorkspace)!;
+    return { ...base, ws: ctx.replyWorkspace, how: "sticky", confidence: 0.65, text: body, why: `replying on #${w.slug}` };
+  }
+
   // d. sticky — the workspace the previous routed message in this thread landed on.
   const sticky = getSticky(surface, now);
   if (sticky?.ws) {
@@ -362,12 +374,16 @@ export async function routeSmart(text: string, ctx: RouteCtx = {}): Promise<Rout
   const slugOf = (id: string | null) => (id ? workspaces.get(id)?.slug ?? id : null);
   const sticky = getSticky(surface, now);
   const staged = ctx.uiWorkspace || (ctx.stagedSessionId ? sessionWs(ctx.stagedSessionId) : null);
+  const replyWs = ctx.replyWorkspace && workspaces.get(ctx.replyWorkspace) ? ctx.replyWorkspace : null;
   const hints: RouteHints = {
     signals: textSignals(body).map((s) => ({ why: s.why, workspaces: s.ws.map((id) => slugOf(id) ?? id) })),
     fleetIntent: isFleetIntent(body),
     social,
     sticky: sticky ? { slug: slugOf(sticky.ws), minutesAgo: Math.round((now - sticky.at) / 60_000) } : null,
     staged: staged && workspaces.get(staged) ? slugOf(staged) : null,
+    // A reply's parent is the best hint when nothing else speaks — same slot the model already sees
+    // as "staged" (it is "what this turn is about"), and stronger than an old sticky.
+    ...(replyWs ? { staged: slugOf(replyWs) } : {}),
   };
   const m = await modelRoute(body, hints);
   if (!m) return routeMessage(text, ctx);
@@ -403,12 +419,12 @@ export type ResolvedTurn = {
  */
 export function resolveTurn(
   text: string,
-  opts: { selected?: string | null; route?: boolean; surface?: string; stagedSessionId?: string | null; uiWorkspace?: string | null } = {},
+  opts: { selected?: string | null; route?: boolean; surface?: string; stagedSessionId?: string | null; uiWorkspace?: string | null; replyWorkspace?: string | null } = {},
 ): ResolvedTurn {
   const selected = opts.selected ?? null;
   if (selected || opts.route === false)
     return { ws: selected, text, routed: null, ask: null, how: selected ? "selected" : "fleet" };
-  const r = routeMessage(text, { surface: opts.surface, stagedSessionId: opts.stagedSessionId, uiWorkspace: opts.uiWorkspace });
+  const r = routeMessage(text, { surface: opts.surface, stagedSessionId: opts.stagedSessionId, uiWorkspace: opts.uiWorkspace, replyWorkspace: opts.replyWorkspace });
   if (r.how === "ask") return { ws: null, text: r.text, routed: null, ask: r, how: "ask" };
   return { ws: r.ws, text: r.text, routed: r, ask: null, how: r.how };
 }
@@ -416,12 +432,12 @@ export function resolveTurn(
 /** resolveTurn, routed by the model (routeSmart). What the Desk, the phone and Telegram call. */
 export async function resolveTurnSmart(
   text: string,
-  opts: { selected?: string | null; route?: boolean; surface?: string; stagedSessionId?: string | null; uiWorkspace?: string | null } = {},
+  opts: { selected?: string | null; route?: boolean; surface?: string; stagedSessionId?: string | null; uiWorkspace?: string | null; replyWorkspace?: string | null } = {},
 ): Promise<ResolvedTurn> {
   const selected = opts.selected ?? null;
   if (selected || opts.route === false)
     return { ws: selected, text, routed: null, ask: null, how: selected ? "selected" : "fleet" };
-  const r = await routeSmart(text, { surface: opts.surface, stagedSessionId: opts.stagedSessionId, uiWorkspace: opts.uiWorkspace });
+  const r = await routeSmart(text, { surface: opts.surface, stagedSessionId: opts.stagedSessionId, uiWorkspace: opts.uiWorkspace, replyWorkspace: opts.replyWorkspace });
   if (r.how === "ask") return { ws: null, text: r.text, routed: null, ask: r, how: "ask" };
   return { ws: r.ws, text: r.text, routed: r, ask: null, how: r.how };
 }

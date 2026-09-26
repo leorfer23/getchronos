@@ -152,11 +152,17 @@ test("a reply keeps the parent's id and a one-line excerpt; the words typed stay
 
 test("quoteOf: the operator's half, and nothing for a gone row, a divider or an empty half", () => {
   const r = chat.add("check the invoice", "done");
-  assert.deepEqual(chat.quoteOf(r.id, "you"), { id: r.id, side: "you", text: "check the invoice" });
+  assert.deepEqual(chat.quoteOf(r.id, "you"), { id: r.id, side: "you", text: "check the invoice", workspace_id: null });
   const wake = chat.add("", "I restarted the stuck worker", "robert");
   assert.equal(chat.quoteOf(wake.id, "you"), null, "a wake has no operator line");
   assert.equal(chat.quoteOf(chat.divide().id, "reply"), null);
   assert.equal(chat.quoteOf(999999, "reply"), null);
+});
+
+test("quoteOf carries the parent's workspace so a reply can stay on that project", () => {
+  const ws = workspaces.create({ slug: "qof", name: "QuoteOf", config_dir: "/tmp/qof" });
+  const parent = chat.add("ship?", "yes", "web", ws.id);
+  assert.equal(chat.quoteOf(parent.id, "reply")?.workspace_id, ws.id);
 });
 
 test("quotePrompt puts the quoted bubble above the reply, attributed", () => {

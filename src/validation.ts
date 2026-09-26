@@ -606,6 +606,7 @@ export const RunJotSchema = z.object({
   model: z.string().nullable().optional(),
   cwd: z.string().optional(),
   goal_kind: z.enum(["pr", "investigation", "qa"]).nullable().optional(),
+  focus_only: z.boolean().optional(),
 });
 export const ReorderJotsSchema = z.object({ ids: z.array(id).min(1) });
 // A browser PushSubscription.toJSON(): endpoint + the two keys the push service encrypts with.
