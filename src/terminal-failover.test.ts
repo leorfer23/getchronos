@@ -18,6 +18,7 @@ import {
   decideFailover,
   detectWall,
   failoverOwns,
+  failoverUsable,
   fallbackChain,
   onTerminalQuiet,
   originalBrief,
@@ -195,15 +196,47 @@ test("fallbackChain: workspace fallback first, then the configured chain, dedupe
   assert.deepEqual(fallbackChain({ fallback_backend: " " }, ["grok"]), ["grok"]);
 });
 
+test("failoverUsable: picker allowlist does not gate the ladder; cursor needs a key", () => {
+  // Installed + non-cursor → always usable for failover (emergency degrade).
+  assert.equal(failoverUsable("grok", null, () => true), true);
+  assert.equal(failoverUsable("grok", null, () => false), false);
+  // Cursor without a key would open a dead login screen — skip it so the chain can give_up cleanly
+  // or the operator sees why, rather than burning a stand-in.
+  const prev = process.env.CURSOR_API_KEY;
+  delete process.env.CURSOR_API_KEY;
+  try {
+    assert.equal(failoverUsable("cursor", null, () => true), false);
+    assert.equal(failoverUsable("cursor-agent", null, () => true), false);
+    process.env.CURSOR_API_KEY = "crsr_test";
+    assert.equal(failoverUsable("cursor", null, () => true), true);
+  } finally {
+    if (prev === undefined) delete process.env.CURSOR_API_KEY;
+    else process.env.CURSOR_API_KEY = prev;
+  }
+});
+
+test("stand-in stays on the walled terminal's host (sticky across computers)", async () => {
+  // Credit-wall failover must not silently move m2/m5 work to the brain — the worktree and files
+  // live on that disk (HOSTS.md sticky / replaces).
+  const s = terminal({ host_id: "h_m2" }, { frame: SESSION_LIMIT });
+  assert.equal(await onTerminalQuiet(s.id, T0 + 10_000), "backend");
+  assert.equal(opened[0].host_id, "h_m2");
+  assert.equal(opened[0].replaces, s.id);
+  assert.equal(opened[0].backend, "grok");
+});
+
 test("standInSeed carries the goal, the brief and the replay, and defangs the quoted wall", () => {
   const seed = standInSeed({
     from: "claude-code", fromModel: "opus", to: "grok",
     wall: { kind: "limit", line: "You've hit your limit · resets 3pm" },
     goal: "renumber the flyway migrations", brief: "Goal: renumber the flyway migrations\n\nStart now.",
     cwd: "/repo/.chronos-worktrees/shop/PER-12", replay: "## Previous attempt (replayed transcript)\n\"say: You're out of usage credits\"",
+    ticketKey: "PER-12", branch: "mc/lf/per-12-renumber",
   });
   assert.match(seed, /previous agent \(claude-code\/opus\) hit its usage limit/);
   assert.match(seed, /Goal: renumber the flyway migrations/);
+  assert.match(seed, /Ticket: PER-12/);
+  assert.match(seed, /Branch: mc\/lf\/per-12-renumber/);
   assert.match(seed, /\/repo\/\.chronos-worktrees\/shop\/PER-12/);
   assert.match(seed, /Previous attempt/);
   assert.match(seed, /Do not start over/);
@@ -243,6 +276,9 @@ beforeEach(() => {
   CONFIG.agent.modelFallback = "opus";
   CONFIG.agent.fallbackBackend = "grok";
   CONFIG.agent.fallbackModel = "grok-4.5";
+  // Cursor stand-ins need a key (failoverUsable); Desk terminals get it from workspace vars, tests
+  // from the daemon env.
+  process.env.CURSOR_API_KEY ??= "crsr_test";
   setFailoverOps({
     activity: (id) => { const f = fakes.get(id); return f ? { ...f } : { live: false, quiet: true, last_out: null, last_in: null, started_at: null }; },
     frame: (id) => fakes.get(id)?.frame ?? null,
@@ -258,6 +294,9 @@ beforeEach(() => {
     kill: (id, reason) => { killed.push({ id, reason }); sessions.end(id, reason); fakes.get(id)!.live = false; },
     feed: () => ["understanding: renumber the migrations", "act: ran npm test -- migrations"],
     installed: (b) => installed.has(b),
+    // Tests treat every host as having whatever the `installed` set says — production uses hostHasCli
+    // against the computer's reported inventory so a stand-in on m2 never assumes the brain's PATH.
+    hostCanRun: (_hostId, backend) => installed.has(backend),
     wake: (w) => { wakes.push(w); },
     notify: (text) => { notes.push(text); },
     later: (ms, fn) => { timers.push({ ms, fn }); return setTimeout(() => {}, 0); },
@@ -360,6 +399,41 @@ test("a session limit skips the model step; an uninstalled or failing backend is
   const t = terminal({}, { frame: SESSION_LIMIT });
   assert.equal(await onTerminalQuiet(t.id, T0 + 10_000), "backend");
   assert.equal(opened.at(-1).backend, "cursor");
+});
+
+test("restricted picker allowlist still fails over onto the configured ladder (Galley footgun)", async () => {
+  // Real bug: backends=["claude-code","cursor-agent"] + fallback_backend=grok → decideFailover
+  // gave up with "ran on claude-code" because usable() required the picker allowlist, and `cursor`
+  // ≠ `cursor-agent` on an exact-string match.
+  const ws = workspaces.create({
+    slug: `fo-galley-${Math.random().toString(36).slice(2, 8)}`,
+    name: "Galley",
+    config_dir: "/tmp/fo",
+    backends: ["claude-code", "cursor-agent"],
+    fallback_backend: "grok",
+    fallback_model: "grok-4.5",
+  } as any);
+  const s = sessions.create({
+    workspace_id: ws.id, backend: "claude-code", model: "opus",
+    goal: "ship the cutover", cwd: "/tmp/fo-repo",
+  } as any);
+  sessions.setMeta(s.id, { first_prompt: "Goal: ship the cutover\n\nStart now." });
+  fakes.set(s.id, {
+    live: true, quiet: true, last_out: T0, last_in: T0, started_at: T0,
+    frame: SESSION_LIMIT, prompt: { kind: "turn", question: "" },
+  });
+  assert.equal(await onTerminalQuiet(s.id, T0 + 10_000), "backend");
+  assert.equal(opened[0].backend, "grok");
+  assert.equal(opened[0].model, "grok-4.5");
+  assert.equal(killed[0].id, s.id);
+});
+
+test("Claude's 'continuing automatically · esc to cancel' wall cancels the wait then opens a stand-in", async () => {
+  const auto = frame("  ⎿  Usage limit reached · continuing automatically at 7pm · esc to cancel");
+  const s = terminal({ model: "opus" }, { frame: auto });
+  assert.equal(await onTerminalQuiet(s.id, T0 + 10_000), "backend");
+  assert.ok(sent.some((x) => x.req.key === "esc"), "cancel the auto-wait before the stand-in starts");
+  assert.equal(opened[0].backend, "grok");
 });
 
 test("guards: kill switch, operator typing, scratch terminals, no wall, not quiet", async () => {

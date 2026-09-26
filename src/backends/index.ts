@@ -140,12 +140,18 @@ export function workspaceBackends(raw: string | null | undefined): string[] {
  *
  * A workspace with NO allow-list allows anything — unknown names are already `validateSpawnTarget`'s
  * job, and failing closed here would strand a workspace whose column holds a typo. A workspace WITH
- * one is held to it exactly.
+ * one is held to it by canonical name: `cursor` and `cursor-agent` are one CLI, so an allow-list of
+ * `["claude-code","cursor-agent"]` must accept a spawn that asked for `cursor` (the name the
+ * failover ladder and CONFIG defaults use). Exact-string matching stranded Galley terminals on a
+ * Claude wall with "no fallback backend left (ran on claude-code)" while cursor-agent sat in the list.
  */
 export function backendAllowed(raw: string | null | undefined, backend: string | null | undefined): boolean {
   if (!backend) return true; // no explicit ask → the workspace's own default is used
   const explicit = explicitList(raw);
-  return explicit ? explicit.includes(backend) : true;
+  if (!explicit) return true;
+  if (!hasBackend(backend)) return false;
+  const want = getBackend(backend).name;
+  return explicit.some((n) => hasBackend(n) && getBackend(n).name === want);
 }
 
 export type { AgentBackend } from "./types.js";

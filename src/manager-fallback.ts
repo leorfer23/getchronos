@@ -11,6 +11,7 @@ import readline from "node:readline";
 import { CONFIG } from "./config.js";
 import { getBackend, hasBackend } from "./backends/index.js";
 import { CREDIT_WALL_RE } from "./backends/types.js";
+import { childEnv } from "./child-env.js";
 import { sandboxWrap, type SandboxMode } from "./sandbox.js";
 import { workspaces } from "./store.js";
 import { resultText } from "./summarize.js";
@@ -54,7 +55,10 @@ export function isCreditWallError(err: unknown): boolean {
  */
 export function isAuthError(err: unknown): boolean {
   const s = String(err instanceof Error ? err.message : err ?? "");
-  return /not logged in|please run \/login|invalid api key|authentication_error|oauth (token|session) (expired|revoked)|\bunauthorized\b|\b401\b/i.test(
+  // Cursor's headless CLI: "Authentication required. Please run 'agent login' first, or set
+  // CURSOR_API_KEY environment variable." — without this, a missing key burned five Robert-wake
+  // retries as a generic failure instead of walking the fallback chain / parking as auth.
+  return /not logged in|please run \/login|please run ['`]?agent login|authentication required|invalid api key|authentication_error|oauth (token|session) (expired|revoked)|\bunauthorized\b|\b401\b|set CURSOR_API_KEY/i.test(
     s,
   );
 }
@@ -299,10 +303,16 @@ export function runManagerFallbackTurn(opts: ManagerFallbackTurnOpts): Promise<s
       fn();
     };
 
+    // Workspace vars / secrets_file (CURSOR_API_KEY) — Robert's extraEnv only carries CHRONOS_ADMIN
+    // + MC_*, and the daemon's process.env only has what .secrets loaded. Without this, a cursor
+    // step on the fallback chain died with "Authentication required… set CURSOR_API_KEY" even when
+    // the workspace already held the key for Desk terminals.
+    const fromWs = opts.wsId ? childEnv(workspaces.get(opts.wsId)).CURSOR_API_KEY : undefined;
     const child = spawn(cmd, cmdArgs, {
       cwd,
       env: {
         ...process.env,
+        ...(fromWs ? { CURSOR_API_KEY: fromWs } : {}),
         ...spec.env,
         ...(opts.extraEnv ?? {}),
       },
