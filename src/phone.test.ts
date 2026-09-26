@@ -134,7 +134,7 @@ test("push: the page registers the worker at root scope, hands it the token, and
   assert.match(sw, /\(p\.actions \|\| \[\]\)\.slice\(0, 2\)/, "Android shows two buttons");
   assert.match(sw, /res\.ok && res\.type === "basic" && !res\.redirected/);
   assert.match(sw, /url\.pathname\.startsWith\("\/api"\)/);
-  assert.match(sw, /const VERSION = "v14"/);
+  assert.match(sw, /const VERSION = "v15"/);
 });
 
 test("Plan tomorrow lives on the Desk — not on the phone", () => {

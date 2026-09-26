@@ -268,11 +268,8 @@ test("the dialog is a plain <dialog> of rows, and Close is a real cancel", () =>
   assert.doesNotMatch(css.slice(css.indexOf(".sbar .qa-last"), css.indexOf(".sbar button.qa.gear")), /animation|transition/);
 });
 
-test("the phone shows the same chips through the same endpoint, keys only", () => {
-  assert.match(phone, /<script src="\/desk-quick-actions\.js"><\/script>/);
-  assert.match(phone, /api\("\/desk\/quick-actions"\)/);
-  assert.match(phone, /QuickActions\.visible\(PQA\.list, phaseOf\(s\), false\)\.filter\(\(a\) => a\.kind === "text" \|\| a\.kind === "approve"\)/);
-  // It rides the key strip's own data-text road, which is the same POST the composer makes.
-  assert.match(phone, /class="qk qa" data-text="\$\{esc\(a\.text\)\}"/);
-  assert.match(phone, /if \(b\.dataset\.text\) return input\(S\.current, \{ text: b\.dataset\.text, enter: true \}\);/);
+test("the phone has no quick-action strip — Focus only, Desk keeps the chips", () => {
+  assert.doesNotMatch(phone, /desk-quick-actions\.js/);
+  assert.doesNotMatch(phone, /\/desk\/quick-actions/);
+  assert.doesNotMatch(phone, /PQA|data-qa|class="qk qa"/);
 });
