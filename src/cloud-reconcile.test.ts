@@ -20,7 +20,7 @@ import {
   tick,
   isReconcileArmed,
 } from "./cloud-reconcile.js";
-import { isCloudStreaming } from "./runner.js";
+import { isCloudStreaming, streamCloudRun } from "./runner.js";
 import type { CloudBackend, CloudLaunch, CloudRunState, CloudUsage } from "./backends/types.js";
 import type { Job, Run } from "./types.js";
 
@@ -198,11 +198,9 @@ test("reconcileOne skips the poll entirely when this process already has the str
       await held;
     },
   });
-  const attachPromise = (async () => {
-    const { streamCloudRun } = await import("./runner.js");
-    return streamCloudRun(holdingBackend, { agentId: run.cloud_agent_id!, runId: run.cloud_run_id!, workspaceId: null }, run.id, null);
-  })();
-  await new Promise((r) => setTimeout(r, 10));
+  // streamCloudRun marks the run as attached synchronously, before its first await — no sleep to
+  // race (a 10ms setTimeout against a dynamic import() lost on a loaded macOS CI runner).
+  const attachPromise = streamCloudRun(holdingBackend, { agentId: run.cloud_agent_id!, runId: run.cloud_run_id!, workspaceId: null }, run.id, null);
   assert.equal(isCloudStreaming(run.id), true);
 
   await reconcileOne(job, run, backend);
