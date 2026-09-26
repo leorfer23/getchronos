@@ -58,7 +58,7 @@ test("Robert: the desk-wide manager is one tap from home, with the same thread a
   assert.match(html, /id="btn-robert"/);
   assert.match(html, /const body = \{ text, client: CLIENT \};/);
   assert.match(html, /api\("\/agent", \{ method: "POST", body: JSON\.stringify\(body\) \}\)/);
-  assert.match(html, /api\("\/agent\/history\?limit=20&ws=" \+ encodeURIComponent\(R\.ws \|\| "all"\)\)/);
+  assert.match(html, /api\("\/agent\/history\?limit=40&ws=all"\)/);
   assert.match(html, /talkMic\(qs\("#r-mic"\)/);
   // His replies are markdown from a model: sanitized before they touch the DOM.
   assert.match(html, /DOMPurify\.sanitize\(marked\.parse/);
@@ -101,13 +101,15 @@ test("answer chips on the card go through the input door; a select's extra optio
 
 
 
-test("Robert on the phone is one routed chat: the strip only filters, and his answer comes off the bus", () => {
+test("Robert on the phone is one routed chat: no strip filter, answer comes off the bus", () => {
   // No conversation picker: a line carries a ws only when you tapped a project on his "which one?".
   assert.match(html, /if \(ws !== undefined\) \{ body\.ws = ws; body\.route = false; \}/);
   assert.match(html, /if \(r\?\.how === "ask"\) \{ dropMine\(\); askWhere\(r, text, quote\); return; \}/);
-  // The strip filters what you see; your own turns show through it.
-  assert.match(html, /const ourThread = \(ws\) => !String\(ws \|\| ""\)\.startsWith\("agent:"\) && \(!R\.ws \|\| \(ws \|\| null\) === R\.ws\);/);
+  // No view filter — every project shows; agent: threads stay out.
+  assert.match(html, /const ourThread = \(ws\) => !String\(ws \|\| ""\)\.startsWith\("agent:"\);/);
   assert.match(html, /if \(!e\.text \|\| \(e\.kind && e\.kind !== "text"\) \|\| !\(mine \|\| ourThread\(e\.ws\)\)\) return;/);
+  assert.doesNotMatch(html, /id="rstrip"/);
+  assert.doesNotMatch(html, /phone-robert-ws/);
   // One bubble per turn: a second turn streaming at once never cuts or mixes into yours.
   assert.match(html, /let b = R\.pend\.get\(key\);/);
   // Accepted turn: keep busy until agent.push; a lost push re-reads history.
@@ -115,7 +117,12 @@ test("Robert on the phone is one routed chat: the strip only filters, and his an
   assert.match(html, /if \(R\.awaitTurn && \(R\.awaitTurn === e\.turn \|\| R\.awaitTurn === "lost"\)\) robRelease/);
   assert.match(html, /robertHistory\(\)\.finally\(\(\) => \{ if \(waiting\) robRelease\(null\); \}\)/);
   assert.match(html, /TagComplete\(rComposer, \(\) => S\.workspaces\);/);
-  assert.match(html, /id="rstrip"/);
+  // Queued "which one?" picks keep their ws.
+  assert.match(html, /R\.outbox\.push\(\{ text, el, quote, ws: picked \}\)/);
+  assert.match(html, /if \(next\) deliverRobert\(next\.text, next\.el, next\.ws, next\.quote\);/);
+  // Push promotes the streaming bubble — no remove+redraw flash.
+  assert.match(html, /const streamed = R\.pend\.get\(e\.turn \|\| "\?"\);/);
+  assert.match(html, /streamed\.className = "bub rob";/);
 });
 
 test("push: the page registers the worker at root scope, hands it the token, and reads deep links", () => {
@@ -325,7 +332,7 @@ test("Robert on the phone: an 8-char id becomes a chip that opens the story; he 
 test("Robert on the phone: a message typed mid-turn parks in an outbox and goes out when the turn lands — never refused, never a dead button", () => {
   const html = fs.readFileSync(new URL("../static/phone.html", import.meta.url), "utf8");
   assert.match(html, /if \(R\.busy\) \{ el\.classList\.add\("queued"\); R\.outbox\.push\(\{ text, el, quote \}\); return; \}/);
-  assert.match(html, /const next = R\.outbox\.shift\(\);\s*if \(next\) deliverRobert\(next\.text, next\.el, undefined, next\.quote\);/);
+  assert.match(html, /const next = R\.outbox\.shift\(\);\s*if \(next\) deliverRobert\(next\.text, next\.el, next\.ws, next\.quote\);/);
   assert.doesNotMatch(html, /qs\("#r-send"\)\.disabled = true/, "the send button is never disabled while he answers");
   assert.match(html, /\.bub\.you\.queued \{ opacity:\.55; \}/);
 });

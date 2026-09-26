@@ -132,12 +132,11 @@ test("a tap on Telegram's routing question re-runs the same message on that proj
   assert.match(tgRouter, /if \(ns === "tr"\) \{\s*const ok = await answerRouteAsk\(op, id\);/);
 });
 
-test("the Desk renders one thread with a chip per row, routed by the daemon, never by the filter", () => {
-  // No filter → ws=all; a filtered project → that thread's own history (see desk-chat-scope.test.ts).
-  assert.match(html, /: "\/agent\/history\?ws=all&limit=16"\)/);
+test("the Desk renders one thread with a chip per row, routed by the daemon — no view filter", () => {
+  // One timeline across every project; chips are labels only.
+  assert.match(html, /\/agent\/history\?ws=all&limit=40/);
+  assert.doesNotMatch(html, /id="chat-ws"|desk-chat-filter|function pickWs\(/);
   assert.match(html, /function setChip\(el, ws, chip = true\)/);
-  // Both bubbles of a row carry the project even though only one shows the chip, or filtering to a
-  // project would hide half of every exchange.
   assert.match(html, /el\.dataset\.ws = ws === undefined \? "\?" : ws \|\| "";/);
   // A tapped candidate is explicit — including #all, which must not route again and ask forever.
   assert.match(html, /if \(item\.picked\) \{ body\.ws = item\.ws; body\.route = false; \}/);

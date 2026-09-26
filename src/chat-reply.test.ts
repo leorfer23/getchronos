@@ -32,6 +32,8 @@ test("replyTo is an id and a side — no text a client could put in his mouth", 
 test("the turn: quote read back from the row, above the words; routing and `you` stay the words typed", () => {
   assert.match(api, /const quote = req\.body\.replyTo \? chat\.quoteOf\(req\.body\.replyTo\.id, req\.body\.replyTo\.side\) : null;/);
   assert.match(api, /const prompt = quotePrompt\(quote\) \+ text \+ chatAttachmentsBlock\(files\);/);
+  // Quote is loaded BEFORE resolveTurnSmart so the parent's project can steer the router.
+  assert.match(api, /replyWorkspace: quote\?\.workspace_id \?\? null/);
   // The router reads req.body.text — a #tag inside the quoted parent never re-routes the reply.
   assert.match(api, /const turn = await resolveTurnSmart\(req\.body\.text,/);
   assert.match(api, /chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote\)/);
@@ -76,10 +78,10 @@ test("phone: same module, same payload, same marks", () => {
   assert.match(phone, /const RP = ChatReply\(\{ log: qs\("#chat"\), input: rComposer, before: rComposer\.closest\("\.composer"\)/);
   assert.match(phone, /const quote = RP\.take\(\);/);
   assert.match(phone, /if \(quote\) body\.replyTo = \{ id: quote\.id, side: quote\.side \};/);
-  assert.match(phone, /if \(next\) deliverRobert\(next\.text, next\.el, undefined, next\.quote\);/);
-  assert.match(phone, /RP\.mark\(bubble\("rob", e\.reply\), e\.id, "reply"\)/);
+  assert.match(phone, /if \(next\) deliverRobert\(next\.text, next\.el, next\.ws, next\.quote\);/);
+  assert.match(phone, /streamed\.className = "bub rob";/);
   assert.match(phone, /ChatReply\.fromRow\(m\)/);
   // The PWA shell caches it, under a new version so an installed phone picks it up.
   assert.match(sw, /"\/chat-reply\.js"/);
-  assert.doesNotMatch(sw, /const VERSION = "v8";/);
+  assert.doesNotMatch(sw, /const VERSION = "v10";/);
 });

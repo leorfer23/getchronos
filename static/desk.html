@@ -1413,7 +1413,6 @@
     </div>
     <div class="chat-att" id="chat-att" hidden></div>
     <form class="chat-ask" id="chat-ask">
-      <select class="wspick" id="chat-ws" title="Which rows you see. Only a view: it never moves on its own and never decides where a line goes — Robert reads the project from what you write"></select>
       <textarea id="chat-input" rows="1" placeholder="Ask Robert… · # to name a project"></textarea>
       <button class="btn primary" id="chat-send">Ask</button>
     </form>
@@ -4604,7 +4603,7 @@ async function openFromHash() {
 // ── Robert, in the corner ────────────────────────────────────────────────────────────────────
 // The same warm manager thread the Mission UI talks to (`/api/agent`), so what you tell him here he
 // remembers there. His answer streams over the bus the rail already uses.
-const OV = { log: qs("#chat-log"), pending: null, busy: false, unread: 0, queue: [], stopped: false, filter: (() => { try { return localStorage.getItem("desk-chat-filter") || null; } catch { return null; } })(), sticky: null, histGen: 0, drawn: new Map(), awaitTurn: null, awaitT: 0 };
+const OV = { log: qs("#chat-log"), pending: null, busy: false, unread: 0, queue: [], stopped: false, sticky: null, histGen: 0, drawn: new Map(), awaitTurn: null, awaitT: 0 };
 // This tab's id on every turn it sends: the bus echoes it, so a line typed or spoken on the phone
 // (same "web" surface) is drawn here, and only the line this tab already drew is skipped.
 const CLIENT = "desk-" + Math.random().toString(36).slice(2, 12);
@@ -4642,7 +4641,7 @@ const DW = {
   board: false,             // #fleet has been mounted
 };
 // The whole surface a widget module sees. Keep it exactly this shape — the README is the contract.
-window.DeskWidgets = { S, api, esc, chipLabel, toast, stage: (id) => select(id), pickWs, wsName, wsColor, byId };
+window.DeskWidgets = { S, api, esc, chipLabel, toast, stage: (id) => select(id), wsName, wsColor, byId };
 
 // One alphabet for names, everywhere: the registry key, the file name and the url segment are the
 // same string, so a name that cannot be a file is dropped here instead of becoming a 404 on the wire.
@@ -5667,9 +5666,8 @@ function wsHue(key) {
   for (const c of String(key)) h = (h * 31 + c.charCodeAt(0)) % 360;
   return h;
 }
-// One exchange shows ONE chip — on your line when there is one — but BOTH bubbles carry the project,
-// or filtering to it would hide half of every row. `ws === undefined` means the turn is in flight and
-// the answer will fill it in; "?" until then, so a filter matches neither it nor the fleet.
+// One exchange shows ONE chip — on your line when there is one — but BOTH bubbles carry the project.
+// `ws === undefined` means the turn is in flight and the answer will fill it in.
 function setChip(el, ws, chip = true) {
   if (!el) return;
   el.dataset.ws = ws === undefined ? "?" : ws || "";
@@ -5680,12 +5678,11 @@ function setChip(el, ws, chip = true) {
   c.className = "wsc";
   c.textContent = w ? "#" + w.slug : ws ? "#?" : "fleet";
   c.style.setProperty("--wsc", `hsl(${wsHue(w?.slug || "fleet")} 65% 55%)`);
-  c.title = w ? w.name + " — click to show only this project" : "the whole shop — click to show every project";
+  c.title = w ? w.name : "the whole shop";
   el.prepend(c);
-  el.classList.toggle("hidden-ws", offFilter(el));
 }
-const offFilter = (el) => OV.filter !== null && !el._own && (el.dataset.ws || "") !== OV.filter;
-// `own`: a row of an exchange typed on this page — it shows whatever the filter is.
+// Label only: the project chip shows where the line landed. Routing is #tags + the daemon's router
+// (+ a reply rides the parent's project). No view filter — one timeline, every project.
 function ovLine(cls, text, ws, chip = true, own = false) {
   const d = document.createElement("div");
   d.className = "bub " + cls;
@@ -5699,17 +5696,7 @@ function ovLine(cls, text, ws, chip = true, own = false) {
   OV.log.scrollTop = OV.log.scrollHeight;
   return d;
 }
-// Click a chip → show only that project (its chip again, or "fleet" → everything). Hover → dim the
-// rest, so you can see what belongs together without filtering.
-function applyWsFilter() {
-  for (const b of qsa(".bub", OV.log)) b.classList.toggle("hidden-ws", offFilter(b));
-}
-OV.log.addEventListener("click", (e) => {
-  const c = e.target.closest(".wsc");
-  if (!c) return;
-  const ws = c.parentElement.dataset.ws || "";
-  pickWs(ws && ws !== OV.filter && wsById(ws) ? ws : null);
-});
+// Hover a chip → dim the rest, so you can see what belongs together.
 OV.log.addEventListener("mouseover", (e) => {
   const c = e.target.closest(".wsc");
   if (!c) return;
@@ -5721,23 +5708,6 @@ OV.log.addEventListener("mouseout", (e) => {
   for (const b of qsa(".bub", OV.log)) b.classList.remove("faded");
 });
 
-function renderWsPick() {
-  const sel = qs("#chat-ws");
-  const cur = OV.filter || "";
-  sel.innerHTML = `<option value="">all</option>` + S.workspaces.map((w) => `<option value="${w.id}"${w.id === cur ? " selected" : ""}>${esc(w.slug)}</option>`).join("");
-  sel.value = cur;
-  sel.classList.toggle("on", !!cur);
-}
-qs("#chat-ws").onchange = (e) => pickWs(e.target.value || null);
-// The view filter (null = every project). Routing never reads it; the log is redrawn from that
-// project's own history (mid-turn it just narrows, so nothing in flight is lost).
-function pickWs(ws) {
-  OV.filter = ws || null;
-  try { if (OV.filter) localStorage.setItem("desk-chat-filter", OV.filter); else localStorage.removeItem("desk-chat-filter"); } catch {}
-  renderWsPick();
-  applyWsFilter();
-  if (!OV.busy && !OV.queue.length) ovHistory(true);
-}
 function chatOpen(open) {
   document.body.classList.toggle("chat-open", open);
   localStorage.setItem("desk-chat", open ? "1" : "0");
@@ -5787,13 +5757,12 @@ qs("#chat-model").onchange = async () => {
   } catch (e) { toast(e.message); loadRobertModel(); }
 };
 qs("#chat-new").onclick = async () => {
-  // One thread, N conversations: this resets one of them — the filtered project, else the one his
-  // last answer landed on — not all of them.
-  const target = OV.filter || OV.sticky || null;
+  // One thread, N conversations: this resets the one his last answer landed on — not all of them.
+  const target = OV.sticky || null;
   const w = target ? wsById(target) : null;
   if (!confirm(`New conversation${w ? " for #" + w.slug : " (the whole shop)"}? He keeps the transcript but forgets the context.`)) return;
   try { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: target }) }); } catch (e) { return toast(e.message); }
-  if (OV.filter) OV.log.innerHTML = ""; else ovHistory(true);
+  ovHistory(true);
   toast("new conversation" + (w ? " · #" + w.slug : ""));
 };
 const input0 = qs("#chat-input");
@@ -6132,20 +6101,17 @@ OV.log.addEventListener("click", (e) => {
   const box = b.closest(".steps"); if (box.classList.contains("live")) return;
   box.classList.toggle("open");
 });
-// The log is the filter's history. No filter → ws=all: every project's rows and the unscoped ones,
-// one timeline, each chipped with its project. A filtered project → that thread's own last rows, so
-// a busy fleet cannot crowd it out. `reload` = the filter moved: redraw from scratch.
+// The log is every project's rows and the unscoped ones, one timeline, each chipped with its
+// project. Routing is #tags + the daemon — no view filter.
 async function ovHistory(reload = false) {
   try {
     if (!reload) {
       const sticky = await api("/thread/route").catch(() => null);
       OV.sticky = sticky?.sticky?.ws ?? null;
-      renderWsPick();
-      applyWsFilter();
     }
     const gen = ++OV.histGen;
-    const h = await api(OV.filter ? "/agent/history?ws=" + encodeURIComponent(OV.filter) + "&limit=16" : "/agent/history?ws=all&limit=16");
-    if (gen !== OV.histGen) return; // the picker moved again while this was in flight
+    const h = await api("/agent/history?ws=all&limit=40");
+    if (gen !== OV.histGen) return;
     if (reload) OV.log.innerHTML = "";
     for (const m of h.messages || []) {
       if (m.source === "divider") continue;
@@ -6682,7 +6648,10 @@ function connectBus() {
     if (e.topic === "agent.push") {
       if (e.source === "divider") return;
       ovWork(OV.busy || OV.queue.length > 0, "queued…");
-      if (OV.pending) { OV.pending.remove(); OV.pending = null; }
+      // Promote the streaming bubble into the final reply — do not remove+redraw (that flash is what
+      // made "thinking → answer → answer again" feel broken).
+      const streamed = OV.pending;
+      if (streamed) { OV.pending = null; streamed.classList.remove("pending"); }
       // A turn from another surface (the phone, a watch report) has no bubble of yours to chip — its
       // row carries the chip instead.
       const fromHere = e.client === CLIENT;
@@ -6695,9 +6664,22 @@ function connectBus() {
       if (!fromHere && !drawn && e.you) { const yb = RP.mark(ovLine("you", e.you, e.ws ?? null), e.id, "you"); RP.quote(yb, e.quote); attBubble(yb, e.attachments); }
       settleSteps(e.turn, e.steps, e.ws ?? null);
       if (e.reply) {
-        // Your own turn's chip is on the line you typed, which this page already drew.
-        RP.mark(ovLine("rob", e.reply, e.ws ?? null, !fromHere && !e.you, fromHere), e.id, "reply");
+        if (streamed && streamed.isConnected) {
+          streamed.className = "bub rob";
+          streamed._raw = e.reply;
+          streamed.innerHTML = mdChat(e.reply);
+          streamed._own = fromHere;
+          dwEmbed(streamed);
+          AskCard.embed(streamed);
+          setChip(streamed, e.ws ?? null, !fromHere && !e.you);
+          RP.mark(streamed, e.id, "reply");
+        } else {
+          if (streamed) streamed.remove();
+          RP.mark(ovLine("rob", e.reply, e.ws ?? null, !fromHere && !e.you, fromHere), e.id, "reply");
+        }
         if (!chatIsOpen()) { OV.unread++; const b = qs("#fab-unread"); b.textContent = OV.unread; b.hidden = false; }
+      } else if (streamed) {
+        streamed.remove();
       }
       // Free the composer: POST returned ages ago; this push is the turn finishing.
       if (OV.awaitTurn && (OV.awaitTurn === e.turn || OV.awaitTurn === "lost")) ovRelease(e.turn || null);

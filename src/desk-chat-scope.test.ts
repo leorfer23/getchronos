@@ -3,47 +3,41 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-// The Desk chat with Robert: ONE chat, routed by the daemon. The composer's picker is only a view
-// filter — the operator's alone: nothing he answers moves it, it never decides where a line goes,
-// and the operator's own exchanges stay on screen through it.
+// The Desk chat with Robert: ONE chat, routed by the daemon. No view-filter picker — routing is
+// #tags + the smart router (+ a reply rides the parent's project). The chips on bubbles are labels.
 const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
 
-test("the picker is a view filter: it never posts a sticky and nothing routes on it", () => {
-  assert.match(html, /qs\("#chat-ws"\)\.onchange = \(e\) => pickWs\(e\.target\.value \|\| null\);/);
-  assert.match(html, /function pickWs\(ws\) \{\s*OV\.filter = ws \|\| null;/);
+test("no workspace view filter: the line goes out with no ws, the router decides", () => {
+  assert.doesNotMatch(html, /id="chat-ws"/);
+  assert.doesNotMatch(html, /desk-chat-filter/);
+  assert.doesNotMatch(html, /function pickWs\(/);
+  assert.doesNotMatch(html, /OV\.filter/);
   assert.doesNotMatch(html, /api\("\/thread\/sticky"/);
-  // The line goes out with no ws: the router reads the project from the text.
+  // The line goes out with no ws: the router reads the project from the text / sticky / reply.
   assert.match(html, /const body = \{ text: item\.text, session: S\.active \|\| null, client: CLIENT \};/);
-  // It survives a reload.
-  assert.match(html, /localStorage\.getItem\("desk-chat-filter"\)/);
 });
 
-test("switching the filter redraws the log from that project's own history — not mid-turn", () => {
-  assert.match(html, /if \(!OV\.busy && !OV\.queue\.length\) ovHistory\(true\);/);
+test("history is one timeline across every project", () => {
   assert.match(html, /async function ovHistory\(reload = false\)/);
-  assert.match(html, /OV\.filter \? "\/agent\/history\?ws=" \+ encodeURIComponent\(OV\.filter\) \+ "&limit=16" : "\/agent\/history\?ws=all&limit=16"/);
+  assert.match(html, /\/agent\/history\?ws=all&limit=40/);
   assert.match(html, /if \(reload\) OV\.log\.innerHTML = "";/);
-  // Two quick switches: only the last fetch paints.
   assert.match(html, /const gen = \+\+OV\.histGen;/);
   assert.match(html, /if \(gen !== OV\.histGen\) return;/);
 });
 
-test("where his answer lands never moves the filter; a chip is a shortcut to it", () => {
+test("chips are labels; a tap on one does not filter the log", () => {
   assert.doesNotMatch(html, /noteLanding/);
-  // Accepted turn: chip from the POST's ws, row id stamped later from agent.push via OV.drawn.
   assert.match(html, /setChip\(item\.bub, r\?\.ws \?\? null\); OV\.sticky = r\?\.ws \?\? null;/);
   assert.match(html, /if \(r\?\.accepted && r\?\.turn\) \{ OV\.drawn\.set\(r\.turn, item\.bub\); ovAwait\(r\.turn\); hold = true; \}/);
-  assert.match(html, /pickWs\(ws && ws !== OV\.filter && wsById\(ws\) \? ws : null\);/);
-  // Asking about a terminal routes on its id in the text; the filter stays put.
-  assert.doesNotMatch(html, /pickWs\(s\.workspace_id/);
+  // Chip click no longer filters; hover still dims siblings. (steps .sh still has its own click.)
+  assert.doesNotMatch(html, /closest\("\.wsc"\).*pickWs|pickWs\(ws && ws/);
+  assert.match(html, /OV\.log\.addEventListener\("mouseover"/);
 });
 
-test("your own exchanges show through the filter, whatever project they land on", () => {
-  assert.match(html, /const offFilter = \(el\) => OV\.filter !== null && !el\._own && \(el\.dataset\.ws \|\| ""\) !== OV\.filter;/);
-  assert.match(html, /ovLine\("you" \+ \(OV\.busy \? " queued" : ""\), text, undefined, true, true\)/);
-  assert.match(html, /OV\.pending = ovLine\("rob pending", "", e\.ws \?\? null, false, e\.client === CLIENT\);/);
-  assert.match(html, /ovLine\("rob", e\.reply, e\.ws \?\? null, !fromHere && !e\.you, fromHere\), e\.id, "reply"\);/);
-  assert.match(html, /const d = ovLine\("rob", r\.reply, null, false, true\);/);
+test("a streamed reply is promoted in place — never remove+redraw", () => {
+  assert.match(html, /const streamed = OV\.pending;/);
+  assert.match(html, /streamed\.className = "bub rob";/);
+  assert.doesNotMatch(html, /if \(OV\.pending\) \{ OV\.pending\.remove\(\); OV\.pending = null; \}/);
 });
 
 test("a dropped request is a note, not a failure — the turn's answer still lands from the bus", () => {

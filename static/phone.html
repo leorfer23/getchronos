@@ -426,7 +426,6 @@
       <button class="askn" id="r-asks" hidden>? 0</button>
       <button class="ic" id="r-reset" aria-label="New thread" title="New thread">↺</button>
     </div>
-    <div class="rstrip" id="rstrip"></div>
     <div class="askpop" id="r-askpop" hidden></div>
     <div class="chat" id="chat"></div>
     <div class="composer">
@@ -1718,15 +1717,15 @@ fcomposer.addEventListener("input", () => { fcomposer.style.height = ""; fcompos
 
 // ── Robert ──────────────────────────────────────────────────────────────────
 // ONE chat, same as the Desk's: you never pick a conversation — the daemon reads the project out of
-// each line (#tag, ticket key, project name, where the last one landed) and hands it to that
-// project's own Robert, asking only when it cannot tell. The strip is a VIEW filter (R.ws), nothing
-// more: it never decides where a line goes, and your own exchanges show through it.
+// each line (#tag, ticket key, project name, the bubble you are answering, where the last one landed)
+// and hands it to that project's own Robert, asking only when it cannot tell. No view filter: one
+// timeline, chips on the bubbles show where each line landed. Type `#` to name a project.
 // POST /agent returns at once with a turn id; replies stream on agent.delta and land whole on
 // agent.push. Holding the HTTP response open used to die on the Cloudflare tunnel (~100s). One
 // bubble per turn (R.pend), so two turns streaming at once never mix or cut. R.awaitTurn holds the
 // composer until that push (or a history re-read) so the outbox does not fire early.
-const R = { busy: false, mine: null, mineYou: null, pend: new Map(), seen: new Set(), lost: false, loaded: false, ws: localStorage.getItem("phone-robert-ws") || null, outbox: [], awaitTurn: null, awaitT: 0 };
-const ourThread = (ws) => !String(ws || "").startsWith("agent:") && (!R.ws || (ws || null) === R.ws);
+const R = { busy: false, mine: null, mineYou: null, pend: new Map(), seen: new Set(), lost: false, loaded: false, outbox: [], awaitTurn: null, awaitT: 0, sticky: null };
+const ourThread = (ws) => !String(ws || "").startsWith("agent:");
 const md = (t) => (window.DOMPurify && window.marked) ? DOMPurify.sanitize(marked.parse(t || "")) : esc(t);
 // An 8-char id in his text is a terminal he is talking about: a chip that opens its story.
 function mdRob(text) {
@@ -1737,38 +1736,26 @@ qs("#chat").addEventListener("click", (e) => { const a = e.target.closest('a[hre
 function bubble(kind, text) {
   const log = qs("#chat"); const d = document.createElement("div");
   d.className = "bub " + kind; d._raw = text;
-  if (kind === "rob") { d.innerHTML = mdRob(text); AskCard.embed(d); } else d.textContent = text;
+  if (kind === "rob" || kind.startsWith("rob ")) { d.innerHTML = mdRob(text); AskCard.embed(d); } else d.textContent = text;
   log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
 }
 async function robertHistory() {
   if (R.loaded) return; R.loaded = true;
   qs("#chat").innerHTML = "";
-  try { const h = await api("/agent/history?limit=20&ws=" + encodeURIComponent(R.ws || "all")); for (const m of h.messages || []) { if (m.source === "divider") continue; if (m.you) RP.quote(RP.mark(bubble("you", m.you), m.id, "you"), ChatReply.fromRow(m)); if (m.reply) RP.mark(bubble("rob", m.reply), m.id, "reply"); } }
+  try { const h = await api("/agent/history?limit=40&ws=all"); for (const m of h.messages || []) { if (m.source === "divider") continue; if (m.you) RP.quote(RP.mark(bubble("you", m.you), m.id, "you"), ChatReply.fromRow(m)); if (m.reply) RP.mark(bubble("rob", m.reply), m.id, "reply"); } }
   catch {}
   qs("#chat").scrollTop = qs("#chat").scrollHeight;
 }
-function renderRStrip() {
-  const chip = (id, name) => `<button class="chip${(R.ws || null) === id ? " on" : ""}" data-rws="${id || ""}">${esc(name)}</button>`;
-  qs("#rstrip").innerHTML = chip(null, "All") + S.workspaces.map((w) => chip(w.id, w.name)).join("");
-}
-qs("#rstrip").onclick = (e) => {
-  const c = e.target.closest("[data-rws]"); if (!c) return;
-  fx.tap(); R.ws = c.dataset.rws || null;
-  if (R.ws) localStorage.setItem("phone-robert-ws", R.ws); else localStorage.removeItem("phone-robert-ws");
-  R.mine = null; R.pend.clear();
-  R.loaded = false; renderRStrip(); robertHistory();
-  for (const q of R.outbox) { q.el.classList.add("queued"); qs("#chat").appendChild(q.el); }
-};
 function showRobert() {
   show("v-robert", "in-right");
-  renderRStrip(); robertHistory();
-  api("/agent/warm", { method: "POST", body: JSON.stringify({ ws: R.ws }) }).catch(() => {});
+  robertHistory();
+  api("/agent/warm", { method: "POST", body: JSON.stringify({ ws: R.sticky }) }).catch(() => {});
 }
 qs("#btn-robert").onclick = () => { fx.tap(); showRobert(); };
 // The Ask widget: cards in his thread, and every open question behind "? N" (static/ask-card.js).
 AskCard.init({ api, toast, sessions: () => S.sessions, askOf, who: (s) => sTitle(s).slice(0, 40), button: qs("#r-asks"), panel: qs("#r-askpop"), log: qs("#chat") });
 qs("#r-back").onclick = () => { fx.tap(); show("v-home", "in-left"); renderHome(); };
-qs("#r-reset").onclick = () => confirmSheet(R.ws ? `Start a new thread with Robert on ${wsName(R.ws)}?` : "Start a new desk-wide thread with Robert?", "New thread", async () => { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: R.ws }) }); qs("#chat").innerHTML = ""; toast("new thread"); });
+qs("#r-reset").onclick = () => confirmSheet(R.sticky ? `Start a new thread with Robert on ${wsName(R.sticky)}?` : "Start a new desk-wide thread with Robert?", "New thread", async () => { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: R.sticky }) }); qs("#chat").innerHTML = ""; R.loaded = false; toast("new thread"); });
 const rComposer = qs("#r-composer");
 // Tap a bubble → ↩ → it is quoted above the composer and the next line answers it (static/chat-reply.js).
 const RP = ChatReply({ log: qs("#chat"), input: rComposer, before: rComposer.closest(".composer"), onMissing: () => toast("that message is further back than the chat shows") });
@@ -1777,6 +1764,8 @@ const CLIENT = "phone-" + Math.random().toString(36).slice(2, 12);
 // A message typed while he is mid-turn is not lost and not refused: it parks in an outbox (dimmed
 // bubble) and goes out the moment the current turn lands — same as the Desk's composer. The daemon
 // serialises his turns anyway; what was missing was a place on the phone to hold the next one.
+// `ws` on an outbox item is only set when you tapped a project on his "which one?" line — preserve
+// it so a queued pick does not re-ask or land on the sticky of a different turn.
 function askRobert() {
   const text = rComposer.value.trim();
   if (!text) return;
@@ -1791,7 +1780,7 @@ function robRelease(turn) {
   clearTimeout(R.awaitT); R.awaitT = 0; R.awaitTurn = null;
   R.busy = false; reloadSoon();
   const next = R.outbox.shift();
-  if (next) deliverRobert(next.text, next.el, undefined, next.quote);
+  if (next) deliverRobert(next.text, next.el, next.ws, next.quote);
 }
 function robAwait(turn) {
   R.awaitTurn = turn;
@@ -1816,6 +1805,7 @@ async function deliverRobert(text, el, ws, quote) {
     if (quote) body.replyTo = { id: quote.id, side: quote.side };
     const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
     if (r?.how === "ask") { dropMine(); askWhere(r, text, quote); return; }
+    if (r?.ws) R.sticky = r.ws;
     // Accepted: keep busy until agent.push for this turn. No reply rides the POST any more.
     if (r?.accepted && r?.turn) { robAwait(r.turn); hold = true; return; }
     RP.mark(el, r?.id, "you");
@@ -1843,9 +1833,10 @@ function askWhere(r, text, quote) {
   row.onclick = (e) => {
     const b = e.target.closest("[data-ws]"); if (!b) return;
     fx.tap(); row.remove();
+    const picked = b.dataset.ws || null;
     const el = RP.quote(bubble("you", text), quote);
-    if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el, quote }); return; }
-    deliverRobert(text, el, b.dataset.ws || null, quote);
+    if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el, quote, ws: picked }); return; }
+    deliverRobert(text, el, picked, quote);
   };
   d.appendChild(row); qs("#chat").scrollTop = qs("#chat").scrollHeight;
 }
@@ -2006,15 +1997,35 @@ function connectBus() {
       if (e.source === "divider" || !(mine || ourThread(e.ws))) return;
       if (e.turn && R.seen.has(e.turn)) return;
       if (e.turn) R.seen.add(e.turn);
-      const b = R.pend.get(e.turn || "?"); if (b) { b.remove(); R.pend.delete(e.turn || "?"); }
+      if (e.ws) R.sticky = e.ws;
+      // Promote the streaming bubble into the final reply — never remove+redraw (that was the
+      // "thinking → answer → answer again" flash on the PWA).
+      const streamed = R.pend.get(e.turn || "?");
+      if (streamed) R.pend.delete(e.turn || "?");
       if (mine) {
-        dropMine(); R.lost = false;
+        if (R.mine && R.mine !== streamed) dropMine();
+        else R.mine = null;
+        R.lost = false;
         // Stamp the bubble we already drew; only re-draw if this tab lost it (navigated away).
         if (R.mineYou?.isConnected) RP.mark(R.mineYou, e.id, "you");
         else if (e.you) RP.quote(RP.mark(bubble("you", e.you), e.id, "you"), e.quote);
       }
       else if (e.you) RP.quote(RP.mark(bubble("you", e.you), e.id, "you"), e.quote); // said on the Desk (or another phone)
-      if (e.reply) { fx.reply(); RP.mark(bubble("rob", e.reply), e.id, "reply"); }
+      if (e.reply) {
+        fx.reply();
+        if (streamed && streamed.isConnected) {
+          streamed.className = "bub rob";
+          streamed._raw = e.reply;
+          streamed.innerHTML = mdRob(e.reply);
+          AskCard.embed(streamed);
+          RP.mark(streamed, e.id, "reply");
+        } else {
+          if (streamed) streamed.remove();
+          RP.mark(bubble("rob", e.reply), e.id, "reply");
+        }
+      } else if (streamed) {
+        streamed.remove();
+      }
       // Free the composer: POST returned ages ago; this push is the turn finishing.
       if (R.awaitTurn && (R.awaitTurn === e.turn || R.awaitTurn === "lost")) robRelease(e.turn || null);
       return;
@@ -2124,7 +2135,7 @@ function handleHash() {
   history.replaceState(null, "", location.pathname);
   const go = () => {
     if (h.startsWith("s=")) { const id = h.slice(2); if (byId(id)) openFocus(id); else toast("that terminal is gone"); }
-    else if (h.startsWith("robert")) { R.loaded = false; showRobert(); } // the filter is yours: a notification never moves it
+    else if (h.startsWith("robert")) { R.loaded = false; showRobert(); } // deep link opens his thread; routing stays on #tags / sticky / reply
   };
   if (S.loaded) go(); else document.addEventListener("phone:loaded", go, { once: true });
 }
