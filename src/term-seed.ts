@@ -10,10 +10,15 @@
 //     machine two went quiet mid-boot, got typed at, and kept only the TAIL of the seed (≈ full −
 //     1024 bytes). The tty was still in cooked mode, which holds 1024 bytes (MAX_INPUT) and drops
 //     them when the CLI switches to raw — the input box never saw the start of its task.
+//   · A CLI that never announces its input has only silence to go on. Six cursor-agent terminals a
+//     Lead opened (2026-09-26) booted silent past the floor, were typed at in cooked mode, and kept
+//     only the HEAD this time: the first 1024 bytes, the Focus contract up to "No filler, no" — the
+//     brief after it never arrived.
 // So: wait until the CLI says its input is up (it turns bracketed paste on, DEC 2004, when the box
-// mounts), and for the boot chatter to stop — with a floor, and a ceiling for a CLI that never
-// settles — hand the prompt over as ONE paste, then press Enter by itself.
+// mounts), for the boot chatter to stop, and for the tty itself to leave cooked mode — with a floor,
+// and a ceiling for a CLI that never settles — hand the prompt over as ONE paste, then press Enter by itself.
 // Shared by the brain (terminal.ts) and a host (hostd/terminals.ts): one negotiation, typed next to its pty.
+import { execFileSync } from "node:child_process";
 import type { ModeTracker } from "./term-modes.js";
 
 export const SEED_MIN_MS = 2500;    // never before this: no CLI is ready sooner
@@ -57,6 +62,25 @@ export interface SeedTarget {
   modes: ModeTracker;
   /** The terminal is gone (exited, or replaced under the same id): stop waiting. */
   gone?(): boolean;
+  /** Is the tty still in cooked (canonical) mode? null = can't tell. See ttyCooked. */
+  cooked?(): boolean | null;
+}
+
+/**
+ * Whether a pty's line discipline is still canonical, read from the tty itself (`stty`), or null when
+ * it can't be read. The one readiness signal every CLI gives, announced or not: a TUI goes raw to read
+ * keys, and until it does the kernel keeps at most 1024 bytes of an unsent line.
+ * Takes the pty, not a path: node-pty's `ptsName` (the slave tty) is a Unix getter its typings omit.
+ */
+export function ttyCooked(pty: object): boolean | null {
+  const tty = (pty as { ptsName?: unknown }).ptsName;
+  if (typeof tty !== "string" || !tty || process.platform === "win32") return null;
+  try {
+    const out = execFileSync("stty", ["-a", process.platform === "darwin" ? "-f" : "-F", tty], { stdio: ["ignore", "pipe", "ignore"], timeout: 1000 }).toString();
+    if (/(^|\s)-icanon(\s|$)/.test(out)) return false;
+    if (/(^|\s)icanon(\s|$)/.test(out)) return true;
+  } catch {}
+  return null;
 }
 
 export function typeSeed(
@@ -73,7 +97,8 @@ export function typeSeed(
     if (t.gone?.()) return void clearInterval(tick);
     const waited = Date.now() - started;
     if (waited < minMs) return;
-    const ready = (!waitInput || t.modes.isOn(2004)) && Date.now() - t.lastOut() >= quietMs;
+    // The tty check goes last: it forks stty, so only once the cheap signals already say "ready".
+    const ready = (!waitInput || t.modes.isOn(2004)) && Date.now() - t.lastOut() >= quietMs && t.cooked?.() !== true;
     if (!ready && waited < maxMs) return;
     clearInterval(tick);
     try {
