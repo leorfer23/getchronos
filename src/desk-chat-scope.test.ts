@@ -30,7 +30,9 @@ test("switching the filter redraws the log from that project's own history — n
 
 test("where his answer lands never moves the filter; a chip is a shortcut to it", () => {
   assert.doesNotMatch(html, /noteLanding/);
-  assert.match(html, /else \{ setChip\(item\.bub, r\?\.ws \?\? null\); OV\.sticky = r\?\.ws \?\? null; RP\.mark\(item\.bub, r\?\.id, "you"\); \}/);
+  // Accepted turn: chip from the POST's ws, row id stamped later from agent.push via OV.drawn.
+  assert.match(html, /setChip\(item\.bub, r\?\.ws \?\? null\); OV\.sticky = r\?\.ws \?\? null;/);
+  assert.match(html, /if \(r\?\.accepted && r\?\.turn\) \{ OV\.drawn\.set\(r\.turn, item\.bub\); ovAwait\(r\.turn\); hold = true; \}/);
   assert.match(html, /pickWs\(ws && ws !== OV\.filter && wsById\(ws\) \? ws : null\);/);
   // Asking about a terminal routes on its id in the text; the filter stays put.
   assert.doesNotMatch(html, /pickWs\(s\.workspace_id/);

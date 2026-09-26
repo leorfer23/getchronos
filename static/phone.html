@@ -1721,10 +1721,11 @@ fcomposer.addEventListener("input", () => { fcomposer.style.height = ""; fcompos
 // each line (#tag, ticket key, project name, where the last one landed) and hands it to that
 // project's own Robert, asking only when it cannot tell. The strip is a VIEW filter (R.ws), nothing
 // more: it never decides where a line goes, and your own exchanges show through it.
-// Replies stream over the bus (agent.delta) and land whole on agent.push — the push, not the POST
-// response, is what draws his answer, so a long turn that outlives the tunnel's request timeout
-// still arrives. One bubble per turn (R.pend), so two turns streaming at once never mix or cut.
-const R = { busy: false, mine: null, mineYou: null, pend: new Map(), seen: new Set(), lost: false, loaded: false, ws: localStorage.getItem("phone-robert-ws") || null, outbox: [] };
+// POST /agent returns at once with a turn id; replies stream on agent.delta and land whole on
+// agent.push. Holding the HTTP response open used to die on the Cloudflare tunnel (~100s). One
+// bubble per turn (R.pend), so two turns streaming at once never mix or cut. R.awaitTurn holds the
+// composer until that push (or a history re-read) so the outbox does not fire early.
+const R = { busy: false, mine: null, mineYou: null, pend: new Map(), seen: new Set(), lost: false, loaded: false, ws: localStorage.getItem("phone-robert-ws") || null, outbox: [], awaitTurn: null, awaitT: 0 };
 const ourThread = (ws) => !String(ws || "").startsWith("agent:") && (!R.ws || (ws || null) === R.ws);
 const md = (t) => (window.DOMPurify && window.marked) ? DOMPurify.sanitize(marked.parse(t || "")) : esc(t);
 // An 8-char id in his text is a terminal he is talking about: a chip that opens its story.
@@ -1785,32 +1786,50 @@ function askRobert() {
   if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el, quote }); return; }
   deliverRobert(text, el, undefined, quote);
 }
+function robRelease(turn) {
+  if (turn && R.awaitTurn && turn !== R.awaitTurn) return;
+  clearTimeout(R.awaitT); R.awaitT = 0; R.awaitTurn = null;
+  R.busy = false; reloadSoon();
+  const next = R.outbox.shift();
+  if (next) deliverRobert(next.text, next.el, undefined, next.quote);
+}
+function robAwait(turn) {
+  R.awaitTurn = turn;
+  clearTimeout(R.awaitT);
+  // Push lost: re-read the thread and free the composer. Covers a long Opus turn + a quiet bus.
+  R.awaitT = setTimeout(() => {
+    if (R.awaitTurn !== turn) return;
+    R.awaitTurn = null; R.lost = true; R.loaded = false; R.mine = null; R.pend.clear();
+    robertHistory().finally(() => robRelease(null));
+  }, 180_000);
+}
 // `ws` only when you tapped a project on his "which one?" line — that is as explicit as a #tag.
 // `quote` = the bubble this line answers.
 async function deliverRobert(text, el, ws, quote) {
-  R.busy = true; el.classList.remove("queued");
+  R.busy = true; el.classList.remove("queued"); R.awaitTurn = null;
   R.mineYou = el;
   if (!R.mine) R.mine = bubble("rob pending", "");
+  let hold = false;
   try {
     const body = { text, client: CLIENT };
     if (ws !== undefined) { body.ws = ws; body.route = false; }
     if (quote) body.replyTo = { id: quote.id, side: quote.side };
     const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
     if (r?.how === "ask") { dropMine(); askWhere(r, text, quote); return; }
+    // Accepted: keep busy until agent.push for this turn. No reply rides the POST any more.
+    if (r?.accepted && r?.turn) { robAwait(r.turn); hold = true; return; }
     RP.mark(el, r?.id, "you");
-    // The push normally drew it already; this covers a bus that was down for the whole turn.
+    // Legacy sync fallback (older daemon): draw from the POST if the push has not already.
     if (r?.reply && !(r.turn && R.seen.has(r.turn))) { if (r.turn) R.seen.add(r.turn); dropMine(); fx.reply(); RP.mark(bubble("rob", r.reply), r.id, "reply"); }
   } catch (err) {
-    // The request died (tunnel timeout on a long turn, the phone slept) but the turn runs on in the
-    // daemon: keep his bubble, let agent.push fill it, and reread the thread once the bus is back.
+    // Accept itself failed. A tunnel timeout should no longer hit a long turn (POST returns before
+    // the manager runs), but if the socket dies mid-accept, keep his bubble and wait on the bus.
     if (err instanceof TypeError || [502, 503, 504, 520, 521, 522, 523, 524].includes(err.status)) {
-      R.lost = true;
-      if (R.mine) R.mine.textContent = "still on it — connection dropped, his answer will land here";
+      R.lost = true; robAwait("lost"); hold = true;
+      if (R.mine) R.mine.textContent = "still on it — his answer will land here";
     } else { dropMine(); fx.fail(); bubble("rob", "(failed: " + String(err.message).slice(0, 160) + ")"); }
   } finally {
-    R.busy = false; reloadSoon();
-    const next = R.outbox.shift();
-    if (next) deliverRobert(next.text, next.el, undefined, next.quote);
+    if (!hold) robRelease(null);
   }
 }
 function dropMine() { if (R.mine) { R.mine.remove(); R.mine = null; } }
@@ -1960,8 +1979,12 @@ function connectBus() {
   const ws = new WebSocket(`${WS_SCHEME}//${location.host}/ws?token=${encodeURIComponent(TOKEN)}&topics=${encodeURIComponent(BUS_TOPICS)}`);
   ws.onopen = () => {
     busRetry = 1000; qs("#bus-dot").className = "dot working";
-    // A turn whose request dropped may have finished while the bus was down too: reread the thread.
-    if (R.lost) { R.lost = false; R.loaded = false; R.mine = null; R.pend.clear(); robertHistory(); }
+    // A turn whose accept or push was missed while the bus was down: reread and free the composer.
+    if (R.lost || R.awaitTurn) {
+      const waiting = !!R.awaitTurn;
+      R.lost = false; R.loaded = false; R.mine = null; R.pend.clear();
+      robertHistory().finally(() => { if (waiting) robRelease(null); });
+    }
   };
   ws.onclose = () => { qs("#bus-dot").className = "dot"; setTimeout(connectBus, busRetry); busRetry = Math.min(busRetry * 2, 20000); };
   ws.onmessage = (ev) => {
@@ -1984,9 +2007,16 @@ function connectBus() {
       if (e.turn && R.seen.has(e.turn)) return;
       if (e.turn) R.seen.add(e.turn);
       const b = R.pend.get(e.turn || "?"); if (b) { b.remove(); R.pend.delete(e.turn || "?"); }
-      if (mine) { dropMine(); R.lost = false; if (e.you && !R.mineYou?.isConnected) RP.quote(RP.mark(bubble("you", e.you), e.id, "you"), e.quote); }
+      if (mine) {
+        dropMine(); R.lost = false;
+        // Stamp the bubble we already drew; only re-draw if this tab lost it (navigated away).
+        if (R.mineYou?.isConnected) RP.mark(R.mineYou, e.id, "you");
+        else if (e.you) RP.quote(RP.mark(bubble("you", e.you), e.id, "you"), e.quote);
+      }
       else if (e.you) RP.quote(RP.mark(bubble("you", e.you), e.id, "you"), e.quote); // said on the Desk (or another phone)
       if (e.reply) { fx.reply(); RP.mark(bubble("rob", e.reply), e.id, "reply"); }
+      // Free the composer: POST returned ages ago; this push is the turn finishing.
+      if (R.awaitTurn && (R.awaitTurn === e.turn || R.awaitTurn === "lost")) robRelease(e.turn || null);
       return;
     }
     if (e.topic === "focus.event") {

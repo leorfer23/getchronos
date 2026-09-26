@@ -47,6 +47,18 @@ test("a working strip says what he is doing, not just that he is busy", () => {
   assert.match(html, /"agent\.turn\.done"/);
 });
 
+test("POST returns at once; the composer stays busy until agent.push for that turn", () => {
+  // Daemon contract: accepted + turn id, manager runs detached.
+  assert.match(api, /res\.json\(\{ accepted: true, turn: turnId, ws, how: turn\.how \}\)/);
+  assert.match(api, /void \(async \(\) => \{/);
+  // Desk holds the queue on that turn id and frees it from the push (or a history re-read).
+  assert.match(html, /if \(r\?\.accepted && r\?\.turn\) \{ OV\.drawn\.set\(r\.turn, item\.bub\); ovAwait\(r\.turn\); hold = true; \}/);
+  assert.match(html, /if \(OV\.awaitTurn && \(OV\.awaitTurn === e\.turn \|\| OV\.awaitTurn === "lost"\)\) ovRelease/);
+  assert.match(html, /ovHistory\(true\)\.catch\(\(\) => \{\}\)\.finally\(\(\) => ovRelease\(null\)\)/);
+  // The old "connection dropped" copy is gone — the POST no longer outlives the tunnel.
+  assert.doesNotMatch(html, /connection dropped/);
+});
+
 test("the working strip actually hides, and the header says idle or what he is on", () => {
   // `.chat-work { display:flex }` used to beat the UA's [hidden] rule: the strip read "working…" forever.
   assert.match(html, /\.chat-work\[hidden\] \{ display:none; \}/);

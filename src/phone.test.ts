@@ -110,9 +110,10 @@ test("Robert on the phone is one routed chat: the strip only filters, and his an
   assert.match(html, /if \(!e\.text \|\| \(e\.kind && e\.kind !== "text"\) \|\| !\(mine \|\| ourThread\(e\.ws\)\)\) return;/);
   // One bubble per turn: a second turn streaming at once never cuts or mixes into yours.
   assert.match(html, /let b = R\.pend\.get\(key\);/);
-  // A request the tunnel dropped mid-turn waits for the push instead of failing.
-  assert.match(html, /if \(err instanceof TypeError \|\| \[502, 503, 504, 520, 521, 522, 523, 524\]\.includes\(err\.status\)\) \{\s*R\.lost = true;/);
-  assert.match(html, /if \(R\.lost\) \{ R\.lost = false; R\.loaded = false;/);
+  // Accepted turn: keep busy until agent.push; a lost push re-reads history.
+  assert.match(html, /if \(r\?\.accepted && r\?\.turn\) \{ robAwait\(r\.turn\); hold = true; return; \}/);
+  assert.match(html, /if \(R\.awaitTurn && \(R\.awaitTurn === e\.turn \|\| R\.awaitTurn === "lost"\)\) robRelease/);
+  assert.match(html, /robertHistory\(\)\.finally\(\(\) => \{ if \(waiting\) robRelease\(null\); \}\)/);
   assert.match(html, /TagComplete\(rComposer, \(\) => S\.workspaces\);/);
   assert.match(html, /id="rstrip"/);
 });
