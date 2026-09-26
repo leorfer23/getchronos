@@ -7,7 +7,7 @@ import { detectPrompt, renderScreen, type DeskPrompt } from "./desk-prompt.js";
 import { FLUSH_MS, clampRate, fanOut, type TermClient } from "./term-fanout.js";
 import { ScreenMirror, type Screen } from "./term-screen.js";
 import { ModeTracker } from "./term-modes.js";
-import { pasteOf, seedEnterMsFor, typeSeed } from "./term-seed.js";
+import { pasteOf, seedEnterMsFor, ttyCooked, typeSeed } from "./term-seed.js";
 import { sessions, sessionGoals, workspaces, repos, tickets, runs, jobs, notes as notesStore, kv } from "./store.js";
 import { backendAllowed, getBackend, workspaceBackends } from "./backends/index.js";
 import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow } from "./sandbox.js";
@@ -884,7 +884,7 @@ export async function openSession(
     if (!opts.resumeId) sessions.setMeta(row.id, { first_prompt: seed });
     // A remote host types it itself, next to the pty (it rode in the SpawnSpec).
     // (term-seed.ts: wait for the input box, then one paste and its own Enter.)
-    if (!remote) typeSeed({ write: (d) => entry.pty.write(d), lastOut: () => entry.lastOut, modes: entry.modes, gone: () => live.get(row.id) !== entry }, seed, backend.name);
+    if (!remote) typeSeed({ write: (d) => entry.pty.write(d), lastOut: () => entry.lastOut, modes: entry.modes, gone: () => live.get(row.id) !== entry, cooked: () => ttyCooked(entry.pty) }, seed, backend.name);
   }
 
   indexSession(row.id);

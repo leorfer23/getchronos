@@ -34,7 +34,7 @@ import { sandboxAvailable, sandboxWrap, workspaceSandboxAllow } from "../sandbox
 import { niceWrap } from "../machine.js";
 import { ensureDropDir, saveDrop } from "../drops.js";
 import { ModeTracker } from "../term-modes.js";
-import { typeSeed } from "../term-seed.js";
+import { ttyCooked, typeSeed } from "../term-seed.js";
 import { locateTranscript, transcriptIsJsonl, type FocusCtx } from "../focus.js";
 import type { AgentBackend } from "../backends/types.js";
 import { ensureRoot, hostBaseEnv, isDir, mainCheckouts, remoteKey, resolveRepos, safeRef, signalName, vetoReason } from "./resolve.js";
@@ -312,7 +312,7 @@ export class HostTerminals {
       c.tail.start();
     }
     // Type-then-Enter next to the pty (HOSTS.md: "no jitter"): the same negotiation as a local seed.
-    if (spec.seed) typeSeed({ write: (d) => c.pty.write(d), lastOut: () => c.lastOut, modes: c.modes, gone: () => !!c.exit }, spec.seed.text, backend.name, { enterMs: spec.seed.enter_after_ms });
+    if (spec.seed) typeSeed({ write: (d) => c.pty.write(d), lastOut: () => c.lastOut, modes: c.modes, gone: () => !!c.exit, cooked: () => ttyCooked(c.pty) }, spec.seed.text, backend.name, { enterMs: spec.seed.enter_after_ms });
     return { ch, pid: term.pid, cols: spec.cols, rows: spec.rows, cwd };
   }
 
