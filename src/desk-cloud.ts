@@ -79,6 +79,15 @@ export async function openCloudSession(
   // is about resume_session/context, which ride INTO dispatch above), so patching it after dispatch
   // returns is safe here.
   runs.patch(disp.run_id, { session_id: row.id });
+  // executeCloud's synchronous prologue (no repo to launch) can fail the run before the link above
+  // exists, so it could not end this row itself — do it here, and refuse loudly, rather than hand
+  // back a terminal that is already dead with nothing saying why.
+  const run = runs.get(disp.run_id);
+  if (run?.status === "failed") {
+    const why = `cloud launch failed: ${run.error ?? "unknown error"}`;
+    sessions.end(row.id, why);
+    throw new Error(why);
+  }
   return sessions.get(row.id)!;
 }
 

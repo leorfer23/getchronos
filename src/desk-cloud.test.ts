@@ -141,6 +141,24 @@ test("openCloudSession opens a real cloud terminal end to end: session + job + r
   assert.equal(cloudRunFor(row), null, "cloudRunFor stays null until the runner sets cloud_agent_id");
 });
 
+test("openCloudSession refuses loudly when the launch fails before the run is linked, and ends the row with why", async () => {
+  // A failure in executeCloud's synchronous prologue lands before openCloudSession links the run,
+  // so the runner cannot end the session itself.
+  setExecutor(async (_job: Job, runId: string) => {
+    runs.patch(runId, { status: "failed", ended_at: new Date().toISOString(), error: "cloud backend needs a repo with a GitHub remote" });
+    return "failed";
+  });
+  const ws = mkWs();
+  const repo = mkRepo(ws.id);
+  await assert.rejects(
+    () => openCloudSession({ backend: "cursor-cloud", workspace_id: ws.id, repo_id: repo.id, cwd: repo.path, role: "human", goal: "ship it" } as any),
+    /cloud launch failed: cloud backend needs a repo/,
+  );
+  const row = sessions.list({ workspace_id: ws.id })[0];
+  assert.equal(row.status, "ended");
+  assert.match(row.end_reason ?? "", /cloud launch failed/);
+});
+
 test("dispatch(): a ticketless job resolves its repo via cwd, so cursor-cloud is not wrongly refused", () => {
   stubExecutor("success");
   const ws = mkWs();

@@ -34,6 +34,7 @@ import type {
 import { gitTrackedSync, mcEnv, mcSystemText, openSession, parseAllowRaw, syncAgentsMd } from "./terminal.js";
 import { agentContext } from "./skills.js";
 import { baseJobName } from "./job-name.js";
+import { jobRepo } from "./job-repo.js";
 import { childEnv } from "./child-env.js";
 import { egressEnforced, egressEnv, egressLocked, egressPolicy } from "./egress.js";
 import { clampSandbox } from "./spawn-guard.js";
@@ -1183,8 +1184,8 @@ export async function executeCloud(job: Job, runId: string, backend: CloudBacken
   const priorRun = runs.get(runId);
   const context = priorRun?.context ?? null;
   const ws = job.workspace_id ? workspaces.get(job.workspace_id) : undefined;
-  const ctxRepoId = job.ticket_id ? tickets.get(job.ticket_id)?.repo_id ?? null : null;
-  const buildRepo = ctxRepoId ? repos.get(ctxRepoId) : undefined;
+  // Ticket's repo, else the one job.cwd sits in — a Desk cloud terminal has no ticket (desk-cloud.ts).
+  const buildRepo = jobRepo(job);
   let addDirs: string[] = [];
   try {
     if (job.add_dirs) addDirs = JSON.parse(job.add_dirs);
@@ -1195,7 +1196,14 @@ export async function executeCloud(job: Job, runId: string, backend: CloudBacken
   const cloudRepos = buildCloudRepos(buildRepo, extraRepos);
 
   const fail = (msg: string): RunStatus => {
+    console.warn(`[cloud] ${runId.slice(0, 8)}: ${msg}`);
     runs.patch(runId, { status: "failed", ended_at: new Date().toISOString(), error: msg });
+    events.add(runId, "error", { type: "error", message: msg });
+    // A Desk cloud terminal has nothing else that would say why it stopped. Linked only once
+    // openCloudSession's post-dispatch patch lands — a failure in this synchronous prologue is
+    // caught there instead.
+    const sid = runs.get(runId)?.session_id;
+    if (sid && sessions.get(sid)?.status === "live") sessions.end(sid, msg);
     bus.publish({
       topic: "run.ended",
       run_id: runId,
@@ -1233,6 +1241,10 @@ export async function executeCloud(job: Job, runId: string, backend: CloudBacken
     started_at: new Date().toISOString(),
   });
   bus.publish({ topic: "run.started", run_id: runId, job_id: job.id });
+  // The Desk tells a cloud terminal from a pty-less corpse by these ids (api.ts /desk, cloudRunFor);
+  // without them the card reads "ended" and input/kill take the local path.
+  const sessionId = runs.get(runId)?.session_id;
+  if (sessionId) sessions.setCloud(sessionId, { cloud_agent_id: launch.agentId, cloud_run_id: launch.runId, cloud_url: launch.url });
 
   const ref: CloudRef = { agentId: launch.agentId, runId: launch.runId, workspaceId: ws?.id ?? null };
   const streamResult = await streamCloudRun(backend, ref, runId, null);

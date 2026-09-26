@@ -13,7 +13,7 @@ import {
   worktreeSandboxDirs,
 } from "./runner.js";
 import { createTicket } from "./tickets.js";
-import { db, jobs, repos, runs, workspaces } from "./store.js";
+import { db, events, jobs, repos, runs, sessions, workspaces } from "./store.js";
 import type { CloudBackend, CloudLaunch, CloudLaunchOpts } from "./backends/types.js";
 import type { Repo } from "./types.js";
 
@@ -202,7 +202,7 @@ function seedCloudJob(): { job: ReturnType<typeof jobs.create>; runId: string } 
 }
 
 beforeEach(() => {
-  db.exec("DELETE FROM run_events; DELETE FROM reviews; DELETE FROM runs; DELETE FROM jobs; DELETE FROM tickets; DELETE FROM repos; DELETE FROM workspaces;");
+  db.exec("DELETE FROM run_events; DELETE FROM reviews; DELETE FROM runs; DELETE FROM jobs; DELETE FROM sessions; DELETE FROM tickets; DELETE FROM repos; DELETE FROM workspaces;");
 });
 
 test("executeCloud: launch → terminal stream → finalize, persisting the ids up front", async () => {
@@ -260,4 +260,49 @@ test("executeCloud: no repo with a GitHub remote fails fast without ever calling
   assert.equal(status, "failed");
   assert.equal(launchCalled, false);
   assert.match(runs.get(run.id)!.error ?? "", /GitHub remote/);
+});
+
+// A Desk cloud terminal (src/desk-cloud.ts): no ticket, only the repo its job.cwd sits in, and a
+// session row linked to the run. This shape used to pass dispatch's gate and then die at launch.
+function seedDeskCloudJob(): { job: ReturnType<typeof jobs.create>; runId: string; sessionId: string } {
+  const id = cn++;
+  const ws = workspaces.create({ slug: `execloud-desk-${id}`, name: "DeskCloud", config_dir: cloudCwd, default_backend: "mock", sandbox_mode: "off" });
+  const repo = repos.create({ workspace_id: ws.id, name: "r", path: cloudCwd, default_branch: "main", delivery: "pr", git_remote: "https://github.com/acme/widget.git" });
+  const job = jobs.create({ name: `desk-cloud-${id}`, goal: "g", workspace_id: ws.id, cwd: cloudCwd, sandbox: "off", backend: "test-cloud", retry_max: 0 });
+  const row = sessions.create({ workspace_id: ws.id, repo_id: repo.id, backend: "cursor-cloud", cwd: repo.path });
+  const run = runs.create(job.id, "test");
+  runs.patch(run.id, { session_id: row.id });
+  return { job, runId: run.id, sessionId: row.id };
+}
+
+test("executeCloud: a ticketless Desk terminal launches on the repo its cwd sits in, and the session learns its cloud ids", async () => {
+  const { job, runId, sessionId } = seedDeskCloudJob();
+  let launchedRepos: CloudLaunchOpts["repos"] = [];
+  const backend = fakeCloudBackend({
+    launch: async (opts) => { launchedRepos = opts.repos; return { agentId: "bc-desk", runId: "run-desk", url: "https://cursor.com/agents/bc-desk", status: "running" }; },
+  });
+
+  const status = await executeCloud(job, runId, backend);
+
+  assert.equal(status, "running", "stream ended without a terminal frame — left for the reconciler, not failed");
+  assert.deepEqual(launchedRepos, [{ url: "https://github.com/acme/widget", startingRef: "main" }]);
+  const s = sessions.get(sessionId)!;
+  assert.equal(s.cloud_agent_id, "bc-desk", "the Desk reads this to treat the row as a live cloud terminal");
+  assert.equal(s.cloud_run_id, "run-desk");
+  assert.equal(s.cloud_url, "https://cursor.com/agents/bc-desk");
+  assert.equal(s.status, "live");
+});
+
+test("executeCloud: a launch failure is not silent — the run records it and the linked terminal ends with the reason", async () => {
+  const { job, runId, sessionId } = seedDeskCloudJob();
+  const backend = fakeCloudBackend({ launch: async () => { throw new Error("cursor-cloud launch failed: 400 repo not accessible"); } });
+
+  const status = await executeCloud(job, runId, backend);
+
+  assert.equal(status, "failed");
+  assert.match(runs.get(runId)!.error ?? "", /400 repo not accessible/);
+  assert.ok(events.list(runId).some((e) => e.type === "error"), "an error event, so Focus shows why");
+  const s = sessions.get(sessionId)!;
+  assert.equal(s.status, "ended");
+  assert.match(s.end_reason ?? "", /400 repo not accessible/);
 });
