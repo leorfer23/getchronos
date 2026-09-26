@@ -94,11 +94,15 @@ test("POST /agent routes, refuses to guess, and answers with where it landed", (
   assert.match(api, /stagedSessionId: req\.body\.session \?\? null/);
   // An ask returns candidates instead of running a manager.
   assert.match(api, /if \(turn\.ask\) \{[\s\S]*?ask: \{ why: turn\.ask\.why, candidates: turn\.ask\.candidates \}/);
-  // The turn runs on the routed workspace's own manager, and the row is stored under it. `prompt` is
-  // `text` plus any attachment paths (chatAttachmentsBlock); the stored `you` stays the clean text.
-  assert.match(api, /askManagerWeb\(prompt, \(t, kind\) => bus\.publish\(\{ topic: "agent\.delta", text: t, kind, ws, client, turn: turnId \}\), runWs, \{ voice: !!req\.body\.voice, turn: turnId, focus: runWs \? null : ws \}\)/);
+  // Accepted at once with a turn id; the manager runs detached and the row is stored under the
+  // routed workspace. `prompt` is `text` plus any attachment paths; the stored `you` stays clean.
+  assert.match(api, /res\.json\(\{ accepted: true, turn: turnId, ws, how: turn\.how \}\)/);
+  assert.match(api, /void \(async \(\) => \{/);
+  assert.match(api, /askManagerWeb\(\s*prompt,\s*\(t, kind\) => bus\.publish\(\{ topic: "agent\.delta", text: t, kind, ws, client, turn: turnId \}\),\s*runWs,\s*\{ voice, turn: turnId, focus: runWs \? null : ws \}/);
   assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote\)/);
-  assert.match(api, /res\.json\(\{ reply, actions, ws, how: turn\.how, turn: turnId, id: row\.id \}\)/);
+  assert.match(api, /topic: "agent\.push"/);
+  // The reply must NOT ride the HTTP response — that is what the tunnel used to cut.
+  assert.doesNotMatch(api, /res\.json\(\{ reply, actions, ws, how: turn\.how/);
   assert.match(api, /commitTurn\(surface, turn\)/);
 });
 

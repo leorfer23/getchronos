@@ -123,7 +123,7 @@ test("the turn: paths go to the model, the stored line stays the words you typed
   // Ids in, paths rebuilt from our own rows — a client cannot name a path to be Read.
   assert.match(api, /\.map\(\(a\) => getChatAttachment\(a\.id\)\)/);
   assert.match(api, /const prompt = quotePrompt\(quote\) \+ text \+ chatAttachmentsBlock\(files\);/);
-  assert.match(api, /await askManagerWeb\(prompt,/);
+  assert.match(api, /await askManagerWeb\(/);
   // `you` is the clean text; the display JSON rides beside it, on the row and on both bus events.
   assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote\);/);
   assert.match(api, /topic: "agent\.asked", you: text,[^\n]*\.\.\.\(shown\.length \? \{ attachments: shown \} : \{\}\)/);

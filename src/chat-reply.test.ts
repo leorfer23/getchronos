@@ -39,7 +39,8 @@ test("the turn: quote read back from the row, above the words; routing and `you`
   // Every surface can draw the quote and mark the new row's bubbles.
   assert.match(api, /topic: "agent\.asked",[^\n]*\.\.\.\(quoted \? \{ quote: quoted \} : \{\}\)/);
   assert.equal((api.match(/id: row\.id,\n\s+\.\.\.\(shown\.length \? \{ attachments: shown \} : \{\}\),\n\s+\.\.\.\(quoted \? \{ quote: quoted \} : \{\}\),/g) || []).length, 2);
-  assert.match(api, /res\.json\(\{ reply, actions, ws, how: turn\.how, turn: turnId, id: row\.id \}\)/);
+  // Quote rides the bus with the accepted turn; the HTTP body only carries the turn id.
+  assert.match(api, /res\.json\(\{ accepted: true, turn: turnId, ws, how: turn\.how \}\)/);
 });
 
 test("the shared module: hover or tap shows ↩, ⎋ drops the quote, a quote click scrolls to its parent", () => {

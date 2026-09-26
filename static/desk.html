@@ -4604,7 +4604,7 @@ async function openFromHash() {
 // ── Robert, in the corner ────────────────────────────────────────────────────────────────────
 // The same warm manager thread the Mission UI talks to (`/api/agent`), so what you tell him here he
 // remembers there. His answer streams over the bus the rail already uses.
-const OV = { log: qs("#chat-log"), pending: null, busy: false, unread: 0, queue: [], stopped: false, filter: (() => { try { return localStorage.getItem("desk-chat-filter") || null; } catch { return null; } })(), sticky: null, histGen: 0, drawn: new Map() };
+const OV = { log: qs("#chat-log"), pending: null, busy: false, unread: 0, queue: [], stopped: false, filter: (() => { try { return localStorage.getItem("desk-chat-filter") || null; } catch { return null; } })(), sticky: null, histGen: 0, drawn: new Map(), awaitTurn: null, awaitT: 0 };
 // This tab's id on every turn it sends: the bus echoes it, so a line typed or spoken on the phone
 // (same "web" surface) is drawn here, and only the line this tab already drew is skipped.
 const CLIENT = "desk-" + Math.random().toString(36).slice(2, 12);
@@ -5956,14 +5956,35 @@ function ovWork(on, what) {
   dot.className = "dot working"; st.textContent = label;
   if (!OV.busy) idleT = setTimeout(() => { if (!OV.busy) ovWork(false); }, 120000);
 }
+// POST /agent returns at once with a turn id; the reply lands on agent.push. Hold the queue until
+// that push (or a history re-read) so a long turn never opens the next queued line early.
+function ovRelease(turn) {
+  if (turn && OV.awaitTurn && turn !== OV.awaitTurn) return;
+  clearTimeout(OV.awaitT); OV.awaitT = 0; OV.awaitTurn = null;
+  OV.busy = false;
+  if (OV.pending) { OV.pending.classList.remove("pending"); OV.pending = null; }
+  ovWork(OV.queue.length > 0);
+  flush();
+}
+function ovAwait(turn) {
+  OV.awaitTurn = turn;
+  clearTimeout(OV.awaitT);
+  // Push lost (bus blip): re-read the thread and free the composer. 3 min covers a long Opus turn.
+  OV.awaitT = setTimeout(() => {
+    if (OV.awaitTurn !== turn) return;
+    OV.awaitTurn = null;
+    ovHistory(true).catch(() => {}).finally(() => ovRelease(null));
+  }, 180_000);
+}
 async function flush() {
   if (OV.busy) return;
   const item = OV.queue.shift();
   if (!item) return;
   item.bub.classList.remove("queued");
-  OV.busy = true; OV.stopped = false;
+  OV.busy = true; OV.stopped = false; OV.awaitTurn = null;
   qs("#chat-work-what").dataset.last = "";
   ovWork(true, "working…");
+  let hold = false;
   try {
     // No ws: the daemon routes this turn to the right project's Robert (#tag, ticket key, project
     // name, the terminal on the stage, or wherever the last message landed). `session` is that
@@ -5980,19 +6001,28 @@ async function flush() {
     if (VC.on) body.voice = true;
     const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
     if (r?.how === "ask") { item.bub.querySelector(".wsc")?.remove(); askWhere(r, item.text, item.atts, item.quote); if (VC.on) vcAskWhere(r, item.text); }
-    else { setChip(item.bub, r?.ws ?? null); OV.sticky = r?.ws ?? null; RP.mark(item.bub, r?.id, "you"); }
+    else {
+      setChip(item.bub, r?.ws ?? null); OV.sticky = r?.ws ?? null;
+      // Accepted turn: keep busy until agent.push for this id. The you-bubble is keyed so the push
+      // can stamp its row id for reply-to.
+      if (r?.accepted && r?.turn) { OV.drawn.set(r.turn, item.bub); ovAwait(r.turn); hold = true; }
+      else if (r?.id) RP.mark(item.bub, r.id, "you");
+    }
   } catch (err) {
-    // The request dropped (tunnel, sleep) but the turn runs on in the daemon: his answer still
-    // arrives on the bus as agent.push, so this is a note, not a failure.
+    // Accept itself failed (auth, network). A tunnel timeout should no longer happen for a long
+    // turn — the POST returns before the manager runs — but if the socket dies mid-accept, keep
+    // waiting on the bus the way a dropped request used to.
     const dropped = err instanceof TypeError || [502, 503, 504, 520, 521, 522, 523, 524].includes(err.status);
-    ovLine("rob", OV.stopped ? "(stopped)" : dropped ? "(connection dropped — he is still on it, his answer lands here)" : "(failed: " + errMsg(err).slice(0, 160) + ")", null, false, true);
-    if (VC.on && !OV.stopped && !dropped) vcEnqueue(VC.lang === "es" ? "Eso falló." : "That didn't go through.");
+    if (dropped && !OV.stopped) {
+      ovLine("rob", "(still on it — his answer lands here)", null, false, true);
+      ovAwait("lost"); hold = true;
+    } else {
+      ovLine("rob", OV.stopped ? "(stopped)" : "(failed: " + errMsg(err).slice(0, 160) + ")", null, false, true);
+      if (VC.on && !OV.stopped) vcEnqueue(VC.lang === "es" ? "Eso falló." : "That didn't go through.");
+    }
   }
   finally {
-    OV.busy = false;
-    if (OV.pending) { OV.pending.classList.remove("pending"); OV.pending = null; }
-    ovWork(OV.queue.length > 0);
-    flush();
+    if (!hold) ovRelease(null);
   }
 }
 // The router refused to guess. One line, the candidates as chips — tapping one re-sends the SAME
@@ -6027,6 +6057,11 @@ async function stopTurn() {
   ovWork(true, "stopping…");
   try { await api("/command", { method: "POST", body: JSON.stringify({ line: "stop robert" }) }); }
   catch (err) { toast("stop failed: " + err.message); }
+  // Abort publishes an error push; if it never arrives, free the composer so ⌘⏎ is not stuck.
+  if (OV.awaitTurn) {
+    clearTimeout(OV.awaitT);
+    OV.awaitT = setTimeout(() => { if (OV.stopped) ovRelease(null); }, 8_000);
+  }
 }
 // ── Robert's steps ────────────────────────────────────────────────────────────────────────────
 // Every tool call in a turn arrives as a step (icon, sentence, terminal, time). One block per turn,
@@ -6664,6 +6699,8 @@ function connectBus() {
         RP.mark(ovLine("rob", e.reply, e.ws ?? null, !fromHere && !e.you, fromHere), e.id, "reply");
         if (!chatIsOpen()) { OV.unread++; const b = qs("#fab-unread"); b.textContent = OV.unread; b.hidden = false; }
       }
+      // Free the composer: POST returned ages ago; this push is the turn finishing.
+      if (OV.awaitTurn && (OV.awaitTurn === e.turn || OV.awaitTurn === "lost")) ovRelease(e.turn || null);
       return;
     }
     if (e.topic === "session.input") { if (e.by && e.by !== "operator") toast(`${e.by} → ${e.session_id.slice(0, 8)}: ${e.text}`); return; }

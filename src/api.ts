@@ -4492,8 +4492,10 @@ export function startServer() {
     }
   });
 
-  // Voice/text → manager agent (same persona as Telegram). Returns the reply + any proposed mutation;
-  // the dashboard confirms and executes a proposal itself via its admin-authed api() calls.
+  // Voice/text → manager agent (same persona as Telegram). Accepts the turn and returns at once with
+  // a turn id; the reply lands on the bus as agent.push (and as a Web Push on the phone). Holding the
+  // HTTP response open for the whole turn used to die on the Cloudflare tunnel (~100s) and show
+  // "connection dropped" on phone/Desk even though Robert kept working server-side.
   api.post("/agent", requireAdmin, validate(AgentTextSchema), async (req, res) => {
     const surface = req.body.surface || "web";
     // An explicit workspace selection wins; otherwise the thread router reads the workspace out of the
@@ -4506,7 +4508,8 @@ export function startServer() {
       stagedSessionId: req.body.session ?? null,
     });
     // Two projects match, or a work request with nothing to go on: offer the choice rather than guess.
-    // Nothing has run yet, so the tap just re-sends the same text with a ws.
+    // Nothing has run yet, so the tap just re-sends the same text with a ws. Sync on purpose: no turn
+    // id, nothing to wait for on the bus.
     if (turn.ask) {
       return res.json({ reply: askLine(turn.ask), ask: { why: turn.ask.why, candidates: turn.ask.candidates }, actions: [], ws: null, how: "ask" });
     }
@@ -4533,51 +4536,59 @@ export function startServer() {
     const quoted = quote ? { id: quote.id, side: quote.side, text: quoteExcerpt(quote.text) } : null;
     const prompt = quotePrompt(quote) + text + chatAttachmentsBlock(files);
     const shown = files.map((a) => ({ id: a.id, url: a.url, mime: a.mime, name: a.name }));
+    const voice = !!req.body.voice;
     bus.publish({ topic: "agent.asked", you: text, at: new Date().toISOString(), source: surface, ws, client, turn: turnId, ...(shown.length ? { attachments: shown } : {}), ...(quoted ? { quote: quoted } : {}) });
-    try {
-      // Stream TEXT deltas to the dashboard so it can speak sentence-by-sentence while the turn runs.
-      // Single operator → broadcast on the bus (no per-client routing). POST result stays authoritative.
-      // client + turn on every delta: the page that asked (a Desk on a voice call) speaks its own turn's
-      // sentences as they stream, and nobody else's.
-      const { reply, actions, steps } = await askManagerWeb(prompt, (t, kind) => bus.publish({ topic: "agent.delta", text: t, kind, ws, client, turn: turnId }), runWs, { voice: !!req.body.voice, turn: turnId, focus: runWs ? null : ws });
-      const row = chat.add(text, reply || "", "web", ws, steps, shown, quote);
-      chat.prune(2000);
-      bus.publish({
-        topic: "agent.push",
-        you: text,
-        reply: reply || "",
-        at: row.created_at,
-        source: "web",
-        ws,
-        client,
-        turn: turnId,
-        steps,
-        id: row.id,
-        ...(shown.length ? { attachments: shown } : {}),
-        ...(quoted ? { quote: quoted } : {}),
-      });
-      bus.publish({ topic: "agent.turn.done", ws });
-      // id = the row: both bubbles of this exchange can now be replied to.
-      res.json({ reply, actions, ws, how: turn.how, turn: turnId, id: row.id });
-    } catch (e: any) {
-      const err = "⚠️ " + String(e?.message ?? e);
-      const row = chat.add(text, err, "web", ws, null, shown, quote);
-      bus.publish({
-        topic: "agent.push",
-        you: text,
-        reply: err,
-        at: row.created_at,
-        source: "web",
-        ws,
-        client,
-        turn: turnId,
-        id: row.id,
-        ...(shown.length ? { attachments: shown } : {}),
-        ...(quoted ? { quote: quoted } : {}),
-      });
-      bus.publish({ topic: "agent.turn.done", ws });
-      res.status(500).json({ error: String(e?.message ?? e) });
-    }
+    // Accepted: the tunnel may close this socket any time; the turn runs detached and the answer
+    // rides agent.push (keyed by client+turn). Clients that miss the push re-read /agent/history.
+    res.json({ accepted: true, turn: turnId, ws, how: turn.how });
+    void (async () => {
+      try {
+        // Stream TEXT deltas so Desk/phone can speak sentence-by-sentence while the turn runs.
+        // client + turn on every delta: the page that asked speaks its own turn's sentences only.
+        const { reply, steps } = await askManagerWeb(
+          prompt,
+          (t, kind) => bus.publish({ topic: "agent.delta", text: t, kind, ws, client, turn: turnId }),
+          runWs,
+          { voice, turn: turnId, focus: runWs ? null : ws },
+        );
+        const row = chat.add(text, reply || "", "web", ws, steps, shown, quote);
+        chat.prune(2000);
+        bus.publish({
+          topic: "agent.push",
+          you: text,
+          reply: reply || "",
+          at: row.created_at,
+          source: "web",
+          ws,
+          client,
+          turn: turnId,
+          steps,
+          id: row.id,
+          ...(shown.length ? { attachments: shown } : {}),
+          ...(quoted ? { quote: quoted } : {}),
+        });
+        bus.publish({ topic: "agent.turn.done", ws });
+      } catch (e: any) {
+        const err = "⚠️ " + String(e?.message ?? e);
+        try {
+          const row = chat.add(text, err, "web", ws, null, shown, quote);
+          bus.publish({
+            topic: "agent.push",
+            you: text,
+            reply: err,
+            at: row.created_at,
+            source: "web",
+            ws,
+            client,
+            turn: turnId,
+            id: row.id,
+            ...(shown.length ? { attachments: shown } : {}),
+            ...(quoted ? { quote: quoted } : {}),
+          });
+        } catch {}
+        bus.publish({ topic: "agent.turn.done", ws });
+      }
+    })();
   });
 
   // Per-executive chat panes: same contract as POST /agent, but the turn runs the named executive's

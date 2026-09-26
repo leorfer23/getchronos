@@ -634,12 +634,22 @@ async function deliver(text, agent, el) {
   }
   try {
     const path = agent.id === "robert" ? "/agent" : "/agent/exec/" + agent.id;
-    const { reply } = await api(path, { method: "POST", body: { text } });
-    finalizePending(reply || "");
+    const r = await api(path, { method: "POST", body: { text } });
+    // Robert's POST returns at once with accepted+turn; the reply lands on agent.push. Exec panes
+    // still return { reply } synchronously (they are rare / short).
+    if (r?.accepted || (agent.id === "robert" && r?.turn && r.reply == null)) {
+      awaitingPush = true;
+      setTimeout(() => {
+        if (!sending || turn !== turnSeq || !awaitingPush) return;
+        sending = false; inflight = null; awaitingPush = false;
+        loadThread().then(drain);
+      }, 180_000);
+    } else {
+      finalizePending(r?.reply || "");
+    }
   } catch (e) {
-    // A long turn outlives WKWebView's fetch timeout ("Load failed") while the agent keeps working
-    // server-side. Don't declare failure: keep the live bubble — the reply arrives over /ws as
-    // agent.push and finalizePending runs from there. Only a dead socket leaves the note standing.
+    // Accept itself failed, or an exec pane's long POST died. Keep the live bubble — the reply
+    // arrives over /ws as agent.push and finalizePending runs from there.
     const acts = document.querySelector("#pending .acts");
     if (acts) {
       acts.insertAdjacentHTML("beforeend",
@@ -653,7 +663,7 @@ async function deliver(text, agent, el) {
       if (!sending || turn !== turnSeq) return; // this turn already finalized; a later one owns the flag
       sending = false; inflight = null; awaitingPush = false;
       loadThread().then(drain);
-    }, 90_000);
+    }, 180_000);
   }
   scrollThread();
 }
