@@ -182,6 +182,16 @@ export function noteClaudeStreamEvent(configDir: string | null | undefined, ev: 
   record({ cli: "claude", scope: profileScope(configDir), windows, at: new Date(now).toISOString(), source: "stream" });
 }
 
+/**
+ * Is this claude profile walled right now? The first window at 100% whose reset is still ahead, per
+ * the last reading its vendor gave us. No reading → null (unknown is not walled).
+ */
+export function claudeWall(configDir: string | null | undefined, now = Date.now()): { window: string; resetsAt: string | null } | null {
+  const m = load().meters[key({ cli: "claude", scope: profileScope(configDir) })];
+  const w = m?.windows.find((w) => w.usedPct >= 100 && (!w.resetsAt || Date.parse(w.resetsAt) > now));
+  return w ? { window: WINDOW_LABEL[w.name] ?? w.name, resetsAt: w.resetsAt } : null;
+}
+
 // ── grok: the last billing line in its own log ────────────────────────────────
 
 let grokCache: { mtimeMs: number; size: number; meter: UsageMeter | null } | null = null;
