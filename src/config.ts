@@ -528,7 +528,8 @@ export const CONFIG = {
   // terminal is blocked the whole time, so this is deliberately short.
   terminalPromptDeadlineMin: Number(process.env.CHRONOS_TERMINAL_PROMPT_DEADLINE_MIN ?? 8),
   // A Desk terminal that stops on a credit/usage wall (src/terminal-failover.ts): first the same
-  // terminal on agent.modelFallback, then a new terminal on the next backend here. off → it waits.
+  // terminal on agent.modelFallback, then a new terminal on the next backend here. The walled one
+  // stays open for the operator to close. off → wait with no stand-in.
   terminalFailover: !/^(off|0|false|no)$/i.test(process.env.CHRONOS_TERMINAL_FAILOVER ?? "on"),
   // Tried in order after workspace.fallback_backend. Names not registered or not installed are skipped.
   terminalFallbackBackends: (process.env.CHRONOS_TERMINAL_FALLBACK_BACKENDS ?? "grok,cursor")

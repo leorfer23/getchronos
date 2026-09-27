@@ -336,7 +336,7 @@ test("the Fable dialog's own 'Switch to Opus and continue' is taken instead of t
   assert.deepEqual(sent.map((x) => x.req), [{ keys: ["enter"] }]);
 });
 
-test("model swap then opus walls too → a grok stand-in with the goal + replay, old terminal closed with a reason, Robert woken", async () => {
+test("model swap then opus walls too → a grok stand-in with the goal + replay; walled terminal STAYS OPEN for the operator", async () => {
   const s = terminal();
   await onTerminalQuiet(s.id, T0 + 10_000);
   runTimers();
@@ -360,17 +360,18 @@ test("model swap then opus walls too → a grok stand-in with the goal + replay,
   assert.match(o.seed, /ran npm test -- migrations/);
 
   const stand = sessions.list({ status: "live" }).find((x) => x.backend === "grok")!;
-  assert.equal(killed.length, 1);
-  assert.equal(killed[0].id, s.id);
-  assert.match(killed[0].reason, new RegExp(`continued in grok terminal ${stand.id.slice(0, 8)}`));
-  assert.match(sessions.get(s.id)!.end_reason!, /usage limit on claude-code\/opus → continued in grok/);
+  assert.equal(killed.length, 0, "Chronos never auto-closes the walled Desk terminal");
+  assert.equal(sessions.get(s.id)!.status, "live");
+  assert.equal(sessions.get(s.id)!.end_reason, null);
+  assert.match(sessions.get(s.id)!.placement ?? "", new RegExp(`continued in grok terminal ${stand.id.slice(0, 8)}`));
+  assert.match(sessions.get(s.id)!.placement ?? "", /you close it/);
 
   const ev = events.find((e: any) => e.step === "backend") as any;
   assert.equal(ev.to_session_id, stand.id);
   assert.equal(ev.from_model, "opus");
   assert.equal(wakes.length, 1);
   assert.equal(wakes[0].topic, "session.failover");
-  assert.match(wakes[0].payload.say, /moved the work to a new grok terminal/);
+  assert.match(wakes[0].payload.say, /LEFT the walled one open/);
   assert.equal(notes.length, 1);
 
   // The grok stand-in walls too → cursor. Then cursor walls → give up (cap 3: model, grok, cursor).
@@ -425,7 +426,8 @@ test("restricted picker allowlist still fails over onto the configured ladder (G
   assert.equal(await onTerminalQuiet(s.id, T0 + 10_000), "backend");
   assert.equal(opened[0].backend, "grok");
   assert.equal(opened[0].model, "grok-4.5");
-  assert.equal(killed[0].id, s.id);
+  assert.equal(killed.length, 0, "walled terminal stays open");
+  assert.equal(sessions.get(s.id)!.status, "live");
 });
 
 test("Claude's 'continuing automatically · esc to cancel' wall cancels the wait then opens a stand-in", async () => {

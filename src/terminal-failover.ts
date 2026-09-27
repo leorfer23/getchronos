@@ -13,9 +13,10 @@
  *   2. Claude itself walled (session/usage limit, the fallback model walled too, or step 1 already
  *      tried) → a NEW terminal on the next backend (workspace.fallback_backend, then
  *      CHRONOS_TERMINAL_FALLBACK_BACKENDS), same workspace/cwd/ticket/goal/HOST, seeded with the goal and a
- *      replay of the old terminal's Focus feed. The old one is closed with an end_reason that points at
- *      the stand-in. Sticky (`replaces`): if the walled terminal was on m2, the stand-in opens on m2 —
- *      never a silent move to the brain. A stand-in that walls too walks to the next backend; nothing is ever retried.
+ *      replay of the old terminal's Focus feed. The walled one STAYS OPEN — the operator closes it
+ *      (✕ / close-done); Chronos never kills a Desk terminal for him. Sticky (`replaces`): if the
+ *      walled terminal was on m2, the stand-in opens on m2 — never a silent move to the brain. A
+ *      stand-in that walls too walks to the next backend; nothing is ever retried.
  *
  * Detection is read off the settled frame at the quiet flip (the same moment desk-prompt reads a
  * question), and only counts a line in the CLI's own voice sitting at the bottom of the frame with
@@ -369,7 +370,7 @@ const wallWords = (w: Wall) => (w.kind === "credit" ? "out of credits" : "usage 
 
 /**
  * A terminal went quiet. Returns what happened, for tests and the log; the backend step resolves
- * after the stand-in is open and the old terminal closed.
+ * after the stand-in is open (the walled terminal is left for the operator to close).
  */
 export async function onTerminalQuiet(id: string, now = Date.now()): Promise<QuietOutcome> {
   if (!terminalFailoverEnabled()) return "off";
@@ -487,9 +488,11 @@ async function handOff(
         states.set(sess.id, { lineage: st.lineage, modelTried: true, actedAt: null, wroteAt: 0, busy: false, done: false });
         const reason = `${wallWords(wall)} on ${s.backend}${from ? "/" + from : ""} → continued in ${to} terminal ${id8(sess.id)}`;
         st.done = true;
-        ops.kill(s.id, reason);
+        // Leave the walled terminal LIVE. The operator closes Desk terminals — not the daemon, not
+        // a rate-limit ladder. Mark why it is still sitting there so the card / host tooltip say so.
+        try { sessions.setPlacement(s.id, `${reason} — still open; you close it`); } catch {}
         publish(s, { step: "backend", wall, from_model: from, to_backend: to, to_model: step.model, to_session_id: sess.id, reason });
-        console.warn(`[terminal-failover] ${id8(s.id)} ${s.backend}/${from ?? "default"}: ${wall.line} → ${to} terminal ${id8(sess.id)}`);
+        console.warn(`[terminal-failover] ${id8(s.id)} ${s.backend}/${from ?? "default"}: ${wall.line} → ${to} terminal ${id8(sess.id)} (walled one left open)`);
         const label = s.goal || s.title || id8(s.id);
         ops.wake({
           topic: "session.failover",
@@ -501,12 +504,15 @@ async function handOff(
             to_session_id: sess.id,
             say:
               `terminal \`${id8(s.id)}\` ("${label}") ${wall.kind === "credit" ? "ran out of credits" : "hit its usage limit"} on ` +
-              `${s.backend}${from ? "/" + from : ""} ("${wall.line}"). The daemon already moved the work to a new ${to} terminal ` +
-              `\`${id8(sess.id)}\`, seeded with the goal and a replay of what the old one did, and closed the old one. ` +
+              `${s.backend}${from ? "/" + from : ""} ("${wall.line}"). The daemon opened a new ${to} terminal ` +
+              `\`${id8(sess.id)}\` with the goal and a replay, and LEFT the walled one open for the operator to close. ` +
               `Check the new terminal picked it up (\`mc session focus ${id8(sess.id)}\`) and tell the operator in one line.`,
           },
         });
-        ops.notify(`↪ <b>Terminal out of ${wall.kind === "credit" ? "credits" : "quota"}</b> — ${esc(label)}: ${esc(s.backend)} → new ${esc(to)} terminal <code>${id8(sess.id)}</code>`, "info");
+        ops.notify(
+          `↪ <b>Terminal out of ${wall.kind === "credit" ? "credits" : "quota"}</b> — ${esc(label)}: ${esc(s.backend)} → new ${esc(to)} <code>${id8(sess.id)}</code> · old <code>${id8(s.id)}</code> still open`,
+          "info",
+        );
         return "backend";
       } catch (e: any) {
         console.warn(`[terminal-failover] ${id8(s.id)}: opening a ${to} stand-in failed: ${e?.message ?? e}`);
