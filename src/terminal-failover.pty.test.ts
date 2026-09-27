@@ -114,9 +114,13 @@ test("a walled claude terminal swaps to opus, then hands its goal to a new grok 
     assert.equal(stand.goal, "renumber the flyway migrations");
     assert.match(stand.title ?? "", /^↪ grok · /);
 
-    await until("the claude row to end with its reason", () => sessions.get(claude.id)!.status === "ended" && !isLive(claude.id));
-    assert.match(sessions.get(claude.id)!.end_reason ?? "", new RegExp(`continued in grok terminal ${stand.id.slice(0, 8)}`));
-
+    await until("the walled claude row to stay live with a placement note", () => {
+      const row = sessions.get(claude.id)!;
+      return row.status === "live" && isLive(claude.id) && /continued in grok/.test(row.placement ?? "");
+    });
+    assert.match(sessions.get(claude.id)!.placement ?? "", new RegExp(`continued in grok terminal ${stand.id.slice(0, 8)}`));
+    assert.match(sessions.get(claude.id)!.placement ?? "", /you close it/);
+    assert.equal(sessions.get(claude.id)!.end_reason, null);
     await until("the grok stand-in to receive its seed", () => /taking over a Desk terminal/.test(read(logs.grok)));
     const seed = read(logs.grok);
     assert.match(seed, /Goal: renumber the flyway migrations/);

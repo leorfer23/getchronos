@@ -277,7 +277,7 @@ point Chronos at a repo you care about:
 | `CHRONOS_LEAD_ASK_FALLBACK_MIN` | `10` | how long a worker's question (`mc ask-lead`) may sit with its Lead before it becomes Robert's anyway — the worker is blocked the whole time |
 | `CHRONOS_TERMINAL_PROMPT_CONFIRM_SEC` | `90` | after his answer, how long before the daemon checks the terminal actually moved on |
 | `CHRONOS_TERMINAL_PROMPT_DEADLINE_MIN` | `8` | how long a terminal's prompt may sit with him before you get it as buttons |
-| `CHRONOS_TERMINAL_FAILOVER` | on | a Desk terminal stopped on a credit/usage wall moves on by itself: `/model <CHRONOS_AGENT_MODEL_FALLBACK>` in the same terminal, then a new terminal on the next backend (`src/terminal-failover.ts`). `off` = it waits for you |
+| `CHRONOS_TERMINAL_FAILOVER` | on | a Desk terminal stopped on a credit/usage wall moves on by itself: `/model <CHRONOS_AGENT_MODEL_FALLBACK>` in the same terminal, then a new terminal on the next backend (`src/terminal-failover.ts`). The walled terminal stays open for you to close — Chronos never auto-kills it. `off` = it waits for you with no stand-in |
 | `CHRONOS_TERMINAL_FALLBACK_BACKENDS` | `grok,cursor` | backends tried in order after `workspace.fallback_backend`; unregistered, uninstalled or not-allowed ones are skipped |
 | `CHRONOS_TERMINAL_FAILOVER_MAX` | `3` | failover steps per terminal lineage (the original plus every stand-in) before it gives up and tells you |
 | `CHRONOS_TERMINAL_FAILOVER_TYPING_SEC` | `20` | someone typed into the terminal this recently → hold off, look again after |
