@@ -4302,9 +4302,11 @@ export function startServer() {
 
   // ⚙ Settings (src/settings.ts): every operator knob, per workspace or global. No workspace_id = the
   // global level. Values apply on the next decision — nothing here needs a restart.
+  // `workspace` takes an id or a slug, so Robert can say "medialab" without looking the id up first.
+  const settingsWs = (v: unknown) => (typeof v === "string" && v ? workspaces.get(v) ?? workspaces.getBySlug(v) ?? null : null);
   api.get("/settings", requireAdmin, (req, res) => {
-    const wsId = typeof req.query.workspace_id === "string" && req.query.workspace_id ? req.query.workspace_id : null;
-    const ws = wsId ? workspaces.get(wsId) : null;
+    const wsId = req.query.workspace_id || req.query.workspace;
+    const ws = settingsWs(wsId);
     if (wsId && !ws) return res.status(404).json({ error: "workspace not found" });
     const account = ws ? { profile: path.basename(ws.config_dir), wall: claudeWall(ws.config_dir) } : null;
     res.json({
@@ -4315,15 +4317,20 @@ export function startServer() {
       settings: settingsView(ws?.id ?? null),
     });
   });
-  api.put("/settings", requireAdmin, validate(PutSettingSchema), (req, res) => {
+  // PUT from the Desk; POST too, because Robert's Telegram proposals only carry POST/PATCH/DELETE.
+  const putSetting = (req: any, res: any) => {
+    const ref = req.body.workspace_id ?? req.body.workspace ?? null;
+    const ws = settingsWs(ref);
+    if (ref && !ws) return res.status(404).json({ error: "workspace not found" });
     try {
-      writeSetting(req.body.key, req.body.value, req.body.workspace_id ?? null);
+      writeSetting(req.body.key, req.body.value, ws?.id ?? null);
     } catch (e: any) {
       return res.status(400).json({ error: String(e?.message ?? e) });
     }
-    const wsId = req.body.workspace_id ?? null;
-    res.json({ setting: settingsView(wsId).find((v) => v.key === req.body.key) ?? null });
-  });
+    res.json({ workspace: ws?.slug ?? null, setting: settingsView(ws?.id ?? null).find((v) => v.key === req.body.key) ?? null });
+  };
+  api.put("/settings", requireAdmin, validate(PutSettingSchema), putSetting);
+  api.post("/settings", requireAdmin, validate(PutSettingSchema), putSetting);
 
   // Model behind the web chat manager. POST recycles the warm process; the thread resumes on the new model.
   api.get("/agent/model", requireAdmin, (req, res) => {

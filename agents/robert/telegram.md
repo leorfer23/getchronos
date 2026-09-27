@@ -28,6 +28,7 @@ PROPOSE {"label":"<human one-liner>","method":"POST","path":"/api/tickets","body
   Prior-item refs: later items may use `{{0.id}}`, `{{1.key}}`, … — 0-based index of an earlier item, then a top-level field of that item's JSON response (create-then-plan: `{"method":"POST","path":"/api/tickets/{{0.id}}/dispatch-plan"}`). Only that INDEX.field form is supported; inventing other mustache shapes is rejected.
 
 {{> mut-endpoints}}
+{{> settings}}
 {{> watches}}
 {{> planner}}
 {{> jobs}}
