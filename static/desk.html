@@ -984,6 +984,40 @@
   .jempty { color:var(--faint); padding:40px; text-align:center; }
   /* ── Jobs page: full screen. Top: filters. Then the fleet's numbers and days, then one row per job
      (its run strip, health, next fire), grouped by client. A job opens in the drawer on the right. ── */
+  /* ── ⚙ Settings: every knob, for all workspaces or one. Changes save as you make them. ── */
+  #dlg-settings { width:100vw; height:100vh; max-width:none; max-height:none; margin:0; border:0; border-radius:0; box-shadow:none; background:var(--bg); padding:0; }
+  #dlg-settings::backdrop { background:var(--bg); }
+  .st { display:flex; flex-direction:column; height:100%; min-height:0; font-size:14.5px; }
+  .st-scope { display:flex; gap:6px; overflow-x:auto; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--surface); flex:none; scrollbar-width:none; }
+  .st-scope button { border:1px solid var(--line); background:var(--bg); color:var(--muted); border-radius:999px; padding:4px 12px; font-size:13.5px; white-space:nowrap; display:inline-flex; align-items:center; gap:6px; }
+  .st-scope button i { width:8px; height:8px; border-radius:50%; display:inline-block; }
+  .st-scope button.on { color:var(--ink); border-color:var(--ink); font-weight:650; }
+  .st-body { flex:1; overflow-y:auto; }
+  .st-wrap { max-width:720px; margin:0 auto; padding:20px 16px 64px; }
+  .st-acct { font-size:13.5px; color:var(--muted); margin:0 0 18px; }
+  .st-acct b { color:var(--ink); font-weight:600; }
+  .st-acct .walled { color:var(--warn); }
+  .st-sec { margin:0 0 22px; }
+  .st-sec h3 { margin:0 0 6px; font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--faint); font-weight:650; }
+  .st-card { background:var(--surface); border:1px solid var(--line); border-radius:12px; }
+  .st-row { display:flex; align-items:center; gap:16px; padding:12px 14px; border-top:1px solid var(--line); }
+  .st-row:first-child { border-top:0; }
+  .st-row.dim .st-l, .st-row.dim .st-c { opacity:.45; }
+  .st-l { flex:1; min-width:0; }
+  .st-l .t { color:var(--ink); }
+  .st-l .h { color:var(--muted); font-size:12.5px; margin-top:2px; line-height:1.35; }
+  .st-l .src { font-size:12px; color:var(--accent); margin-left:6px; }
+  .st-l .src button { border:0; background:none; color:var(--muted); font:inherit; text-decoration:underline; padding:0 0 0 4px; cursor:pointer; }
+  .st-c { flex:none; display:flex; justify-content:flex-end; max-width:55%; }
+  .st-c select, .st-c input { font:inherit; font-size:14px; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:5px 8px; }
+  .st-c input { width:110px; text-align:right; }
+  .st-c input.wide { width:220px; text-align:left; }
+  .st-c select:focus, .st-c input:focus { outline:0; border-color:var(--accent); }
+  .st-chips { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; }
+  .st-chips button { border:1px solid var(--line); background:var(--bg); color:var(--muted); border-radius:999px; padding:3px 10px; font-size:13px; }
+  .st-chips button.on { border-color:var(--accent); color:var(--ink); background:var(--accent-soft); }
+  .st-chips button sup { font-size:10px; color:var(--accent); margin-left:2px; }
+  @media (max-width: 600px) { .st-row:not(.b) { flex-wrap:wrap; } .st-row.b .st-c { width:auto; } .st-c { max-width:none; width:100%; justify-content:flex-start; } .st-chips { justify-content:flex-start; } }
   #dlg-jobs { width:100vw; height:100vh; max-width:none; max-height:none; margin:0; border:0; border-radius:0; box-shadow:none; background:var(--bg); }
   #dlg-jobs::backdrop { background:var(--bg); }
   .jv { display:flex; flex-direction:column; height:100%; min-height:0; font-size:14.5px; position:relative; }
@@ -1441,6 +1475,7 @@
   <button id="btn-hosts">🖥 Computers</button>
   <button id="btn-briefs">📋 Briefs</button>
   <button id="btn-memory">🧠 Memory</button>
+  <button id="btn-settings">⚙ Settings</button>
   <button id="btn-keys">Keys <kbd>?</kbd></button>
 </div>
 <div class="menu" id="menu-stage"></div>
@@ -1640,6 +1675,17 @@
      what fires next. A job opens in the drawer: its runs, its settings, its triggers, one run's
      story. The fleet's own ticket/review runs are not jobs unless you ask for them (⚙ System).
      Robert sets these up too (`mc job new`). -->
+<dialog id="dlg-settings">
+  <div class="st">
+    <header class="jv-bar">
+      <button class="back" id="settings-close" title="Back to the Desk (esc)">‹ Desk</button>
+      <h2>Settings</h2>
+      <span class="sp"></span>
+    </header>
+    <nav class="st-scope" id="st-scope"></nav>
+    <div class="st-body"><div class="st-wrap" id="st-main"></div></div>
+  </div>
+</dialog>
 <dialog id="dlg-jobs">
   <div class="jv">
     <header class="jv-bar">
@@ -4710,6 +4756,7 @@ qs("#keys-close").onclick = () => qs("#dlg-keys").close();
 // A /desk#reopen=<id> link selects an active terminal or revives a dormant one from SQLite.
 async function openFromHash() {
   if (location.hash === "#jobs") return openJobs();
+  if (location.hash === "#settings") return openSettings();
   const m = /#reopen=([0-9a-f-]{8,})/.exec(location.hash);
   if (!m) return;
   history.replaceState(null, "", location.pathname);
@@ -5499,6 +5546,119 @@ function onJobEvent(e) {
 // Ages and "in 12m" drift: repaint the rows twice a minute while the page is up.
 setInterval(() => { if (jv.open && J.loaded) { renderJobList(); renderKpis(); } }, 30000);
 qs("#btn-jobs").onclick = () => openJobs();
+// ── ⚙ Settings (src/settings.ts) ─────────────────────────────────────────────────────────────────
+// One page for every knob: "All workspaces" is the global level, a workspace chip shows what that
+// workspace runs with and lets it differ. Every control saves on change; "reset" drops back to what
+// it inherits. Nothing here needs a restart.
+const ST = { ws: null, data: null };
+async function openSettings(wsId) {
+  const d = qs("#dlg-settings");
+  if (wsId !== undefined) ST.ws = wsId;
+  if (!d.open) d.showModal();
+  if (location.hash !== "#settings") history.replaceState(null, "", "#settings");
+  await loadSettings();
+}
+async function loadSettings() {
+  try {
+    ST.data = await api("/settings" + (ST.ws ? `?workspace_id=${encodeURIComponent(ST.ws)}` : ""));
+  } catch (e) {
+    if (e.status === 404 && ST.ws) { ST.ws = null; return loadSettings(); }
+    return toast("settings: " + errMsg(e));
+  }
+  renderSettings();
+}
+function stFmtWhen(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString([], { weekday: "short" })} ${t}`;
+}
+function stControl(v) {
+  const k = esc(v.key);
+  if (v.type === "bool")
+    return `<span class="switch ${v.value ? "on" : ""}" data-st-bool="${k}" role="switch" aria-checked="${!!v.value}" tabindex="0"><i></i></span>`;
+  if (v.type === "enum") {
+    const opts = (v.nullable ? [""] : []).concat(v.options || []);
+    return `<select data-st-enum="${k}">${opts.map((o) => `<option value="${esc(o)}"${(v.value ?? "") === o ? " selected" : ""}>${o ? esc(o) : "—"}</option>`).join("")}</select>`;
+  }
+  if (v.type === "list") {
+    const on = Array.isArray(v.value) ? v.value : [];
+    return `<div class="st-chips">${(v.options || []).map((o) => {
+      const i = on.indexOf(o);
+      return `<button data-st-list="${k}" data-o="${esc(o)}" class="${i >= 0 ? "on" : ""}">${esc(o)}${i >= 0 && on.length > 1 ? `<sup>${i + 1}</sup>` : ""}</button>`;
+    }).join("")}</div>`;
+  }
+  const num = v.type === "int" || v.type === "number";
+  return `<input data-st-text="${k}" ${num ? `inputmode="decimal"` : `class="wide"`} value="${esc(v.value ?? "")}" placeholder="${v.nullable ? "—" : ""}" spellcheck="false">`;
+}
+function renderSettings() {
+  const D = ST.data;
+  if (!D) return;
+  const wsList = D.workspaces || [];
+  qs("#st-scope").innerHTML =
+    `<button data-st-ws="" class="${ST.ws ? "" : "on"}">All workspaces</button>` +
+    wsList.map((w) => `<button data-st-ws="${esc(w.id)}" class="${ST.ws === w.id ? "on" : ""}"><i style="background:${wsColor(w.id)}"></i>${esc(w.name)}</button>`).join("");
+  const byKey = Object.fromEntries(D.settings.map((v) => [v.key, v]));
+  const robertOff = byKey["robert.enabled"]?.value === false;
+  const acct = D.account
+    ? `<p class="st-acct">Claude account <b>${esc(D.account.profile)}</b> · ${D.account.wall
+        ? `<span class="walled">at its ${esc(D.account.wall.window)} limit${D.account.wall.resetsAt ? " until " + esc(stFmtWhen(D.account.wall.resetsAt)) : ""}</span>`
+        : "has room"}</p>`
+    : `<p class="st-acct">What every workspace runs with. A workspace can differ — pick it above.</p>`;
+  const row = (v) => {
+    const overridden = ST.ws ? v.level === "both" && v.source === "workspace" : v.source === "global" && v.level !== "ws";
+    const src = overridden ? `<span class="src">${ST.ws ? "this workspace" : "changed"}<button data-st-reset="${esc(v.key)}">reset</button></span>` : "";
+    const dim = robertOff && v.key.startsWith("robert.") && v.key !== "robert.enabled" && v.key !== "robert.model" ? " dim" : "";
+    return `<div class="st-row${v.type === "bool" ? " b" : ""}${dim}" title="${esc(v.env || "")}"><div class="st-l"><div class="t">${esc(v.label)}${src}</div>${v.help ? `<div class="h">${esc(v.help)}</div>` : ""}</div><div class="st-c">${stControl(v)}</div></div>`;
+  };
+  const groups = D.groups.filter((g) => D.settings.some((v) => v.group === g));
+  qs("#st-main").innerHTML = acct + groups.map((g) =>
+    `<section class="st-sec"><h3>${esc(g)}</h3><div class="st-card">${D.settings.filter((v) => v.group === g).map(row).join("")}</div></section>`).join("");
+}
+async function saveSetting(key, value) {
+  try {
+    const r = await api("/settings", { method: "PUT", body: JSON.stringify({ key, value, workspace_id: ST.ws }) });
+    const i = ST.data.settings.findIndex((v) => v.key === key);
+    if (r.setting && i >= 0) ST.data.settings[i] = r.setting;
+    if (key.startsWith("ws.") || key === "robert.model") load();
+  } catch (e) {
+    toast(errMsg(e));
+  }
+  renderSettings();
+}
+const stDef = (k) => ST.data?.settings.find((v) => v.key === k);
+const stDlg = qs("#dlg-settings");
+stDlg.addEventListener("click", (e) => {
+  const t = e.target.closest("button, .switch");
+  if (!t) return;
+  if (t.id === "settings-close") return stDlg.close();
+  if (t.dataset.stWs !== undefined) { ST.ws = t.dataset.stWs || null; return loadSettings(); }
+  if (t.dataset.stReset) return saveSetting(t.dataset.stReset, null);
+  if (t.dataset.stBool) return saveSetting(t.dataset.stBool, !stDef(t.dataset.stBool)?.value);
+  if (t.dataset.stList) {
+    const cur = Array.isArray(stDef(t.dataset.stList)?.value) ? [...stDef(t.dataset.stList).value] : [];
+    const o = t.dataset.o;
+    return saveSetting(t.dataset.stList, cur.includes(o) ? cur.filter((x) => x !== o) : [...cur, o]);
+  }
+});
+stDlg.addEventListener("keydown", (e) => {
+  const sw = e.target.closest?.(".switch[data-st-bool]");
+  if (sw && (e.key === " " || e.key === "Enter")) { e.preventDefault(); sw.click(); }
+  if (e.target.dataset?.stText && e.key === "Enter") e.target.blur();
+});
+stDlg.addEventListener("change", (e) => {
+  const t = e.target;
+  if (t.dataset.stEnum) return saveSetting(t.dataset.stEnum, t.value === "" ? null : t.value);
+  if (t.dataset.stText) {
+    const v = stDef(t.dataset.stText);
+    const raw = t.value.trim();
+    if (raw === "" && v?.nullable) return saveSetting(v.key, null);
+    return saveSetting(t.dataset.stText, v && (v.type === "int" || v.type === "number") ? Number(raw) : raw);
+  }
+});
+stDlg.addEventListener("close", () => { if (location.hash === "#settings") history.replaceState(null, "", location.pathname); });
+qs("#btn-settings").onclick = () => openSettings();
+
 qs("#job-new").onclick = () => newJob();
 qs("#jobs-close").onclick = () => closeJobs();
 // ── memory ───────────────────────────────────────────────────────────────────────────────────

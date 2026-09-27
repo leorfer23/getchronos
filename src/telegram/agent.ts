@@ -1,4 +1,5 @@
 import { humanizeStep, type RobertStep } from "../robert-steps.js";
+import { onSettingChange } from "../settings.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import os from "node:os";
 import fs from "node:fs";
@@ -1277,6 +1278,12 @@ export function setWebModel(model: string) {
   for (const m of webMgrs.values()) m.kill();
   webMgrs.clear();
 }
+
+// The same switch from ⚙ Settings (the setting's kv key IS web.model): restart the warm managers.
+onSettingChange("robert.model", () => {
+  for (const m of webMgrs.values()) m.kill();
+  webMgrs.clear();
+});
 
 // The skill index is baked into the system prompt at spawn time, so a skill approved (or edited) while
 // a manager is warm would stay invisible until the next recycle. Drop that workspace's processes

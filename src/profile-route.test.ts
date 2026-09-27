@@ -12,27 +12,27 @@ test("parseAlternates: names resolve through profiles; unknown bases and empty g
 });
 
 test("pinned profile with room stays put", () => {
-  assert.deepEqual(routeConfigDir("/h/.claude", 0, { alternates, wallOf: walled([]), exists }), { dir: "/h/.claude", reason: null });
+  assert.deepEqual(routeConfigDir("/h/.claude", null, 0, { alternates, wallOf: walled([]), exists }), { dir: "/h/.claude", reason: null });
 });
 
 test("walled pinned profile moves to the first sibling with room", () => {
-  const r = routeConfigDir("/h/.claude", 0, { alternates, wallOf: walled(["/h/.claude"]), exists });
+  const r = routeConfigDir("/h/.claude", null, 0, { alternates, wallOf: walled(["/h/.claude"]), exists });
   assert.equal(r.dir, "/h/.claude-leo.osn92");
   assert.match(r.reason!, /\.claude at its weekly limit until 2026-09-30T17:00:00\.000Z → \.claude-leo\.osn92/);
 });
 
 test("walled sibling and missing dirs are skipped", () => {
-  const r = routeConfigDir("/h/.claude", 0, { alternates, wallOf: walled(["/h/.claude", "/h/.claude-leo.osn92"]), exists });
+  const r = routeConfigDir("/h/.claude", null, 0, { alternates, wallOf: walled(["/h/.claude", "/h/.claude-leo.osn92"]), exists });
   assert.equal(r.dir, "/h/.claude-b");
-  const gone = routeConfigDir("/h/.claude", 0, { alternates, wallOf: walled(["/h/.claude"]), exists: (d) => d !== "/h/.claude-leo.osn92" });
+  const gone = routeConfigDir("/h/.claude", null, 0, { alternates, wallOf: walled(["/h/.claude"]), exists: (d) => d !== "/h/.claude-leo.osn92" });
   assert.equal(gone.dir, "/h/.claude-b");
 });
 
 test("everything walled → pinned (the wall failover takes over)", () => {
-  const r = routeConfigDir("/h/.claude", 0, { alternates, wallOf: walled(["/h/.claude", "/h/.claude-leo.osn92", "/h/.claude-b"]), exists });
+  const r = routeConfigDir("/h/.claude", null, 0, { alternates, wallOf: walled(["/h/.claude", "/h/.claude-leo.osn92", "/h/.claude-b"]), exists });
   assert.deepEqual(r, { dir: "/h/.claude", reason: null });
 });
 
 test("a profile with no alternates never leaves its account", () => {
-  assert.equal(routeConfigDir("/h/.claude-acme", 0, { alternates, wallOf: walled(["/h/.claude-acme"]), exists }).dir, "/h/.claude-acme");
+  assert.equal(routeConfigDir("/h/.claude-acme", null, 0, { alternates, wallOf: walled(["/h/.claude-acme"]), exists }).dir, "/h/.claude-acme");
 });

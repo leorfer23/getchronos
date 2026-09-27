@@ -21,6 +21,8 @@ import os from "node:os";
 import path from "node:path";
 import { CONFIG } from "./config.js";
 import { claudeWall } from "./usage-meter.js";
+import { defineSetting, resolveSetting } from "./settings.js";
+import { workspaces } from "./store.js";
 
 const expand = (p: string) => (p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p);
 const norm = (p: string) => path.resolve(expand(p));
@@ -47,6 +49,32 @@ export function parseAlternates(raw: string, profiles: Record<string, string>): 
   return out;
 }
 
+/** CHRONOS_PROFILE_ALTERNATES' siblings for one pinned dir, as profile names where it has one. */
+export function envAlternatesFor(pinned: string): string[] {
+  const dirs = parseAlternates(CONFIG.profileAlternates, CONFIG.profiles).get(norm(pinned)) ?? [];
+  const byDir = new Map(Object.entries(CONFIG.profiles).map(([n, d]) => [norm(d), n]));
+  return dirs.map((d) => byDir.get(d) ?? d);
+}
+
+defineSetting({
+  // Per workspace ONLY: a global list would hand a client workspace a personal login (or another
+  // client's) the moment its own account walled — the one thing config_dir pinning exists to prevent.
+  key: "accounts.alternates", group: "Accounts", level: "ws", type: "list", env: "CHRONOS_PROFILE_ALTERNATES",
+  label: "Backup Claude accounts",
+  help: "When this workspace's account is at its limit, new Claude sessions start on the first of these with room.",
+  options: () => Object.keys(CONFIG.profiles).sort(),
+  default: (ws) => envAlternatesFor(ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude),
+});
+
+/** A workspace's siblings from the Settings page, when it (or the global level) set any; else the env map. */
+function alternatesFor(pinned: string, workspaceId: string | null | undefined): string[] | undefined {
+  const ws = workspaceId ? workspaces.get(workspaceId) : undefined;
+  if (ws && ws.config_dir && norm(ws.config_dir) !== norm(pinned)) return undefined;
+  const { value, source } = resolveSetting("accounts.alternates", ws?.id ?? null);
+  if (source === "default" || !Array.isArray(value)) return undefined;
+  return value.map((n) => resolveDir(n, CONFIG.profiles)).filter((d): d is string => !!d && d !== norm(pinned));
+}
+
 export interface Routed {
   dir: string;
   /** Set only when the pinned dir was skipped: why, for the log and the Desk card. */
@@ -55,6 +83,7 @@ export interface Routed {
 
 export function routeConfigDir(
   pinned: string,
+  workspaceId?: string | null,
   now = Date.now(),
   deps: {
     alternates?: Map<string, string[]>;
@@ -62,8 +91,9 @@ export function routeConfigDir(
     exists?: (dir: string) => boolean;
   } = {},
 ): Routed {
-  const alternates = deps.alternates ?? parseAlternates(CONFIG.profileAlternates, CONFIG.profiles);
-  const alts = alternates.get(norm(pinned));
+  const alts = deps.alternates
+    ? deps.alternates.get(norm(pinned))
+    : alternatesFor(pinned, workspaceId) ?? parseAlternates(CONFIG.profileAlternates, CONFIG.profiles).get(norm(pinned));
   if (!alts?.length) return { dir: pinned, reason: null };
   const wallOf = deps.wallOf ?? claudeWall;
   const wall = wallOf(pinned, now);

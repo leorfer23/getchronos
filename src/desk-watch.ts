@@ -12,6 +12,7 @@
  * because "nothing changed" is a watch you stop trusting, and the whole point is that he asked to
  * be told.
  */
+import { settingOn } from "./settings.js";
 import { bus } from "./bus.js";
 import { getAgent } from "./agent-lifecycle.js";
 import { OP_PREFIX } from "./operational-prefix.js";
@@ -297,6 +298,12 @@ export async function sweepWatches(nowMs = Date.now()): Promise<void> {
       // work to after its goal is exactly the one the watch should keep watching.
       const over = s.status !== "live" || !isLive(s.id) || sessionGoalReached(s, sessionActivity(s.id));
       if (!over && !watchDue(s, nowMs)) continue;
+      // Switched off in ⚙ Settings: the watch stays set but costs nothing; a finished terminal's
+      // watch still lifts, silently.
+      if (!settingOn("robert.enabled", s.workspace_id) || !settingOn("robert.watches", s.workspace_id)) {
+        if (over) sessions.setWatch(s.id, { every_min: null });
+        continue;
+      }
       try {
         await runWatch(s, over);
       } catch (e: any) {

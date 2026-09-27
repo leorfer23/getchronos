@@ -18,6 +18,7 @@
  *  - **`ask_policy: 'escalate'` outranks him**, exactly as it does in answerAsk. In those
  *    workspaces he may recommend, never decide.
  */
+import { settingOn } from "./settings.js";
 import { asks, sessions, workspaces, type Ask } from "./store.js";
 import { getAgent } from "./agent-lifecycle.js";
 import { OP_PREFIX } from "./operational-prefix.js";
@@ -240,7 +241,7 @@ export function cancelSessionAsks(sessionId: string): void {
 }
 
 /** Whether an agent may ask Robert at all. Off puts every terminal ask straight on the operator's phone. */
-export const askRobertEnabled = () => process.env.CHRONOS_ASK_ROBERT !== "0";
+export const askRobertEnabled = (wsId?: string | null) => settingOn("robert.enabled", wsId) && settingOn("robert.asks", wsId);
 
 /** Who a session's ask says it is from, on the card. */
 export function askerLabel(sessionId: string): string {

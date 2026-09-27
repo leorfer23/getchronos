@@ -1026,3 +1026,10 @@ export const NewInboxItemSchema = z.object({
 });
 // Snooze until — same grammar as `mc pad follow`: 2h, +1d, tomorrow 9:00, monday 10, an ISO stamp.
 export const InboxSnoozeSchema = z.object({ until: z.string().trim().min(1).max(80) });
+
+// ⚙ Settings: one knob at a time. value null = clear the override (inherit); the registry checks the type.
+export const PutSettingSchema = z.object({
+  key: z.string().min(1).max(80),
+  value: z.union([z.boolean(), z.number(), z.string().max(500), z.array(z.string().max(100)).max(20), z.null()]),
+  workspace_id: z.string().min(1).nullable().optional(),
+});

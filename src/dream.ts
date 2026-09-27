@@ -1,4 +1,5 @@
 import { CONFIG } from "./config.js";
+import { settingOn } from "./settings.js";
 import { db, dreamRuns, jobs, kv, notes, repos, runs, workspaces } from "./store.js";
 import type { DreamSource } from "./store.js";
 import { dispatch } from "./dispatcher.js";
@@ -170,7 +171,8 @@ export function pickActive<W extends Pick<Workspace, "id">>(list: W[], signals: 
 /** One pass per active workspace, now — a slot's body, and `POST /api/dream/run` with no workspace. */
 export function dreamAll(source: DreamSource, slot: string | null, now = new Date()): StartResult[] {
   const out: StartResult[] = [];
-  for (const ws of pickActive(workspaces.list(), (w) => activitySignals(w, dreamRuns.lastFinished(w.id)))) {
+  const on = workspaces.list().filter((w) => settingOn("memory.dream", w.id));
+  for (const ws of pickActive(on, (w) => activitySignals(w, dreamRuns.lastFinished(w.id)))) {
     try { out.push(startDream(ws, { source, slot, now })); }
     catch (e: any) { out.push({ workspace: ws.slug, error: e?.message ?? String(e) }); }
   }
