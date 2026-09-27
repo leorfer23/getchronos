@@ -63,10 +63,17 @@ function reset() {
 const ws = (slug = "acme") => workspaces.create({ slug, name: slug, config_dir: "/tmp/" + slug }).id;
 
 function term(over: Record<string, unknown> = {}) {
-  return sessions.create({ workspace_id: ws(), goal: "fix the login redirect", cwd: "/tmp", ...over } as any);
+  // Opt Robert in — production defaults to off for operator-spawned terminals.
+  return sessions.create({ workspace_id: ws(), goal: "fix the login redirect", cwd: "/tmp", robert: true, ...over } as any);
 }
 
 const allRows = () => db.prepare("SELECT * FROM robert_wakes ORDER BY generation").all() as any[];
+
+test("a terminal the operator did not hand to Robert never wakes him for an orange menu", () => {
+  reset();
+  const s = term({ robert: false });
+  assert.equal(onPromptWaiting(s.id, select(), NOW), null);
+});
 
 test("a waiting select/yn/question wakes him; a finished turn never does", () => {
   for (const p of [select(), { kind: "yn", question: "Overwrite the file? (y/n)" } as DeskPrompt, { kind: "question", question: "Which branch?" } as DeskPrompt]) {

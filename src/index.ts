@@ -46,6 +46,7 @@ import { startTerminalFailover } from "./terminal-failover.js";
 import { startWorklog } from "./worklog.js";
 import { startCloudReconcile } from "./cloud-reconcile.js";
 import { searchIndex } from "./store.js";
+import { installSessionSearchHooks } from "./session-search.js";
 import { startHostLink } from "./hostlink/brain-link.js";
 
 // Defense-in-depth: every route handler and background async path is expected to catch its own
@@ -76,6 +77,7 @@ if (CONFIG.sandbox.defaultMode !== "off" && CONFIG.sandbox.projectDirs.length ==
   );
 }
 searchIndex.backfill();
+installSessionSearchHooks();
 startActivity();
 startMachineGovernor();
 reloadSchedules();

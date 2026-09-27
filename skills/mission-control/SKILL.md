@@ -313,7 +313,7 @@ mc session focus <ID> [-n 20]       # what another terminal is doing, in plain E
 mc session new --goal "…" [--kind pr|investigation|qa] [--description "the brief"] [--cwd p]
                                     # --goal repeats: two or three finish lines, worked in order
                                     # open a helper terminal to parallelize your work
-mc search "<query>" --kind session  # find past sessions that did related work
+mc search "<query>" --kind session  # find past sessions (goal, summary, branch, repo, PR urls)
 ```
 
 Waiting on another terminal? Check `mc session focus <ID>` before interrupting anyone — it's free.
@@ -321,8 +321,8 @@ Waiting on another terminal? Check `mc session focus <ID>` before interrupting a
 ## Leads — a Robert for one goal
 
 A **Lead** is a terminal (`role: lead`) that owns ONE goal in this workspace and runs it the way
-Robert runs the wall: it opens workers, is woken when they stop, steers them, closes them, and
-reports with a receipt. Design: `LEADS.md` in the chronos repo.
+Robert runs the wall: it opens workers, is woken when they stop, steers them, and reports with a
+receipt — closing workers is the operator's hand only. Design: `LEADS.md` in the chronos repo.
 
 ```bash
 mc lead new "<goal>" [--description "the brief"] [--kind pr|investigation|qa]   # open one (refused from inside a Lead)
@@ -331,10 +331,11 @@ mc lead list                        # live Leads + how many workers each has ope
 
 - **If `MC_LEAD=1` you ARE a Lead.** Workers you open with `mc session new` are signed as yours; when
   one stops, the daemon types a "a terminal FINISHED ITS TURN…" message into you — look
-  (`mc session focus <ID>`), then `mc session send <ID> "…"` / `mc session key <ID> …` / `mc session done <ID>`.
-  Full authority inside your goal (merge, deploy, close). One prohibition: no communication outside
-  Chronos — no Slack, email, Telegram, third-party messages or outside PR comments. Close your workers
-  before `mc goal done`.
+  (`mc session focus <ID>`), then `mc session send <ID> "…"` / `mc session key <ID> …` / `mc session done <ID>`
+  (tick only — never kill; the operator closes).
+  Full authority inside your goal for steering (merge/deploy still need the operator where they always
+  did). One prohibition: no communication outside Chronos — no Slack, email, Telegram, third-party
+  messages or outside PR comments. Leave closing workers to the operator before `mc goal done`.
 - **If you are a worker under a Lead**, nothing changes for you: stop cleanly with your Summary and
   the Lead picks it up. `mc ask-robert` still reaches Robert.
 - Reach for a Lead only when a goal is several terminals' work; a one-terminal task is just a terminal.

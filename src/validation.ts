@@ -158,6 +158,8 @@ export const SessionPatchSchema = z.object({
   // goal against the automatic deriver; agents pass "agent" via `mc goal set`.
   goal_source: z.enum(["seed", "auto", "agent", "human"]).optional(),
   title: z.string().max(200).optional(),
+  /** Opt Robert into (or out of) driving this terminal — stops and orange prompts. */
+  robert: z.boolean().optional(),
 });
 
 // Typing into someone else's terminal. `text` is a line (Enter follows unless enter:false); `key` is

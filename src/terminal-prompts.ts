@@ -173,6 +173,8 @@ export function onPromptWaiting(
   // A terminal with no goal or no client is the operator's own scratch window: not fleet work, and
   // Robert has nothing to judge "is this in scope" against.
   if (!s || !s.workspace_id || !goalOf(s)) return null;
+  // Opt-in: orange menus on terminals the operator did not hand to Robert wait for the operator.
+  if (!s.robert) return null;
   // He is at the keyboard on this one. Waking him to answer over the operator's shoulder is worse
   // than saying nothing.
   const typed = operatorTyped.get(sessionId) ?? 0;

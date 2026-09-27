@@ -543,7 +543,7 @@ One `search_fts` virtual table (`fts5`, `porter unicode61`; `title, body` indexe
 |---|---|
 | `event` | assistant + result text from `run_events` (on insert) |
 | `ticket` | key + title + body (create/update/note/plan) |
-| `session` | title + first prompt + AI summary + tags + ticket |
+| `session` | goal/title + spawn goal + first prompt + AI summary + tags + ticket + branch/worktree + repo name/path leaf + PR urls |
 | `note` / `skill` | title/name + body/description |
 
 Query via `GET /api/search?q=&workspace=&kind=&since=` or `mc search`. Ranked, workspace/kind/date

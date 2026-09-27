@@ -1,6 +1,7 @@
 import { randomUUID, randomBytes } from "node:crypto";
 import { db } from "./db.js";
 import { now } from "./util.js";
+import { sessionSearchHook } from "./session-search-hook.js";
 import type { GoalKind, GoalSource, NewSession, Session, WatchReport } from "../types.js";
 
 // The Lead's credential never rides a row out of the store: every session-returning endpoint (GET
@@ -10,6 +11,7 @@ const pub = <T>(r: T): T => {
   if (r) {
     delete (r as any).lead_token;
     (r as any).focus_only = !!(r as any).focus_only;
+    (r as any).robert = !!(r as any).robert;
   }
   return r;
 };
@@ -51,8 +53,8 @@ export const sessions = {
   create(s: NewSession & { id?: string }): Session {
     const id = s.id || randomUUID();
     db.prepare(
-      `INSERT INTO sessions (id,ticket_id,workspace_id,repo_id,title,goal,goal_kind,goal_source,spawn_goal,created_by,lead_id,agent_name,lead_token,backend,model,role,focus_only,cwd,host_id,status,created_at)
-       VALUES (@id,@ticket_id,@workspace_id,@repo_id,@title,@goal,@goal_kind,@goal_source,@spawn_goal,@created_by,@lead_id,@agent_name,@lead_token,@backend,@model,@role,@focus_only,@cwd,@host_id,'live',@created_at)`
+      `INSERT INTO sessions (id,ticket_id,workspace_id,repo_id,title,goal,goal_kind,goal_source,spawn_goal,created_by,lead_id,agent_name,lead_token,backend,model,role,focus_only,cwd,host_id,status,robert,created_at)
+       VALUES (@id,@ticket_id,@workspace_id,@repo_id,@title,@goal,@goal_kind,@goal_source,@spawn_goal,@created_by,@lead_id,@agent_name,@lead_token,@backend,@model,@role,@focus_only,@cwd,@host_id,'live',@robert,@created_at)`
     ).run({
       id,
       ticket_id: s.ticket_id ?? null,
@@ -82,9 +84,18 @@ export const sessions = {
       cwd: s.cwd,
       // The computer the pty runs on (HOSTS.md). Placement decides it once, here; it never moves.
       host_id: s.host_id || "local",
+      // Opt-in: Robert drives terminals he opened (and Leads) by default; everything else waits for
+      // the operator's "Let Robert drive this". Standing watch is a separate opt-in.
+      robert: s.robert != null ? (s.robert ? 1 : 0)
+        : ((s.created_by ?? "operator") === "robert" || s.role === "lead" ? 1 : 0),
       created_at: now(),
     });
     return this.get(id)!;
+  },
+  /** Hand this terminal to Robert (or take it back). Drives stops + orange prompts; not the standing watch. */
+  setRobert(id: string, on: boolean) {
+    db.prepare("UPDATE sessions SET robert=? WHERE id=?").run(on ? 1 : 0, id);
+    return this.get(id);
   },
   /**
    * The terminals a Lead owns (`lead_id`), newest first. The one query behind "does this Lead still
@@ -326,11 +337,13 @@ export const sessions = {
     db.prepare(
       "UPDATE sessions SET worktree_path=?, worktree_branch=?, repo_id=COALESCE(?, repo_id) WHERE id=?",
     ).run(w.path, w.branch, w.repo_id ?? null, id);
+    sessionSearchHook.bump(id);
     return this.get(id);
   },
   /** Forget the worktree a terminal claimed, once that tree is gone. The repo it needed stays. */
   clearWorktree(id: string) {
     db.prepare("UPDATE sessions SET worktree_path=NULL, worktree_branch=NULL WHERE id=?").run(id);
+    sessionSearchHook.bump(id);
     return this.get(id);
   },
   /** Count one "this terminal had to stop and ask you" — the number that says which work was smooth. */

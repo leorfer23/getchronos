@@ -15,6 +15,34 @@ export function tokenOk(got: string | undefined | null, expected: string): boole
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+/**
+ * Closing a Desk terminal is the operator's hand only — Desk ✕, phone Kill, or a Telegram ✅ on a
+ * proposed kill. Robert, Leads and workers may PROPOSE; they never execute. The positive signal is
+ * `x-mc-operator: 1`, which only those three surfaces set (never `mc`, never a Lead credential).
+ * Daemon-internal `killSession` (host failover, etc.) does not go through HTTP and is unchanged.
+ */
+export function operatorMayCloseTerminal(req: express.Request, res: express.Response): boolean {
+  if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) {
+    res.status(403).json({
+      error: "closing a terminal is operator-only (Desk ✕, phone, or Telegram confirm)",
+    });
+    return false;
+  }
+  if (req.get("x-mc-lead") || req.get("x-mc-session") || req.get("x-mc-agent")) {
+    res.status(403).json({
+      error: "agents may not close terminals — ask the operator (Desk ✕ / phone / Telegram ✅)",
+    });
+    return false;
+  }
+  if (req.get("x-mc-operator") !== "1") {
+    res.status(403).json({
+      error: "closing a terminal needs the operator's hand (Desk ✕, phone, or Telegram ✅)",
+    });
+    return false;
+  }
+  return true;
+}
+
 // Per-workspace API token (PER-24) — the trust boundary for cross-tenant authz. Every sandboxed
 // job/session gets its own workspace's token injected as MC_WORKSPACE_TOKEN (see mcEnv in
 // terminal.ts) and `mc` sends it as x-mc-workspace-token on every call. checkScope() 404s any

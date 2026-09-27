@@ -28,6 +28,7 @@ export { sessions } from "./store/sessions.js";
 export { sessionGoals } from "./store/session-goals.js";
 export { sessionPrs } from "./store/session-prs.js";
 export type { SessionPr } from "./store/session-prs.js";
+export { sessionSearchHook } from "./store/session-search-hook.js";
 export { notes } from "./store/notes.js";
 export { jots } from "./store/jots.js";
 export { proseSamples } from "./store/prose.js";

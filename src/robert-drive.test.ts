@@ -81,7 +81,8 @@ const stampReport = (at: number) =>
 let n = 0;
 const term = (over: Record<string, unknown> = {}) => {
   const w = workspaces.create({ slug: "acme" + ++n, name: "Acme", config_dir: "/tmp/acme" + n }).id;
-  return sessions.create({ workspace_id: w, goal: "open the rollback PR", cwd: "/tmp", ...over } as any);
+  // Tests that assert Robert wakes a terminal opt him in — production defaults to off for operator-spawned ones.
+  return sessions.create({ workspace_id: w, goal: "open the rollback PR", cwd: "/tmp", robert: true, ...over } as any);
 };
 const rows = () => db.prepare("SELECT * FROM robert_wakes ORDER BY generation").all() as any[];
 
@@ -91,6 +92,16 @@ test("driveKind: finished, review, decide, declared blocked and waiting-on-rober
   assert.equal(driveKind(st("decide"), ctx()), "decide");
   assert.equal(driveKind(st("blocked"), ctx({ declared: "blocked" })), "blocked");
   assert.equal(driveKind(st("waiting", { on: "robert" }), ctx()), "robert");
+});
+
+test("fireIfStill: a terminal the operator did not hand to Robert stays quiet (unless it waited on him)", () => {
+  reset();
+  const off = term({ robert: false });
+  screens.set(off.id, st("your_turn"));
+  assert.equal(fireIfStill(off.id, driveKey(off.id, "your_turn", st("your_turn").since), NOW), null);
+  screens.set(off.id, st("waiting", { on: "robert" }));
+  assert.ok(fireIfStill(off.id, driveKey(off.id, "waiting", st("waiting", { on: "robert" }).since), NOW),
+    "waiting --on robert is the agent asking — he answers even without the opt-in");
 });
 
 test("driveKind: work in flight, scratch windows and things with another owner never do", () => {
@@ -492,7 +503,7 @@ test("fireIfStill: a worker with no lead_id — including one that SAYS it has a
   const lead = sessions.create({ workspace_id: ws, role: "lead", goal: "ship the thing", cwd: "/tmp" });
   const impostor = sessions.create({
     workspace_id: ws, role: "worker", goal: "open the rollback PR", cwd: "/tmp",
-    created_by: `lead:${lead.id.slice(0, 8)}`,
+    created_by: `lead:${lead.id.slice(0, 8)}`, robert: true,
   });
   const sent: string[] = [];
   setDriveSendProbe((id) => { sent.push(id); return null; });

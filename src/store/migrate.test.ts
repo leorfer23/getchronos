@@ -233,6 +233,27 @@ test("ensureLocalHost is idempotent and puts back a deleted local row", () => {
   db.close();
 });
 
+test("migration 141 adds chat_messages.engine and sessions.robert; robert's own terminals stay opted in", () => {
+  const db = new Database(":memory:");
+  applyUpTo(db, 140);
+  const ts = "2026-09-25T00:00:00.000Z";
+  db.prepare(`INSERT INTO workspaces (id,slug,name,config_dir,created_at,updated_at) VALUES ('w1','acme','Acme','/tmp',@ts,@ts)`).run({ ts });
+  db.prepare(
+    `INSERT INTO sessions (id,workspace_id,role,cwd,status,created_at,created_by) VALUES (@id,@ws,@role,'/tmp',@status,@ts,@by)`,
+  ).run({ id: "s-op", ws: "w1", role: "human", status: "live", ts, by: "operator" });
+  db.prepare(
+    `INSERT INTO sessions (id,workspace_id,role,cwd,status,created_at,created_by) VALUES (@id,@ws,@role,'/tmp',@status,@ts,@by)`,
+  ).run({ id: "s-rob", ws: "w1", role: "human", status: "live", ts, by: "robert" });
+  db.prepare(`INSERT INTO chat_messages (you,reply,created_at,source,workspace_id) VALUES ('hola','hey',@ts,'web',NULL)`).run({ ts });
+  applyUpTo(db, 141);
+  const msg = db.prepare("SELECT engine FROM chat_messages").get() as { engine: string | null };
+  assert.equal(msg.engine, null);
+  const op = db.prepare("SELECT robert FROM sessions WHERE id='s-op'").get() as { robert: number };
+  const rob = db.prepare("SELECT robert FROM sessions WHERE id='s-rob'").get() as { robert: number };
+  assert.equal(op.robert, 0);
+  assert.equal(rob.robert, 1);
+});
+
 test("migration 140 adds chat_messages.reply_to + reply_quote, existing rows untouched", () => {
   const db = new Database(":memory:");
   applyUpTo(db, 139);

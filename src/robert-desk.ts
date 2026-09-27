@@ -7,13 +7,13 @@ import { bus } from "./bus.js";
 import { chat } from "./store.js";
 import type { RobertStep } from "./robert-steps.js";
 
-export function postRobertToDesk(p: { body: string; ws: string | null; steps?: RobertStep[]; turn?: string }): void {
+export function postRobertToDesk(p: { body: string; ws: string | null; steps?: RobertStep[]; turn?: string; engine?: string | null }): void {
   const body = (p.body || "").trim();
   if (!body && !p.steps?.length) return;
   try {
-    const row = chat.add("", body, "robert", p.ws, p.steps ?? null);
+    const row = chat.add("", body, "robert", p.ws, p.steps ?? null, null, null, p.engine ?? null);
     chat.prune(2000);
-    bus.publish({ topic: "agent.push", you: "", reply: body, at: row.created_at, source: "robert", id: row.id, ws: p.ws, turn: p.turn, steps: p.steps ?? [] });
+    bus.publish({ topic: "agent.push", you: "", reply: body, at: row.created_at, source: "robert", id: row.id, ws: p.ws, turn: p.turn, steps: p.steps ?? [], engine: p.engine ?? null });
   } catch (e) {
     console.warn("[robert-desk] post failed", e);
   }

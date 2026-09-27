@@ -268,14 +268,14 @@ and a Lead may never invent an override the operator has not said yes to.
    unpushed / busy). `force` on a worker's tree → 403
    `"a lead may not force-remove a worker's worktree — <what would be lost>; ask the operator (mc ask-robert)"`.
    `mc worktree rm` sends `x-mc-lead` when `MC_LEAD_TOKEN` is set.
-2. **Close-done** — `POST /api/leads/me/close-done` (`leadGate`) closes only its live workers whose
-   goal is ticked, reusing `closeDoneSessions` (the same function `/desk/close-done` uses).
-   `mc lead close-done [--rm-worktrees]` never force-removes; it prints every worktree refusal.
+2. **Close-done — retired.** `POST /api/leads/me/close-done` always 403s. Closing a terminal is the
+   operator only (`operatorMayCloseTerminal` in `src/authz.ts`: Desk ✕ / phone / Telegram ✅ with
+   `x-mc-operator: 1`). A Lead ticks goals (`mc session done`) and asks the operator to close.
 3. **Reopen** — a Lead may reopen only its own workers; `lead_id` is kept through `revive`; the
    reopened pty gets `leadWorkerBlock` + `MC_LEAD_ID` again. Another Lead → 404.
 4. **Worklog** — `POST /workspaces/:id/worklog` allows a Lead only in its own workspace; author is
    forced to `lead:<id8>`. `mc worklog` sends the header.
-5. **Still closed** to a Lead: vars write, `/desk/close-done` (the whole wall), `/sessions/:id/drop`.
+5. **Still closed** to a Lead: killing terminals, vars write, `/desk/close-done`, `/sessions/:id/drop`.
 6. **Audit** — every use publishes a bus event with `by` / `actor` `lead:<id8>` (`src/activity.ts`).
 
 ## Scale

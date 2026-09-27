@@ -54,20 +54,20 @@ export function wakeBeaconGraceMs(): number {
   return Math.max(300_000, WAKE_DRAIN_MS + 60_000);
 }
 
-type WakeAsker = (prompt: string, wsId: string | null, model: string) => Promise<string | { reply: string; steps?: RobertStep[]; turn?: string }>;
-type WakePoster = (p: { body: string; ticket_id: string | null; workspace_id: string | null; steps?: RobertStep[]; turn?: string }) => void;
+type WakeAsker = (prompt: string, wsId: string | null, model: string) => Promise<string | { reply: string; steps?: RobertStep[]; turn?: string; engine?: string }>;
+type WakePoster = (p: { body: string; ticket_id: string | null; workspace_id: string | null; steps?: RobertStep[]; turn?: string; engine?: string }) => void;
 type WakeNotifier = (text: string) => Promise<unknown>;
 
 let asker: WakeAsker = async (prompt, wsId, model) => {
   const out = await askManagerWeb(prompt, undefined, wsId, { model, label: "woken" });
-  return { reply: out.reply, steps: out.steps, turn: out.turn };
+  return { reply: out.reply, steps: out.steps, turn: out.turn, engine: out.engine };
 };
 let poster: WakePoster = (p) => {
   // Depth pinned to the cap: an automatic triage post must never chain-wake anyone.
   void postToBoard({ author: "robert", body: p.body, ticket_id: p.ticket_id, workspace_id: p.workspace_id, depth: BOARD_WAKE_MAX_DEPTH });
   // The Desk never renders the board. What Robert did on his own has to land in the one thread the
   // operator reads, or a woken Robert looks exactly like a sleeping one.
-  postRobertToDesk({ body: p.body, ws: p.workspace_id, steps: p.steps, turn: p.turn });
+  postRobertToDesk({ body: p.body, ws: p.workspace_id, steps: p.steps, turn: p.turn, engine: p.engine });
 };
 let notifier: WakeNotifier = (text) => notify(text);
 
@@ -213,11 +213,11 @@ export async function drainScope(scope: string, nowMs = Date.now()): Promise<Dra
     const prompt = batchPrompt(rows);
     try {
       const out = await asker(prompt, wsId, robertModelFor(prompt));
-      const { reply, steps, turn } = typeof out === "string" ? { reply: out, steps: undefined, turn: undefined } : out;
+      const { reply, steps, turn, engine } = typeof out === "string" ? { reply: out, steps: undefined, turn: undefined, engine: undefined } : out;
       const text = (reply || "").trim();
       // A turn that produced no words still happened; acking it is what keeps an empty reply from
       // re-presenting the same wakes every 30 seconds forever.
-      if (text || steps?.length) poster({ body: text, ticket_id: rows.length === 1 ? rows[0].subject : null, workspace_id: wsId, steps, turn });
+      if (text || steps?.length) poster({ body: text, ticket_id: rows.length === 1 ? rows[0].subject : null, workspace_id: wsId, steps, turn, engine });
       robertWakes.ackIds(ids, WAKE_ATTEMPT_CAP);
       return "drained";
     } catch (e: any) {

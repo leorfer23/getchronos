@@ -787,6 +787,12 @@ export interface Session {
   worktree_path: string | null;
   worktree_branch: string | null;
   // A standing order to re-read this terminal on a clock: Robert looks, then reports on Telegram.
+  /**
+   * Operator opted Robert into driving this terminal (stops, orange prompts). Off by default — he
+   * only looks at standing watches and terminals he opened himself. Explicit `mc ask-robert` /
+   * `waiting --on robert` still reach him regardless.
+   */
+  robert: boolean;
   /** Minutes between checks. Null = nobody is watching this terminal. */
   watch_every_min: number | null;
   /** What the operator asked to be watched FOR, in their words ("tell me if it goes near prod"). */
@@ -856,6 +862,8 @@ export interface NewSession {
   goal_kind?: GoalKind | null;
   goal_source?: GoalSource | null;
   created_by?: string | null;
+  /** Opt Robert into driving this terminal. Default: on when he (or a Lead) opened it. */
+  robert?: boolean;
   /** Set by api.ts from `leadScope(req)` alone — never from what the caller sent. */
   lead_id?: string | null;
   agent_name?: string | null;
