@@ -30,6 +30,7 @@ import {
 } from "./wire.js";
 import { JoinCodes, ensureBrainCert, mintHostCredential, hashToken, legacyHostsFile, type BrainCert } from "./join.js";
 import { HostRegistry } from "./registry.js";
+import { classifyBrainUrl } from "./pin.js";
 import { brainBuild, hostsView, updateVerdict, UPDATE_STALE_MS, type UpdateRecord } from "./view.js";
 import { hosts, workspaces, LOCAL_HOST_ID } from "../store.js";
 import type { HostPatch } from "../store/hosts.js";
@@ -620,10 +621,18 @@ export class BrainLink extends EventEmitter {
     const lan = this.listenUrls[0] ?? null;
     const tunnel = (this.opts.publicUrls?.() ?? [])[0] ?? null;
     const url = opts.url || lan || tunnel || urls[0] || "<brain-url>";
+    const cf = cfAccessFromEnv();
+    // Public (tunnel) URLs need Access headers; LAN/pinned names must never send a service token
+    // (HOSTS.md — CF_ACCESS is never used against a LAN IP).
+    const needsCf = (u: string) => {
+      const k = classifyBrainUrl(u);
+      return k.ok && k.kind === "ca" ? cf : null;
+    };
+    const cmdFor = (u: string) => hostJoinCommand(u, code, hostRepoUrl(), hostInstallMode(), brainBuild().version, needsCf(u));
     return {
       code,
-      command: hostJoinCommand(url, code),
-      commands: { lan: lan ? hostJoinCommand(lan, code) : null, tunnel: tunnel ? hostJoinCommand(tunnel, code) : null },
+      command: cmdFor(url),
+      commands: { lan: lan ? hostJoinCommand(lan, code) : null, tunnel: tunnel ? cmdFor(tunnel) : null },
       expires_at,
       urls,
       fingerprint: cert?.fingerprint ?? "",
@@ -742,6 +751,13 @@ export function hostInstallMode(env: NodeJS.ProcessEnv = process.env): "git" | "
  */
 export const NODE_CHECK = `node -e 'const v=process.versions.node,m=+v.split(".")[0];if(m<22||m>26){console.error("Chronos needs Node 22-26, this is "+v+". Fix: brew install node@24 and put /opt/homebrew/opt/node@24/bin first on PATH");process.exit(1)}'`;
 
+/** Access service token from the brain's env — only needed for tunnel (CA) join commands. */
+export function cfAccessFromEnv(env: NodeJS.ProcessEnv = process.env): { id: string; secret: string } | null {
+  const id = (env.CF_ACCESS_CLIENT_ID ?? "").trim();
+  const secret = (env.CF_ACCESS_CLIENT_SECRET ?? "").trim();
+  return id && secret ? { id, secret } : null;
+}
+
 /**
  * The one line the operator pastes on a new Mac. Safe to re-run: an existing clone is reset to the
  * latest main, not re-cloned. Paths use "$HOME", never `~` (a `~` inside quotes is not expanded,
@@ -751,10 +767,24 @@ export const NODE_CHECK = `node -e 'const v=process.versions.node,m=+v.split("."
  *    bin/getchronos.mjs, whose preflight says what to fix if `npm ci` did not finish.
  *  - npm: npx fetches the brain's own version, which installs itself into ~/.chronos-host/app
  *    (the npx cache is not a place a LaunchAgent may point at).
+ *  - Tunnel joins (public hostname behind Cloudflare Access): when `cfAccess` is set, the command
+ *    exports CF_ACCESS_* so `host join` can handshake and write them into ~/.chronos-host/.secrets.
  */
-export function hostJoinCommand(url: string, code: string, repo = hostRepoUrl(), mode = hostInstallMode(), version = brainBuild().version): string {
-  if (mode === "npm") return `${NODE_CHECK} && npx -y getchronos@${shq(version)} host join ${shq(url)} ${shq(code)}`;
-  return `${NODE_CHECK} && D="$HOME/.chronos-host/app" && { [ -d "$D/.git" ] && git -C "$D" fetch -q origin main && git -C "$D" reset -q --hard FETCH_HEAD || git clone -q ${shq(repo)} "$D"; } && cd "$D" && npm ci --no-audit --no-fund && npm run host -- join ${shq(url)} ${shq(code)}`;
+export function hostJoinCommand(
+  url: string,
+  code: string,
+  repo = hostRepoUrl(),
+  mode = hostInstallMode(),
+  version = brainBuild().version,
+  cfAccess: { id: string; secret: string } | null = null,
+): string {
+  const body = mode === "npm"
+    ? `${NODE_CHECK} && npx -y getchronos@${shq(version)} host join ${shq(url)} ${shq(code)}`
+    : `${NODE_CHECK} && D="$HOME/.chronos-host/app" && { [ -d "$D/.git" ] && git -C "$D" fetch -q origin main && git -C "$D" reset -q --hard FETCH_HEAD || git clone -q ${shq(repo)} "$D"; } && cd "$D" && npm ci --no-audit --no-fund && npm run host -- join ${shq(url)} ${shq(code)}`;
+  if (cfAccess?.id && cfAccess.secret) {
+    return `CF_ACCESS_CLIENT_ID=${shq(cfAccess.id)} CF_ACCESS_CLIENT_SECRET=${shq(cfAccess.secret)} ${body}`;
+  }
+  return body;
 }
 
 function defaultApiTarget(): { host: string; port: number } {

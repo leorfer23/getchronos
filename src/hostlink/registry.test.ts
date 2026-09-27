@@ -210,6 +210,30 @@ test("the join command, npm flavour: npx the brain's own version; CHRONOS_HOST_I
   assert.equal(hostInstallMode({ CHRONOS_HOST_INSTALL: "brew" } as any), "git");
 });
 
+test("tunnel join command prefixes CF_ACCESS_* when a service token is passed", () => {
+  const cf = { id: "cid.access", secret: "s3cret" };
+  const cmd = hostJoinCommand("wss://desk.example.com/host", "CHR1-x", "r", "git", "0.1.0", cf);
+  assert.match(cmd, /^CF_ACCESS_CLIENT_ID=cid\.access CF_ACCESS_CLIENT_SECRET=s3cret node -e /);
+  assert.match(cmd, /join wss:\/\/desk\.example\.com\/host CHR1-x$/);
+  assert.doesNotMatch(hostJoinCommand("wss://desk.example.com/host", "CHR1-x", "r", "git", "0.1.0", null), /CF_ACCESS/);
+});
+
+test("mintJoin: Anywhere command carries CF_ACCESS from the brain env; Same network does not", () => {
+  const prev = { id: process.env.CF_ACCESS_CLIENT_ID, secret: process.env.CF_ACCESS_CLIENT_SECRET };
+  process.env.CF_ACCESS_CLIENT_ID = "brain-cid.access";
+  process.env.CF_ACCESS_CLIENT_SECRET = "brain-secret";
+  try {
+    const tun = new BrainLink({ creds: new HostRegistry(), codes: new JoinCodes(), publicUrls: () => ["wss://desk.example.com/host"] });
+    const m = tun.mintJoin({ name: "m5" });
+    assert.match(m.commands.tunnel!, /^CF_ACCESS_CLIENT_ID=brain-cid\.access CF_ACCESS_CLIENT_SECRET=brain-secret /);
+    assert.match(m.commands.tunnel!, /join wss:\/\/desk\.example\.com\/host CHR1-/);
+    assert.equal(m.commands.lan, null);
+  } finally {
+    if (prev.id === undefined) delete process.env.CF_ACCESS_CLIENT_ID; else process.env.CF_ACCESS_CLIENT_ID = prev.id;
+    if (prev.secret === undefined) delete process.env.CF_ACCESS_CLIENT_SECRET; else process.env.CF_ACCESS_CLIENT_SECRET = prev.secret;
+  }
+});
+
 test("the node check: exits 0 on this node, 1 with the fix on one outside 22–26", () => {
   const script = /node -e '(.*)'$/.exec(NODE_CHECK)![1];
   assert.equal(spawnSync(process.execPath, ["-e", script]).status, 0);
@@ -220,14 +244,23 @@ test("the node check: exits 0 on this node, 1 with the fix on one outside 22–2
 });
 
 test("a join code's commands: LAN only with the listener up, tunnel only with a public URL", () => {
-  const none = new BrainLink({ creds: new HostRegistry(), codes: new JoinCodes(), publicUrls: () => [] });
-  const m0 = none.mintJoin();
-  assert.deepEqual(m0.commands, { lan: null, tunnel: null });
-  const tun = new BrainLink({ creds: new HostRegistry(), codes: new JoinCodes(), publicUrls: () => ["wss://desk.example.com/host"] });
-  const m1 = tun.mintJoin({ name: "m5" });
-  assert.equal(m1.commands.lan, null);
-  assert.match(m1.commands.tunnel!, /npm run host -- join wss:\/\/desk\.example\.com\/host CHR1-/);
-  assert.equal(m1.command, m1.commands.tunnel);
+  const prev = { id: process.env.CF_ACCESS_CLIENT_ID, secret: process.env.CF_ACCESS_CLIENT_SECRET };
+  delete process.env.CF_ACCESS_CLIENT_ID;
+  delete process.env.CF_ACCESS_CLIENT_SECRET;
+  try {
+    const none = new BrainLink({ creds: new HostRegistry(), codes: new JoinCodes(), publicUrls: () => [] });
+    const m0 = none.mintJoin();
+    assert.deepEqual(m0.commands, { lan: null, tunnel: null });
+    const tun = new BrainLink({ creds: new HostRegistry(), codes: new JoinCodes(), publicUrls: () => ["wss://desk.example.com/host"] });
+    const m1 = tun.mintJoin({ name: "m5" });
+    assert.equal(m1.commands.lan, null);
+    assert.match(m1.commands.tunnel!, /npm run host -- join wss:\/\/desk\.example\.com\/host CHR1-/);
+    assert.doesNotMatch(m1.commands.tunnel!, /CF_ACCESS/);
+    assert.equal(m1.command, m1.commands.tunnel);
+  } finally {
+    if (prev.id === undefined) delete process.env.CF_ACCESS_CLIENT_ID; else process.env.CF_ACCESS_CLIENT_ID = prev.id;
+    if (prev.secret === undefined) delete process.env.CF_ACCESS_CLIENT_SECRET; else process.env.CF_ACCESS_CLIENT_SECRET = prev.secret;
+  }
 });
 
 // ───────────────────────────── the admin API ─────────────────────────────
