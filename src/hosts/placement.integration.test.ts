@@ -61,6 +61,12 @@ const modeWas = CONFIG.placement.mode;
 
 const base = `http://127.0.0.1:${PORT}/api`;
 const post = (p: string, body: unknown) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+/** Operator-hand kill (Desk/phone shape) — agents may not close terminals. */
+const kill = (id: string) =>
+  fetch(`${base}/sessions/${id}/kill`, {
+    method: "POST",
+    headers: { "x-mc-admin": CONFIG.adminToken, "x-mc-operator": "1" },
+  });
 
 function waitFor(cond: () => boolean, what: string, ms = 8000): Promise<void> {
   const start = Date.now();
@@ -154,7 +160,7 @@ test("Auto: POST /sessions with no host_id lands on the host with the most headr
     assert.equal(sessions.get(s.id)!.placement, s.placement, "kept on the row");
     assert.ok(isLive(s.id));
     assert.deepEqual(placed.map((e) => [e.session_id, e.host_id]), [[s.id, cred.host_id]]);
-    await fetch(`${base}/sessions/${s.id}/kill`, { method: "POST" });
+    await kill(s.id);
     await waitFor(() => sessions.get(s.id)!.status === "ended", "the host terminal to end");
   } finally {
     bus.off("event", onEv);
@@ -167,7 +173,7 @@ test("a pin to the brain — or a brain directory — keeps a terminal local eve
     const s = await r.json();
     assert.equal(r.status, 201, JSON.stringify(s));
     assert.equal(s.host_id, "local");
-    await fetch(`${base}/sessions/${s.id}/kill`, { method: "POST" });
+    await kill(s.id);
   }
 });
 
@@ -187,7 +193,7 @@ test("nobody has room: an agent is refused with every computer's reason; the ope
     assert.equal(op.status, 201, JSON.stringify(s));
     assert.equal(s.host_id, cred.host_id, "least loaded: the host at 3.1/core beats the brain at 19.5");
     assert.match(s.placement, /^every computer is busy — least loaded/);
-    await fetch(`${base}/sessions/${s.id}/kill`, { method: "POST" });
+    await kill(s.id);
     await waitFor(() => sessions.get(s.id)!.status === "ended", "the host terminal to end");
   } finally {
     setLoadProbe(() => BRAIN_BUSY);
@@ -228,7 +234,7 @@ test("mc heavy from a host is granted from THAT host's pool (ncpu/6), and freed 
   assert.equal((await fromHost(s.id, "DELETE", `/machine/slots/${a.json.slot_id}`)).json.released, true);
 
   // The terminal ends → whatever it still held on its host is released.
-  await fetch(`${base}/sessions/${s.id}/kill`, { method: "POST" });
+  await kill(s.id);
   await waitFor(() => sessions.get(s.id)!.status === "ended", "the host terminal to end");
   const { findHost } = await import("./index.js");
   await waitFor(() => findHost(cred.host_id)!.slots.holders().length === 0, "the host's slots to be released");

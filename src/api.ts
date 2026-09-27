@@ -131,7 +131,7 @@ import { ensureIntakeJob } from "./intake.js";
 import { RepoGitError, resolveRepoGitFields } from "./repo-git.js";
 import type { GoalKind, LessonState, Session } from "./types.js";
 import { redactConnectorConfig, publicTrigger } from "./redact.js";
-import { tokenOk, callerScope, checkScope, forwardedGate, leadMayType, leadScope, type LeadScope } from "./authz.js";
+import { tokenOk, callerScope, checkScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, type LeadScope } from "./authz.js";
 import { findHost, hostOnline } from "./hosts/index.js";
 import { RemoteHost } from "./hosts/remote.js";
 import { resolveHostRef, sessionHostOffline } from "./remote-terminals.js";
@@ -285,8 +285,8 @@ export function leadGate(req: express.Request, res: express.Response): LeadScope
 }
 
 /**
- * Kill every live terminal whose goal is ticked. Shared by `/desk/close-done` (the whole wall) and
- * `/leads/me/close-done` (one Lead's workers only) so the two doors cannot drift.
+ * Kill every live terminal whose goal is ticked. Used by `/desk/close-done` after the operator
+ * gate. (Leads no longer get a scoped copy — closing is operator-only.)
  */
 export function closeDoneSessions(filter?: (s: { id: string; lead_id: string | null }) => boolean): string[] {
   const done = sessions
@@ -991,51 +991,14 @@ export function startServer() {
     res.json(out);
   });
 
-  // Close only THIS Lead's live workers whose goal is ticked — the same door as /desk/close-done,
-  // scoped to workersOf(leadId). Never the whole Desk (that stays admin). Optional
-  // `rm_worktrees` tries a non-force remove of each closed worker's claim and reports every refusal
-  // (a Lead may not force — LEADS.md Powers).
+  // Close only THIS Lead's live workers whose goal is ticked — retired: closing a terminal is the
+  // operator's hand only (Desk ✕ / phone / Telegram ✅). Kept as a 403 so old `mc lead close-done`
+  // calls fail loudly instead of silently no-opping.
   api.post("/leads/me/close-done", async (req, res) => {
-    const lead = leadGate(req, res);
-    if (!lead) return;
-    const by = `lead:${lead.leadId.slice(0, 8)}`;
-    const closed = closeDoneSessions((s) => s.lead_id === lead.leadId);
-    bus.publish({ topic: "lead.close-done", lead_id: lead.leadId, closed, by, actor: by });
-    const rm = req.body?.rm_worktrees === true || req.body?.rm_worktrees === "1";
-    const worktrees: { id8: string; ok: boolean; error?: string; path?: string }[] = [];
-    if (rm) {
-      for (const id of closed) {
-        const s = sessions.get(id);
-        const ref = s?.worktree_path || s?.worktree_branch;
-        if (!ref) {
-          worktrees.push({ id8: id.slice(0, 8), ok: true });
-          continue;
-        }
-        const out = await removeWorktreeAs(
-          { admin: false, scope: { ws: lead.ws }, lead },
-          ref,
-          { force: false },
-        );
-        if (out.removed) {
-          bus.publish({
-            topic: "worktree.removed",
-            path: out.removed.path,
-            branch: out.removed.branch,
-            by: out.removed.by,
-            actor: out.removed.by,
-          });
-          if (out.removed.session_id) bus.publish({ topic: "session.updated", session_id: out.removed.session_id });
-        }
-        worktrees.push({
-          id8: id.slice(0, 8),
-          ok: out.status === 200,
-          ...(out.status === 200
-            ? { path: out.removed?.path }
-            : { error: String(out.body?.error ?? JSON.stringify(out.body)) }),
-        });
-      }
-    }
-    res.json({ closed, ...(rm ? { worktrees } : {}) });
+    if (!leadGate(req, res)) return;
+    return res.status(403).json({
+      error: "Leads may not close terminals — ask the operator (Desk ✕ / phone / Telegram ✅)",
+    });
   });
 
   // A standing watch: Robert re-reads THIS terminal every N minutes and reports on Telegram. Scoped,
@@ -1111,6 +1074,7 @@ export function startServer() {
   api.post("/sessions/:id/kill", (req, res) => {
     const s = sessions.get(req.params.id);
     if (s && !checkScope(req, res, s.workspace_id)) return;
+    if (!operatorMayCloseTerminal(req, res)) return;
     // No pid to signal — stop the underlying run instead, so the cloud agent actually stops
     // instead of just going unwatched. killSession() below still ends the session row either way.
     if (s?.cloud_agent_id) {
@@ -2607,16 +2571,19 @@ export function startServer() {
   // The wall's text cards: one request for every terminal you are NOT reading live, returning only the
   // frames that changed since the seq each card last saw (term-screen.ts). Same gate as /term — a
   // frame is the terminal's contents. `ids` caps at 200; `since` is `id:seq,id:seq`.
-  // Every live terminal whose goal is ticked, closed in one call — the Desk's "N done" count and
-  // Robert's "close everything that is finished" are the same door. A Lead's narrower copy lives at
-  // POST /leads/me/close-done (leadGate) and reuses closeDoneSessions below.
+  // Every live terminal whose goal is ticked, closed in one call — the Desk's "N done" count.
+  // Closing is operator-only (src/authz.ts operatorMayCloseTerminal); Robert proposes, never executes.
+  // A Lead's former copy at POST /leads/me/close-done now 403s for the same reason.
   // Hosts: join codes, connected links, revoke (admin only — src/hostlink/brain-link.ts).
   // The brain's menu bar item (desktop/hostbar.swift --brain): the whole fleet, every 3 s. Here and not
   // in hostRoutes because it reads pty activity from terminal.ts, which brain-link.ts must not import.
   api.use(barRoutes(requireAdmin, { link: brainLink, activity: sessionActivity }));
   api.use(hostRoutes(requireAdmin));
 
-  api.post("/desk/close-done", requireAdmin, (_req, res) => {
+  // Every live terminal whose goal is ticked, closed in one call — Desk / phone / Telegram ✅ only.
+  // Robert and Leads may propose; they never hit this door (operatorMayCloseTerminal).
+  api.post("/desk/close-done", (req, res) => {
+    if (!operatorMayCloseTerminal(req, res)) return;
     res.json({ closed: closeDoneSessions() });
   });
   // The stage footer's quick actions (src/quick-actions.ts) — the sentences the operator taps instead

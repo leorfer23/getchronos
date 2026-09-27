@@ -197,7 +197,7 @@ describe("reopen ownership", () => {
 });
 
 describe("surfaces that stay closed to a Lead", () => {
-  test("vars write, /desk/close-done, /sessions/:id/drop stay admin-only (no leadScope)", () => {
+  test("vars write, /desk/close-done, /sessions/:id/drop stay admin/operator-only (no leadScope)", () => {
     const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
     // vars write
     const varsAt = api.indexOf('api.post("/workspaces/:id/vars"');
@@ -205,11 +205,11 @@ describe("surfaces that stay closed to a Lead", () => {
     const varsBody = api.slice(varsAt, varsAt + 400);
     assert.match(varsBody, /requireAdmin/);
     assert.doesNotMatch(varsBody, /leadScope|leadGate/);
-    // whole-wall close-done
+    // whole-wall close-done — operator gate, not lead
     const deskAt = api.indexOf('api.post("/desk/close-done"');
     assert.ok(deskAt > 0);
     const deskBody = api.slice(deskAt, deskAt + 350);
-    assert.match(deskBody, /requireAdmin/);
+    assert.match(deskBody, /operatorMayCloseTerminal/);
     assert.doesNotMatch(deskBody, /leadGate/);
     // drop
     const dropAt = api.indexOf('"/sessions/:id/drop"');
@@ -219,13 +219,15 @@ describe("surfaces that stay closed to a Lead", () => {
     assert.doesNotMatch(dropBody, /leadScope|leadGate/);
   });
 
-  test("/leads/me/close-done is leadGate-scoped; worklog POST accepts a Lead in its workspace", () => {
+  test("/leads/me/close-done is retired (403) — closing is operator-only", () => {
     const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
     const closeAt = api.indexOf('api.post("/leads/me/close-done"');
     assert.ok(closeAt > 0, "missing /leads/me/close-done");
-    const closeBody = api.slice(closeAt, closeAt + 900);
+    const closeBody = api.slice(closeAt, closeAt + 500);
     assert.ok(closeBody.includes("leadGate(req, res)"));
-    assert.ok(closeBody.includes("lead.leadId") || closeBody.includes("lead_id === lead.leadId"));
+    assert.match(closeBody, /status\(403\)/);
+    assert.match(closeBody, /Leads may not close terminals/);
+    assert.doesNotMatch(closeBody, /closeDoneSessions/);
 
     const wlAt = api.indexOf('api.post("/workspaces/:id/worklog"');
     assert.ok(wlAt > 0);

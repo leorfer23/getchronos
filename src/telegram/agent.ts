@@ -394,9 +394,18 @@ async function fire(it: ProposalItem) {
   const stamped = stampTelegramAskAnswer(it);
   // The ✅ tap from the claimed operator chat IS the authorization — send the admin header
   // unconditionally rather than hand-mirroring api.ts's requireAdmin route list (drift risk).
+  // Kill / close-done also need x-mc-operator: 1 — the positive "operator's hand" signal that
+  // agents (incl. Robert) cannot forge through `mc` or a Lead credential (src/authz.ts).
+  const pathOnly = (stamped.path ?? "").split("?")[0];
+  const closing =
+    /\/sessions\/[^/]+\/kill$/.test(pathOnly) || pathOnly === "/api/desk/close-done";
   const res = await fetch(`http://localhost:${CONFIG.port}${stamped.path}`, {
     method: stamped.method,
-    headers: { "content-type": "application/json", "x-mc-admin": CONFIG.adminToken },
+    headers: {
+      "content-type": "application/json",
+      "x-mc-admin": CONFIG.adminToken,
+      ...(closing ? { "x-mc-operator": "1" } : {}),
+    },
     ...(stamped.body !== undefined ? { body: JSON.stringify(stamped.body) } : {}),
   });
   const json = await res.json().catch(() => null);

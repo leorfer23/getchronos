@@ -1,6 +1,7 @@
 import { randomUUID, randomBytes } from "node:crypto";
 import { db } from "./db.js";
 import { now } from "./util.js";
+import { sessionSearchHook } from "./session-search-hook.js";
 import type { GoalKind, GoalSource, NewSession, Session, WatchReport } from "../types.js";
 
 // The Lead's credential never rides a row out of the store: every session-returning endpoint (GET
@@ -326,11 +327,13 @@ export const sessions = {
     db.prepare(
       "UPDATE sessions SET worktree_path=?, worktree_branch=?, repo_id=COALESCE(?, repo_id) WHERE id=?",
     ).run(w.path, w.branch, w.repo_id ?? null, id);
+    sessionSearchHook.bump(id);
     return this.get(id);
   },
   /** Forget the worktree a terminal claimed, once that tree is gone. The repo it needed stays. */
   clearWorktree(id: string) {
     db.prepare("UPDATE sessions SET worktree_path=NULL, worktree_branch=NULL WHERE id=?").run(id);
+    sessionSearchHook.bump(id);
     return this.get(id);
   },
   /** Count one "this terminal had to stop and ask you" — the number that says which work was smooth. */

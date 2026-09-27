@@ -1770,10 +1770,15 @@ let TOKEN = window.__MC_TOKEN__ || localStorage.getItem("mc-token") || null;
 const WS_SCHEME = location.protocol === "https:" ? "wss:" : "ws:";
 const qs = (s, r = document) => r.querySelector(s);
 const qsa = (s, r = document) => [...r.querySelectorAll(s)];
-const api = (p, opts) => fetch("/api" + p, {
+const api = (p, opts) => {
+  const headers = { "content-type": "application/json", ...(TOKEN ? { "x-mc-admin": TOKEN } : {}), ...(opts?.headers || {}) };
+  // Closing a terminal is operator-only: this header is the Desk's hand (src/authz.ts).
+  if (/\/(?:sessions\/[^/]+\/kill|desk\/close-done)$/.test(String(p).split("?")[0])) headers["x-mc-operator"] = "1";
+  return fetch("/api" + p, {
   ...opts,
-  headers: { "content-type": "application/json", ...(TOKEN ? { "x-mc-admin": TOKEN } : {}), ...(opts?.headers || {}) },
+  headers,
 }).then(async (r) => { if (!r.ok) throw Object.assign(new Error((await r.text()).slice(0, 200)), { status: r.status }); return r.status === 204 ? null : r.json(); });
+};
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 let toastT;
 function toast(msg) {

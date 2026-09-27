@@ -1,5 +1,6 @@
 import { db } from "./db.js";
 import { now } from "./util.js";
+import { sessionSearchHook } from "./session-search-hook.js";
 
 /** A PR a Desk terminal opened — see migration 139 and src/terminal-automerge.ts. */
 export type SessionPr = {
@@ -21,7 +22,14 @@ export const sessionPrs = {
     const res = db
       .prepare("INSERT OR IGNORE INTO session_prs (url,session_id,workspace_id,cwd,created_at,updated_at) VALUES (?,?,?,?,?,?)")
       .run(r.url, r.session_id, r.workspace_id, r.cwd, now(), now());
+    if (res.changes > 0) sessionSearchHook.bump(r.session_id);
     return res.changes > 0;
+  },
+  /** Every PR this terminal was first to open — feeds session FTS. */
+  forSession(session_id: string): SessionPr[] {
+    return db
+      .prepare("SELECT * FROM session_prs WHERE session_id = ? ORDER BY created_at ASC")
+      .all(session_id) as SessionPr[];
   },
   get(url: string): SessionPr | undefined {
     return db.prepare("SELECT * FROM session_prs WHERE url = ?").get(url) as SessionPr | undefined;
