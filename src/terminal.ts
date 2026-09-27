@@ -44,6 +44,7 @@ import { agentBlock, agentPrompt } from "./agent-defs.js";
 import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, type SessionGoal, type Workspace } from "./types.js";
 import { goalLines, setGoals, splitGoalText } from "./goals.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "./agent-prep.js";
+import { routeConfigDir } from "./profile-route.js";
 
 // Moved to agent-prep.ts (store-free, so `chronos host` runs the same code); re-exported for callers.
 export { excludeChronosArtifacts, gitExcludePath, gitTrackedSync, insideGitRepo, mcSystemText, syncAgentsMd } from "./agent-prep.js";
@@ -599,7 +600,12 @@ export async function openSession(
   }
   const backend = getBackend(opts.backend);
   const ws = wsEarly;
-  const configDir = ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude;
+  const pinnedDir = ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude;
+  // A walled account hands a NEW claude terminal to its sibling login (profile-route.ts). Brain only:
+  // a remote host resolves its own profile dir by name.
+  const routed = !remote && backend.name === "claude-code" ? routeConfigDir(pinnedDir) : { dir: pinnedDir, reason: null };
+  const configDir = routed.dir;
+  if (routed.reason) console.log(`[profile-route] ${row.id.slice(0, 8)}: ${routed.reason}`);
   // Profile prep runs on the machine the CLI runs on. For a remote host that is `prepare()` inside
   // its spawn (hostd/terminals.ts) — the brain's own profile dirs are not the ones that CLI reads.
   if (!remote) {
@@ -1204,7 +1210,7 @@ export function closeOutSession(id: string, opts: { cwd?: string; transcript?: s
   const s = sessions.get(id);
   if (!s) return;
   const ws = s.workspace_id ? workspaces.get(s.workspace_id) : undefined;
-  const configDir = ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude;
+  const configDir = routeConfigDir(ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude).dir;
   runExitDigest(id, s.workspace_id ?? null, configDir, digestText(id, opts.transcript ?? ""));
 }
 

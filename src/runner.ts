@@ -80,6 +80,7 @@ export function shouldFileReviewOnEnd(name?: string | null): boolean {
 // worktreeSandboxDirs moved to worktree-core.ts (store-free) so a host builds the same sandbox for a
 // run in ITS worktree (HOSTS.md phase 5); re-exported here for existing callers.
 import { worktreeSandboxDirs } from "./worktree-core.js";
+import { routeConfigDir } from "./profile-route.js";
 export { worktreeSandboxDirs };
 
 // Pure decision extracted for unit testing (the real check lives inline in the close handler, where
@@ -235,7 +236,10 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
   }
   // Workspace (if any) owns the config dir + isolation wall; fall back to the legacy profile map.
   const ws = job.workspace_id ? workspaces.get(job.workspace_id) : undefined;
-  const profileDir = ws?.config_dir ?? CONFIG.profiles[job.profile] ?? CONFIG.profiles.claude;
+  const pinnedDir = ws?.config_dir ?? CONFIG.profiles[job.profile] ?? CONFIG.profiles.claude;
+  const routed = backend.name === "claude-code" ? routeConfigDir(pinnedDir) : { dir: pinnedDir, reason: null };
+  const profileDir = routed.dir;
+  if (routed.reason) console.log(`[profile-route] ${job.name} run ${runId.slice(0, 8)}: ${routed.reason}`);
   const denyDirs = job.workspace_id ? workspaces.isolationDenyDirs(job.workspace_id) : [];
   // Standing workspace context (★ memos + skill index) is injected HERE, fresh at run time, so
   // every workspace-scoped run gets it — ticket/review dispatches, cron jobs, manual `mc job new`
@@ -434,7 +438,9 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
 export function adoptRun(job: Job, runId: string, child: ProcHandle): Promise<RunStatus> {
   const backend = getBackend(job.backend);
   const ws = job.workspace_id ? workspaces.get(job.workspace_id) : undefined;
-  const profileDir = ws?.config_dir ?? CONFIG.profiles[job.profile] ?? CONFIG.profiles.claude;
+  // Same choice execute() made (profile-route.ts), so its stream readings land on the right account.
+  const pinnedDir = ws?.config_dir ?? CONFIG.profiles[job.profile] ?? CONFIG.profiles.claude;
+  const profileDir = backend.name === "claude-code" ? routeConfigDir(pinnedDir).dir : pinnedDir;
   const steerMode = !!(ws?.live_steer && backend.steerArgs && backend.encodeSteer && child.stdin);
   if (steerMode) liveSteer.set(runId, { stdin: null, outstanding: 1, encode: backend.encodeSteer!, queue: [], unconfirmed: [] });
   const started = Date.parse(runs.get(runId)?.started_at ?? "");

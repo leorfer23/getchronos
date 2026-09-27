@@ -479,6 +479,9 @@ export const CONFIG = {
   // that belongs to a client should pin its own via `workspaces.config_dir` — that is what keeps
   // one client's work off another's account. See `profiles` at the bottom of this file.
   defaultProfile: process.env.CHRONOS_DEFAULT_PROFILE ?? "claude",
+  // Sibling logins a new claude session may move to when its pinned profile is walled
+  // (src/profile-route.ts): "claude=claude-leo.osn92" — `,` several alternates, `;` several groups.
+  profileAlternates: process.env.CHRONOS_PROFILE_ALTERNATES ?? "",
   desktopNotify: process.env.CHRONOS_DESKTOP_NOTIFY !== "0",
   // Web Push to the phone (src/push.ts). Off in tests; CHRONOS_PUSH=0 turns it off in the daemon.
   push: process.env.CHRONOS_PUSH !== "0" && process.env.CHRONOS_TEST !== "1",

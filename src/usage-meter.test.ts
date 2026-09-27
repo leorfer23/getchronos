@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { installClaudeHooks } from "./term-hooks.js";
 import {
+  claudeWall,
   _resetUsage,
   noteClaudeStatusline,
   noteClaudeStreamEvent,
@@ -104,4 +105,16 @@ test("installClaudeHooks adds our statusLine, never replaces the operator's", ()
   installClaudeHooks(b);
   const s2 = JSON.parse(fs.readFileSync(path.join(b, "settings.json"), "utf8"));
   assert.equal(s2.statusLine.command, "~/my-line.sh");
+});
+
+test("claudeWall: a window at 100% until a future reset walls the profile; a passed reset does not", () => {
+  const home = os.homedir();
+  const reset = Math.floor(Date.parse("2026-09-30T17:00:00Z") / 1000);
+  noteClaudeStatusline(path.join(home, ".claude"), { five_hour: { used_percentage: 0, resets_at: reset }, seven_day: { used_percentage: 100, resets_at: reset } });
+  noteClaudeStatusline(path.join(home, ".claude-alt"), { seven_day: { used_percentage: 97, resets_at: reset } });
+  const before = Date.parse("2026-09-28T00:00:00Z");
+  assert.deepEqual(claudeWall(path.join(home, ".claude"), before), { window: "weekly", resetsAt: "2026-09-30T17:00:00.000Z" });
+  assert.equal(claudeWall(path.join(home, ".claude"), Date.parse("2026-10-01T00:00:00Z")), null);
+  assert.equal(claudeWall(path.join(home, ".claude-alt"), before), null);
+  assert.equal(claudeWall(path.join(home, ".claude-never-seen"), before), null);
 });
