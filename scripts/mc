@@ -291,7 +291,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc lead board add "title" ["title" ...]      append slices (numbered in order)
   mc lead board set <n> [--status todo|doing|review|done|dropped] [--worker id8] [--pr URL] [--note "..."]
   mc lead close-done [--rm-worktrees] (INSIDE a Lead) RETIRED — always 403; closing is operator-only
-                                    (Desk ✕ / phone / Telegram ✅). Tick with `mc session done` instead.
+                                    (Desk / phone / Telegram confirm). Tick with mc session done instead.
                                      --rm-worktrees tries a non-force remove of each claim and prints
                                      refusals (never force — ask the operator via mc ask-robert)
   mc lead adopt <leadId>             (INSIDE a Lead) take an ENDED Lead's live workers + board + inbox
