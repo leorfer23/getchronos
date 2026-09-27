@@ -383,12 +383,20 @@ test("host secrets writer keeps foreign keys, replaces ours, and is 600", () => 
   const f = path.join(dir, "sec", ".secrets");
   fs.mkdirSync(path.dirname(f), { recursive: true });
   fs.writeFileSync(f, "# mine\nCHRONOS_HOST_ROOTS=~/code\nCHRONOS_HOST_ID=old\n", { mode: 0o644 });
-  writeHostSecrets(f, { CHRONOS_HOST_ID: "h_new", CHRONOS_HOST_TOKEN: "tok" });
+  writeHostSecrets(f, {
+    CHRONOS_HOST_ID: "h_new",
+    CHRONOS_HOST_TOKEN: "tok",
+    CF_ACCESS_CLIENT_ID: "cid.access",
+    CF_ACCESS_CLIENT_SECRET: "csec",
+  });
   const txt = fs.readFileSync(f, "utf8");
   assert.match(txt, /# mine/);
   assert.match(txt, /CHRONOS_HOST_ROOTS=~\/code/);
   assert.doesNotMatch(txt, /=old/);
-  assert.equal(parseEnvFile(f).CHRONOS_HOST_ID, "h_new");
+  const env = parseEnvFile(f);
+  assert.equal(env.CHRONOS_HOST_ID, "h_new");
+  assert.equal(env.CF_ACCESS_CLIENT_ID, "cid.access");
+  assert.equal(env.CF_ACCESS_CLIENT_SECRET, "csec");
   assert.equal(fs.statSync(f).mode & 0o777, 0o600);
 });
 

@@ -181,12 +181,19 @@ export async function join(opts: {
     : null;
   const got = await exchangeCode(opts.url, opts.code, { name: opts.name, cfAccess: cf });
   const secretsFile = path.join(opts.hostHome, ".secrets");
-  writeHostSecrets(secretsFile, {
+  const secrets: Record<string, string> = {
     CHRONOS_HOST_BRAINS: got.brains.join(","),
     CHRONOS_HOST_ID: got.host_id,
     CHRONOS_HOST_TOKEN: got.token,
     CHRONOS_HOST_CERT_FP: got.fp,
-  });
+  };
+  // Tunnel joins need these on every reconnect (host run reads them from .secrets). Persist when
+  // the paste carried them; leave alone if the operator already set them by hand.
+  if (cf) {
+    secrets.CF_ACCESS_CLIENT_ID = cf.id;
+    secrets.CF_ACCESS_CLIENT_SECRET = cf.secret;
+  }
+  writeHostSecrets(secretsFile, secrets);
   let plistFile: string | null = null;
   if (!opts.noLaunchd) {
     plistFile = writeHostPlist({ hostHome: opts.hostHome, launchAgentsDir: opts.launchAgentsDir });

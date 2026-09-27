@@ -300,6 +300,10 @@ On the brain, once — pick how new computers reach it (either or both):
 echo 'CHRONOS_HOST_LISTEN=0.0.0.0:7779' >> .secrets
 # Anywhere: advertise the tunnel (cloudflared already forwards /host to :7777)
 echo 'CHRONOS_HOST_PUBLIC_URL=wss://desk.example.com/host' >> .secrets
+# Cloudflare Access service token (Zero Trust → Access → Service Auth). The Desk's
+# "Anywhere" join command prefixes these so the host can pass Access on every reconnect.
+echo 'CF_ACCESS_CLIENT_ID=…' >> .secrets
+echo 'CF_ACCESS_CLIENT_SECRET=…' >> .secrets
 npm run deploy
 ```
 
