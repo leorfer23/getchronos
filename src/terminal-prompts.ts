@@ -20,6 +20,7 @@
  * What he may answer and what he must hand up is NOT here: `agents/_blocks/terminal-prompts.md` owns
  * that policy, exactly as ask-authority.md owns it for asks. Two copies is how one goes stale.
  */
+import { settingOn } from "./settings.js";
 import { createHash } from "node:crypto";
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
@@ -128,7 +129,9 @@ type Tracked = {
 
 const tracked = new Map<string, Tracked>();
 
-export const terminalPromptsEnabled = (): boolean => CONFIG.terminalPrompts;
+/** ⚙ Settings → Robert: may he answer on-screen prompts in this workspace. Read per prompt. */
+export const terminalPromptsEnabled = (wsId?: string | null): boolean =>
+  settingOn("robert.enabled", wsId) && settingOn("robert.prompts", wsId);
 /** Robert is already on a screen prompt from this terminal — robert-drive leaves it alone. */
 export const promptTracked = (sessionId: string): boolean => tracked.has(sessionId);
 
@@ -167,7 +170,6 @@ export function onPromptWaiting(
   p: DeskPrompt | null | undefined,
   nowMs = Date.now(),
 ): string | null {
-  if (!terminalPromptsEnabled()) return null;
   if (!p || !ANSWERABLE.has(p.kind) || !p.question?.trim()) return null;
   const s = sessions.get(sessionId);
   // A terminal with no goal or no client is the operator's own scratch window: not fleet work, and
@@ -175,6 +177,7 @@ export function onPromptWaiting(
   if (!s || !s.workspace_id || !goalOf(s)) return null;
   // Opt-in: orange menus on terminals the operator did not hand to Robert wait for the operator.
   if (!s.robert) return null;
+  if (!terminalPromptsEnabled(s.workspace_id)) return null;
   // He is at the keyboard on this one. Waking him to answer over the operator's shoulder is worse
   // than saying nothing.
   const typed = operatorTyped.get(sessionId) ?? 0;
@@ -320,6 +323,6 @@ export function startTerminalPrompts(): void {
   console.log(
     terminalPromptsEnabled()
       ? `[terminal-prompts] Robert woken on 🟠 prompts (confirm ${CONFIG.terminalPromptConfirmSec}s, deadline ${CONFIG.terminalPromptDeadlineMin}m)`
-      : "[terminal-prompts] off (CHRONOS_TERMINAL_PROMPTS=0) — a waiting terminal waits for the operator",
+      : "[terminal-prompts] off globally (⚙ Settings → Robert) — a waiting terminal waits for the operator",
   );
 }

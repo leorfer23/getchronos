@@ -40,12 +40,14 @@ import { failoverOwns } from "./terminal-failover.js";
 import { promptTracked } from "./terminal-prompts.js";
 import { focusEvents, sessionActivity, sendInput } from "./terminal.js";
 import { signalsOf, statusOf, type TermStatus } from "./term-status.js";
+import { setting, settingOn } from "./settings.js";
 
 export type DriveKind = "review" | "turn" | "decide" | "blocked" | "robert";
 /** The same five as a set — the inbox stores kinds as free text, and only these have a Robert wake. */
 const DRIVE_KINDS: ReadonlySet<string> = new Set<DriveKind>(["review", "turn", "decide", "blocked", "robert"]);
 
-export const driveEnabled = (): boolean => CONFIG.robertDrive.enabled;
+/** Robert may be woken for this workspace's terminals (⚙ Settings → Robert). Read per wake, never at boot. */
+export const driveEnabled = (wsId?: string | null): boolean => settingOn("robert.enabled", wsId) && settingOn("robert.drive", wsId);
 
 /** Seconds a phase must hold before Robert hears about it. */
 export function graceMs(kind: DriveKind): number {
@@ -797,12 +799,15 @@ export function fireIfStill(sessionId: string, key: string, nowMs = Date.now()):
   // him — that IS asking. Anything with a lead_id (live Lead, escalation, or orphan after the Lead
   // ended) is fleet work under a Lead and reaches him without a separate opt-in.
   if (!s.robert && kind !== "robert" && !s.lead_id) return null;
+  // Switched off in ⚙ Settings: the stop is the operator's, like any terminal he never handed over.
+  if (!driveEnabled(s.workspace_id)) return null;
   // Same stop re-armed (a second status event): the queue absorbs it as a repeat, and it is not a new
   // wake for the caps.
   const repeat = robertWakeExists(key);
   if (!repeat && alreadyWoken(sessionId, st.phase, lastInput(sessionId))) return null;
   const mine = perSession.get(sessionId) ?? [];
-  if (!repeat && !underCaps(mine, global, nowMs)) {
+  const caps = { perSession: setting<number>("robert.per_terminal_hour", s.workspace_id), global: setting<number>("robert.per_hour") };
+  if (!repeat && !underCaps(mine, global, nowMs, caps)) {
     console.warn(`[robert-drive] cap reached — ${id8(sessionId)} ${kind} not sent`);
     return null;
   }
@@ -831,7 +836,7 @@ export function fireIfStill(sessionId: string, key: string, nowMs = Date.now()):
 
 /** A status landed: arm (or disarm) this terminal's timer. */
 export function onStatus(sessionId: string, st: TermStatus | null | undefined): void {
-  if (!driveEnabled() || !st) return;
+  if (!st) return;
   const s = sessions.get(sessionId);
   armTimer(sessionId, st, s);
   // A Lead's own stop depends on what its WORKERS are doing (leadHasWorkingWorkers), and a Lead that
@@ -883,10 +888,6 @@ export function noteDriveInput(sessionId: string, by: string, atMs = Date.now())
 }
 
 export function startRobertDrive(): void {
-  if (!driveEnabled()) {
-    console.log("[robert-drive] off (CHRONOS_ROBERT_DRIVE=0) — finished terminals wait for the operator");
-    return;
-  }
   bus.on("event", (e: BusEvent) => {
     try {
       if (e.topic === "session.input") { noteDriveInput(e.session_id, e.by); noteLeadTyped(e.session_id, e.by); }
@@ -925,6 +926,6 @@ export function startRobertDrive(): void {
   }
   const c = CONFIG.robertDrive;
   const l = CONFIG.leadDrive;
-  console.log(`[robert-drive] Robert woken on finished/review/decide/blocked/waiting-on-robert terminals (grace ${c.graceSec}s, ${c.perSessionHour}/terminal·h, ${c.globalHour}/h)`);
+  console.log(`[robert-drive] Robert woken on finished/review/decide/blocked/waiting-on-robert terminals (grace ${c.graceSec}s; on/off + caps per workspace in ⚙ Settings)`);
   console.log(`[lead-drive] a Lead's own workers file into its inbox (\`mc lead wait\`); a Lead that is not pulling gets one digest after ${l.digestDebounceSec}s (max ${l.digestMaxWaitSec}s), then Robert`);
 }

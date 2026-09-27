@@ -45,6 +45,7 @@ import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, typ
 import { goalLines, setGoals, splitGoalText } from "./goals.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "./agent-prep.js";
 import { routeConfigDir } from "./profile-route.js";
+import { setting, settingOn } from "./settings.js";
 
 // Moved to agent-prep.ts (store-free, so `chronos host` runs the same code); re-exported for callers.
 export { excludeChronosArtifacts, gitExcludePath, gitTrackedSync, insideGitRepo, mcSystemText, syncAgentsMd } from "./agent-prep.js";
@@ -503,10 +504,10 @@ export async function openSession(
       }
     } else {
       const seats = live.filter((x) => !x.lead_id).length;
-      const cap = CONFIG.maxSessionsPerWorkspace;
+      const cap = setting<number>("limits.max_terminals", opts.workspace_id);
       if (seats >= cap) {
         throw new Error(
-          `workspace session cap reached (${seats}/${cap}) — close a terminal or raise CHRONOS_MAX_WS_SESSIONS`,
+          `workspace session cap reached (${seats}/${cap}) — close a terminal or raise it in ⚙ Settings → Limits`,
         );
       }
     }
@@ -603,7 +604,7 @@ export async function openSession(
   const pinnedDir = ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude;
   // A walled account hands a NEW claude terminal to its sibling login (profile-route.ts). Brain only:
   // a remote host resolves its own profile dir by name.
-  const routed = !remote && backend.name === "claude-code" ? routeConfigDir(pinnedDir) : { dir: pinnedDir, reason: null };
+  const routed = !remote && backend.name === "claude-code" ? routeConfigDir(pinnedDir, opts.workspace_id) : { dir: pinnedDir, reason: null };
   const configDir = routed.dir;
   if (routed.reason) console.log(`[profile-route] ${row.id.slice(0, 8)}: ${routed.reason}`);
   // Profile prep runs on the machine the CLI runs on. For a remote host that is `prepare()` inside
@@ -1210,7 +1211,7 @@ export function closeOutSession(id: string, opts: { cwd?: string; transcript?: s
   const s = sessions.get(id);
   if (!s) return;
   const ws = s.workspace_id ? workspaces.get(s.workspace_id) : undefined;
-  const configDir = routeConfigDir(ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude).dir;
+  const configDir = routeConfigDir(ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude, s.workspace_id).dir;
   runExitDigest(id, s.workspace_id ?? null, configDir, digestText(id, opts.transcript ?? ""));
 }
 
@@ -1240,6 +1241,7 @@ function claimExitDigest(id: string): boolean {
 }
 
 function runExitDigest(id: string, workspaceId: string | null, configDir: string, transcript: string) {
+  if (!settingOn("memory.summaries", workspaceId)) return;
   if (!claimExitDigest(id)) return;
   aiSessionDigest(transcript, configDir, wsOfSession(id), knownFacts(workspaceId))
     .then(({ summary, learnings }) => {
@@ -1248,7 +1250,7 @@ function runExitDigest(id: string, workspaceId: string | null, configDir: string
         indexSession(id);
         bus.publish({ topic: "session.updated", session_id: id });
       }
-      if (CONFIG.autoMemory && workspaceId && learnings.length) captureSessionLearnings(id, workspaceId, learnings);
+      if (workspaceId && settingOn("memory.learnings", workspaceId) && learnings.length) captureSessionLearnings(id, workspaceId, learnings);
     })
     .catch(() => {});
 }

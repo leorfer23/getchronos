@@ -298,3 +298,20 @@ test("a row claimed by a crashed drain but held back by its window is not acked 
   assert.equal(left.length, 1, "the held-back t1 row is still queued");
   assert.equal(left[0].id, stuck.id);
 });
+
+test("Robert switched off for a workspace (⚙ Settings): queued wakes drop with no turn; bus wakes never queue", async () => {
+  reset();
+  const { writeSetting, _resetSettingsCache } = await import("./settings.js");
+  const { enqueueBusWake } = await import("./wake-queue.js");
+  _resetSettingsCache();
+  const w = ws("quiet");
+  enqueueWake(wake({ workspace_id: w }));
+  writeSetting("robert.enabled", false, w);
+  assert.equal(await drainScope(w, NOW), "idle");
+  assert.equal(asked.length, 0, "no Robert turn");
+  assert.equal(robertWakes.unacked().length, 0, "dropped, not saved up");
+  const t = ticket(w, "QUI-1");
+  assert.equal(enqueueBusWake({ topic: "ticket.updated", ticket_id: t, status: "blocked" } as any), null);
+  writeSetting("robert.enabled", null, w);
+  _resetSettingsCache();
+});

@@ -22,6 +22,7 @@
  * question), and only counts a line in the CLI's own voice sitting at the bottom of the frame with
  * nothing but composer chrome under it — an agent explaining rate limits in prose never matches.
  */
+import { setting, settingOn } from "./settings.js";
 import fs from "node:fs";
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
@@ -351,11 +352,12 @@ function stateFor(id: string, backend: string): TermState {
   return st;
 }
 
-export const terminalFailoverEnabled = (): boolean => CONFIG.terminalFailover;
+/** ⚙ Settings → Failover, per workspace. Read on every quiet flip. */
+export const terminalFailoverEnabled = (wsId?: string | null): boolean => settingOn("failover.enabled", wsId);
 
 /** Is this terminal sitting on a wall failover will handle? terminal-prompts leaves those alone. */
 export function failoverOwns(sessionId: string): boolean {
-  if (!terminalFailoverEnabled()) return false;
+  if (!terminalFailoverEnabled(sessions.get(sessionId)?.workspace_id)) return false;
   const st = states.get(sessionId);
   if (st?.done) return false;
   try { return !!detectWall(ops.frame(sessionId)); } catch { return false; }
@@ -373,11 +375,11 @@ const wallWords = (w: Wall) => (w.kind === "credit" ? "out of credits" : "usage 
  * after the stand-in is open (the walled terminal is left for the operator to close).
  */
 export async function onTerminalQuiet(id: string, now = Date.now()): Promise<QuietOutcome> {
-  if (!terminalFailoverEnabled()) return "off";
   const act = ops.activity(id);
   if (!act.live || !act.quiet) return "not-live";
   const s = sessions.get(id);
   if (!s || s.status !== "live") return "not-live";
+  if (!terminalFailoverEnabled(s.workspace_id)) return "off";
   const st = stateFor(id, s.backend);
   if (st.done) return "done";
   if (st.busy) return "busy";
@@ -406,9 +408,9 @@ export async function onTerminalQuiet(id: string, now = Date.now()): Promise<Qui
     model,
     modelTried: st.modelTried,
     attempts: st.lineage.attempts,
-    max: CONFIG.terminalFailoverMax,
+    max: setting<number>("failover.max", s.workspace_id),
     modelFallback: CONFIG.agent.modelFallback,
-    chain: fallbackChain(ws),
+    chain: fallbackChain(ws, setting<string[]>("failover.backends", s.workspace_id)),
     tried: st.lineage.tried,
     usable: (b) => failoverUsable(b, ws, ops.installed, s.host_id, ops.hostCanRun),
     modelFor: (b) =>

@@ -17,6 +17,7 @@
  *  - **Ack-through on success only.** A throw leaves the rows queued with `last_error` and one more
  *    attempt; past the cap a row is PARKED and surfaced, never silently dropped.
  */
+import { settingOn } from "./settings.js";
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
 import { kv, robertWakes, tickets, type RobertWake } from "./store.js";
@@ -127,10 +128,10 @@ export function enqueueWake(w: EnqueueWake): string {
 }
 
 export function enqueueBusWake(e: RobertWakeEvent): string | null {
-  if (!CONFIG.robertWake) return null;
   const ticketId = e.ticket_id;
   if (!ticketId) return null;
   const wsId = tickets.get(ticketId)?.workspace_id ?? null;
+  if (!settingOn("robert.enabled", wsId) || !settingOn("robert.ticket_wakes", wsId)) return null;
   return enqueueWake({ topic: e.topic, key: wakeKeyFor(e), subject: ticketId, workspace_id: wsId, payload: e });
 }
 
@@ -210,6 +211,13 @@ export async function drainScope(scope: string, nowMs = Date.now()): Promise<Dra
     const wsId = wsOfScope(scope);
     const ids = rows.map((r) => r.id);
     robertWakes.claim(ids);
+    // Robert switched off for this workspace (⚙ Settings): what queued is dropped, not saved up for
+    // one giant turn the moment he is switched back on.
+    if (!settingOn("robert.enabled", wsId)) {
+      robertWakes.ackIds(ids, WAKE_ATTEMPT_CAP);
+      console.log(`[wake-queue] ${scope}: Robert is off here — dropped ${ids.length} wake(s)`);
+      return "idle";
+    }
     const prompt = batchPrompt(rows);
     try {
       const out = await asker(prompt, wsId, robertModelFor(prompt));

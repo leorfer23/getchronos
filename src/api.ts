@@ -1,4 +1,6 @@
 import express from "express";
+import { GROUPS as SETTING_GROUPS, settingsView, writeSetting } from "./settings.js";
+import { claudeWall } from "./usage-meter.js";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import http from "node:http";
@@ -157,7 +159,7 @@ import {
   DispatchTicketSchema, SetPlanSchema, GradeSchema, NewAttachmentSchema,
   ReviewNotesSchema, ReviewVerdictSchema,
   NewCalendarSchema, PatchCalendarSchema, CalendarIngestSchema, ImportLocalCalendarsSchema,
-  OpenUrlSchema, HeartbeatSchema, AgentTextSchema, SpeakSchema, AgentModelSchema, AgentWarmSchema, ThreadStickySchema, AGENT_MODELS,
+  OpenUrlSchema, HeartbeatSchema, AgentTextSchema, SpeakSchema, AgentModelSchema, PutSettingSchema, AgentWarmSchema, ThreadStickySchema, AGENT_MODELS,
   NewBoardPostSchema,
   NewLaunchSchema, LaunchPatchSchema, ReorderLaunchesSchema, DeskNotifySchema, PushSubscribeSchema, PushUnsubscribeSchema,
   QuickActionsSchema, HeavySlotSchema,
@@ -2433,7 +2435,7 @@ export function startServer() {
       if (!sess) return res.status(404).json({ error: "session not found" });
       if (!checkScope(req, res, sess.workspace_id)) return;
       if (sess.status !== "live") return res.status(409).json({ error: "that terminal has ended" });
-      const fallback = askRobertEnabled() ? "robert" : "operator";
+      const fallback = askRobertEnabled(sess.workspace_id) ? "robert" : "operator";
       // `route: "lead"` is EARNED, not asserted (LEADS.md). `mc` asks for it off `MC_LEAD_ID`, which
       // is baked into the worker's env at spawn and goes stale the moment that Lead ends — and in a
       // workspace that requires human answers no agent may decide, Lead included. Refused either way
@@ -4297,6 +4299,38 @@ export function startServer() {
     warmWebManager(req.body.ws ?? null);
     res.json({ ok: true });
   });
+
+  // ⚙ Settings (src/settings.ts): every operator knob, per workspace or global. No workspace_id = the
+  // global level. Values apply on the next decision — nothing here needs a restart.
+  // `workspace` takes an id or a slug, so Robert can say "medialab" without looking the id up first.
+  const settingsWs = (v: unknown) => (typeof v === "string" && v ? workspaces.get(v) ?? workspaces.getBySlug(v) ?? null : null);
+  api.get("/settings", requireAdmin, (req, res) => {
+    const wsId = req.query.workspace_id || req.query.workspace;
+    const ws = settingsWs(wsId);
+    if (wsId && !ws) return res.status(404).json({ error: "workspace not found" });
+    const account = ws ? { profile: path.basename(ws.config_dir), wall: claudeWall(ws.config_dir) } : null;
+    res.json({
+      workspace_id: ws?.id ?? null,
+      groups: SETTING_GROUPS,
+      account,
+      workspaces: workspaces.list().filter((w) => !w.archived).map((w) => ({ id: w.id, slug: w.slug, name: w.name })),
+      settings: settingsView(ws?.id ?? null),
+    });
+  });
+  // PUT from the Desk; POST too, because Robert's Telegram proposals only carry POST/PATCH/DELETE.
+  const putSetting = (req: any, res: any) => {
+    const ref = req.body.workspace_id ?? req.body.workspace ?? null;
+    const ws = settingsWs(ref);
+    if (ref && !ws) return res.status(404).json({ error: "workspace not found" });
+    try {
+      writeSetting(req.body.key, req.body.value, ws?.id ?? null);
+    } catch (e: any) {
+      return res.status(400).json({ error: String(e?.message ?? e) });
+    }
+    res.json({ workspace: ws?.slug ?? null, setting: settingsView(ws?.id ?? null).find((v) => v.key === req.body.key) ?? null });
+  };
+  api.put("/settings", requireAdmin, validate(PutSettingSchema), putSetting);
+  api.post("/settings", requireAdmin, validate(PutSettingSchema), putSetting);
 
   // Model behind the web chat manager. POST recycles the warm process; the thread resumes on the new model.
   api.get("/agent/model", requireAdmin, (req, res) => {
