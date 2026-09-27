@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { externalStatusFor, normalizePriority, adfToText, mapStatus, isStatusDivergent, DEFAULT_STATUS_MAP } from "./types.js";
 import { jira } from "./jira.js";
 import { clickup, fetchTasks as clickupFetchTasks } from "./clickup.js";
-import { isCredentialError, syncWorkspace } from "./index.js";
+import { isCredentialError, reportSyncFailure, resetCredBrokenForTest, syncWorkspace } from "./index.js";
 import { workspaces, tickets, deletedExternals } from "../store.js";
 
 test("externalStatusFor: collapse-to-nearest defaults", () => {
@@ -328,4 +328,22 @@ test("isCredentialError: a revoked token is told apart from a broken sync", () =
   assert.ok(!isCredentialError("clickup pull 500: internal error"));
   assert.ok(!isCredentialError("fetch failed"));
   assert.ok(!isCredentialError("clickup connector needs { list_id } or { team_id, assignee_id }"));
+});
+
+test("reportSyncFailure: a dead credential logs once; repeats stay quiet until reset", () => {
+  resetCredBrokenForTest();
+  const ws = { id: "ws_galley", slug: "galley", name: "Galley", ticket_connector: "clickup" };
+  const msg = 'clickup pull 401: {"err":"Token invalid","ECODE":"OAUTH_025"}';
+  const pings: string[] = [];
+  const ping = async (t: string) => { pings.push(t); };
+
+  assert.equal(reportSyncFailure(ws, msg, ping as any), true, "first failure is news");
+  assert.equal(reportSyncFailure(ws, msg, ping as any), false, "second identical failure is silent");
+  assert.equal(reportSyncFailure(ws, msg, ping as any), false);
+  assert.equal(pings.length, 1, "Telegram once");
+
+  // Transient errors always log — they are not the firehose.
+  assert.equal(reportSyncFailure(ws, "fetch failed", ping as any), true);
+  assert.equal(reportSyncFailure(ws, "fetch failed", ping as any), true);
+  assert.equal(pings.length, 1, "transient errors do not page the operator");
 });

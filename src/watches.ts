@@ -258,10 +258,19 @@ export async function tickPolls(nowMs = Date.now()): Promise<void> {
       if (w.one_shot === 0 && w.last_state === state) continue;
       watches.patch(w.id, { last_state: state });
       fire({ ...w, last_state: state }, `${w.check_path} → ${state}`, nowMs);
-    } catch (e) {
+    } catch (e: any) {
       // A check that can't run is noted, not retried in a hot loop — the interval still applies.
+      // 404/410: the path is gone (deleted ticket, retired route). Keep polling and we fill the
+      // err log every `every_sec` until `until` — disable once and say why.
       watches.patch(w.id, { last_checked_at: new Date(nowMs).toISOString() });
-      console.error(`[watches] poll ${w.id} (${w.check_path}) failed:`, e);
+      const msg = String(e?.message ?? e);
+      if (/→\s*(404|410)\b/.test(msg)) {
+        watches.patch(w.id, { enabled: 0, disabled_reason: `check gone: ${msg.slice(0, 120)}` });
+        invalidateWatchCache();
+        console.warn(`[watches] poll ${w.id} (${w.check_path}) disabled — ${msg}`);
+      } else {
+        console.error(`[watches] poll ${w.id} (${w.check_path}) failed:`, e);
+      }
     }
   }
 }

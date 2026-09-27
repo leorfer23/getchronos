@@ -56,6 +56,13 @@ process.on("unhandledRejection", (reason) => {
   console.error("[chronos] unhandled rejection (daemon stays up):", reason);
 });
 process.on("uncaughtException", (err) => {
+  // @xterm/headless occasionally throws from its async parse timer when a buffer line is missing
+  // (`Cannot set … isWrapped`). The ScreenMirror write path is best-effort; don't treat this as a
+  // daemon fault — the existing listener already keeps us up, this just stops the err-log spam.
+  if (err instanceof TypeError && /setting 'isWrapped'/.test(String(err.message))) {
+    console.warn("[term-screen] xterm parse glitch (ignored):", err.message);
+    return;
+  }
   console.error("[chronos] uncaught exception (daemon stays up):", err);
 });
 

@@ -238,6 +238,33 @@ export const isCredentialError = (msg: string): boolean =>
   /\b(401|403)\b/.test(msg) || /token invalid|unauthorized|invalid credentials|authentication failed/i.test(msg);
 const credBroken = new Set<string>();
 
+/** Test seam: drop the in-process "already shouted" set so a suite can assert once-vs-many. */
+export function resetCredBrokenForTest(): void { credBroken.clear(); }
+
+/**
+ * One place the sync loop reports a failure. Credential errors log + Telegram once per workspace
+ * until a sync succeeds again; everything else stays per-cycle (transient).
+ * Returns whether this call emitted a warn line (tests assert the quiet-after-first behaviour).
+ */
+export function reportSyncFailure(
+  ws: { id: string; slug: string; name: string; ticket_connector: string },
+  msg: string,
+  ping: typeof notify = notify,
+): boolean {
+  if (isCredentialError(msg)) {
+    if (credBroken.has(ws.id)) return false;
+    credBroken.add(ws.id);
+    console.warn(`[connector] ${ws.slug} sync failed:`, msg);
+    ping(
+      `🔑 <b>${ws.name}</b>: the ${ws.ticket_connector} credential is invalid — tickets have STOPPED mirroring. ` +
+        `Fix on the daemon host: <code>node scripts/set-connector-token.mjs ${ws.slug}</code>`
+    ).catch(() => {});
+    return true;
+  }
+  console.warn(`[connector] ${ws.slug} sync failed:`, msg);
+  return true;
+}
+
 // Periodically reconcile every non-native workspace with its external tracker.
 let syncTimer: NodeJS.Timeout | undefined;
 export function startConnectorSync() {
@@ -252,15 +279,10 @@ export function startConnectorSync() {
           console.log(`[connector] ${ws.slug}: +${r.created} ~${r.updated} →${r.pushed}${r.errors.length ? " err:" + r.errors.length : ""}`);
         if (r.created) notify(`🔄 <b>${ws.name}</b>: ${r.created} new ${ws.ticket_connector} ticket${r.created > 1 ? "s" : ""}`).catch(() => {});
       } catch (e: any) {
-        const msg = String(e?.message ?? e);
-        console.warn(`[connector] ${ws.slug} sync failed:`, msg);
-        if (isCredentialError(msg) && !credBroken.has(ws.id)) {
-          credBroken.add(ws.id);
-          notify(
-            `🔑 <b>${ws.name}</b>: the ${ws.ticket_connector} credential is invalid — tickets have STOPPED mirroring. ` +
-              `Fix on the daemon host: <code>node scripts/set-connector-token.mjs ${ws.slug}</code>`
-          ).catch(() => {});
-        }
+        // A dead credential fails identically every cycle. Log + Telegram once; further cycles stay
+        // quiet until a sync succeeds (credBroken cleared above) so chronos.err.log is not a 401
+        // firehose (galley's ClickUp token alone was ~600 identical lines overnight).
+        reportSyncFailure(ws, String(e?.message ?? e));
       }
     }
   };
