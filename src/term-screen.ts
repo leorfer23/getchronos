@@ -23,7 +23,14 @@ export class ScreenMirror {
 
   write(data: string) {
     if (this.disposed || !data) return;
-    this.term.write(data, () => { this._seq++; });
+    // xterm headless has thrown TypeError: Cannot set properties of undefined (setting 'isWrapped')
+    // from its async parse queue on malformed / mid-dispose writes. Keep the mirror best-effort:
+    // never throw into the pty path, and never bump seq after dispose.
+    try {
+      this.term.write(data, () => { if (!this.disposed) this._seq++; });
+    } catch (err) {
+      console.warn("[term-screen] write failed:", err instanceof Error ? err.message : err);
+    }
   }
 
   resize(cols: number, rows: number) {
@@ -38,16 +45,26 @@ export class ScreenMirror {
     if (this.disposed) return Promise.resolve();
     return new Promise((resolve) => {
       const t = setTimeout(resolve, 200);
-      this.term.write("", () => { clearTimeout(t); resolve(); });
+      try {
+        this.term.write("", () => { clearTimeout(t); resolve(); });
+      } catch {
+        clearTimeout(t);
+        resolve();
+      }
     });
   }
 
   snapshot(): Screen {
-    const b = this.term.buffer.active;
-    const lines: string[] = [];
-    for (let i = 0; i < this.term.rows; i++) lines.push(b.getLine(b.viewportY + i)?.translateToString(true) ?? "");
-    while (lines.length && !lines[lines.length - 1]) lines.pop();
-    return { seq: this._seq, cols: this.term.cols, rows: this.term.rows, lines };
+    if (this.disposed) return { seq: this._seq, cols: 0, rows: 0, lines: [] };
+    try {
+      const b = this.term.buffer.active;
+      const lines: string[] = [];
+      for (let i = 0; i < this.term.rows; i++) lines.push(b.getLine(b.viewportY + i)?.translateToString(true) ?? "");
+      while (lines.length && !lines[lines.length - 1]) lines.pop();
+      return { seq: this._seq, cols: this.term.cols, rows: this.term.rows, lines };
+    } catch {
+      return { seq: this._seq, cols: this.term.cols, rows: this.term.rows, lines: [] };
+    }
   }
 
   dispose() {

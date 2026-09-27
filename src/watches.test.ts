@@ -217,6 +217,46 @@ test("poll: honours the interval, fires on the predicate, survives a failing che
   await tickPolls(NOW);
   assert.equal(posted.length, 1, "a failed check is not a fire");
   assert.ok(watches.get(bad.id)!.last_checked_at, "the attempt is recorded so the interval still applies");
+  assert.equal(watches.get(bad.id)!.enabled, 1, "a transient 502 keeps the watch live");
+  setWatchFetcher(null);
+});
+
+test("poll: a 404/410 disables the watch — the path is gone, stop filling the err log", async () => {
+  reset();
+  setWatchFetcher(async () => { throw new Error("GET /api/tickets/SPO-9 → 404"); });
+  const w = watches.create((prepareWatch({
+    owner: "robert", what: "spo ticket", check: "/api/tickets/SPO-9", when: "status != 'pending'", every: "5m",
+  }, NOW) as any).row);
+
+  await tickPolls(NOW);
+  const after = watches.get(w.id)!;
+  assert.equal(after.enabled, 0);
+  assert.match(after.disabled_reason ?? "", /check gone:.*404/);
+  assert.equal(posted.length, 0, "gone is not a fire");
+
+  // A second tick must not re-check a disabled watch.
+  let calls = 0;
+  setWatchFetcher(async () => { calls++; throw new Error("GET /api/tickets/SPO-9 → 404"); });
+  await tickPolls(NOW + 301_000);
+  assert.equal(calls, 0, "disabled watches are not in live('poll')");
+  setWatchFetcher(null);
+});
+
+test("poll: a 410 is treated like a 404; a 401 is not (credential, keep trying)", async () => {
+  reset();
+  setWatchFetcher(async () => { throw new Error("GET /api/tickets/X → 410"); });
+  const gone = watches.create((prepareWatch({
+    owner: "robert", what: "gone", check: "/api/tickets/X", when: "status == 'done'",
+  }, NOW) as any).row);
+  await tickPolls(NOW);
+  assert.equal(watches.get(gone.id)!.enabled, 0);
+
+  setWatchFetcher(async () => { throw new Error("GET /api/tickets/Y → 401"); });
+  const auth = watches.create((prepareWatch({
+    owner: "robert", what: "auth", check: "/api/tickets/Y", when: "status == 'done'",
+  }, NOW) as any).row);
+  await tickPolls(NOW);
+  assert.equal(watches.get(auth.id)!.enabled, 1, "401 stays live — not the same as deleted");
   setWatchFetcher(null);
 });
 

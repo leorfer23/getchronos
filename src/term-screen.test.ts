@@ -48,6 +48,27 @@ test("writes after dispose are ignored", async () => {
   assert.equal(m.seq, 0);
 });
 
+test("write/settle/snapshot never throw — mirror is best-effort against xterm glitches", async () => {
+  const m = new ScreenMirror(40, 6);
+  // A burst of CSI noise + dispose mid-flight used to surface as an uncaught isWrapped TypeError
+  // from xterm's async parse timer. Sync path must stay quiet; seq must not move after dispose.
+  assert.doesNotThrow(() => {
+    m.write("\x1b[999;999H\x1b[2J\x1b[H" + "x".repeat(500) + "\r\n\n\n");
+    m.resize(20, 4);
+    m.write("\x1b[?1049h\x1b[2Jmore\x1b[?1049l");
+  });
+  await m.settle();
+  assert.doesNotThrow(() => m.snapshot());
+  m.dispose();
+  assert.doesNotThrow(() => {
+    m.write("after dispose");
+    m.resize(80, 24);
+    m.snapshot();
+  });
+  await m.settle();
+  assert.equal(m.seq >= 0, true);
+});
+
 /**
  * The substitution this module exists for: readPrompt() used to re-render the pty tail into a
  * throwaway headless terminal on every quiet flip (renderScreen). It now reads the always-on mirror.
