@@ -1974,6 +1974,19 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       ALTER TABLE chat_messages ADD COLUMN reply_quote TEXT;`),
   },
 
+  {
+    version: 141,
+    name: "chat_messages.engine + sessions.robert — which model answered; which terminals Robert may drive",
+    // engine: short name of the model/backend that answered a Robert turn ("opus", "cursor"), so the
+    // Desk can put a quiet label on the bubble instead of an "engine degradado" step on every turn.
+    // robert: opt-in — Robert's automatic drive/prompts only touch terminals the operator handed him
+    // (or ones he opened himself). Standing watch stays its own opt-in.
+    up: (db) => db.exec(`
+      ALTER TABLE chat_messages ADD COLUMN engine TEXT;
+      ALTER TABLE sessions ADD COLUMN robert INTEGER NOT NULL DEFAULT 0 CHECK (robert IN (0, 1));
+      UPDATE sessions SET robert = 1 WHERE created_by = 'robert' OR role = 'lead';`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

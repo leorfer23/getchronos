@@ -2,15 +2,16 @@
  *
  * The chat is the conversation; this is what you glance at beside it: the questions waiting on you,
  * the terminals that stopped (blocked, idle, done), the PRs they opened with their CI, and today —
- * follow-ups due, spend, how much of each subscription is gone. One compact row per thing, one or two
- * buttons each, a count on every header, and a section with nothing in it is not drawn at all.
+ * follow-ups due and spend. Subscription usage lives in the Desk header, not here. One compact row
+ * per thing, one or two buttons each, a count on every header, and a section with nothing in it is
+ * not drawn at all.
  *
- * It owns no data. The page already holds the terminals, the notes and the usage meter live off the
- * bus; the questions are the Ask widget's (static/ask-card.js, answered through it); only the PRs and
- * the spend come from GET /desk/cockpit (src/desk-cockpit.ts). Every button goes through a door that
- * already exists — /sessions/:id/input, /sessions/:id/kill, /tickets/:id/merge-pr, /jots/:id/follow-up/now.
+ * It owns no data. The page already holds the terminals and the notes; the questions are the Ask
+ * widget's (static/ask-card.js, answered through it); only the PRs and the spend come from
+ * GET /desk/cockpit (src/desk-cockpit.ts). Every button goes through a door that already exists —
+ * /sessions/:id/input, /sessions/:id/kill, /tickets/:id/merge-pr, /jots/:id/follow-up/now.
  *
- * ctx = { el, api, toast, esc, arm, isOpen(), terminals(), jots(), isLive(id), usage(), ask (AskCard),
+ * ctx = { el, api, toast, esc, arm, isOpen(), terminals(), jots(), isLive(id), ask (AskCard),
  *         open(id), input(id, body), close(id), openFollow(j), reload() }
  */
 (function (root) {
@@ -121,12 +122,8 @@
     });
   }
   function todayLine() {
-    var bits = [];
-    if (D.spend) bits.push('<span class="ck-spend" title="Runs $' + D.spend.runs_usd.toFixed(2) + " · terminals $" + D.spend.sessions_usd.toFixed(2) + '"><b>$' + D.spend.today_usd.toFixed(2) + "</b> today</span>");
-    (C.usage() || []).forEach(function (u) {
-      bits.push('<span class="ck-u ' + (u.level || "") + '" title="' + e(u.tip) + '">' + e(u.name) + " <b>" + Math.round(u.pct) + '%</b><i><i style="width:' + Math.min(100, u.pct) + '%"></i></i></span>');
-    });
-    return bits.length ? '<div class="ck-today">' + bits.join("") + "</div>" : "";
+    if (!D.spend) return "";
+    return '<div class="ck-today"><span class="ck-spend" title="Runs $' + D.spend.runs_usd.toFixed(2) + " · terminals $" + D.spend.sessions_usd.toFixed(2) + '"><b>$' + D.spend.today_usd.toFixed(2) + "</b> today</span></div>";
   }
 
   // ── paint ──────────────────────────────────────────────────────────────────────────────────────

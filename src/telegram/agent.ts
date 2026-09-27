@@ -1349,6 +1349,13 @@ export const fallbackLine = (fb: { backend: string; model: string | null; why: s
     ? `⚠️ ${fb.why}`
     : `⚠️ engine degradado: ${fb.backend}${fb.model ? `/${fb.model}` : ""} (${fb.why})`;
 
+/** Quiet label for the Desk bubble — just the model (or backend) name. */
+export const engineLabel = (backend: string, model: string | null | undefined): string => {
+  const m = (model || "").trim();
+  if (m) return m.includes("/") ? m.split("/").pop()! : m;
+  return backend === "claude" ? "claude" : backend;
+};
+
 const webMgrs = new Map<string, WarmManager>(); // workspace key → warm manager
 function webManager(key: string, wsId: string | null): WarmManager {
   let m = webMgrs.get(key);
@@ -1444,7 +1451,7 @@ export async function askManagerWeb(
   // focus: the router's pick on an auto-routed turn. The turn then runs on the fleet-wide Robert
   // (wsId null) with that project named as where to start — never a fence (agents/_blocks/threads.md).
   opts?: { model?: string; voice?: boolean; turn?: string; label?: string; focus?: string | null },
-): Promise<{ reply: string; actions: UiAction[]; steps: RobertStep[]; turn: string }> {
+): Promise<{ reply: string; actions: UiAction[]; steps: RobertStep[]; turn: string; engine: string }> {
   const key = wsKey(wsId);
   rotateWebIfIdle(key);
   // Every tool call he makes becomes a timestamped step: published live, returned for the chat row.
@@ -1453,6 +1460,11 @@ export async function askManagerWeb(
   const outer = onDelta;
   onDelta = (t, kind) => {
     if (kind === "tool") {
+      // Engine swaps are stamped on the bubble as a quiet model name — not as a warn step every turn.
+      if (/^⚠️\s*(engine degradado|.*(?:en cooldown|sin créditos|sin login|rate-limited|también falló))/i.test(t)) {
+        outer?.(t, kind);
+        return;
+      }
       const step = humanizeStep(t);
       if (step) {
         steps.push(step);
@@ -1466,6 +1478,7 @@ export async function askManagerWeb(
   // operator's dashboard pick stands — re-applied every turn, or one wake would leave the desk on its
   // model, and a credit-wall downgrade (fable → opus) would never come back.
   const model = opts?.model || getWebModel();
+  let engine = engineLabel("claude", model);
   kv.set(`web.lastTurnAt:${key}`, String(Date.now()));
   const realWsId = key === "default" ? null : key;
   // The live fleet first, then a recap of this workspace's thread (web + any Telegram/briefing rows
@@ -1482,7 +1495,10 @@ export async function askManagerWeb(
     key: `web:${key}`,
     primary: () => m.turn(prompt, onDelta, undefined, model),
     model,
-    primaryOn: (alt) => m.turn(prompt, onDelta, undefined, alt),
+    primaryOn: (alt) => {
+      engine = engineLabel("claude", alt);
+      return m.turn(prompt, onDelta, undefined, alt);
+    },
     system: m.system,
     prompt,
     wsId: realWsId,
@@ -1494,7 +1510,11 @@ export async function askManagerWeb(
     onDelta,
     // `prompt` already carries this thread's recap, so only the declaration needs carrying.
     agent: { name: "Robert", tools: MANAGER_TOOLS },
-    onFallback: (fb) => onDelta?.(fallbackLine(fb), "tool"),
+    onFallback: (fb) => {
+      engine = engineLabel(fb.backend, fb.model);
+      // Still log for Telegram / activity surfaces that listen to tool deltas — Desk filters it out.
+      onDelta?.(fallbackLine(fb), "tool");
+    },
     killPrimary: () => {
       m.kill();
       webMgrs.delete(key);
@@ -1509,7 +1529,7 @@ export async function askManagerWeb(
   // card in the reply (src/robert-asks.ts). Late import — the asks layer sits far below the manager.
   const { liftRobertAsks } = await import("../robert-asks.js");
   const { reply: shown, actions } = liftRobertAsks(scanUiActions(reply || ""), realWsId ?? opts?.focus ?? null);
-  return { reply: shown, actions, steps, turn };
+  return { reply: shown, actions, steps, turn, engine };
 }
 
 // ── The named executives (none, while Robert is the only executive) ───────────────────────────────────────────────

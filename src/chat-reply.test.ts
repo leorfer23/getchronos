@@ -36,7 +36,7 @@ test("the turn: quote read back from the row, above the words; routing and `you`
   assert.match(api, /replyWorkspace: quote\?\.workspace_id \?\? null/);
   // The router reads req.body.text — a #tag inside the quoted parent never re-routes the reply.
   assert.match(api, /const turn = await resolveTurnSmart\(req\.body\.text,/);
-  assert.match(api, /chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote\)/);
+  assert.match(api, /chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote, engine\)/);
   assert.match(api, /chat\.add\(text, err, "web", ws, null, shown, quote\)/);
   // Every surface can draw the quote and mark the new row's bubbles.
   assert.match(api, /topic: "agent\.asked",[^\n]*\.\.\.\(quoted \? \{ quote: quoted \} : \{\}\)/);
@@ -67,7 +67,7 @@ test("Desk: the quote rides the next typed line, every stored bubble is marked",
   assert.match(desk, /OV\.queue\.push\(\{ text, bub, ws: c\.ws, picked: true, atts, quote, session: S\.active \|\| null \}\)/);
   // History: both halves marked, the reply's quote drawn.
   assert.match(desk, /const yb = RP\.mark\(ovLine\("you", m\.you, ws\), m\.id, "you"\);\s*RP\.quote\(yb, ChatReply\.fromRow\(m\)\);/);
-  assert.match(desk, /if \(m\.reply\) RP\.mark\(ovLine\("rob", m\.reply, ws, !m\.you\), m\.id, "reply"\);/);
+  assert.match(desk, /if \(m\.reply\) \{ const rb = RP\.mark\(ovLine\("rob", m\.reply, ws, !m\.you\), m\.id, "reply"\); setMdl\(rb, m\.engine, steps\); \}/);
   // A line drawn early (agent.asked from the phone) is marked when its row lands.
   assert.match(desk, /if \(drawn\) RP\.mark\(drawn, e\.id, "you"\);/);
   assert.match(desk, /drawn: new Map\(\)/);

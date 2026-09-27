@@ -556,7 +556,7 @@ export function startServer() {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
-    const { goal, goal_done, goal_done_all, goal_kind, goal_source, title } = req.body ?? {};
+    const { goal, goal_done, goal_done_all, goal_kind, goal_source, title, robert } = req.body ?? {};
     const current = sessionGoals.current(s.id);
     if (goal !== undefined || goal_kind !== undefined) {
       if (current && goal !== null) {
@@ -585,6 +585,7 @@ export function startServer() {
       reopenGoal(s.id);
     }
     if (title !== undefined) sessions.setMeta(s.id, { title });
+    if (robert !== undefined) sessions.setRobert(s.id, !!robert);
     bus.publish({ topic: "session.updated", session_id: s.id });
     res.json(sessions.get(s.id));
   });
@@ -4519,13 +4520,13 @@ export function startServer() {
       try {
         // Stream TEXT deltas so Desk/phone can speak sentence-by-sentence while the turn runs.
         // client + turn on every delta: the page that asked speaks its own turn's sentences only.
-        const { reply, steps } = await askManagerWeb(
+        const { reply, steps, engine } = await askManagerWeb(
           prompt,
           (t, kind) => bus.publish({ topic: "agent.delta", text: t, kind, ws, client, turn: turnId }),
           runWs,
           { voice, turn: turnId, focus: runWs ? null : ws },
         );
-        const row = chat.add(text, reply || "", "web", ws, steps, shown, quote);
+        const row = chat.add(text, reply || "", "web", ws, steps, shown, quote, engine);
         chat.prune(2000);
         bus.publish({
           topic: "agent.push",
@@ -4537,6 +4538,7 @@ export function startServer() {
           client,
           turn: turnId,
           steps,
+          engine,
           id: row.id,
           ...(shown.length ? { attachments: shown } : {}),
           ...(quoted ? { quote: quoted } : {}),

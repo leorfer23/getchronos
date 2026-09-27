@@ -125,7 +125,7 @@ test("the turn: paths go to the model, the stored line stays the words you typed
   assert.match(api, /const prompt = quotePrompt\(quote\) \+ text \+ chatAttachmentsBlock\(files\);/);
   assert.match(api, /await askManagerWeb\(/);
   // `you` is the clean text; the display JSON rides beside it, on the row and on both bus events.
-  assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote\);/);
+  assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote, engine\);/);
   assert.match(api, /topic: "agent\.asked", you: text,[^\n]*\.\.\.\(shown\.length \? \{ attachments: shown \} : \{\}\)/);
   assert.match(api, /\.\.\.\(shown\.length \? \{ attachments: shown \} : \{\}\),/);
 });

@@ -100,14 +100,17 @@ export const chat = {
     // The bubble this line answers. The row keeps the parent's id plus a display excerpt, so the
     // quote still draws after prune() has dropped the parent.
     quote: ChatQuote | null = null,
+    /** Short name of the model/backend that answered ("opus", "cursor") — Desk shows it on the bubble. */
+    engine: string | null = null,
   ): { id: number; created_at: string; source: ChatSource } {
     const ts = now();
     const r = db
-      .prepare(`INSERT INTO chat_messages (you,reply,created_at,source,workspace_id,steps,attachments,reply_to,reply_quote) VALUES (?,?,?,?,?,?,?,?,?)`)
+      .prepare(`INSERT INTO chat_messages (you,reply,created_at,source,workspace_id,steps,attachments,reply_to,reply_quote,engine) VALUES (?,?,?,?,?,?,?,?,?,?)`)
       .run(you, reply, ts, source, workspaceId, steps && steps.length ? JSON.stringify(steps) : null,
         attachments && attachments.length ? JSON.stringify(attachments) : null,
         quote ? quote.id : null,
-        quote ? JSON.stringify({ side: quote.side, text: quoteExcerpt(quote.text) }) : null);
+        quote ? JSON.stringify({ side: quote.side, text: quoteExcerpt(quote.text) }) : null,
+        engine || null);
     return { id: Number(r.lastInsertRowid), created_at: ts, source };
   },
   /**

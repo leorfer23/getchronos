@@ -773,8 +773,14 @@
   .chat { width:0; flex:none; border-left:1px solid var(--line); background:var(--surface); display:none; flex-direction:column; overflow:hidden; }
   /* It is the daily driver (Leo 2026-09-25): about twice the old 460px, and the rail and the terminal
      give up the width. On a laptop it stops at half the window so the stage never vanishes. */
-  body.chat-open .chat { display:flex; width:clamp(460px, 52vw, var(--chat-w,920px)); }
+  body.chat-open .chat { display:flex; position:relative; width:var(--chat-w, clamp(460px, 52vw, 920px)); }
   body.chat-open:not(.chat-full) { --rail-w:clamp(240px, 18vw, 360px); }
+  /* Drag the left edge to resize (remembered). Hidden in full screen — he already owns the stage. */
+  .chat-resize { display:none; position:absolute; left:0; top:0; bottom:0; width:6px; margin-left:-3px;
+    cursor:col-resize; z-index:4; touch-action:none; }
+  body.chat-open:not(.chat-full) .chat-resize { display:block; }
+  body.chat-resizing, body.chat-resizing * { cursor:col-resize !important; user-select:none !important; }
+  body.chat-resizing .chat-resize { background:var(--accent); opacity:.4; }
   /* Full screen (⤢ / ⌘⇧K): Robert takes the whole stage, the rail stays, ⤡ puts him back. */
   body.chat-open.chat-full .stage { display:none; }
   body.chat-open.chat-full .chat { width:auto; flex:1; border-left:0; }
@@ -876,6 +882,8 @@
     background:color-mix(in oklab, var(--wsc) 22%, transparent); color:color-mix(in oklab, var(--wsc) 70%, var(--ink)); }
   .bub.you .wsc { color:var(--accent-ink); background:rgba(255,255,255,.22); }
   .bub .wsc:hover { border-color:currentColor; }
+  /* Which model answered this line — small, quiet; replaces the old "engine degradado" step spam. */
+  .bub .mdl { float:right; margin:1px 0 2px 8px; font-size:11px; line-height:17px; color:var(--faint); font-weight:500; }
   .bub.faded { opacity:.22; }
   .bub.hidden-ws { display:none; }
   .wspick { flex:0 0 auto; align-self:flex-end; margin-bottom:4px; padding:4px 6px; border-radius:999px; border:1px solid var(--line);
@@ -1381,6 +1389,7 @@
   </section>
 
   <aside class="chat" id="chat">
+    <div class="chat-resize" id="chat-resize" title="Drag to resize"></div>
     <div class="chat-head">
       <span class="dot ended" id="rob-dot"></span>
       <strong>Robert</strong>
@@ -3597,6 +3606,17 @@ async function stopWatch(id) {
   catch (e) { toast(e.message); }
   render();
 }
+/** Opt Robert into (or out of) driving this terminal — stops, prompts, the works. Off by default. */
+async function toggleRobert(id) {
+  const s = byId(id); if (!s || !s.live) return;
+  const on = !s.robert;
+  try {
+    const r = await api("/sessions/" + id, { method: "PATCH", body: JSON.stringify({ robert: on }) });
+    s.robert = !!r.robert;
+    toast(on ? "Robert will drive this terminal" : "Robert stays out of this terminal");
+  } catch (e) { toast(e.message); }
+  render();
+}
 function openWatch(id) {
   const s = byId(id); if (!s || !s.live) return;
   const w = s.watch?.active ? s.watch : null;
@@ -4130,6 +4150,7 @@ qs("#h-more").onclick = () => {
   const m = qs("#menu-stage");
   m.innerHTML =
     (s.live ? `<button data-k="done">${s.goal_done_at ? "↩ Not done after all" : "✓ Goal reached"}</button>` : "") +
+    (s.live ? `<button data-k="robert">${s.robert ? "🤖 Robert drives this · on" : "🤖 Let Robert drive this"}</button>` : "") +
     (s.live ? `<button data-k="watch">${s.watch?.active ? "👁 Robert's watch…" : "👁 Have Robert watch it…"}</button>` : "") +
     `<button data-k="link">🔗 Copy reopen link</button>` +
     `<button data-k="font-">Font smaller <kbd>⌘−</kbd></button><button data-k="font+">Font bigger <kbd>⌘+</kbd></button>` +
@@ -4138,6 +4159,7 @@ qs("#h-more").onclick = () => {
   for (const b of qsa("button", m)) b.onclick = (e) => {
     const k = b.dataset.k;
     if (k === "done") toggleDone(s.id);
+    if (k === "robert") toggleRobert(s.id);
     if (k === "watch") openWatch(s.id);
     if (k === "link") { navigator.clipboard?.writeText(location.origin + "/desk#reopen=" + s.id); toast("copied"); }
     if (k === "font-") setFont(S.font - 1);
@@ -4181,6 +4203,7 @@ function sessionActions(id) {
     { label: "Open", run: () => select(s.id) },
     { label: s.goal_done_at ? "↩ Not done after all" : "✓ Goal reached", run: () => toggleDone(s.id) },
     { label: "✏️ Rename…", run: () => { const t = prompt("What is this terminal for?", title(s)); if (t != null && t.trim()) saveGoal(s.id, t.trim()); } },
+    { label: s.robert ? "🤖 Robert drives this · on" : "🤖 Let Robert drive this", run: () => toggleRobert(s.id) },
     { label: s.watch?.active ? "👁 Robert's watch…" : "👁 Have Robert watch it…", run: () => openWatch(s.id) },
     ...(s.role !== "lead" && !s.lead_id && s.workspace_id ? [{ label: "◆ Promote to Lead", armed: "◆ Restart as Lead? click again", run: () => promoteLead(s.id) }] : []),
     { label: "🔗 Copy reopen link", run: link },
@@ -5776,6 +5799,31 @@ function setChip(el, ws, chip = true) {
   c.title = w ? w.name : "the whole shop";
   el.prepend(c);
 }
+/** Small model name on a Robert bubble. Also recovers it from old "engine degradado" steps. */
+function setMdl(el, engine, steps) {
+  if (!el || el.classList.contains("you")) return;
+  el.querySelector(".mdl")?.remove();
+  let name = (engine || "").trim();
+  if (!name && Array.isArray(steps)) {
+    for (const st of steps) {
+      const tx = String(st?.text || "");
+      let m = /engine degradado:\s*([^\s(/]+)/i.exec(tx);
+      if (m) { name = m[1]; break; }
+      m = /→\s*(\S+)/.exec(tx);
+      if (st?.kind === "warn" && m) { name = m[1]; break; }
+    }
+  }
+  if (!name) return;
+  const c = document.createElement("span");
+  c.className = "mdl";
+  c.textContent = name;
+  c.title = "answered on " + name;
+  el.prepend(c);
+}
+/** Skip the old engine-degradado warn lines from the steps trail. */
+function stepsClean(steps) {
+  return (steps || []).filter((st) => !(st?.kind === "warn" && /engine degradado|en cooldown|sin créditos|sin login|rate-limited|también falló/i.test(String(st.text || ""))));
+}
 // Label only: the project chip shows where the line landed. Routing is #tags + the daemon's router
 // (+ a reply rides the parent's project). No view filter — one timeline, every project.
 function ovLine(cls, text, ws, chip = true, own = false) {
@@ -5810,6 +5858,40 @@ function chatOpen(open) {
 }
 const chatIsOpen = () => document.body.classList.contains("chat-open");
 qs("#chat-close").onclick = () => chatOpen(false);
+// Drag the left edge of Robert's pane to set its width (localStorage desk-chat-w).
+(function chatResize() {
+  const MIN = 360, MAX_FRAC = 0.72;
+  try {
+    const saved = Number(localStorage.getItem("desk-chat-w"));
+    if (saved >= MIN) document.documentElement.style.setProperty("--chat-w", saved + "px");
+  } catch {}
+  const grip = qs("#chat-resize");
+  if (!grip) return;
+  let startX = 0, startW = 0;
+  const onMove = (e) => {
+    const max = Math.floor(window.innerWidth * MAX_FRAC);
+    const w = Math.min(max, Math.max(MIN, startW + (startX - e.clientX)));
+    document.documentElement.style.setProperty("--chat-w", w + "px");
+  };
+  const onUp = (e) => {
+    document.body.classList.remove("chat-resizing");
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    try {
+      const w = Number(getComputedStyle(document.documentElement).getPropertyValue("--chat-w").replace("px", ""));
+      if (w >= MIN) localStorage.setItem("desk-chat-w", String(Math.round(w)));
+    } catch {}
+  };
+  grip.addEventListener("pointerdown", (e) => {
+    if (chatIsFull()) return;
+    e.preventDefault();
+    startX = e.clientX;
+    startW = qs("#chat").getBoundingClientRect().width;
+    document.body.classList.add("chat-resizing");
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
+})();
 // Docked ↔ full screen, remembered per viewer. Full screen opens him if he was closed; ⤡ (or ⌘⇧K,
 // or ⎋ in his composer) is always one step back to docked.
 const chatIsFull = () => document.body.classList.contains("chat-full");
@@ -6170,7 +6252,7 @@ function stepsBox(ws, turn, label) {
 }
 function addSteps(box, steps) {
   const ol = qs("ol", box);
-  for (const st of steps || []) { box._steps.push(st); ol.appendChild(stepLi(st)); }
+  for (const st of stepsClean(steps)) { box._steps.push(st); ol.appendChild(stepLi(st)); }
   paintSteps(box);
 }
 function liveSteps(e) {
@@ -6219,8 +6301,8 @@ async function ovHistory(reload = false) {
         attBubble(yb, atts);
       }
       let steps = null; try { steps = m.steps ? JSON.parse(m.steps) : null; } catch {}
-      if (steps?.length) { const box = stepsBox(ws, "h" + m.id, m.source === "robert" ? "woken" : ""); addSteps(box, steps); OV.log.appendChild(box); }
-      if (m.reply) RP.mark(ovLine("rob", m.reply, ws, !m.you), m.id, "reply");
+      if (stepsClean(steps).length) { const box = stepsBox(ws, "h" + m.id, m.source === "robert" ? "woken" : ""); addSteps(box, steps); OV.log.appendChild(box); }
+      if (m.reply) { const rb = RP.mark(ovLine("rob", m.reply, ws, !m.you), m.id, "reply"); setMdl(rb, m.engine, steps); }
     }
   } catch {}
 }
@@ -6235,7 +6317,6 @@ DeskCockpit.init({
     .map((s) => ({ id: s.id, phase: phaseOf(s), title: title(s), ws: s.workspace_id ? wsName(s.workspace_id) : "", line: oneLiner(s).text, since: phaseSince(s) })),
   jots: () => S.jots,
   isLive: liveSession,
-  usage: () => uTops(),
   open: pickTerminal,
   input,
   close: async (id) => {
@@ -6769,10 +6850,12 @@ function connectBus() {
           dwEmbed(streamed);
           AskCard.embed(streamed);
           setChip(streamed, e.ws ?? null, !fromHere && !e.you);
+          setMdl(streamed, e.engine, e.steps);
           RP.mark(streamed, e.id, "reply");
         } else {
           if (streamed) streamed.remove();
-          RP.mark(ovLine("rob", e.reply, e.ws ?? null, !fromHere && !e.you, fromHere), e.id, "reply");
+          const rb = RP.mark(ovLine("rob", e.reply, e.ws ?? null, !fromHere && !e.you, fromHere), e.id, "reply");
+          setMdl(rb, e.engine, e.steps);
         }
         if (!chatIsOpen()) { OV.unread++; const b = qs("#fab-unread"); b.textContent = OV.unread; b.hidden = false; }
       } else if (streamed) {

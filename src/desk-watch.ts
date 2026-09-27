@@ -238,14 +238,16 @@ export async function runWatch(s: Session, final = false): Promise<void> {
   let failed = false;
   let steps: RobertStep[] = [];
   let turn: string | undefined;
+  let engine: string | undefined;
   try {
     // Model is the Desk pick (getWebModel inside askManagerWeb) — same as a typed chat turn.
-    const { reply, steps: st, turn: t } = await askManagerWeb(watchPrompt(d, final), undefined, s.workspace_id ?? null, {
+    const { reply, steps: st, turn: t, engine: eng } = await askManagerWeb(watchPrompt(d, final), undefined, s.workspace_id ?? null, {
       label: "watch",
     });
     body = (reply || "").trim();
     steps = st;
     turn = t;
+    engine = eng;
   } catch (e: any) {
     console.warn("[desk-watch] robert turn failed", e?.message ?? e);
     // Never swallow a watch: he asked to hear every interval, so a failed turn reports the raw state
@@ -265,6 +267,7 @@ export async function runWatch(s: Session, final = false): Promise<void> {
     ws: s.workspace_id ?? null,
     steps,
     turn,
+    engine,
   });
   if (final) sessions.setWatch(s.id, { every_min: null });
   bus.publish({ topic: "session.updated", session_id: s.id });

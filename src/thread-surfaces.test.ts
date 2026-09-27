@@ -99,7 +99,7 @@ test("POST /agent routes, refuses to guess, and answers with where it landed", (
   assert.match(api, /res\.json\(\{ accepted: true, turn: turnId, ws, how: turn\.how \}\)/);
   assert.match(api, /void \(async \(\) => \{/);
   assert.match(api, /askManagerWeb\(\s*prompt,\s*\(t, kind\) => bus\.publish\(\{ topic: "agent\.delta", text: t, kind, ws, client, turn: turnId \}\),\s*runWs,\s*\{ voice, turn: turnId, focus: runWs \? null : ws \}/);
-  assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote\)/);
+  assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote, engine\)/);
   assert.match(api, /topic: "agent\.push"/);
   // The reply must NOT ride the HTTP response — that is what the tunnel used to cut.
   assert.doesNotMatch(api, /res\.json\(\{ reply, actions, ws, how: turn\.how/);

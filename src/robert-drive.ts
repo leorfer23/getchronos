@@ -792,6 +792,11 @@ export function fireIfStill(sessionId: string, key: string, nowMs = Date.now()):
     const out = fireToLead(s, lead, kind, st, key, nowMs);
     if (out !== ESCALATE) return out;
   }
+  // Opt-in for ROBERT only (after Lead routing): he auto-drives terminals the operator handed him
+  // (or ones he opened). An agent that explicitly waited on him (`waiting --on robert`) still reaches
+  // him — that IS asking. Anything with a lead_id (live Lead, escalation, or orphan after the Lead
+  // ended) is fleet work under a Lead and reaches him without a separate opt-in.
+  if (!s.robert && kind !== "robert" && !s.lead_id) return null;
   // Same stop re-armed (a second status event): the queue absorbs it as a repeat, and it is not a new
   // wake for the caps.
   const repeat = robertWakeExists(key);
@@ -842,7 +847,9 @@ export function onStatus(sessionId: string, st: TermStatus | null | undefined): 
 function armTimer(sessionId: string, st: TermStatus, s: Session | undefined): void {
   const prev = timers.get(sessionId);
   const kind = s && s.status === "live" ? driveKind(st, context(s)) : null;
-  if (!kind) {
+  // Opt-in for Robert's own queue — Lead-owned workers still arm (Lead inbox / orphan / escalate).
+  // waiting-on-robert always arms: that is the agent asking.
+  if (!kind || (s && !s.robert && kind !== "robert" && !s.lead_id)) {
     if (prev) { clearTimeout(prev.t); timers.delete(sessionId); }
     return;
   }
