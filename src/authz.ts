@@ -75,6 +75,21 @@ export function leadScope(req: express.Request): LeadScope {
   return { ws: s.workspace_id, leadId: s.id };
 }
 /**
+ * May this caller open a terminal (POST /sessions)? Null = yes, otherwise the refusal.
+ *
+ * Opening terminals is the executives' hand: the operator at the Desk and Robert (no workspace token,
+ * or the admin one) and a live Lead of that same workspace (its own credential). A plain terminal
+ * carries only its workspace token — it used to `mc session new` its own helpers, and did: fans of
+ * workers with no `lead_id`, so no one who opened them was woken when they stopped or could steer
+ * them. A terminal that needs more hands says so to Robert.
+ */
+export function spawnRefusal(scope: CallerScope, lead: LeadScope): string | null {
+  if (scope === null) return "invalid workspace token";
+  if (scope.ws === null) return null;
+  if (lead && lead.ws === scope.ws) return null;
+  return "only a Lead, Robert or the operator opens terminals — need more hands? `mc ask-robert`";
+}
+/**
  * May this Lead type into that terminal (POST /sessions/:id/input)?
  *
  * Ownership, not neighbourhood: only the terminals the daemon stamped with this Lead's id at spawn.

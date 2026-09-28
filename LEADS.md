@@ -47,6 +47,11 @@ X is shipped — and only talks to him or Robert when it must.
 ### Authz (src/authz.ts)
 - New header `x-mc-lead: <lead_token>`. `leadScope(req)` → `{ ws, leadId }` when the token belongs to
   a **live** session with `role = "lead"`, else null.
+- **Only a Lead fans out.** `spawnRefusal(scope, lead)` gates `POST /sessions`: the operator and
+  Robert (no workspace token, or admin) and a live Lead of that same workspace may open terminals; a
+  plain terminal presenting only its workspace token gets a 403 and is told to `mc ask-robert`. Before
+  this, the mission-control skill told every terminal to "open a helper terminal to parallelize", and
+  they did — unowned workers (`lead_id` null) that woke no one who had opened them.
 - `POST /sessions/:id/input` accepts admin OR a Lead typing into a terminal **it owns**:
   `target.lead_id === leadId` (and same workspace, as a second wall) — `leadMayType` in authz.ts.
   Anything else is the same 404 a wrong-workspace caller gets, so a Lead cannot map the wall by

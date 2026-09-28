@@ -2,7 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { CONFIG } from "./config.js";
 import { db, sessions, workspaces } from "./store.js";
-import { callerScope, checkScope, leadMayType, leadScope, tokenOk } from "./authz.js";
+import { callerScope, checkScope, leadMayType, leadScope, spawnRefusal, tokenOk } from "./authz.js";
 
 beforeEach(() => {
   db.exec("DELETE FROM sessions; DELETE FROM workspaces;");
@@ -157,4 +157,28 @@ test("leadMayType: a worker of this Lead in ANOTHER workspace is still refused",
   // case a row ever crosses by another route.
   const stray = sessions.create({ workspace_id: other.id, role: "worker", cwd: "/tmp", lead_id: lead.id });
   assert.equal(leadMayType({ ws: home.id, leadId: lead.id }, stray), false);
+});
+
+test("spawnRefusal: only the operator, Robert and a live Lead of that workspace open terminals", () => {
+  const home = workspaces.create({ slug: "sp-home", name: "Home", config_dir: "/tmp/sp-home" });
+  const other = workspaces.create({ slug: "sp-other", name: "Other", config_dir: "/tmp/sp-other" });
+  const lead = sessions.create({ workspace_id: home.id, role: "lead", cwd: "/tmp" });
+  const leadReq = (tok: string | null) => fakeReq({ "x-mc-workspace-token": home.token, ...(tok ? { "x-mc-lead": tok } : {}) });
+
+  // The Desk and Robert: no workspace token on loopback, or the admin one.
+  assert.equal(spawnRefusal(callerScope(fakeReq()), null), null);
+  assert.equal(spawnRefusal({ ws: null }, null), null);
+  // A Lead, with its own credential, in its own workspace.
+  const lr = leadReq(sessions.leadToken(lead.id));
+  assert.equal(spawnRefusal(callerScope(lr), leadScope(lr)), null);
+
+  // A plain terminal: its workspace token and nothing else — the helper fan this exists to stop.
+  const plain = leadReq(null);
+  assert.match(spawnRefusal(callerScope(plain), leadScope(plain))!, /only a Lead, Robert or the operator/);
+  // A forged or ended Lead's token is a plain terminal too.
+  const forged = leadReq("forged");
+  assert.ok(spawnRefusal(callerScope(forged), leadScope(forged)));
+  // A Lead's credential does not carry into another workspace's token.
+  assert.ok(spawnRefusal({ ws: other.id }, { ws: home.id, leadId: lead.id }));
+  assert.equal(spawnRefusal(null, null), "invalid workspace token");
 });
