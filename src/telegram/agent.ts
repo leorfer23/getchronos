@@ -7,6 +7,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { randomUUID } from "node:crypto";
 import { noteClaudeStreamEvent } from "../usage-meter.js";
+import { routeConfigDir } from "../profile-route.js";
 import { CONFIG } from "../config.js";
 import { bus, type BusEvent } from "../bus.js";
 import { agentChat, chat as chatLog, kv, workspaces } from "../store.js";
@@ -668,7 +669,7 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
     if (warm) {
       const m = runWs ? warmForChatWs(chat, runWs) : warmForChat(chat);
       ask.warm = m;
-      const tgKey = runWs ? `tg:${chat}:${runWs}` : `tg:${chat}`;
+      const tgKey = acctKey(runWs ? `tg:${chat}:${runWs}` : `tg:${chat}`, m);
       reply = await withProviderFallback({
         key: tgKey,
         primary: () => m.turn(prompt, undefined, undefined, CONFIG.agent.model),
@@ -677,7 +678,7 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
         system: m.system,
         prompt,
         wsId: runWs,
-        profileDir: runWs ? webProfileDir(runWs) : undefined,
+        profileDir: m.profileDir,
         agent: { name: "Robert", tools: MANAGER_TOOLS },
         // Telegram propose-and-confirm: no CHRONOS_ADMIN on primary or fallback.
         killPrimary: () => {
@@ -1002,6 +1003,10 @@ export class WarmManager {
   constructor(private opts: WarmOpts) {
     this.resumeId = opts.resumeSessionId ?? null;
   }
+  /** The Claude account this process runs on — a caller recycles it when the routed account moves. */
+  get profileDir(): string {
+    return this.opts.profileDir || DEFAULT_PROFILE_DIR;
+  }
 
   /** System prompt baked into this process — used when re-running a turn on the fallback backend. */
   get system(): string {
@@ -1261,8 +1266,14 @@ export class WarmManager {
 const WEB_IDLE_ROTATE_MS = 60 * 60 * 1000;
 // Workspace → its Claude profile dir; no workspace (or unknown id) → the operator's default.
 export function webProfileDir(wsId?: string | null): string {
-  return (wsId ? workspaces.get(wsId)?.config_dir : null) || DEFAULT_PROFILE_DIR;
+  const pinned = (wsId ? workspaces.get(wsId)?.config_dir : null) || DEFAULT_PROFILE_DIR;
+  // A walled account hands Robert to its sibling login — the same pick a new terminal or job gets
+  // (profile-route.ts). Without it he alone stayed on the capped account and fell to grok → cursor.
+  return routeConfigDir(pinned, wsId).dir;
 }
+// The cooldown a walled turn starts belongs to the ACCOUNT it ran on: a key without it kept the
+// sibling login idle until the capped one's cooldown ran out.
+const acctKey = (key: string, m: WarmManager) => `${key}@${path.basename(m.profileDir)}`;
 // kv/map key for a thread. Unknown ids collapse to the unscoped thread, same as no selection.
 const wsKey = (wsId?: string | null) => (wsId && workspaces.get(wsId) ? wsId : "default");
 const getWebSession = (key: string) => kv.get(`web.session:${key}`) ?? null;
@@ -1366,7 +1377,8 @@ export const engineLabel = (backend: string, model: string | null | undefined): 
 const webMgrs = new Map<string, WarmManager>(); // workspace key → warm manager
 function webManager(key: string, wsId: string | null): WarmManager {
   let m = webMgrs.get(key);
-  if (m && memoryMoved("robert")) { m.kill(); webMgrs.delete(key); m = undefined; }
+  const dir = webProfileDir(wsId);
+  if (m && (memoryMoved("robert") || m.profileDir !== dir)) { m.kill(); webMgrs.delete(key); m = undefined; }
   if (!m) {
     m = new WarmManager({
       // Same standing workspace context every job runner and terminal agent gets: operator notes + the
@@ -1377,7 +1389,7 @@ function webManager(key: string, wsId: string | null): WarmManager {
       // page cannot mount. Web surface only — Telegram has nowhere to render one.
       system: personaSystem("robert", robertPrompt("web"), wsId ? agentContext(wsId) : "", briefsBlock(wsId), widgetPromptBlock()),
       model: getWebModel(),
-      profileDir: webProfileDir(wsId),
+      profileDir: dir,
       allowedTools: MANAGER_TOOLS,
       inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
       // MC_AGENT_NAME signs what he does through `mc` — a keystroke he types into someone
@@ -1499,7 +1511,7 @@ export async function askManagerWeb(
     : chatLog.contextBlock({ limit: 12, workspaceId: realWsId });
   const prompt = fleetLine(realWsId) + "\n\n" + focusLine + (recap || "") + (opts?.voice ? VOICE_TURN + "\n\n" : "") + text;
   const reply = await withProviderFallback({
-    key: `web:${key}`,
+    key: acctKey(`web:${key}`, m),
     primary: () => m.turn(prompt, onDelta, undefined, model),
     model,
     primaryOn: (alt) => {
@@ -1513,7 +1525,7 @@ export async function askManagerWeb(
     // Robert belongs to (see the warm-manager spawn above). The fallback engine has to carry both,
     // or a degraded turn silently loses the workspace default the primary had.
     extraEnv: { CHRONOS_ADMIN: CONFIG.adminToken, MC_AGENT_NAME: "robert", ...(realWsId ? { MC_WORKSPACE: realWsId } : {}) },
-    profileDir: webProfileDir(realWsId),
+    profileDir: m.profileDir,
     onDelta,
     // `prompt` already carries this thread's recap, so only the declaration needs carrying.
     agent: { name: "Robert", tools: MANAGER_TOOLS },
@@ -1719,11 +1731,13 @@ export const warmExecWeb = (id: string) => warmExec(id);
 const tgWarm = new Map<number, WarmManager>();
 function warmForChat(chat: number): WarmManager {
   let m = tgWarm.get(chat);
-  if (m && memoryMoved("robert")) { m.kill(); tgWarm.delete(chat); m = undefined; }
+  const dir = webProfileDir(null);
+  if (m && (memoryMoved("robert") || m.profileDir !== dir)) { m.kill(); tgWarm.delete(chat); m = undefined; }
   if (!m) {
     m = new WarmManager({
       system: personaSystem("robert", robertPrompt("telegram")),
       model: CONFIG.agent.model,
+      profileDir: dir,
       allowedTools: MANAGER_TOOLS,
       inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
       resumeSessionId: getChatSession(chat) ?? null,
@@ -1757,7 +1771,8 @@ function warmForChatWs(chat: number, wsId: string): WarmManager {
   const key = wsKey(wsId);
   const mapKey = `${chat}:${key}`;
   let m = tgWsWarm.get(mapKey);
-  if (m && memoryMoved("robert")) { m.kill(); tgWsWarm.delete(mapKey); m = undefined; }
+  const dir = webProfileDir(wsId);
+  if (m && (memoryMoved("robert") || m.profileDir !== dir)) { m.kill(); tgWsWarm.delete(mapKey); m = undefined; }
   if (!m) {
     m = new WarmManager({
       // propose-and-confirm — NOT the web execute-directly persona. Same workspace skill index as the
@@ -1766,7 +1781,7 @@ function warmForChatWs(chat: number, wsId: string): WarmManager {
       model: CONFIG.agent.model,
       allowedTools: MANAGER_TOOLS,
       inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
-      profileDir: webProfileDir(wsId), // the workspace's account + skills + MCP
+      profileDir: dir, // the workspace's account (or its sibling when walled) + skills + MCP
       // deliberately no extraEnv: without CHRONOS_ADMIN the agent can only read and PROPOSE
       resumeSessionId: getWebSession(key),
       onSessionId: (id) => setWebSession(key, id),
