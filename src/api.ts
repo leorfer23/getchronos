@@ -82,6 +82,7 @@ import { recall, renderRecall } from "./recall.js";
 import { recordRead, recordRecall, sessionFor, usageRoute } from "./memory-usage.js";
 import * as dreamRoutes from "./dream-routes.js";
 import * as inboxRoutes from "./inbox-routes.js";
+import * as artifactRoutes from "./artifact-routes.js";
 import { cockpitRoute } from "./desk-cockpit.js";
 import { inbox } from "./store/inbox.js";
 import { openConflicts } from "./memory-conflicts.js";
@@ -164,7 +165,8 @@ import {
   NewLaunchSchema, LaunchPatchSchema, ReorderLaunchesSchema, DeskNotifySchema, PushSubscribeSchema, PushUnsubscribeSchema,
   QuickActionsSchema, HeavySlotSchema,
   ReportSchema, LeadBroadcastSchema, LeadAdoptSchema, BoardAddSchema, BoardPatchSchema, PatchAccelSchema,
-  BuildGraphifySchema, QueryGraphifySchema } from "./validation.js";
+  BuildGraphifySchema, QueryGraphifySchema,
+  NewArtifactSchema, UpdateArtifactSchema, ArtifactEventSchema, ArtifactStateSchema } from "./validation.js";
 import { pressureWord, swapPctOf } from "./machine.js";
 import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
 import { HOST_PATH, brainLink, forwardedHost, hostRoutes } from "./hostlink/brain-link.js";
@@ -1728,6 +1730,18 @@ export function startServer() {
   api.post("/inbox/:id/dismiss", inboxRoutes.dismissRoute);
   api.post("/inbox/:id/snooze", inboxRoutes.snoozeRoute);
   api.post("/inbox/:id/dispatch", inboxRoutes.dispatchRoute);
+
+  // Artifacts (src/artifacts.ts, src/artifact-routes.ts): HTML pages agents publish for the operator,
+  // answered in place through the Desk's sandboxed viewer. A page that asks is an asks row underneath.
+  api.post("/artifacts", validate(NewArtifactSchema), artifactRoutes.createRoute);
+  api.get("/artifacts", artifactRoutes.listRoute);
+  api.get("/artifacts/:id", artifactRoutes.getRoute);
+  api.put("/artifacts/:id", validate(UpdateArtifactSchema), artifactRoutes.updateRoute);
+  api.get("/artifacts/:id/html", artifactRoutes.htmlRoute);
+  api.get("/artifacts/:id/frame", artifactRoutes.frameRoute);
+  api.post("/artifacts/:id/events", validate(ArtifactEventSchema), artifactRoutes.eventRoute);
+  api.get("/artifacts/:id/events", artifactRoutes.eventsRoute);
+  api.put("/artifacts/:id/state", validate(ArtifactStateSchema), artifactRoutes.stateRoute);
 
   // Pairs of remembered facts a judge found to disagree. Read-only and workspace-walled, same as
   // recall: a conflict quotes two pieces of this workspace's memory.

@@ -11,6 +11,7 @@
     const s = String(t ?? "")
       .replace(/```[\s\S]*?```/g, " ")
       .replace(/^::ask [0-9a-f-]{8,36}::$/gm, "a question for you") // an Ask card (static/ask-card.js)
+      .replace(/^::artifact [0-9a-f-]{8,36}::$/gm, "a page for you") // an artifact card (static/artifact-view.js)
       .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
       .replace(/^[ \t]*(?:#{1,6}|>|[-*+]|\d+\.)[ \t]+/gm, "")
       .replace(/\*\*|__|~~|[*`]/g, "")

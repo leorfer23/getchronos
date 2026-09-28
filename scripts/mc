@@ -349,6 +349,22 @@ const HELP = `mc — Mission Control backlog CLI
                                      knows the goal and answers in seconds, and passes up what only
                                      Robert or the operator can settle. Falls back to Robert if it
                                      does not answer, or ends. Default --wait 10
+  mc artifact put <page.html|-> [--title T] [--notify] [--id <id8>]   publish an HTML page for the operator
+                                     (a report, a comparison, a dashboard). --notify puts its card in the Desk
+                                     chat; --id publishes a NEW VERSION of that page. Prints the Desk link.
+                                     Inside the page, window.chronos is the SDK: chronos.submit(data) answers,
+                                     chronos.send(data) sends anything short of the answer, chronos.state.get/set
+                                     keeps its JSON; or no code: <button data-chronos-submit='{"pick":"B"}'>,
+                                     <form data-chronos-submit>. Style with the Desk's var(--ink) var(--accent)…
+  mc artifact ask <page.html|-> "question" [--options "a,b"] [--title T] [--wait <min>] [--robert]
+                                     ask the operator WITH a page: he clicks/fills it in the Desk and you get
+                                     what the page submitted (JSON) — same park & resume as mc ask. Default
+                                     --wait 15; --robert lets Robert take it first (he answers in words)
+  mc artifact list [--ws <id>]      pages in this workspace (id8, status, version, age, title)
+  mc artifact get <id8> [--html]    one page: who, status, answer, file on disk; --html prints its source
+  mc artifact events <id8> [--after <n>] [--wait <sec>] [--json]   what the page sent back
+  mc artifact send|submit <id8> '<json|text>'   talk to another agent's page (submit only to one that
+                                     is not a question for the operator)
   mc asks [--all]                    open asks (id8, age, ticket, question); --all includes answered
   mc answer <id8> "text"             operator side: answer an open ask (no MC_RUN needed)
   mc ask hold <id8> <+2h|+2d|ISO> ["why"]      "later" is an answer: date the question OFF the live
@@ -2654,6 +2670,126 @@ async function heavy(argv) {
         `Focus feed what you are blocked on, then either work on something that does not depend on it, ` +
         `or run \`mc state blocked "<what you need>"\` and stop. Re-check with: mc asks`
       );
+    }
+    // Artifacts (src/artifacts.ts): an HTML page for the operator — a report to read, or a question he
+    // answers by clicking. `ask` is `mc ask` with a page: the same asks row underneath, so a run that
+    // times out parks and is resumed with whatever the page submitted.
+    if (cmd === "artifact" || cmd === "artifacts") {
+      const sub = cmd === "artifacts" ? "list" : pos[1] || "list";
+      const deskUrl = (id) => API.replace(/\/api\/?$/, "") + "/desk#artifact=" + id;
+      const origin = () =>
+        process.env.MC_RUN ? { run_id: process.env.MC_RUN } : process.env.MC_SESSION ? { session_id: process.env.MC_SESSION } : {};
+      const readPage = async (f) => {
+        if (!f || f === "-") {
+          const d = await readStdin();
+          if (!d.trim()) die("no HTML: pass a file, or pipe the page in with -");
+          return d;
+        }
+        if (!fs.existsSync(f)) die(`no such file: ${f}`);
+        return fs.readFileSync(f, "utf8");
+      };
+      const titleOf = (f, html) =>
+        opt.title && opt.title !== "true"
+          ? opt.title
+          : /<title[^>]*>([^<]{1,200})<\/title>/i.exec(html)?.[1]?.trim() || (f && f !== "-" ? path.basename(f, path.extname(f)) : "Untitled");
+      const dataOf = (raw) => {
+        if (raw == null || raw === "") return null;
+        try { return JSON.parse(raw); } catch { return raw; }
+      };
+      const show = (d) => (typeof d === "string" ? d : JSON.stringify(d));
+      const ageMin = (ts) => Math.round((Date.now() - new Date(ts).getTime()) / 60000);
+      if (sub === "put") {
+        const f = pos[2];
+        const html = await readPage(f);
+        if (opt.id && opt.id !== "true") {
+          const a = await req("PUT", "/artifacts/" + opt.id, { html, ...(opt.title && opt.title !== "true" ? { title: opt.title } : {}) });
+          return console.log(`${a.id.slice(0, 8)} → v${a.version}\n${deskUrl(a.id)}`);
+        }
+        const a = await req("POST", "/artifacts", {
+          title: titleOf(f, html), html, ...origin(),
+          ...(opt.ws && opt.ws !== "true" ? { workspace_id: opt.ws } : {}),
+          ...(opt.notify ? { notify: true } : {}),
+        });
+        return console.log(
+          `${a.id.slice(0, 8)} published (v1)${opt.notify ? " — its card is in the Desk chat" : ""}\n${deskUrl(a.id)}\nfile: ${a.file}`
+        );
+      }
+      if (sub === "ask") {
+        const f = pos[2];
+        const question = pos.slice(3).join(" ");
+        if (!f || !question) die('mc artifact ask <page.html|-> "question" [--options "a,b"] [--title T] [--wait <min>]');
+        if (!process.env.MC_RUN && !process.env.MC_SESSION) die("mc artifact ask only works inside a Desk terminal or a dispatched run");
+        const html = await readPage(f);
+        const options = opt.options ? opt.options.split(",").map((x) => x.trim()).filter(Boolean) : undefined;
+        const waitMin = opt.wait != null ? Number(opt.wait) : 15;
+        const a = await req("POST", "/artifacts", {
+          title: titleOf(f, html), html, question, options, ...origin(), ...(opt.robert ? { route: "robert" } : {}),
+        });
+        const id8 = a.id.slice(0, 8);
+        console.log(`asked with a page (${id8}) — ${deskUrl(a.id)}`);
+        if (waitMin <= 0) return console.log(`not waiting (--wait 0) — read the answer later: mc artifact events ${id8}`);
+        console.log(`waiting up to ${waitMin}m…`);
+        const deadline = Date.now() + waitMin * 60_000;
+        let after = 0;
+        for (;;) {
+          const remainingMs = deadline - Date.now();
+          if (remainingMs <= 0) break;
+          const r = await req("GET", `/artifacts/${a.id}/events?after=${after}&wait_ms=${Math.min(55_000, remainingMs)}`);
+          for (const ev of r.events) {
+            after = ev.id;
+            if (ev.kind === "send") console.log(`· sent: ${show(dataOf(ev.data))}`);
+            if (ev.kind === "submit") return console.log(`✅ answer (${ev.by}): ${show(dataOf(ev.data))}`);
+          }
+        }
+        if (process.env.MC_RUN)
+          return console.log(
+            `⏸ no answer yet. Commit your WIP now, note where you left off with mc note, then finish your turn cleanly ` +
+            `(do not mark the ticket for review). The system parks this run and resumes you automatically — with your ` +
+            `full context — when the answer arrives.`
+          );
+        return console.log(
+          `⏸ no answer yet (${id8}). Do not guess: work on something that does not depend on it, or run ` +
+          `\`mc state blocked "<what you need>"\` and stop. Re-check with: mc artifact events ${id8}`
+        );
+      }
+      if (sub === "list") {
+        const qs = new URLSearchParams();
+        const ws = opt.ws || opt.workspace || process.env.MC_WORKSPACE;
+        if (ws && ws !== "true") qs.set("workspace", ws);
+        const rows = await req("GET", "/artifacts?" + qs.toString());
+        if (!rows.length) return console.log("(no pages)");
+        return console.log(
+          rows.map((a) => `${a.id.slice(0, 8)}\t${a.status}${a.ask_id ? "?" : ""}\tv${a.version}\t${ageMin(a.updated_at)}m\t${a.title}`).join("\n")
+        );
+      }
+      const id = pos[2] || die(`mc artifact ${sub} needs an id: mc artifact ${sub} <id8>`);
+      if (sub === "get" || sub === "show") {
+        if (opt.html) return process.stdout.write((await req("GET", `/artifacts/${id}/html`)).html);
+        const a = await req("GET", "/artifacts/" + id);
+        const lines = [
+          `${a.id.slice(0, 8)}  ${a.title}  (v${a.version}, ${a.status})`,
+          `by: ${a.created_by || "-"}`,
+          ...(a.question ? [`asks: ${a.question}`] : []),
+          ...(a.answer != null ? [`answer: ${show(a.answer)}`] : []),
+          `events: ${a.events.length}`,
+          `file: ${a.file}`,
+          deskUrl(a.id),
+        ];
+        return console.log(lines.join("\n"));
+      }
+      if (sub === "events") {
+        const after = Number(opt.after) || 0;
+        const waitMs = opt.wait ? Math.min(55_000, Number(opt.wait) * 1000) : 0;
+        const r = await req("GET", `/artifacts/${id}/events?after=${after}&wait_ms=${waitMs}`);
+        if (opt.json) return console.log(JSON.stringify(r, null, 2));
+        if (!r.events.length) return console.log(`(nothing yet — ${r.status})`);
+        return console.log(r.events.map((e) => `#${e.id}\t${e.kind}\t${e.by}\t${show(dataOf(e.data))}`).join("\n"));
+      }
+      if (sub === "send" || sub === "submit") {
+        const r = await req("POST", `/artifacts/${id}/events`, { kind: sub, data: dataOf(pos.slice(3).join(" ")) });
+        return console.log(`${sub === "submit" ? "✅ submitted" : "sent"} (#${r.event.id})`);
+      }
+      die(`unknown: mc artifact ${sub} — put | ask | list | get | events | send | submit`);
     }
     if (cmd === "asks") {
       const qs = new URLSearchParams();

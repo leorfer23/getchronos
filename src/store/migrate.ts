@@ -1987,6 +1987,41 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       UPDATE sessions SET robert = 1 WHERE created_by = 'robert' OR role = 'lead';`),
   },
 
+  {
+    version: 142,
+    name: "artifacts + artifact_events — HTML pages agents publish and the operator answers in place",
+    // The page itself lives on disk (artifacts/<ws>/<id>/v<n>.html, src/artifacts.ts); this row is the
+    // index. ask_id links a page that IS a question (`mc artifact ask`) to the asks row whose answer
+    // resumes the agent. state is the page's own JSON (chronos.state), kept across reloads.
+    // artifact_events: what the page sent back — `submit` (the answer) and `send` (anything before it).
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+        session_id TEXT,
+        run_id TEXT,
+        ask_id TEXT,
+        created_by TEXT,
+        title TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'answered', 'closed')),
+        state TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_artifacts_ws ON artifacts(workspace_id, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_artifacts_ask ON artifacts(ask_id);
+      CREATE TABLE IF NOT EXISTS artifact_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('submit', 'send')),
+        data TEXT NOT NULL,
+        by TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_artifact_events ON artifact_events(artifact_id, id);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

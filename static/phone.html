@@ -398,6 +398,7 @@
 </div>
 
 <script src="/ask-card.js"></script>
+<script src="/artifact-view.js"></script>
 <script src="/tag-complete.js"></script>
 <script src="/chat-reply.js"></script>
 <script src="/vendor/marked.min.js"></script>
@@ -1471,7 +1472,7 @@ qs("#chat").addEventListener("click", (e) => { const a = e.target.closest('a[hre
 function bubble(kind, text) {
   const log = qs("#chat"); const d = document.createElement("div");
   d.className = "bub " + kind; d._raw = text;
-  if (kind === "rob" || kind.startsWith("rob ")) { d.innerHTML = mdRob(text); AskCard.embed(d); } else d.textContent = text;
+  if (kind === "rob" || kind.startsWith("rob ")) { d.innerHTML = mdRob(text); ArtifactView.embed(d); AskCard.embed(d); } else d.textContent = text;
   log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
 }
 async function robertHistory() {
@@ -1517,6 +1518,7 @@ qs("#r-model").onchange = async () => {
 qs("#btn-robert").onclick = () => { fx.tap(); showRobert(); };
 // The Ask widget: cards in his thread, and every open question behind "? N" (static/ask-card.js).
 AskCard.init({ api, toast, sessions: () => S.sessions, askOf, who: (s) => sTitle(s).slice(0, 40), button: qs("#r-asks"), panel: qs("#r-askpop"), log: qs("#chat") });
+ArtifactView.init({ api, toast });
 qs("#r-back").onclick = () => { fx.tap(); show("v-home", "in-left"); renderHome(); };
 qs("#r-reset").onclick = () => confirmSheet(R.sticky ? `Start a new thread with Robert on ${wsName(R.sticky)}?` : "Start a new desk-wide thread with Robert?", "New thread", async () => { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: R.sticky }) }); qs("#chat").innerHTML = ""; R.loaded = false; toast("new thread"); });
 const rComposer = qs("#r-composer");
@@ -1633,7 +1635,7 @@ rComposer.addEventListener("input", () => { rComposer.style.height = ""; rCompos
 // Keyboard up/down changes the visible area: refit so the pty's rows match what you can see.
 
 // ── live updates ────────────────────────────────────────────────────────────
-const BUS_TOPICS = ["session.status", "session.activity", "agent.state", "session.started", "session.ended", "session.updated", "session.usage", "agent.delta", "agent.push", "ask.created", "ask.answered", "focus.event"].join(",");
+const BUS_TOPICS = ["session.status", "session.activity", "agent.state", "session.started", "session.ended", "session.updated", "session.usage", "agent.delta", "agent.push", "ask.created", "ask.answered", "artifact.created", "artifact.updated", "artifact.event", "focus.event"].join(",");
 let busRetry = 1000, reloadT;
 const reloadSoon = () => { clearTimeout(reloadT); reloadT = setTimeout(() => load().catch(() => {}), 250); };
 function connectBus() {
@@ -1653,6 +1655,7 @@ function connectBus() {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     AskCard.onEvent(e);
     if (AskCard.TOPICS.includes(e.topic)) return;
+    if (ArtifactView.TOPICS.includes(e.topic)) return ArtifactView.onEvent(e);
     if (e.topic === "agent.delta") {
       // Only his words: thinking and tool lines are not the answer.
       const mine = e.client === CLIENT;
@@ -1688,6 +1691,7 @@ function connectBus() {
           streamed.className = "bub rob";
           streamed._raw = e.reply;
           streamed.innerHTML = mdRob(e.reply);
+          ArtifactView.embed(streamed);
           AskCard.embed(streamed);
           RP.mark(streamed, e.id, "reply");
         } else {

@@ -1823,6 +1823,7 @@
 <script src="/desk-companion.js"></script>
 <script src="/desk-quick-actions.js"></script>
 <script src="/ask-card.js"></script>
+<script src="/artifact-view.js"></script>
 <script src="/desk-cockpit.js"></script>
 <script src="/tag-complete.js"></script>
 <script src="/chat-reply.js"></script>
@@ -6006,6 +6007,7 @@ function ovLine(cls, text, ws, chip = true, own = false) {
   d.innerHTML = mdChat(text);
   d._raw = text;
   dwEmbed(d);
+  ArtifactView.embed(d);
   AskCard.embed(d);
   setChip(d, ws, chip);
   OV.log.appendChild(d);
@@ -6481,6 +6483,8 @@ async function ovHistory(reload = false) {
 }
 // The Ask widget: cards in the log, and every open question behind "? N" (static/ask-card.js).
 AskCard.init({ api, toast, sessions: () => S.sessions, askOf, who: chipLabel, button: qs("#chat-asks"), panel: qs("#askpop"), log: OV.log });
+// Artifacts: an agent's HTML page as a card in the chat, opened in a sandboxed viewer (static/artifact-view.js).
+ArtifactView.init({ api, toast });
 // The panel over (docked) or beside (full screen) his conversation: questions, stopped terminals, PRs,
 // today (static/desk-cockpit.js). Everything it lists the page already holds; it only reads PRs + spend.
 DeskCockpit.init({
@@ -6716,7 +6720,7 @@ function vcPicked(n, text) {
 // (the audio is ready by the time the one before it ends) and played in order.
 function speakable(text) {
   let t = String(text ?? "").replace(/```[\s\S]*?```/g, " ");
-  t = t.split("\n").filter((l) => !/^\s*(UI\b|\{.*\}\s*$|::ask [0-9a-f-]{8,36}::\s*$)/.test(l)).join("\n");
+  t = t.split("\n").filter((l) => !/^\s*(UI\b|\{.*\}\s*$|::(?:ask|artifact) [0-9a-f-]{8,36}::\s*$)/.test(l)).join("\n");
   t = t.replace(/\b([0-9a-f]{8})(?:-?[0-9a-f]{4}){0,3}(?:-?[0-9a-f]{12})?\b/g, (m, id8) => { const s = S.sessions.find((x) => x.id.startsWith(id8)); return s ? chipLabel(s) : m; });
   t = t.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/https?:\/\/\S+/g, VC.lang === "es" ? "un enlace" : "a link").replace(/`([^`]*)`/g, "$1");
   t = t.replace(/^\s*(?:[-•*]|\d+[.)])\s+/gm, "").replace(/\s+·\s+/g, ", ").replace(/[*_#>|~]+/g, " ").replace(/\p{Extended_Pictographic}️?/gu, "");
@@ -6906,6 +6910,7 @@ const BUS_TOPICS = [
   "run.started", "run.ended", "job.updated",
   "host.online", "host.offline", "host.updated",
   "ask.created", "ask.answered",
+  "artifact.created", "artifact.updated", "artifact.event",
   "inbox.updated",
 ].join(",");
 function connectBus() {
@@ -6917,6 +6922,7 @@ function connectBus() {
     if (DW.topics.has(e.topic)) dwBus(e.topic);
     AskCard.onEvent(e);
     if (AskCard.TOPICS.includes(e.topic)) return;
+    if (ArtifactView.TOPICS.includes(e.topic)) return ArtifactView.onEvent(e);
     if (e.topic === "host.online" || e.topic === "host.offline" || e.topic === "host.updated") return loadHostsSoon();
     if (e.topic === "inbox.updated") return loadInboxSoon();
     if (e.topic === "session.activity") {
@@ -7021,6 +7027,7 @@ function connectBus() {
           streamed.innerHTML = mdChat(e.reply);
           streamed._own = fromHere;
           dwEmbed(streamed);
+          ArtifactView.embed(streamed);
           AskCard.embed(streamed);
           setChip(streamed, e.ws ?? null, !fromHere && !e.you);
           setMdl(streamed, e.engine, e.steps);

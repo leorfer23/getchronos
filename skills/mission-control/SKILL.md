@@ -147,6 +147,44 @@ goes to the operator's phone with his recommendation, and you get their answer.
 - **Don't ask what you can find out.** Read the repo, `mc recall`, the memos first.
 - `mc ask` (without `-robert`) is for headless dispatched runs only — it fails in a Desk terminal.
 
+## Showing and asking with a page — `mc artifact`
+
+When words are the wrong shape — a report with a table or chart, three designs to compare, a
+form with several fields — write an HTML page and put it in front of the operator on the Desk.
+
+```bash
+mc artifact put report.html --notify            # a page to read; --notify puts its card in the Desk chat
+mc artifact put report.html --id 4146d196       # a NEW VERSION of that page (old ones are kept)
+mc artifact ask picker.html "which layout for the weekly report?"   # blocks; prints what he submitted
+mc artifact events <id8> [--wait 30]            # what the page sent back (send + submit)
+mc artifact list | get <id8> [--html]
+```
+
+`mc artifact ask` is `mc ask-robert` with a page: it goes to the operator (`--robert` lets Robert
+take it first, in words), blocks up to `--wait` minutes (default 15) and prints the answer as JSON,
+e.g. `✅ answer (operator): {"layout":"B","note":"less scroll"}`.
+
+Inside the page, `window.chronos` is the SDK (no import, it is injected):
+
+```html
+<button data-chronos-submit='{"layout":"B"}'>B</button>   <!-- submit that JSON, no JS needed -->
+<form data-chronos-submit>…fields…<button>Send</button></form>  <!-- submit the fields as an object -->
+<script>
+  chronos.context            // { id, title, question, options, status, answer, state }
+  chronos.submit(data)       // THE answer — once; the page is then answered
+  chronos.send(data)         // anything before it (a pick, a 👍); read with mc artifact events
+  chronos.state.set(obj)     // saved JSON, back in chronos.state.get() on reload / on the phone
+  chronos.on("answered", fn)
+</script>
+```
+
+- The page is sandboxed: **no network** (no fetch, no form posts) except scripts/styles/fonts from
+  cdn.jsdelivr.net, cdnjs.cloudflare.com, unpkg.com and https images. Put the data IN the page.
+- No `localStorage` — use `chronos.state`.
+- Use the Desk's colours so it matches light and dark: `var(--bg) var(--surface) var(--ink)
+  var(--muted) var(--line) var(--accent) var(--accent-soft) var(--warn) var(--danger)`.
+- One page, one purpose; keep it calm. The `<title>` is the card's title unless you pass `--title`.
+
 ## Before you change a repo — `mc worktree`
 
 The operator runs many terminals at once, and more than one may point at the same repo. Two agents in

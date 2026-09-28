@@ -121,6 +121,11 @@ export type BusEvent = (
   | { topic: "host.policy_violation"; host_id: string; workspace_id: string | null; session_id: string | null; reason: string }
   // HOSTS.md phase 4: placement chose a computer for a terminal, and why ("most headroom (…)").
   | { topic: "session.placed"; session_id: string; workspace_id: string | null; host_id: string; reason: string }
+  // Artifacts (src/artifacts.ts): an HTML page an agent published, a new version of it, and what the
+  // page sent back (kind submit|send). The Desk refreshes a page's card on these.
+  | { topic: "artifact.created"; artifact_id: string; workspace_id: string | null; session_id: string | null; title: string; ask_id: string | null }
+  | { topic: "artifact.updated"; artifact_id: string; workspace_id: string | null; version: number }
+  | { topic: "artifact.event"; artifact_id: string; event_id: number; kind: string; workspace_id: string | null; session_id: string | null }
   | { topic: "clipboard.read"; by: string; describe: string; chars: number }
   | { topic: "clipboard.write"; by: string; describe: string; chars: number }
   | {
