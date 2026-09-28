@@ -70,7 +70,7 @@ export function placementCandidates(now = Date.now()): HostCandidate[] {
       sandbox: !!(hello?.capabilities?.sandbox ?? caps?.sandbox),
       clis: (hello?.capabilities?.clis ?? caps?.clis ?? []).filter((c) => !!c.path).map((c) => c.name),
       unauthed: (hello?.capabilities?.clis ?? caps?.clis ?? []).filter((c) => !!c.path && c.auth === "no").map((c) => c.name),
-      profiles: (hello?.profiles ?? caps?.profiles ?? []).map((p) => ({ name: p.name, exists: !!p.exists })),
+      profiles: profilesOf(hello?.profiles ?? caps?.profiles),
       checkouts: repoCheckouts.forHost(id).map((c) => c.repo_id),
       auto_clone: !!(hello?.capabilities?.auto_clone ?? caps?.auto_clone),
       procs: !!(hello?.capabilities?.procs ?? (caps as any)?.procs),
@@ -80,6 +80,20 @@ export function placementCandidates(now = Date.now()): HostCandidate[] {
     });
   }
   return out;
+}
+
+const profilesOf = (list: Array<{ name: string; exists?: boolean }> | null | undefined) =>
+  (list ?? []).map((p) => ({ name: p.name, exists: !!p.exists }));
+
+/**
+ * The profiles a host reported, by name: its live hello when connected, else the last one stored.
+ * Nothing heard = no profiles, so nothing is assumed set up there. The brain has none to report.
+ */
+export function hostProfiles(hostId: string): Array<{ name: string; exists: boolean }> {
+  if (hostId === LOCAL_HOST_ID) return [];
+  const live = findHost(hostId);
+  const hello = live instanceof RemoteHost ? live.hello : null;
+  return profilesOf(hello?.profiles ?? parseCapabilities(hosts.get(hostId)?.capabilities_json)?.profiles);
 }
 
 /** What openSession knows about the terminal it is about to open — the fields placement reads. */

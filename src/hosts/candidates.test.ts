@@ -14,7 +14,7 @@ const { hosts, repos, sessions, workspaces } = await import("../store.js");
 const { createTicket, ticketBranch } = await import("../tickets.js");
 const { registerHost } = await import("./index.js");
 const { RemoteHost, VITALS_STALE_MS } = await import("./remote.js");
-const { placementCandidates, placeRequest, stickyFor } = await import("./candidates.js");
+const { hostProfiles, placementCandidates, placeRequest, stickyFor } = await import("./candidates.js");
 const { worktreeRootFor } = await import("../worktree-core.js");
 const { PROTOCOL_VERSION } = await import("../hostlink/wire.js");
 
@@ -113,4 +113,13 @@ test("a remote host's governor is real: its own numbers, its own core count, its
   online = false;
   assert.match((m2.vitals().admission as any).reason, /offline/);
   online = true;
+});
+
+test("hostProfiles: a connected host's hello, else what it last reported; nothing heard = none", () => {
+  assert.deepEqual(hostProfiles("h_m2"), [{ name: "claude-cand", exists: true }]);
+  hosts.create({ id: "h_m7", name: "m7", token_hash: "z".repeat(64), status: "offline" });
+  hosts.update("h_m7", { capabilities_json: JSON.stringify({ profiles: [{ name: "claude", dir: "/Users/y/.claude", exists: true }, { name: "claude-b", dir: "/Users/y/.claude-b", exists: false }] }) });
+  assert.deepEqual(hostProfiles("h_m7"), [{ name: "claude", exists: true }, { name: "claude-b", exists: false }], "offline: its last report");
+  assert.deepEqual(hostProfiles("h_m5"), [], "joined but never reported");
+  assert.deepEqual(hostProfiles("local"), [], "the brain routes by its own disk, not by a report");
 });
