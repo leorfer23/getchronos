@@ -61,7 +61,7 @@
     "unpdf": "^1.8.1",
     "web-push": "^3.6.7",
     "ws": "^8.18.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
