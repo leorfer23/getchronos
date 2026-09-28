@@ -58,7 +58,9 @@ export function callerScope(req: express.Request): CallerScope {
   const forwarded = forwardedHost(req) !== null;
   if (!forwarded && tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return { ws: null };
   const tok = req.get("x-mc-workspace-token");
-  if (!tok) return forwarded ? null : { ws: null };
+  // `Origin: null` is a sandboxed iframe (an artifact page, src/artifacts.ts) or a file:// page — a
+  // browser context, never one of this Mac's own processes, so it never gets the tokenless pass.
+  if (!tok) return forwarded || req.get("origin") === "null" ? null : { ws: null };
   const w = workspaces.getByToken(tok);
   return w ? { ws: w.id } : null;
 }

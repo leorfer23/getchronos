@@ -21,6 +21,7 @@ export function quoteExcerpt(text: string, max = QUOTE_SHOWN): string {
   const t = String(text ?? "")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/^::ask [0-9a-f-]{8,36}::$/gm, "a question for you") // an Ask card (src/robert-asks.ts)
+    .replace(/^::artifact [0-9a-f-]{8,36}::$/gm, "a page for you") // an artifact card (src/artifacts.ts)
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/^[ \t]*(?:#{1,6}|>|[-*+]|\d+\.)[ \t]+/gm, "")
     .replace(/\*\*|__|~~|[*`]/g, "")

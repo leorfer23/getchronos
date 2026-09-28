@@ -399,6 +399,33 @@ being silent between "started" and "done".
 
 ---
 
+## 5e. Artifacts — HTML pages agents publish (`src/artifacts.ts`, `static/artifact-view.js`)
+
+An agent writes an HTML page (report, comparison, picker, form) and publishes it with `mc artifact
+put|ask`. The Desk (and the phone) show a `::artifact <id>::` chat line as the page's card; Open, or
+`/desk#artifact=<id>`, shows it in a sandboxed iframe. Inside, `window.chronos`
+(`static/artifact-sdk.js`) sends back `submit` (the answer, once) and `send` (anything before it),
+and keeps `state`.
+
+- **Storage**: `artifacts/<workspace>/<id>/v<n>.html` under the state dir (`CHRONOS_ARTIFACTS`
+  overrides), every version kept; `artifacts` + `artifact_events` rows are the index (migration 142).
+- **A page that asks is an ask**: `mc artifact ask` files an ordinary asks row (route `operator` by
+  default) linked by `artifacts.ask_id`. The page's submit goes through `answerAsk`, so park & resume,
+  `ask_policy`, holds and the Telegram card all apply unchanged. An ask answered some other way
+  (Telegram button, `mc answer`) marks the page answered with that answer (`onAskAnswered`).
+- **Security**: the page is untrusted. `frameHtml()` puts a CSP ahead of ANY page markup
+  (`connect-src 'none'`, `form-action 'none'`, scripts only inline + three CDNs); the iframe has no
+  `allow-same-origin`, so its origin is opaque and it cannot read the Desk's token. The viewer answers
+  postMessage only from the open frame's window and makes the API call itself. `callerScope` refuses
+  the tokenless loopback pass to `Origin: null`. The HTML is only ever returned inside JSON, never
+  served as a page from the daemon's origin.
+- **Workspace wall**: every `:id` route runs `checkScope`; a workspace token (an agent) may `send`
+  to a page but may not `submit` to one that is a question for the operator.
+- **Not yet**: a gallery of a workspace's pages, pages addressed agent→agent, Robert publishing pages
+  from his own turns (he can already POST /api/artifacts and write `::artifact <id>::`).
+
+---
+
 ## 5d. One terminal, several goals (`src/goals.ts`, `src/store/session-goals.ts`)
 
 A terminal is opened with a **goal** — the line on its Desk card, the reason it exists. It may be

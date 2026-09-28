@@ -66,3 +66,6 @@ desktop/src-tauri/gen/
 relay/node_modules/
 __pycache__/
 *.pyc
+
+# Artifacts (src/artifacts.ts): HTML pages agents publish — operator content, never tracked.
+/artifacts/

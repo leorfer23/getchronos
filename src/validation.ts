@@ -1035,3 +1035,36 @@ export const PutSettingSchema = z.object({
   /** id or slug; same as workspace_id. */
   workspace: z.string().min(1).nullable().optional(),
 });
+
+// ───────────────────────────── artifacts ─────────────────────────────
+/**
+ * `mc artifact put|ask` — an HTML page for the operator (src/artifacts.ts). The page is capped by
+ * bytes in the service (2MB); here only that it is a string. A `question` makes it an ask: the same
+ * limits as NewAskSchema, because underneath it IS one.
+ */
+export const NewArtifactSchema = z.object({
+  title: z.string().min(1).max(200),
+  html: z.string().min(1),
+  session_id: id.optional(),
+  run_id: id.optional(),
+  workspace_id: id.optional(),
+  by: z.string().max(80).optional(),
+  question: z.string().min(1).max(500).optional(),
+  options: z.array(z.string().min(1).max(80)).min(1).max(6).optional(),
+  route: z.enum(["operator", "robert"]).optional(),
+  notify: z.boolean().optional(),
+});
+
+export const UpdateArtifactSchema = z.object({
+  html: z.string().min(1),
+  title: z.string().min(1).max(200).optional(),
+});
+
+/** What a page sends back through the viewer (or an agent through `mc artifact submit|send`). */
+export const ArtifactEventSchema = z.object({
+  kind: z.enum(["submit", "send"]),
+  data: z.unknown().optional(),
+  by: z.string().max(80).optional(),
+});
+
+export const ArtifactStateSchema = z.object({ state: z.unknown().optional() });
