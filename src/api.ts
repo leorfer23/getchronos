@@ -133,7 +133,7 @@ import { ensureIntakeJob } from "./intake.js";
 import { RepoGitError, resolveRepoGitFields } from "./repo-git.js";
 import type { GoalKind, LessonState, Session } from "./types.js";
 import { redactConnectorConfig, publicTrigger } from "./redact.js";
-import { tokenOk, callerScope, checkScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, type LeadScope } from "./authz.js";
+import { tokenOk, callerScope, checkScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
 import { findHost, hostOnline } from "./hosts/index.js";
 import { RemoteHost } from "./hosts/remote.js";
 import { resolveHostRef, sessionHostOffline } from "./remote-terminals.js";
@@ -507,6 +507,9 @@ export function startServer() {
     // No nesting (LEADS.md): a Lead is Robert's deputy for one goal, not a spawner of other Leads.
     if (req.body?.role === "lead" && lead)
       return res.status(403).json({ error: "a lead may not open a lead" });
+    // Leads-only fan-out (LEADS.md): a plain terminal may not open terminals of its own.
+    const refused = spawnRefusal(scope, lead);
+    if (refused) return res.status(403).json({ error: refused });
     try {
       // Who opened it, for the day's log. The caller may name itself (`mc session new` passes its
       // agent name); anything else is the operator at the wall. `created_by` is only that label now —

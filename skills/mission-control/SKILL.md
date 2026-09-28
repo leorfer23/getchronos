@@ -310,13 +310,14 @@ mc pad due                          # this client's scheduled follow-ups
 ```bash
 mc session list                     # live terminals in this workspace
 mc session focus <ID> [-n 20]       # what another terminal is doing, in plain English (read-only)
-mc session new --goal "…" [--kind pr|investigation|qa] [--description "the brief"] [--cwd p]
-                                    # --goal repeats: two or three finish lines, worked in order
-                                    # open a helper terminal to parallelize your work
 mc search "<query>" --kind session  # find past sessions (goal, summary, branch, repo, PR urls)
 ```
 
 Waiting on another terminal? Check `mc session focus <ID>` before interrupting anyone — it's free.
+
+**You do not open terminals.** Only a Lead (below), Robert and the operator do — the daemon refuses
+`mc session new` / `mc lead new` from a plain terminal. Work too big for one terminal? Say so with
+`mc ask-robert` (what, why, how many hands); he opens the workers or a Lead.
 
 ## Leads — a Robert for one goal
 
@@ -325,11 +326,12 @@ Robert runs the wall: it opens workers, is woken when they stop, steers them, an
 receipt — closing workers is the operator's hand only. Design: `LEADS.md` in the chronos repo.
 
 ```bash
-mc lead new "<goal>" [--description "the brief"] [--kind pr|investigation|qa]   # open one (refused from inside a Lead)
 mc lead list                        # live Leads + how many workers each has open
 ```
 
-- **If `MC_LEAD=1` you ARE a Lead.** Workers you open with `mc session new` are signed as yours; when
+- **If `MC_LEAD=1` you ARE a Lead** — the one kind of terminal that opens workers:
+  `mc session new --goal "…" [--kind pr|investigation|qa] [--description "the brief"] [--cwd p]`
+  (`--goal` repeats: two or three finish lines, worked in order). They are signed as yours; when
   one stops, the daemon types a "a terminal FINISHED ITS TURN…" message into you — look
   (`mc session focus <ID>`), then `mc session send <ID> "…"` / `mc session key <ID> …` / `mc session done <ID>`
   (tick only — never kill; the operator closes).
@@ -338,7 +340,7 @@ mc lead list                        # live Leads + how many workers each has ope
   messages or outside PR comments. Leave closing workers to the operator before `mc goal done`.
 - **If you are a worker under a Lead**, nothing changes for you: stop cleanly with your Summary and
   the Lead picks it up. `mc ask-robert` still reaches Robert.
-- Reach for a Lead only when a goal is several terminals' work; a one-terminal task is just a terminal.
+- Leads are opened by Robert or the operator (`mc lead new`), never by a terminal — a one-terminal task is just a terminal.
 
 ## Jobs — headless agents on a schedule
 

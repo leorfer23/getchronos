@@ -1,9 +1,9 @@
 ---
 name: agent-coordination
-description: Coordinate with other Desk terminals and Robert — see who is working or blocked, read another terminal, wait for one to settle, split work into a helper terminal, and hand off to Robert. Use when your work depends on another terminal, you want to parallelize, or you need Robert to decide or pick something up.
+description: Coordinate with other Desk terminals and Robert — see who is working or blocked, read another terminal, wait for one to settle, ask Robert for more hands, and hand off to Robert. Use when your work depends on another terminal, the work is too big for one terminal, or you need Robert to decide or pick something up.
 category: ops
 tags: [desk, robert, terminals, wait]
-version: 3
+version: 4
 ---
 
 # Agent coordination (Chronos Desk)
@@ -20,7 +20,7 @@ waiting on each other, and Robert deciding what you can't.
 ## When to use
 
 - Your work depends on another terminal finishing (a migration, a PR, an investigation)
-- You want to split work into a helper terminal
+- The work is too big for one terminal (only a Lead, Robert or the operator opens terminals — ask Robert)
 - You need a decision, or something picked up after you're done
 
 ## Quick reference
@@ -40,9 +40,8 @@ curl -s -X POST "http://localhost:7777/api/sessions/<ID>/wait" \
   -d '{"until":"settled","timeout_ms":300000}'
 # 200 = settled (body has the state) · 408 = timed out · until also takes "done", "blocked", or a list
 
-# Split work into a helper terminal
-mc session new --goal "backfill the 2025 partitions" --kind pr \
-  --description "Context: … Done when: … Don't touch: …"
+# Too big for one terminal — ask for hands (a plain terminal cannot open one; the daemon refuses)
+mc ask-robert "the 2025 backfill is 3 independent partitions — worth a Lead with 3 workers? I'd say yes"
 
 # Need a decision
 mc ask-robert "migration terminal is blocked on prod creds — wait, or ship the PR without the backfill? I'd ship"
@@ -54,9 +53,11 @@ mc ask-robert "migration terminal is blocked on prod creds — wait, or ship the
    already said what you need to know.
 2. **Wait, don't poll.** `POST /api/sessions/<ID>/wait` with a `timeout_ms` that matches the work.
    On 408, re-check with `mc session focus` and decide: wait again, work around it, or ask.
-3. **Split with a brief, not a sentence.** `mc session new --goal --kind --description`: the
-   description becomes the helper's first prompt, so give it context, the done-condition, and what it
-   must not touch. Point each terminal at its own `mc worktree` — never two terminals in one checkout.
+3. **Need more hands? Ask, don't spawn.** Only a Lead, Robert and the operator open terminals
+   (`mc session new` from a plain terminal is refused). `mc ask-robert` with the split you'd make —
+   he opens the workers or a Lead. If you ARE a Lead (`MC_LEAD=1`): split with a brief, not a
+   sentence (`mc session new --goal --kind --description`: context, done-condition, what it must not
+   touch), each worker in its own `mc worktree`.
 4. **Decisions go to `mc ask-robert`.** One sentence, the options, your default. Robert answers the
    routine ones and puts the rest on the operator's phone with his recommendation.
 5. **Walls go on your card.** `mc state blocked "<what you need>" --reason auth|approval|question` —
