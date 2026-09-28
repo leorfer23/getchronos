@@ -4,7 +4,8 @@
  * the terminals that stopped (blocked, idle, done), the PRs they opened with their CI, and today —
  * follow-ups due and spend. Subscription usage lives in the Desk header, not here. One compact row
  * per thing, one or two buttons each, a count on every header, and a section with nothing in it is
- * not drawn at all.
+ * not drawn at all. Folded (the default, remembered per browser) it is one line of counts; a click
+ * on it opens the whole panel, "▾ hide" folds it back.
  *
  * It owns no data. The page already holds the terminals and the notes; the questions are the Ask
  * widget's (static/ask-card.js, answered through it); only the PRs and the spend come from
@@ -17,7 +18,9 @@
 (function (root) {
   var C = null;
   var D = { prs: [], spend: null, at: 0 };
-  var st = { open: null, more: {}, hidden: new Map(), t: 0, ft: 0, pend: false };
+  var st = { open: null, more: {}, hidden: new Map(), t: 0, ft: 0, pend: false, fold: true };
+  var FOLD_KEY = "desk-cockpit-fold";
+  try { st.fold = localStorage.getItem(FOLD_KEY) !== "0"; } catch (x) {}
   var CAP = 4; // rows a section shows before "+N more"
   var HIDE_MS = 8000; // a row you just acted on stays gone this long, while the bus catches up
 
@@ -68,6 +71,14 @@
       (extra || "") + shown.join("") +
       (rows.length > CAP ? '<button type="button" class="ck-more" data-more="' + key + '">' + (more ? "fewer" : "+" + (rows.length - CAP) + " more") + "</button>" : "") +
       "</section>";
+  }
+
+  /** The folded panel: one chip per non-empty section, each just a name and its count. */
+  function foldLine(counts) {
+    var chips = counts.filter(function (c) { return c[2]; }).map(function (c) {
+      return '<span class="ck-chip" data-sec="' + c[0] + '">' + e(c[1]) + " <b>" + c[2] + "</b></span>";
+    });
+    return chips.length ? '<button type="button" class="ck-fold" data-fold title="Show the panel"><i class="ck-ar">▸</i>' + chips.join("") + "</button>" : "";
   }
 
   // ── the sections ───────────────────────────────────────────────────────────────────────────────
@@ -137,14 +148,18 @@
     items.clear();
     var asks = askRows();
     var askKeys = new Set((C.ask.items ? C.ask.items() : []).map(function (it) { return it.key; }));
-    var html = section("asks", "Questions", asks) + section("terms", "Terminals", termRows(askKeys)) +
-      section("prs", "PRs", prRows()) + section("today", "Today", fuRows(), todayLine());
+    var terms = termRows(askKeys), prs = prRows(), fus = fuRows(), today = todayLine();
+    var html = st.fold
+      ? foldLine([["asks", "Questions", asks.length], ["terms", "Terminals", terms.length], ["prs", "PRs", prs.length], ["today", "Today", fus.length]])
+      : section("asks", "Questions", asks) + section("terms", "Terminals", terms) + section("prs", "PRs", prs) + section("today", "Today", fus, today);
+    if (html && !st.fold) html = '<button type="button" class="ck-unfold" data-fold title="Fold the panel to one line"><i class="ck-ar">▾</i> hide</button>' + html;
     if (html === C.el._html) return;
     C.el._html = html;
     // The panel growing or shrinking moves the conversation under it; the page keeps its newest line in view.
     (C.pin || function (f) { f(); })(function () {
       C.el.innerHTML = html;
       C.el.hidden = !html;
+      C.el.classList.toggle("folded", st.fold);
       if (st.open) {
         var card = C.el.querySelector('[data-card="' + st.open + '"]');
         var it = items.get(st.open);
@@ -204,6 +219,11 @@
   function init(ctx) {
     C = ctx;
     C.el.addEventListener("click", function (ev) {
+      if (ev.target.closest("[data-fold]")) {
+        st.fold = !st.fold; st.open = null;
+        try { localStorage.setItem(FOLD_KEY, st.fold ? "1" : "0"); } catch (x) {}
+        C.el._html = null; return render();
+      }
       var m = ev.target.closest("[data-more]");
       if (m) { st.more[m.dataset.more] = !st.more[m.dataset.more]; C.el._html = null; return render(); }
       if (ev.target.closest("a, .ck-card")) return;
