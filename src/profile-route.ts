@@ -23,6 +23,7 @@ import { CONFIG } from "./config.js";
 import { claudeWall } from "./usage-meter.js";
 import { defineSetting, resolveSetting } from "./settings.js";
 import { workspaces } from "./store.js";
+import { profileNameFor } from "./hosts/spawn-spec.js";
 
 const expand = (p: string) => (p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p);
 const norm = (p: string) => path.resolve(expand(p));
@@ -81,16 +82,13 @@ export interface Routed {
   reason: string | null;
 }
 
-export function routeConfigDir(
-  pinned: string,
-  workspaceId?: string | null,
-  now = Date.now(),
-  deps: {
-    alternates?: Map<string, string[]>;
-    wallOf?: (dir: string, now: number) => { window: string; resetsAt: string | null } | null;
-    exists?: (dir: string) => boolean;
-  } = {},
-): Routed {
+export type RouteDeps = {
+  alternates?: Map<string, string[]>;
+  wallOf?: (dir: string, now: number) => { window: string; resetsAt: string | null } | null;
+  exists?: (dir: string) => boolean;
+};
+
+export function routeConfigDir(pinned: string, workspaceId?: string | null, now = Date.now(), deps: RouteDeps = {}): Routed {
   const alts = deps.alternates
     ? deps.alternates.get(norm(pinned))
     : alternatesFor(pinned, workspaceId) ?? parseAlternates(CONFIG.profileAlternates, CONFIG.profiles).get(norm(pinned));
@@ -105,4 +103,42 @@ export function routeConfigDir(
     return { dir: alt, reason: `${path.basename(pinned)} at its ${wall.window} limit${until} → ${path.basename(alt)}` };
   }
   return { dir: pinned, reason: null };
+}
+
+export interface HostRouted extends Routed {
+  /** The profile NAME to put in the spec: the host resolves it to its own directory. */
+  profile: string;
+  /** The pinned account is walled and a sibling would have taken it, but this host has no such login. */
+  note: string | null;
+}
+
+/**
+ * The same choice for a claude CLI on ANOTHER computer. Walls are the brain's to know — the usage meter
+ * reads every account by its brain dir — but whether the sibling login is there to switch to is the
+ * host's: it reports its profiles by NAME in its inventory (hostd/inventory.ts). So a sibling counts
+ * only when the host says it exists, and the routed dir travels as a name. A host without it keeps the
+ * pinned profile it was placed for, exactly as before, and the wall failover takes it from there.
+ * `dir` stays the BRAIN dir of the chosen account: what the usage meter and the Desk card read.
+ */
+export function routeProfileForHost(
+  pinned: string,
+  pinnedName: string,
+  workspaceId: string | null | undefined,
+  hostProfiles: ReadonlyArray<{ name: string; exists: boolean }>,
+  now = Date.now(),
+  deps: Omit<RouteDeps, "exists"> & { profiles?: Record<string, string> } = {},
+): HostRouted {
+  const profiles = deps.profiles ?? CONFIG.profiles;
+  const nameOf = (dir: string) => profileNameFor(dir, profiles, "");
+  const onHost = (dir: string) => {
+    const n = nameOf(dir);
+    return !!n && hostProfiles.some((p) => p.name === n && p.exists);
+  };
+  const routed = routeConfigDir(pinned, workspaceId, now, { ...deps, exists: onHost });
+  if (routed.reason) return { ...routed, profile: nameOf(routed.dir), note: null };
+  const unconstrained = routeConfigDir(pinned, workspaceId, now, { ...deps, exists: () => true });
+  const note = unconstrained.reason
+    ? `${path.basename(pinned)} is walled but ${nameOf(unconstrained.dir) || path.basename(unconstrained.dir)} is not set up on that host → staying on ${pinnedName}`
+    : null;
+  return { dir: pinned, reason: null, profile: pinnedName, note };
 }

@@ -23,7 +23,7 @@ import { egressBrokered, egressEnforced, egressEnv, egressLocked, egressPolicy }
 import { niceWrap } from "./machine.js";
 import { findHost, hostFor, LOCAL_HOST_ID, type PtyHandle } from "./hosts/index.js";
 import { brainPathsIn, buildRemoteSpawnSpec, profileNameFor } from "./hosts/spawn-spec.js";
-import { placeTerminal } from "./hosts/candidates.js";
+import { hostProfiles, placeTerminal } from "./hosts/candidates.js";
 import { hostAccepts, hostPolicy, workspaceDenied } from "./hosts/policy.js";
 import { mirrorFile } from "./hosts/transcript-mirror.js";
 import type { RemoteHost } from "./hosts/remote.js";
@@ -44,7 +44,7 @@ import { agentBlock, agentPrompt } from "./agent-defs.js";
 import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, type SessionGoal, type Workspace } from "./types.js";
 import { goalLines, setGoals, splitGoalText } from "./goals.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "./agent-prep.js";
-import { routeConfigDir } from "./profile-route.js";
+import { routeConfigDir, routeProfileForHost } from "./profile-route.js";
 import { setting, settingOn } from "./settings.js";
 
 // Moved to agent-prep.ts (store-free, so `chronos host` runs the same code); re-exported for callers.
@@ -602,11 +602,19 @@ export async function openSession(
   const backend = getBackend(opts.backend);
   const ws = wsEarly;
   const pinnedDir = ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude;
-  // A walled account hands a NEW claude terminal to its sibling login (profile-route.ts). Brain only:
-  // a remote host resolves its own profile dir by name.
-  const routed = !remote && backend.name === "claude-code" ? routeConfigDir(pinnedDir, opts.workspace_id) : { dir: pinnedDir, reason: null };
+  const pinnedProfile = profileNameFor(ws?.config_dir, CONFIG.profiles, CONFIG.defaultProfile);
+  // A walled account hands a NEW claude terminal to its sibling login (profile-route.ts). The wall is
+  // read here on the brain either way; a remote host switches only to a sibling it reports having, and
+  // gets it by NAME (it resolves its own dir). `configDir` stays the brain dir of that account.
+  const routed = backend.name !== "claude-code"
+    ? { dir: pinnedDir, reason: null, profile: pinnedProfile, note: null }
+    : remote
+      ? routeProfileForHost(pinnedDir, pinnedProfile, opts.workspace_id, hostProfiles(targetHost))
+      : { ...routeConfigDir(pinnedDir, opts.workspace_id), profile: pinnedProfile, note: null };
   const configDir = routed.dir;
-  if (routed.reason) console.log(`[profile-route] ${row.id.slice(0, 8)}: ${routed.reason}`);
+  const onHost = remote ? ` (on ${targetHost})` : "";
+  if (routed.reason) console.log(`[profile-route] ${row.id.slice(0, 8)}${onHost}: ${routed.reason}`);
+  if (routed.note) console.log(`[profile-route] ${row.id.slice(0, 8)}${onHost}: ${routed.note}`);
   // Profile prep runs on the machine the CLI runs on. For a remote host that is `prepare()` inside
   // its spawn (hostd/terminals.ts) — the brain's own profile dirs are not the ones that CLI reads.
   if (!remote) {
@@ -819,7 +827,7 @@ export async function openSession(
       // Only a path the HOST reported: this row's cwd or claimed worktree (a resume), or those of the
       // terminal this one stands in for on the same host (failover). Never a brain-chosen directory.
       resumeCwd: hostReportedCwd(opts.cwd, doResume ? row : null, opts.replaces ? sessions.get(opts.replaces) : undefined, targetHost) || runCwd,
-      profile: profileNameFor(ws?.config_dir, CONFIG.profiles, CONFIG.defaultProfile),
+      profile: routed.profile,
       // The host locks to ITS proxy (phase 5): the workspace's mode decides, not the brain's listener.
       sandbox: { mode, allowRaw: parseAllowRaw(ws?.sandbox_allow), egressLocked: egressEnforced(opts.workspace_id) },
       egress: egressPolicy(opts.workspace_id),

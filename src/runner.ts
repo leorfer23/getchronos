@@ -19,6 +19,7 @@ import { profileNameFor } from "./hosts/spawn-spec.js";
 import { worktreeRootFor } from "./worktree-core.js";
 import { checkoutOn, execIn, gateRunners, workDirOf } from "./hosts/workdir.js";
 import { samePath } from "./hosts/run-placement.js";
+import { hostProfiles } from "./hosts/candidates.js";
 import { getBackend } from "./backends/index.js";
 import { isCloudBackend } from "./backends/types.js";
 import type {
@@ -80,7 +81,7 @@ export function shouldFileReviewOnEnd(name?: string | null): boolean {
 // worktreeSandboxDirs moved to worktree-core.ts (store-free) so a host builds the same sandbox for a
 // run in ITS worktree (HOSTS.md phase 5); re-exported here for existing callers.
 import { worktreeSandboxDirs } from "./worktree-core.js";
-import { routeConfigDir } from "./profile-route.js";
+import { routeConfigDir, routeProfileForHost } from "./profile-route.js";
 export { worktreeSandboxDirs };
 
 // Pure decision extracted for unit testing (the real check lives inline in the close handler, where
@@ -237,9 +238,20 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
   // Workspace (if any) owns the config dir + isolation wall; fall back to the legacy profile map.
   const ws = job.workspace_id ? workspaces.get(job.workspace_id) : undefined;
   const pinnedDir = ws?.config_dir ?? CONFIG.profiles[job.profile] ?? CONFIG.profiles.claude;
-  const routed = backend.name === "claude-code" ? routeConfigDir(pinnedDir, job.workspace_id) : { dir: pinnedDir, reason: null };
+  // The profile NAME a host run is sent (the brain's workspace pin; a host resolves its own dir).
+  const pinnedProfile = profileNameFor(ws?.config_dir, CONFIG.profiles, CONFIG.defaultProfile);
+  // dispatch() wrote the run's computer before this ran. On a host, a walled account moves only to a
+  // sibling that host reports having (profile-route.ts routeProfileForHost); the wall is read here.
+  const runHostId = runs.get(runId)?.host_id || LOCAL_HOST_ID;
+  const onHost = runHostId !== LOCAL_HOST_ID ? ` (on ${runHostId})` : "";
+  const routed = backend.name !== "claude-code"
+    ? { dir: pinnedDir, reason: null, profile: pinnedProfile, note: null }
+    : onHost
+      ? routeProfileForHost(pinnedDir, pinnedProfile, job.workspace_id, hostProfiles(runHostId))
+      : { ...routeConfigDir(pinnedDir, job.workspace_id), profile: pinnedProfile, note: null };
   const profileDir = routed.dir;
-  if (routed.reason) console.log(`[profile-route] ${job.name} run ${runId.slice(0, 8)}: ${routed.reason}`);
+  if (routed.reason) console.log(`[profile-route] ${job.name} run ${runId.slice(0, 8)}${onHost}: ${routed.reason}`);
+  if (routed.note) console.log(`[profile-route] ${job.name} run ${runId.slice(0, 8)}${onHost}: ${routed.note}`);
   const denyDirs = job.workspace_id ? workspaces.isolationDenyDirs(job.workspace_id) : [];
   // Standing workspace context (★ memos + skill index) is injected HERE, fresh at run time, so
   // every workspace-scoped run gets it — ticket/review dispatches, cron jobs, manual `mc job new`
@@ -406,7 +418,7 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
     // Another computer: the same decisions, sent as intent (hosts/proc-spec.ts). The host resolves the
     // checkout / worktree / profile / sandbox / egress on its own disk and builds the argv itself.
     const built = remoteProcSpec(job, runId, host, {
-      effJob, context, sessionId, nativeResume, steerMode, sandboxMode, profileDir, backendName: backend.name,
+      effJob, context, sessionId, nativeResume, steerMode, sandboxMode, profileDir, profile: routed.profile, backendName: backend.name,
       env: { ...childEnv(ws), ...Object.fromEntries(Object.entries(backend.env(job, profileDir)).filter(([, v]) => v !== profileDir)), ...mcEnv(job.workspace_id, null, job.ticket_id), MC_RUN: runId },
     });
     if ("error" in built) return failBeforeSpawn(job, runId, built.error);
@@ -440,7 +452,12 @@ export function adoptRun(job: Job, runId: string, child: ProcHandle): Promise<Ru
   const ws = job.workspace_id ? workspaces.get(job.workspace_id) : undefined;
   // Same choice execute() made (profile-route.ts), so its stream readings land on the right account.
   const pinnedDir = ws?.config_dir ?? CONFIG.profiles[job.profile] ?? CONFIG.profiles.claude;
-  const profileDir = backend.name === "claude-code" ? routeConfigDir(pinnedDir, job.workspace_id).dir : pinnedDir;
+  const hostId = runs.get(runId)?.host_id || LOCAL_HOST_ID;
+  const profileDir = backend.name !== "claude-code"
+    ? pinnedDir
+    : hostId !== LOCAL_HOST_ID
+      ? routeProfileForHost(pinnedDir, profileNameFor(ws?.config_dir, CONFIG.profiles, CONFIG.defaultProfile), job.workspace_id, hostProfiles(hostId)).dir
+      : routeConfigDir(pinnedDir, job.workspace_id).dir;
   const steerMode = !!(ws?.live_steer && backend.steerArgs && backend.encodeSteer && child.stdin);
   if (steerMode) liveSteer.set(runId, { stdin: null, outstanding: 1, encode: backend.encodeSteer!, queue: [], unconfirmed: [] });
   const started = Date.parse(runs.get(runId)?.started_at ?? "");
@@ -477,7 +494,7 @@ function remoteProcSpec(
   host: Host,
   x: {
     effJob: Job; context: string | null; sessionId: string; nativeResume: string | null; steerMode: boolean;
-    sandboxMode: SandboxMode; profileDir: string; backendName: string; env: Record<string, string>;
+    sandboxMode: SandboxMode; profileDir: string; profile: string; backendName: string; env: Record<string, string>;
   },
 ): { spec: ProcSpec } | { error: string } {
   const ws = job.workspace_id ? workspaces.get(job.workspace_id) : undefined;
@@ -498,7 +515,7 @@ function remoteProcSpec(
     runId,
     workspace: ws ? { id: ws.id, slug: ws.slug } : null,
     backend: x.backendName,
-    profile: profileNameFor(ws?.config_dir, CONFIG.profiles, CONFIG.defaultProfile),
+    profile: x.profile,
     job: {
       name: job.name, goal: x.effJob.goal, append_system: x.effJob.append_system ?? null, model: job.model ?? null,
       allowed_tools: job.allowed_tools ?? null, disallowed_tools: job.disallowed_tools ?? null, max_budget_usd: job.max_budget_usd ?? null,
