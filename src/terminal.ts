@@ -511,11 +511,12 @@ export async function openSession(
       .list({ workspace_id: opts.workspace_id, status: "live" })
       .filter((x) => x.id !== opts.replaces && x.id !== opts.movedFrom);
     if (opts.lead_id) {
-      const n = live.filter((x) => x.lead_id === opts.lead_id).length;
+      // A worker whose goal is ticked is finished work waiting to be closed, not a slot in use.
+      const n = live.filter((x) => x.lead_id === opts.lead_id && !x.goal_done_at).length;
       const cap = CONFIG.leadDrive.maxWorkers;
       if (n >= cap) {
         throw new Error(
-          `lead worker cap reached (${n}/${cap}) — close a worker or raise CHRONOS_LEAD_MAX_WORKERS`,
+          `lead worker cap reached (${n}/${cap} unfinished) — tick finished ones (mc session done), close them (mc lead close-done) or raise CHRONOS_LEAD_MAX_WORKERS`,
         );
       }
     } else {

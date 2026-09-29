@@ -71,8 +71,24 @@ describe("1. per-Lead worker budget vs workspace seat cap", () => {
           goal: "too many",
           cwd: tmp,
         } as any),
-      /lead worker cap reached \(2\/2\)/,
+      /lead worker cap reached \(2\/2 unfinished\)/,
     );
+  });
+
+  test("a ticked worker does not hold a slot in the Lead's budget", async () => {
+    const lead = mkLead();
+    CONFIG.maxSessionsPerWorkspace = 20;
+    CONFIG.leadDrive.maxWorkers = 1;
+    const done = mkWorker(lead.id);
+    mkWorker(lead.id);
+    const open = () =>
+      openSession({
+        workspace_id: wsId, backend: "mock", created_by: `lead:${lead.id.slice(0, 8)}`,
+        lead_id: lead.id, goal: "one more", cwd: tmp,
+      } as any);
+    await assert.rejects(open, /lead worker cap reached \(2\/1 unfinished\)/);
+    sessions.setGoal(done.id, { goal_done: true });
+    await assert.rejects(open, /lead worker cap reached \(1\/1 unfinished\)/);
   });
 
   test("workers with lead_id do not consume workspace seats; the Lead itself does", async () => {

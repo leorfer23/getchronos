@@ -73,7 +73,7 @@ import { sessionUsage, snapshotUsage } from "./session-usage.js";
 import { applyHook, declare as declareStatus, sessionGoalReached, setProgress, statusOf } from "./term-status.js";
 import { parseEvery, watchView } from "./desk-watch.js";
 import { clipboardEnabled, readClipboard, writeClipboard } from "./clipboard.js";
-import { ensureSessionWorktree, listAllWorktrees, remoteWorktreeBranch, removeWorktreeAs } from "./worktrees.js";
+import { ensureSessionWorktree, listAllWorktrees, remoteWorktreeBranch, removeWorktreeAs, type WorktreeState } from "./worktrees.js";
 import { askRobertEnabled, askerLabel, escalateAsk } from "./ask-robert.js";
 import * as noteSvc from "./notes.js";
 import { forgetMemorySeen, markMemorySeen, memoryNotice, rememberFact } from "./memory-tree.js";
@@ -288,7 +288,7 @@ export function leadGate(req: express.Request, res: express.Response): LeadScope
 
 /**
  * Kill every live terminal whose goal is ticked. Used by `/desk/close-done` after the operator
- * gate. (Leads no longer get a scoped copy — closing is operator-only.)
+ * gate. A Lead closes its own workers through leadCloseDone, which adds the per-worker guards.
  */
 export function closeDoneSessions(filter?: (s: { id: string; lead_id: string | null }) => boolean): string[] {
   const done = sessions
@@ -300,6 +300,52 @@ export function closeDoneSessions(filter?: (s: { id: string; lead_id: string | n
     } catch {}
   }
   return done.map((s) => s.id);
+}
+
+/**
+ * Why a Lead may not close this worker of its own yet, or null. Pure over what the caller read:
+ * the goal must be ticked, the pty quiet (not mid-turn), and the tree it claimed holding nothing a
+ * close would strand — no uncommitted files, no commits that no remote has (a squash-merged branch
+ * counts as landed, see worktreeState). Same sentences `mc worktree rm` refuses with.
+ */
+export function leadCloseRefusal(
+  w: Pick<Session, "id" | "goal_done_at">,
+  act: { live: boolean; quiet: boolean },
+  wt: Pick<WorktreeState, "dirty" | "dirty_files" | "unpushed"> | null,
+): string | null {
+  if (!w.goal_done_at) return `goal not ticked — \`mc session done ${w.id.slice(0, 8)}\` first`;
+  if (act.live && !act.quiet) return "still working — its terminal is writing right now";
+  if (wt?.dirty) return `${wt.dirty_files} uncommitted file(s) in its worktree`;
+  if (wt?.unpushed) return `${wt.unpushed} commit(s) in its worktree not on any remote`;
+  return null;
+}
+
+/** Close a Lead's own live workers that pass leadCloseRefusal; `ids` (id or prefix) narrows the set. */
+export async function leadCloseDone(
+  lead: { ws: string; leadId: string },
+  ids: string[] | null,
+): Promise<{ closed: string[]; skipped: { id8: string; reason: string }[] }> {
+  const workers = sessions
+    .workersOf(lead.leadId, { status: "live" })
+    .filter((w) => w.workspace_id === lead.ws && (!ids || ids.some((r) => w.id === r || w.id.startsWith(r))));
+  const trees = workers.some((w) => w.goal_done_at) ? await listAllWorktrees(lead.ws) : [];
+  const closed: string[] = [];
+  const skipped: { id8: string; reason: string }[] = [];
+  for (const w of workers) {
+    const wt = trees.find((t) => t.path === w.worktree_path || t.path === w.cwd) ?? null;
+    const why = leadCloseRefusal(w, sessionActivity(w.id), wt);
+    if (why) {
+      skipped.push({ id8: w.id.slice(0, 8), reason: why });
+      continue;
+    }
+    try {
+      killSession(w.id);
+      closed.push(w.id);
+    } catch (e: any) {
+      skipped.push({ id8: w.id.slice(0, 8), reason: String(e?.message ?? e).slice(0, 200) });
+    }
+  }
+  return { closed, skipped };
 }
 
 /**
@@ -961,14 +1007,37 @@ export function startServer() {
     res.json(out);
   });
 
-  // Close only THIS Lead's live workers whose goal is ticked — retired: closing a terminal is the
-  // operator's hand only (Desk ✕ / phone / Telegram ✅). Kept as a 403 so old `mc lead close-done`
-  // calls fail loudly instead of silently no-opping.
+  // Close THIS Lead's finished workers (LEADS.md Powers). Every live worker it owns that passes
+  // leadCloseRefusal is killed; the rest come back as `skipped` with the reason. `ids` narrows it to
+  // named workers (id or prefix). Optional `rm_worktrees` then tries a non-force remove per claim.
   api.post("/leads/me/close-done", async (req, res) => {
-    if (!leadGate(req, res)) return;
-    return res.status(403).json({
-      error: "Leads may not close terminals — ask the operator (Desk ✕ / phone / Telegram ✅)",
-    });
+    const lead = leadGate(req, res);
+    if (!lead) return;
+    const by = `lead:${lead.leadId.slice(0, 8)}`;
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String).filter(Boolean) : null;
+    const { closed, skipped } = await leadCloseDone(lead, ids);
+    if (closed.length) bus.publish({ topic: "lead.close-done", lead_id: lead.leadId, closed, by, actor: by });
+    const rm = req.body?.rm_worktrees === true || req.body?.rm_worktrees === "1";
+    const worktrees: { id8: string; ok: boolean; error?: string; path?: string }[] = [];
+    if (rm) {
+      for (const id of closed) {
+        const s = sessions.get(id);
+        const ref = s?.worktree_path || s?.worktree_branch;
+        if (!ref) {
+          worktrees.push({ id8: id.slice(0, 8), ok: true });
+          continue;
+        }
+        const out = await removeWorktreeAs({ admin: false, scope: { ws: lead.ws }, lead }, ref, { force: false });
+        if (out.removed) {
+          bus.publish({ topic: "worktree.removed", path: out.removed.path, branch: out.removed.branch, by: out.removed.by, actor: out.removed.by });
+          if (out.removed.session_id) bus.publish({ topic: "session.updated", session_id: out.removed.session_id });
+          worktrees.push({ id8: id.slice(0, 8), ok: true, path: out.removed.path });
+        } else {
+          worktrees.push({ id8: id.slice(0, 8), ok: false, error: out.body?.error ?? `HTTP ${out.status}` });
+        }
+      }
+    }
+    res.json({ closed, skipped, ...(rm ? { worktrees } : {}) });
   });
 
   // A standing watch: Robert re-reads THIS terminal every N minutes and reports on Telegram. Scoped,
@@ -2555,7 +2624,7 @@ export function startServer() {
   // frame is the terminal's contents. `ids` caps at 200; `since` is `id:seq,id:seq`.
   // Every live terminal whose goal is ticked, closed in one call — the Desk's "N done" count.
   // Closing is operator-only (src/authz.ts operatorMayCloseTerminal); Robert proposes, never executes.
-  // A Lead's former copy at POST /leads/me/close-done now 403s for the same reason.
+  // A Lead closes only its OWN finished workers, through POST /leads/me/close-done (leadCloseRefusal).
   // Hosts: join codes, connected links, revoke (admin only — src/hostlink/brain-link.ts).
   // The brain's menu bar item (desktop/hostbar.swift --brain): the whole fleet, every 3 s. Here and not
   // in hostRoutes because it reads pty activity from terminal.ts, which brain-link.ts must not import.
@@ -2563,7 +2632,7 @@ export function startServer() {
   api.use(hostRoutes(requireAdmin));
 
   // Every live terminal whose goal is ticked, closed in one call — Desk / phone / Telegram ✅ only.
-  // Robert and Leads may propose; they never hit this door (operatorMayCloseTerminal).
+  // Robert and Leads never hit this door (operatorMayCloseTerminal); a Lead has its own scoped one.
   api.post("/desk/close-done", (req, res) => {
     if (!operatorMayCloseTerminal(req, res)) return;
     res.json({ closed: closeDoneSessions() });
