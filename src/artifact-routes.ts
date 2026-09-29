@@ -6,7 +6,7 @@
  *                                       operator/Robert (workspace_id). With `question` it is an ask.
  *  GET  /artifacts[?workspace&session]  newest first; a workspace token sees only its own
  *  GET  /artifacts/:id                  the row + its events
- *  PUT  /artifacts/:id                  a new version of the page
+ *  PUT  /artifacts/:id                  a new version of the page (`notify` posts its card again)
  *  GET  /artifacts/:id/html[?v=]        the agent's HTML as JSON {html} — never served as a page
  *  GET  /artifacts/:id/frame[?v=]       {html} ready for the viewer's sandboxed srcdoc (CSP + SDK)
  *  POST /artifacts/:id/events           {kind: submit|send, data} — what the page sent back
@@ -124,7 +124,7 @@ export function updateRoute(req: Req, res: Res): void {
   const a = load(req, res);
   if (!a) return;
   try {
-    res.json(artifactView(updateArtifact(a, req.body.html, req.body.title ?? null)));
+    res.json(artifactView(updateArtifact(a, req.body.html, req.body.title ?? null, !!req.body.notify)));
   } catch (e) {
     fail(res, e);
   }

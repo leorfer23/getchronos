@@ -621,6 +621,9 @@
   .pin.closed .i, .pin.closed .s, .pin.closed .t { color:var(--faint); }
   .pin.closed .t { text-decoration:line-through; }
   .pin.doc .i { color:var(--p-wait); }
+  .pin.page .i { color:var(--accent); }
+  .pin.page.ask .i, .pin.page.ask .s { color:var(--warn); }
+  .pin.page.done .i, .pin.page.done .s { color:var(--ok); }
   .comp-tl { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:2px 0 16px; }
   .comp-tl::-webkit-scrollbar { width:0; }
   .ctl { display:grid; grid-template-columns:34px 11px 1fr; column-gap:6px; align-items:baseline;
@@ -2514,10 +2517,11 @@ function boardShips(s) {
   if (s.id === C.id) compPinsLoad(s.id);
   const prs = C.id === s.id ? C.pins.prs : [];
   const docs = C.id === s.id ? C.pins.docs : [];
+  const pages = C.id === s.id ? C.pins.pages : [];
   const u = s.usage || {};
   const la = s.lines_added || u.lines_added, lr = s.lines_removed || u.lines_removed;
   const chips = (la || lr ? `<span class="vchip diff"><b>+${la || 0}</b> <i>−${lr || 0}</i></span>` : "") + linkChips(F.headline || "");
-  const rows = prs.map(pinPrHtml).concat(docs.map(pinDocHtml));
+  const rows = pages.map(pinPageHtml).concat(prs.map(pinPrHtml), docs.map(pinDocHtml));
   if (!rows.length && !chips) return "";
   return `<section class="bcard bships"><h4>Deliverables${prs.length ? `<span class="n">${prs.length} PR${prs.length === 1 ? "" : "s"}</span>` : ""}</h4>`
     + rows.join("")
@@ -2885,7 +2889,7 @@ const C = {
   open: new Set(),     // expanded "read N files" rows
   promptOpen: false, stick: true, lastPhase: null,
   raf: 0, sig: "", gutSig: "", gutRaf: 0,
-  pins: { prs: [], docs: [] }, pinAt: 0, pinBusy: false, pinSig: "", screen: [], // artifacts: /sessions/:id/artifacts
+  pins: { prs: [], docs: [], pages: [] }, pinAt: 0, pinBusy: false, pinSig: "", screen: [], // artifacts: /sessions/:id/artifacts
 };
 // How often the rail re-asks what this terminal has produced. The answer changes on the scale of a
 // PR being merged, and the server caches gh behind it (src/session-artifacts.ts), so 30s is generous.
@@ -2898,7 +2902,7 @@ function compSoon() { if (C.raf) return; C.raf = requestAnimationFrame(() => { C
 // there is always a heading above the first row.
 function compOpen(id) {
   C.id = id; C.chapters = []; C.open = new Set(); C.promptOpen = false; C.stick = true; C.lastPhase = null; C.sig = "";
-  C.pins = { prs: [], docs: [] }; C.pinAt = 0; C.pinSig = ""; C.screen = [];
+  C.pins = { prs: [], docs: [], pages: [] }; C.pinAt = 0; C.pinSig = ""; C.screen = [];
   qs("#comp-tl").replaceChildren();
   compPinsLoad(id);
   const s = byId(id);
@@ -3034,7 +3038,7 @@ async function compPinsLoad(id, force) {
     const seen = compScreenPrs(!C.pinAt);
     const a = await api("/sessions/" + id + "/artifacts" + (seen.length ? "?urls=" + encodeURIComponent(seen.join(",")) : ""));
     if (C.id !== id) return;            // the stage moved on while we were waiting
-    C.pins = { prs: a.prs || [], docs: a.docs || [] };
+    C.pins = { prs: a.prs || [], docs: a.docs || [], pages: a.pages || [] };
   } catch {
     // A terminal that has just been closed out 404s here; the rail keeps whatever it last knew.
   } finally {
@@ -3060,13 +3064,22 @@ function pinDocHtml(d) {
     ? `<a class="pin doc" href="${esc(d.url)}" target="_blank" rel="noopener" title="${esc(d.url)}"><span class="i">▤</span><span class="t">${esc(d.label)}</span><span class="s">doc</span></a>`
     : `<button type="button" class="pin doc" data-pin-path="${esc(d.path)}" title="${esc(d.path)} — click to copy the path"><span class="i">▤</span><span class="t">${esc(d.label)}</span><span class="s">doc</span></button>`;
 }
+// A page it published (mc artifact put|ask): opens in the Desk's own viewer (static/artifact-view.js
+// answers any [data-afopen] click), so the page sits beside the terminal that made it.
+function pinPageHtml(a) {
+  const open = a.status === "open";
+  const st = a.asks && open ? "asks you" : !open ? "answered" : a.version > 1 ? "v" + a.version : "page";
+  return `<button type="button" class="pin page${a.asks && open ? " ask" : ""}${open ? "" : " done"}" data-afopen="${esc(a.id)}" title="${esc(a.title)} — open the page">`
+    + `<span class="i">◰</span><span class="t">${esc(a.title)}</span><span class="s">${esc(st)}</span></button>`;
+}
 function compPins(s) {
   const box = qs("#comp-pins");
   // Refreshed off the 1s tick rather than its own timer: the rail is only ever this session's.
   if (s.id === C.id) compPinsLoad(s.id);
   const prs = C.id === s.id ? C.pins.prs : [];
   const docs = C.id === s.id ? C.pins.docs : [];
-  const out = prs.map(pinPrHtml).concat(docs.map(pinDocHtml));
+  const pages = C.id === s.id ? C.pins.pages : [];
+  const out = pages.map(pinPageHtml).concat(prs.map(pinPrHtml), docs.map(pinDocHtml));
   const html = out.join("");
   if (html !== C.pinSig) { C.pinSig = html; setHtml(box, html); }
   box.hidden = !out.length;
@@ -3488,7 +3501,14 @@ document.addEventListener("keydown", (e) => {
 function mountPane(s, host) {
   if (!s.live || S.panes.has(s.id)) return;
   if (!TOKEN) return;
-  const openLink = (event, uri) => { if (event.button !== 0) return; if (!/^https?:\/\//i.test(uri)) return; window.open(uri, "_blank", "noopener,noreferrer"); };
+  const openLink = (event, uri) => {
+    if (event.button !== 0) return;
+    if (!/^https?:\/\//i.test(uri)) return;
+    // A page link an agent printed (mc artifact): open it right here, whichever host the link names.
+    const page = /\/desk#artifact=([0-9a-f-]{8,36})$/.exec(uri);
+    if (page) return ArtifactView.open(page[1]);
+    window.open(uri, "_blank", "noopener,noreferrer");
+  };
   const term = new Terminal({
     fontSize: S.font, fontFamily: 'ui-monospace,"SF Mono",Menlo,monospace', cursorBlink: false,
     scrollback: 2000, convertEol: false, allowProposedApi: true,
@@ -6922,7 +6942,11 @@ function connectBus() {
     if (DW.topics.has(e.topic)) dwBus(e.topic);
     AskCard.onEvent(e);
     if (AskCard.TOPICS.includes(e.topic)) return;
-    if (ArtifactView.TOPICS.includes(e.topic)) return ArtifactView.onEvent(e);
+    if (ArtifactView.TOPICS.includes(e.topic)) {
+      // This terminal published or re-published a page: pin it now, not on the next 30s poll.
+      if (C.id && (e.session_id === C.id || (C.pins.pages || []).some((p) => p.id === e.artifact_id))) compPinsLoad(C.id, true);
+      return ArtifactView.onEvent(e);
+    }
     if (e.topic === "host.online" || e.topic === "host.offline" || e.topic === "host.updated") return loadHostsSoon();
     if (e.topic === "inbox.updated") return loadInboxSoon();
     if (e.topic === "session.activity") {

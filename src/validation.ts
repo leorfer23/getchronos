@@ -1058,6 +1058,7 @@ export const NewArtifactSchema = z.object({
 export const UpdateArtifactSchema = z.object({
   html: z.string().min(1),
   title: z.string().min(1).max(200).optional(),
+  notify: z.boolean().optional(),
 });
 
 /** What a page sends back through the viewer (or an agent through `mc artifact submit|send`). */

@@ -351,7 +351,9 @@ const HELP = `mc — Mission Control backlog CLI
                                      does not answer, or ends. Default --wait 10
   mc artifact put <page.html|-> [--title T] [--notify] [--id <id8>]   publish an HTML page for the operator
                                      (a report, a comparison, a dashboard). --notify puts its card in the Desk
-                                     chat; --id publishes a NEW VERSION of that page. Prints the Desk link.
+                                     chat; --id publishes a NEW VERSION of that page. Prints the page's link:
+                                     put it in your reply so the operator can click it (it is also pinned
+                                     on your terminal's rail).
                                      Inside the page, window.chronos is the SDK: chronos.submit(data) answers,
                                      chronos.send(data) sends anything short of the answer, chronos.state.get/set
                                      keeps its JSON; or no code: <button data-chronos-submit='{"pick":"B"}'>,
@@ -2676,7 +2678,9 @@ async function heavy(argv) {
     // times out parks and is resumed with whatever the page submitted.
     if (cmd === "artifact" || cmd === "artifacts") {
       const sub = cmd === "artifacts" ? "list" : pos[1] || "list";
-      const deskUrl = (id) => API.replace(/\/api\/?$/, "") + "/desk#artifact=" + id;
+      // The daemon hands back `url` — its public Desk (src/artifacts.ts deskBase), so a link printed on
+      // another host opens from the operator's machine. The loopback guess is only for an older daemon.
+      const deskUrl = (a) => a.url || API.replace(/\/api\/?$/, "") + "/desk#artifact=" + a.id;
       const origin = () =>
         process.env.MC_RUN ? { run_id: process.env.MC_RUN } : process.env.MC_SESSION ? { session_id: process.env.MC_SESSION } : {};
       const readPage = async (f) => {
@@ -2702,8 +2706,10 @@ async function heavy(argv) {
         const f = pos[2];
         const html = await readPage(f);
         if (opt.id && opt.id !== "true") {
-          const a = await req("PUT", "/artifacts/" + opt.id, { html, ...(opt.title && opt.title !== "true" ? { title: opt.title } : {}) });
-          return console.log(`${a.id.slice(0, 8)} → v${a.version}\n${deskUrl(a.id)}`);
+          const a = await req("PUT", "/artifacts/" + opt.id, {
+            html, ...(opt.title && opt.title !== "true" ? { title: opt.title } : {}), ...(opt.notify ? { notify: true } : {}),
+          });
+          return console.log(`${a.id.slice(0, 8)} → v${a.version}${opt.notify ? " — its card is in the Desk chat" : ""}\n${deskUrl(a)}`);
         }
         const a = await req("POST", "/artifacts", {
           title: titleOf(f, html), html, ...origin(),
@@ -2711,7 +2717,7 @@ async function heavy(argv) {
           ...(opt.notify ? { notify: true } : {}),
         });
         return console.log(
-          `${a.id.slice(0, 8)} published (v1)${opt.notify ? " — its card is in the Desk chat" : ""}\n${deskUrl(a.id)}\nfile: ${a.file}`
+          `${a.id.slice(0, 8)} published (v1)${opt.notify ? " — its card is in the Desk chat" : ""}\n${deskUrl(a)}\nfile: ${a.file}`
         );
       }
       if (sub === "ask") {
@@ -2726,7 +2732,7 @@ async function heavy(argv) {
           title: titleOf(f, html), html, question, options, ...origin(), ...(opt.robert ? { route: "robert" } : {}),
         });
         const id8 = a.id.slice(0, 8);
-        console.log(`asked with a page (${id8}) — ${deskUrl(a.id)}`);
+        console.log(`asked with a page (${id8}) — ${deskUrl(a)}`);
         if (waitMin <= 0) return console.log(`not waiting (--wait 0) — read the answer later: mc artifact events ${id8}`);
         console.log(`waiting up to ${waitMin}m…`);
         const deadline = Date.now() + waitMin * 60_000;
@@ -2773,7 +2779,7 @@ async function heavy(argv) {
           ...(a.answer != null ? [`answer: ${show(a.answer)}`] : []),
           `events: ${a.events.length}`,
           `file: ${a.file}`,
-          deskUrl(a.id),
+          deskUrl(a),
         ];
         return console.log(lines.join("\n"));
       }
