@@ -55,8 +55,8 @@ test("the clocks tick off the page's one clock, not off a repaint", () => {
 test("deliverables are the daemon's pins, drawn by the same function as the rail", () => {
   assert.match(html, /function pinPrHtml\(p\)/);
   assert.match(html, /function pinDocHtml\(d\)/);
-  assert.match(html, /const out = prs\.map\(pinPrHtml\)\.concat\(docs\.map\(pinDocHtml\)\);/, "the rail uses the shared pin");
-  assert.match(html, /const rows = prs\.map\(pinPrHtml\)\.concat\(docs\.map\(pinDocHtml\)\);/, "and so does the board");
+  assert.match(html, /const out = pages\.map\(pinPageHtml\)\.concat\(prs\.map\(pinPrHtml\), docs\.map\(pinDocHtml\)\);/, "the rail uses the shared pin");
+  assert.match(html, /const rows = pages\.map\(pinPageHtml\)\.concat\(prs\.map\(pinPrHtml\), docs\.map\(pinDocHtml\)\);/, "and so does the board");
   // The pins refresh on the same throttle wherever they are shown.
   assert.match(html, /if \(S\.mode === "focus"\) renderStorySoon\(\); else compSoon\(\);/);
   assert.match(html, /if \(s\.id === C\.id\) compPinsLoad\(s\.id\);/);

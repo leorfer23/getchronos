@@ -11,6 +11,8 @@
  *     so that PR's state is free and authoritative.
  *   · the terminal's own screen — a PR URL the Desk read out of the pane (`gh pr create` prints it to
  *     stdout, which no transcript records). The page passes them in; they are filtered before use.
+ *   · the pages it published (`mc artifact put|ask`, src/artifacts.ts) — rows keyed to this session, so
+ *     the page is beside the terminal that made it, not only as a card in Robert's chat.
  *   · the Focus feed (focus.ts) — a URL the agent printed in its narration, or a markdown file a tool
  *     call wrote. The feed carries no tool RESULTS (see desk-companion.js), so `gh pr create`'s output
  *     is invisible: what is caught is the agent then SAYING the URL, which the goal templates and the
@@ -23,7 +25,7 @@
 import os from "node:os";
 import { execFileTimed } from "./exec.js";
 import { childEnv } from "./child-env.js";
-import { repos, tickets, workspaces } from "./store.js";
+import { artifacts, repos, tickets, workspaces } from "./store.js";
 import { ciRollup } from "./delivery.js";
 import type { FocusEvent } from "./focus.js";
 import type { Session } from "./types.js";
@@ -52,9 +54,20 @@ export interface DocPin {
   label: string;
 }
 
+/** A page this terminal published (src/artifacts.ts). The Desk opens it in its viewer by id. */
+export interface PagePin {
+  kind: "page";
+  id: string;
+  title: string;
+  status: string;
+  asks: boolean;
+  version: number;
+}
+
 export interface SessionArtifacts {
   prs: PrPin[];
   docs: DocPin[];
+  pages: PagePin[];
 }
 
 // Fully-qualified PR links only. A bare "#412" is ambiguous across repos and a relative link is not
@@ -73,6 +86,7 @@ const MD_URL_RE = /https?:\/\/\S+\.mdx?(?:\?\S*)?(?=$|[\s.,;:)\]}'"])/g;
 
 const MAX_PRS = 8;
 const MAX_DOCS = 8;
+const MAX_PAGES = 8;
 const OPEN_TTL_MS = 90_000;
 
 const NOISE_PATH_RE = /(^|\/)(node_modules|\.git|dist)\//;
@@ -247,7 +261,10 @@ export async function sessionArtifacts(s: Session, events: FocusEvent[], onScree
       prs.push({ ...p, state: st?.state ?? null, title: st?.title ?? null, source: "feed", ci: st?.ci ?? null });
     }
   }
-  return { prs, docs: found.docs };
+  const pages: PagePin[] = artifacts.list({ session_id: s.id, limit: MAX_PAGES }).map((a) => ({
+    kind: "page", id: a.id, title: a.title, status: a.status, asks: !!a.ask_id, version: a.version,
+  }));
+  return { prs, docs: found.docs, pages };
 }
 
 function prRepoOf(url: string): string {

@@ -38,6 +38,26 @@ export const artifactFile = (a: Pick<Artifact, "id" | "workspace_id">, v: number
 export const artifactMarker = (id: string): string => `::artifact ${id}::`;
 export const ARTIFACT_MARKER_RE = /^::artifact ([0-9a-f-]{8,36})::$/;
 
+/**
+ * Where the operator opens a page from anywhere — the link an agent prints. localhost is only right on
+ * the brain itself: an agent on another host (HOSTS.md) printing its own loopback points at nothing.
+ * CHRONOS_DESK_URL wins; else the tunnel the hosts already dial (CHRONOS_HOST_PUBLIC_URL, wss://…/host)
+ * is the same public Desk over https; else this machine's loopback.
+ */
+export function deskBase(env: NodeJS.ProcessEnv = process.env): string {
+  const set = (env.CHRONOS_DESK_URL ?? "").trim();
+  if (set) return set.replace(/\/+$/, "").replace(/\/desk$/, "");
+  const tunnel = (env.CHRONOS_HOST_PUBLIC_URL ?? "").split(",").map((s) => s.trim()).find(Boolean);
+  if (tunnel) {
+    try {
+      const u = new URL(tunnel);
+      if (u.protocol === "wss:" || u.protocol === "https:") return "https://" + u.host;
+    } catch {}
+  }
+  return "http://localhost:" + Number(env.CHRONOS_PORT ?? 7777);
+}
+export const artifactUrl = (id: string, env: NodeJS.ProcessEnv = process.env): string => deskBase(env) + "/desk#artifact=" + id;
+
 export class ArtifactError extends Error {
   constructor(message: string, readonly status = 400) {
     super(message);
@@ -118,12 +138,13 @@ export async function publishArtifact(p: PublishInput): Promise<{ artifact: Arti
 }
 
 /** A new version of the same page. Old versions stay on disk; the viewer shows the latest. */
-export function updateArtifact(a: Artifact, html: string, title?: string | null): Artifact {
+export function updateArtifact(a: Artifact, html: string, title?: string | null, notify = false): Artifact {
   if (bytes(html) > MAX_HTML_BYTES) throw new ArtifactError(`page is over ${MAX_HTML_BYTES / 1024 / 1024}MB`, 413);
   const v = a.version + 1;
   writeVersion(a, v, html);
   const out = artifacts.patch(a.id, { version: v, ...(title ? { title } : {}) })!;
-  bus.publish({ topic: "artifact.updated", artifact_id: a.id, workspace_id: a.workspace_id, version: v });
+  bus.publish({ topic: "artifact.updated", artifact_id: a.id, workspace_id: a.workspace_id, session_id: a.session_id, version: v });
+  if (notify) postRobertToDesk({ body: artifactMarker(a.id), ws: a.workspace_id });
   return out;
 }
 
@@ -328,5 +349,6 @@ export function artifactView(a: Artifact) {
     ask_status: ask?.status ?? null,
     answer: lastSubmit(a),
     file: artifactFile(a, a.version),
+    url: artifactUrl(a.id),
   };
 }

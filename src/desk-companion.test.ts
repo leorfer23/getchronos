@@ -260,7 +260,13 @@ test("the PR and the doc are pinned above the timeline, not inside it", () => {
   assert.match(html, /data-pin-path="\$\{esc\(d\.path\)\}"/);
   assert.match(html, /const d = e\.target\.closest\("\[data-pin-path\]"\);\s*if \(d\) compCopy\(d\.dataset\.pinPath\);/);
   // Selecting another terminal clears the pins with everything else the rail holds.
-  assert.match(html, /C\.pins = \{ prs: \[\], docs: \[\] \}; C\.pinAt = 0; C\.pinSig = "";/);
+  assert.match(html, /C\.pins = \{ prs: \[\], docs: \[\], pages: \[\] \}; C\.pinAt = 0; C\.pinSig = "";/);
+  // A page it published opens in the Desk's viewer (ArtifactView answers [data-afopen]), and a bus event
+  // about this terminal's page refreshes the pins at once instead of on the next poll.
+  assert.match(html, /function pinPageHtml\(a\)[\s\S]{0,400}data-afopen="\$\{esc\(a\.id\)\}"/);
+  assert.match(html, /e\.session_id === C\.id[^\n]*compPinsLoad\(C\.id, true\)/);
+  // A page link printed in the terminal opens in place, whatever host it names.
+  assert.match(html, /\/desk#artifact=\(\[0-9a-f-\]\{8,36\}\)\$\/\.exec\(uri\);\s*if \(page\) return ArtifactView\.open\(page\[1\]\);/);
 });
 
 test("a PR the terminal only printed is read off the pane, bounded so a frame never pays for the whole day", () => {

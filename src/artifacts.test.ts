@@ -13,6 +13,10 @@ import { callerScope } from "./authz.js";
 import {
   FRAME_CSP,
   artifactFile,
+  artifactMarker,
+  artifactUrl,
+  artifactView,
+  deskBase,
   frameContext,
   frameHtml,
   publishArtifact,
@@ -23,6 +27,7 @@ import {
   waitArtifactEvents,
 } from "./artifacts.js";
 import * as routes from "./artifact-routes.js";
+import { sessionArtifacts } from "./session-artifacts.js";
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "chronos-artifacts-"));
 process.env.CHRONOS_ARTIFACTS = ROOT;
@@ -213,4 +218,38 @@ test("create from a terminal is stamped with its workspace, not the one in the b
   );
   assert.equal(res.statusCode, 201);
   assert.equal(res.body.workspace_id, ws.id);
+});
+
+// ── the link an agent prints, and where the page is pinned ─────────────────────────────────────
+
+test("the printed link is the public Desk, never another host's loopback", () => {
+  assert.equal(deskBase({ CHRONOS_DESK_URL: "https://desk.example.com/desk/" }), "https://desk.example.com");
+  assert.equal(deskBase({ CHRONOS_HOST_PUBLIC_URL: "wss://desk.example.com/host" }), "https://desk.example.com");
+  assert.equal(deskBase({ CHRONOS_HOST_PUBLIC_URL: " , wss://t.example.com/host" }), "https://t.example.com");
+  assert.equal(deskBase({ CHRONOS_HOST_PUBLIC_URL: "not a url", CHRONOS_PORT: "7788" }), "http://localhost:7788");
+  assert.equal(deskBase({}), "http://localhost:7777");
+  assert.equal(artifactUrl("abc", { CHRONOS_DESK_URL: "https://d.example.com" }), "https://d.example.com/desk#artifact=abc");
+});
+
+test("every artifact the API hands back carries its link", async () => {
+  const { artifact: a } = await publishArtifact({ title: "Report", html: "<p>x</p>", workspace_id: ws.id, session_id: term.id });
+  assert.equal(artifactView(a).url, artifactUrl(a.id));
+});
+
+test("a new version with notify puts its card in the chat again; without, it does not", async () => {
+  const { artifact: a } = await publishArtifact({ title: "Report", html: "<p>x</p>", workspace_id: ws.id, session_id: term.id });
+  const cards = () => (db.prepare("SELECT COUNT(*) AS n FROM chat_messages WHERE reply = ?").get(artifactMarker(a.id)) as { n: number }).n;
+  const before = cards();
+  updateArtifact(a, "<p>y</p>");
+  assert.equal(cards(), before);
+  updateArtifact(artifacts.get(a.id)!, "<p>z</p>", null, true);
+  assert.equal(cards(), before + 1);
+});
+
+test("a terminal's pages are pinned beside it, and only its own", async () => {
+  const mine = await publishArtifact({ title: "Mine", html: "<p>x</p>", workspace_id: ws.id, session_id: term.id });
+  const elsewhere = sessions.create({ workspace_id: ws.id, cwd: "/tmp", backend: "claude-code" });
+  await publishArtifact({ title: "Theirs", html: "<p>x</p>", workspace_id: ws.id, session_id: elsewhere.id });
+  const pins = await sessionArtifacts(sessions.get(term.id)!, []);
+  assert.deepEqual(pins.pages.map((p) => [p.id, p.title, p.status, p.asks]), [[mine.artifact.id, "Mine", "open", false]]);
 });
