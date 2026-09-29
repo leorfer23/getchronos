@@ -267,6 +267,9 @@ The workspace's memory is a **tree**, so it stays small enough to use:
 - **`memory-<topic>`** — a branch. The expanded detail behind one topic's lines; an index line that
   has detail ends in `→ memory-<topic>`. Not auto-loaded — `mc memo get memory-<topic>` when that
   topic comes up. Capped at 6000 chars.
+- The caps are what the nightly dream pass condenses to. `mc remember` may overshoot them 2× (6000
+  index / 12000 branch), so a full memo never stops you saving a rule mid-task — don't condense
+  it yourself first; the dream pass will.
 - Everything else — other memos, skills, lessons, past-session digests — is found with `mc recall`.
 
 ```bash

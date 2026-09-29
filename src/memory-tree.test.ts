@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { notes, sessions, workspaces } from "./store.js";
 import { contextBlock, updateNote } from "./notes.js";
-import { INDEX_CAP, INDEX_SLUG, indexSections, markMemorySeen, memoryNotice, rememberFact } from "./memory-tree.js";
+import { INDEX_CAP, INDEX_SLUG, INDEX_WRITE_CAP, indexSections, markMemorySeen, memoryNotice, rememberFact } from "./memory-tree.js";
 import type { Note } from "./types.js";
 
 const mkWs = (slug: string) => workspaces.create({ slug: `${slug}-${randomUUID().slice(0, 6)}`, name: slug, config_dir: `/tmp/mc-test/${slug}-${randomUUID()}` });
@@ -49,17 +49,20 @@ test("detail goes to the topic branch and the index line points at it", () => {
   assert.match(notes.bySlug(w.id, INDEX_SLUG)!.body, /- Target develop → memory-git-flow/);
 });
 
-test("remember refuses a long line and an index past its cap instead of growing", () => {
+test("remember lets the index run past its cap (the dream pass condenses it) but refuses past the write headroom", () => {
   const w = mkWs("mem-cap");
   const long = rememberFact(w.id, { fact: "x".repeat(201) });
   assert.ok(!long.ok && /capped at 200/.test(long.error));
   let refused = "";
-  for (let i = 0; i < 40 && !refused; i++) {
+  let overCap = false;
+  for (let i = 0; i < 80 && !refused; i++) {
     const r = rememberFact(w.id, { fact: `rule number ${i} ${randomUUID()} ${"word ".repeat(20)}`, topic: "t" });
     if (!r.ok) refused = r.error;
+    else if (r.note.body.length > INDEX_CAP) overCap = true;
   }
+  assert.ok(overCap, "a live write past INDEX_CAP is kept, not refused");
   assert.match(refused, /memory index would pass/);
-  assert.ok(notes.bySlug(w.id, INDEX_SLUG)!.body.length <= INDEX_CAP);
+  assert.ok(notes.bySlug(w.id, INDEX_SLUG)!.body.length <= INDEX_WRITE_CAP);
 });
 
 test("contextBlock loads the index first, and one oversized memo no longer starves the rest", () => {

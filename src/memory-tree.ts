@@ -14,8 +14,10 @@
  *   Memory archive (slug `memory-archive`)  — the cold tier: everything the dream pass took out, with
  *                                             provenance. Never injected; `mc recall` finds it.
  *
- * Every level is hard-capped. A write that would overflow is refused with what to condense,
- * instead of silently truncating — the index stays a map, not a dump.
+ * Every level has a cap the dream pass holds it to. A live write (`mc remember`) gets WRITE_SLACK×
+ * that cap of headroom, so an agent mid-task can still save a rule when a memo is full; past the
+ * headroom it is refused with what to condense, never silently truncated. The next dream pass
+ * refuses any plan that leaves a memo over its real cap, so the overshoot lives for hours, not weeks.
  *
  * `mc learn` is an inbox (`session-learnings`, never injected): the dream pass (src/dream-pass.ts)
  * triages it into the tree twice a day. `mc remember` writes straight into the tree.
@@ -33,6 +35,10 @@ export const INDEX_SLUG = "memory-index";
 export const INDEX_CAP = 3000;
 export const LINE_CAP = 200;
 export const BRANCH_CAP = 6000;
+// Live writes may overshoot the caps above by this factor; the dream pass condenses back under them.
+export const WRITE_SLACK = 2;
+export const INDEX_WRITE_CAP = INDEX_CAP * WRITE_SLACK;
+export const BRANCH_WRITE_CAP = BRANCH_CAP * WRITE_SLACK;
 export const HOT_SLUG = "memory-hot";
 export const HOT_CAP = 1500;
 export const ARCHIVE_SLUG = "memory-archive";
@@ -125,8 +131,8 @@ export function rememberFact(workspace_id: string, input: { fact: string; topic?
     branch = store.bySlug(workspace_id, slug) ?? null;
     const block = `- **${guard(fact, "memory-branch", workspace_id)}** — ${guard(detail, "memory-branch", workspace_id)}`;
     const nextLen = (branch?.body.length ?? 0) + block.length;
-    if (nextLen > BRANCH_CAP)
-      return { ok: false, error: `${slug} would pass ${BRANCH_CAP} chars — condense it first (mc memo edit ${slug} --body "…")` };
+    if (nextLen > BRANCH_WRITE_CAP)
+      return { ok: false, error: `${slug} would pass ${BRANCH_WRITE_CAP} chars — condense it first (mc memo edit ${slug} --body "…")` };
     if (!branch) {
       branch = createNote({ workspace_id, title: `Memory: ${topic}`, body: `# Memory: ${topic}\n\nDetail behind the "${topic}" lines of the memory index.\n` });
       if (branch.slug !== slug) throw new Error(`memory branch slug collision: ${branch.slug}`);
@@ -145,8 +151,8 @@ export function rememberFact(workspace_id: string, input: { fact: string; topic?
     const siblings = [...sec.lines];
     sec.lines.push(line);
     const body = renderIndex(sections);
-    if (body.length > INDEX_CAP)
-      return { ok: false, error: `the memory index would pass ${INDEX_CAP} chars — merge or drop lines first (mc memo edit ${INDEX_SLUG} --body "…"), or move detail into a topic memo` };
+    if (body.length > INDEX_WRITE_CAP)
+      return { ok: false, error: `the memory index would pass ${INDEX_WRITE_CAP} chars — merge or drop lines first (mc memo edit ${INDEX_SLUG} --body "…"), or move detail into a topic memo` };
     const saved = updateNote(index.id, { body });
     // The dedupe above only caught "we already know this". A rule can be new AND contradict one
     // already standing under the same heading — that is the pair an agent picks between at random.
