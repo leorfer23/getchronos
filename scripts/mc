@@ -290,10 +290,13 @@ const HELP = `mc — Mission Control backlog CLI
                                      Durable — this is what rebuilds the picture after a compaction
   mc lead board add "title" ["title" ...]      append slices (numbered in order)
   mc lead board set <n> [--status todo|doing|review|done|dropped] [--worker id8] [--pr URL] [--note "..."]
-  mc lead close-done [--rm-worktrees] (INSIDE a Lead) RETIRED — always 403; closing is operator-only
-                                    (Desk / phone / Telegram confirm). Tick with mc session done instead.
-                                     --rm-worktrees tries a non-force remove of each claim and prints
-                                     refusals (never force — ask the operator via mc ask-robert)
+  mc lead close-done [id8 ...] [--rm-worktrees]
+                                     (INSIDE a Lead) close your OWN finished workers: goal ticked
+                                     (mc session done), terminal quiet, worktree clean + pushed. Each
+                                     one that fails a guard is listed with why. Ticked workers do not
+                                     count toward CHRONOS_LEAD_MAX_WORKERS. --rm-worktrees then tries a
+                                     non-force remove of each claim and prints refusals (never force —
+                                     ask the operator via mc ask-robert)
   mc lead adopt <leadId>             (INSIDE a Lead) take an ENDED Lead's live workers + board + inbox
                                      in this workspace (lead.adopted bus event)
   mc report done|partial|blocked "summary" [--pr URL] [--tests "what you ran + result"]
@@ -1895,13 +1898,16 @@ async function heavy(argv) {
           `${r.workers} worker(s), ${r.slices} slice(s), ${r.events} event(s)`,
         );
       }
-      // Close only THIS Lead's live workers whose goal is ticked. Optional --rm-worktrees tries a
+      // Close THIS Lead's finished workers (goal ticked, quiet, tree clean + pushed); `id8 ...` narrows
+      // it. Every worker a guard kept open is printed with why. Optional --rm-worktrees tries a
       // non-force remove of each closed worker's claim and prints every refusal — a Lead may never
       // force (LEADS.md Powers); the refusal is what you carry to the operator via mc ask-robert.
       if (pos[1] === "close-done") {
         const rm = !!(opt["rm-worktrees"] || opt.rm_worktrees);
-        const r = await req("POST", "/leads/me/close-done", { rm_worktrees: rm }, H);
-        if (!r.closed.length) return console.log("(no done workers to close)");
+        const ids = pos.slice(2).filter(Boolean);
+        const r = await req("POST", "/leads/me/close-done", { rm_worktrees: rm, ...(ids.length ? { ids } : {}) }, H);
+        for (const k of r.skipped || []) console.log(`  kept ${k.id8}: ${k.reason}`);
+        if (!r.closed.length) return console.log("(no finished workers closed)");
         console.log(`closed ${r.closed.length}: ${r.closed.map((id) => id.slice(0, 8)).join(" ")}`);
         if (rm && r.worktrees) {
           for (const w of r.worktrees) {

@@ -186,9 +186,10 @@ response ever carries a `lead_token`.
 - `GET /api/leads/me/events[?all=1][&limit=]` — the inbox: outstanding (unacked), or the history.
 - `GET /api/leads/me/workers` — one row per worker of this Lead, live first then ended today:
   `id8, status, phase, word, line, progress, goal, goal_done, worktree_branch, minutes_live`.
-- `POST /api/leads/me/close-done` — close only this Lead's live workers whose goal is ticked
-  (`closeDoneSessions` filter). Optional `rm_worktrees` tries a non-force remove per claim and
-  returns every refusal. See Powers below.
+- `POST /api/leads/me/close-done` `{ ids?, rm_worktrees? }` — close this Lead's live workers that
+  pass `leadCloseRefusal` (goal ticked, pty quiet, claimed tree clean + pushed); returns `closed` and
+  `skipped: [{id8, reason}]`. `ids` (id or prefix) narrows it. Optional `rm_worktrees` tries a
+  non-force remove per closed claim and returns every refusal. See Powers below.
 
 ### Promotion (Desk right-click → ◆ Promote to Lead)
 - `POST /api/sessions/:id/promote-lead` (workspace-scoped; 403 with `x-mc-lead`, 409 for a Lead, a
@@ -273,20 +274,25 @@ and a Lead may never invent an override the operator has not said yes to.
    unpushed / busy). `force` on a worker's tree → 403
    `"a lead may not force-remove a worker's worktree — <what would be lost>; ask the operator (mc ask-robert)"`.
    `mc worktree rm` sends `x-mc-lead` when `MC_LEAD_TOKEN` is set.
-2. **Close-done — retired.** `POST /api/leads/me/close-done` always 403s. Closing a terminal is the
-   operator only (`operatorMayCloseTerminal` in `src/authz.ts`: Desk ✕ / phone / Telegram ✅ with
-   `x-mc-operator: 1`). A Lead ticks goals (`mc session done`) and asks the operator to close.
+2. **Close-done — own finished workers only** (`leadCloseDone` in `src/api.ts`). A Lead closes a
+   worker it owns once its goal is ticked, its pty is quiet, and the tree it claimed has no
+   uncommitted files and no commits missing from every remote (squash-merged counts as landed).
+   Anything else comes back in `skipped` with the reason. Everything else about closing stays the
+   operator's (`operatorMayCloseTerminal` in `src/authz.ts`: Desk ✕ / phone / Telegram ✅ with
+   `x-mc-operator: 1`) — `mc session kill`, `/desk/close-done`, another Lead's or the operator's
+   terminals. Ticked workers do not count toward `CHRONOS_LEAD_MAX_WORKERS` (`openSession`).
 3. **Reopen** — a Lead may reopen only its own workers; `lead_id` is kept through `revive`; the
    reopened pty gets `leadWorkerBlock` + `MC_LEAD_ID` again. Another Lead → 404.
 4. **Worklog** — `POST /workspaces/:id/worklog` allows a Lead only in its own workspace; author is
    forced to `lead:<id8>`. `mc worklog` sends the header.
-5. **Still closed** to a Lead: killing terminals, vars write, `/desk/close-done`, `/sessions/:id/drop`.
+5. **Still closed** to a Lead: killing terminals outright, vars write, `/desk/close-done`, `/sessions/:id/drop`.
 6. **Audit** — every use publishes a bus event with `by` / `actor` `lead:<id8>` (`src/activity.ts`).
 
 ## Scale
 
-1. **Budget** — live workers with `lead_id` count against `CONFIG.leadDrive.maxWorkers`
-   (`CHRONOS_LEAD_MAX_WORKERS`, default 10), not `maxSessionsPerWorkspace`. The Lead itself still
+1. **Budget** — live, unticked workers with `lead_id` count against `CONFIG.leadDrive.maxWorkers`
+   (`CHRONOS_LEAD_MAX_WORKERS`, default 10), not `maxSessionsPerWorkspace`. A worker whose goal is
+   ticked (`mc session done`) frees its slot even before it is closed. The Lead itself still
    occupies a workspace seat. Machine admission (`admissionNow` in `openSession`) still applies.
 2. **Signing** — `mc session new` without `MC_AGENT_NAME` but with `MC_SESSION` signs
    `created_by = agent:<MC_SESSION id8>` so it does not skip admission as `"operator"`.

@@ -88,11 +88,14 @@ state blocked "<what you need>" --reason ...` only once you know the answer can 
 the operator, and you are stopped until it does.
 
 ## Finishing
-Every slice `done` or `dropped` on your board, then **leave closing your workers to the operator**.
-`mc session done <id>` ticks a worker's goal (the Desk shows it finished) — it does **not** kill the
-pty. Never `mc session kill`, never `mc lead close-done`. When their work is truly landed, say so in
-your Summary and stop; the operator closes from the Desk (or confirms on Telegram). Then
-`mc goal done` on yourself. Your last report follows the shape above: the details that back it,
+Every slice `done` or `dropped` on your board, then **close your finished workers yourself**.
+`mc session done <id>` ticks a worker's goal (the Desk shows it finished; it no longer counts toward
+your worker cap) — it does **not** kill the pty. Once its work has landed (PR merged, or nothing left
+to push), `mc lead close-done [id8 ...]` closes it. The daemon keeps open any worker whose goal is
+not ticked, whose terminal is still writing, or whose worktree has uncommitted files or commits on
+no remote, and prints why — fix that or carry it to `mc ask-robert`, never route around it. Close as
+you go, not only at the end: a finished worker left open is noise on the operator's Desk. Never
+`mc session kill` (that is the operator's hand). Then `mc goal done` on yourself. Your last report follows the shape above: the details that back it,
 **Next steps** if anything is left outside this goal, and a **Summary** last — what shipped, with the
 PR URLs, what you verified, what you skipped and why. Your board is the checklist for that summary;
 nothing on it should be a surprise.
@@ -103,8 +106,10 @@ Inside this goal you have Robert's hands on **your own workers only** (`sessions
   gets (uncommitted, unpushed, busy). **Never `--force` on a worker's tree** — a daemon refusal is the
   sentence you carry to the operator via `mc ask-robert`, not a wall to route around.
 - `mc session done <id>` — tick a worker's goal when it is met (does not kill the terminal).
+- `mc lead close-done [id8 ...] [--rm-worktrees]` — close ticked, quiet workers whose tree is clean
+  and pushed; every one it keeps open is listed with the reason.
 - `mc session reopen <id>` — only yours; the reopened pty still knows it is your worker.
 - `mc worklog add "…" --outcome "…"` in this workspace — author is forced to you.
 
-Still closed to you (operator only): killing / closing terminals, writing workspace vars, dropping a
-file onto a terminal. `mc lead close-done` returns 403 — ask the operator.
+Still closed to you (operator only): killing any terminal outright (`mc session kill`), closing
+anyone else's terminals, writing workspace vars, dropping a file onto a terminal.

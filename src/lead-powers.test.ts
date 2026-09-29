@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { db, repos, sessions, workspaces } from "./store.js";
 import { ensureSessionWorktree, removeWorktreeAs } from "./worktrees.js";
-import { closeDoneSessions, leadGate } from "./api.js";
+import { closeDoneSessions, leadCloseDone, leadCloseRefusal, leadGate } from "./api.js";
 import { leadMayType } from "./authz.js";
 
 const git = (cwd: string, args: string[]) =>
@@ -176,6 +176,73 @@ describe("closeDoneSessions — Lead scope", () => {
   });
 });
 
+describe("leadCloseRefusal — what keeps a worker open", () => {
+  const quiet = { live: true, quiet: true };
+  const clean = { dirty: false, dirty_files: 0, unpushed: 0 };
+  test("goal ticked, quiet, clean tree (or none) → may close", () => {
+    assert.equal(leadCloseRefusal({ id: "abcdef1234", goal_done_at: "x" }, quiet, clean), null);
+    assert.equal(leadCloseRefusal({ id: "abcdef1234", goal_done_at: "x" }, { live: false, quiet: true }, null), null);
+  });
+  test("each guard names its reason", () => {
+    assert.match(leadCloseRefusal({ id: "abcdef1234", goal_done_at: null }, quiet, clean)!, /goal not ticked — `mc session done abcdef12`/);
+    assert.match(leadCloseRefusal({ id: "a", goal_done_at: "x" }, { live: true, quiet: false }, clean)!, /still working/);
+    assert.match(leadCloseRefusal({ id: "a", goal_done_at: "x" }, quiet, { dirty: true, dirty_files: 2, unpushed: 0 })!, /2 uncommitted/);
+    assert.match(leadCloseRefusal({ id: "a", goal_done_at: "x" }, quiet, { ...clean, unpushed: 3 })!, /3 commit\(s\) .*not on any remote/);
+  });
+});
+
+describe("leadCloseDone — own finished workers only", () => {
+  test("closes only this Lead's ticked workers; unticked and another Lead's stay live", async () => {
+    const lead = mkLead();
+    const other = mkLead();
+    const done = mkWorker(lead.id);
+    const busy = mkWorker(lead.id);
+    const theirs = mkWorker(other.id);
+    sessions.setGoal(done.id, { goal_done: true });
+    sessions.setGoal(theirs.id, { goal_done: true });
+    const out = await leadCloseDone({ ws: wsId, leadId: lead.id }, null);
+    assert.deepEqual(out.closed, [done.id]);
+    assert.deepEqual(out.skipped.map((k) => k.id8), [busy.id.slice(0, 8)]);
+    assert.match(out.skipped[0].reason, /goal not ticked/);
+    assert.equal(sessions.get(done.id)!.status, "ended");
+    assert.equal(sessions.get(busy.id)!.status, "live");
+    assert.equal(sessions.get(theirs.id)!.status, "live");
+  });
+
+  test("ids narrows the set to the named workers", async () => {
+    const lead = mkLead();
+    const a = mkWorker(lead.id);
+    const b = mkWorker(lead.id);
+    sessions.setGoal(a.id, { goal_done: true });
+    sessions.setGoal(b.id, { goal_done: true });
+    const out = await leadCloseDone({ ws: wsId, leadId: lead.id }, [b.id.slice(0, 8)]);
+    assert.deepEqual(out.closed, [b.id]);
+    assert.equal(sessions.get(a.id)!.status, "live");
+  });
+
+  test("a ticked worker with uncommitted or unpushed work in its tree stays open", async () => {
+    const lead = mkLead();
+    const dirty = mkWorker(lead.id);
+    const unpushed = mkWorker(lead.id);
+    const landed = mkWorker(lead.id);
+    const wd = await claimFor(dirty);
+    const wu = await claimFor(unpushed);
+    await claimFor(landed);
+    fs.writeFileSync(path.join(wd.path, "wip.txt"), "hour of work\n");
+    fs.writeFileSync(path.join(wu.path, "feat.txt"), "committed\n");
+    git(wu.path, ["add", "-A"]);
+    git(wu.path, ["-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "feat"]);
+    for (const w of [dirty, unpushed, landed]) sessions.setGoal(w.id, { goal_done: true });
+    const out = await leadCloseDone({ ws: wsId, leadId: lead.id }, null);
+    assert.deepEqual(out.closed, [landed.id]);
+    const why = Object.fromEntries(out.skipped.map((k) => [k.id8, k.reason]));
+    assert.match(why[dirty.id.slice(0, 8)], /1 uncommitted file/);
+    assert.match(why[unpushed.id.slice(0, 8)], /1 commit\(s\) in its worktree not on any remote/);
+    assert.equal(sessions.get(dirty.id)!.status, "live");
+    assert.equal(sessions.get(unpushed.id)!.status, "live");
+  });
+});
+
 describe("reopen ownership", () => {
   test("Lead may type/reopen only its worker; another Lead is refused; lead_id survives end+revive", () => {
     const a = mkLead();
@@ -224,14 +291,13 @@ describe("surfaces that stay closed to a Lead", () => {
     assert.doesNotMatch(routes, /leadScope|leadGate/);
   });
 
-  test("/leads/me/close-done is retired (403) — closing is operator-only", () => {
+  test("/leads/me/close-done is scoped to the Lead and goes through leadCloseDone", () => {
     const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
     const closeAt = api.indexOf('api.post("/leads/me/close-done"');
     assert.ok(closeAt > 0, "missing /leads/me/close-done");
-    const closeBody = api.slice(closeAt, closeAt + 500);
+    const closeBody = api.slice(closeAt, closeAt + 700);
     assert.ok(closeBody.includes("leadGate(req, res)"));
-    assert.match(closeBody, /status\(403\)/);
-    assert.match(closeBody, /Leads may not close terminals/);
+    assert.match(closeBody, /leadCloseDone\(lead, ids\)/);
     assert.doesNotMatch(closeBody, /closeDoneSessions/);
 
     const wlAt = api.indexOf('api.post("/workspaces/:id/worklog"');
