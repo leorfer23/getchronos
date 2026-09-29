@@ -184,6 +184,9 @@ Inside the page, `window.chronos` is the SDK (no import, it is injected):
 - Use the Desk's colours so it matches light and dark: `var(--bg) var(--surface) var(--ink)
   var(--muted) var(--line) var(--accent) var(--accent-soft) var(--warn) var(--danger)`.
 - One page, one purpose; keep it calm. The `<title>` is the card's title unless you pass `--title`.
+- **Claude only:** you also have a claude.ai Artifact tool. Before your first page in a terminal,
+  ask the operator which one they want (AskUserQuestion: Chronos artifact on the Desk, or Claude
+  artifact on claude.ai). Never pick for them; reuse their answer for later pages.
 
 ## Before you change a repo — `mc worktree`
 
