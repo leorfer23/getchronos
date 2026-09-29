@@ -97,6 +97,22 @@ export function leadWorkerBlock(row: Pick<Session, "lead_id">): string {
   }
 }
 
+/**
+ * The block every CLAUDE Desk terminal is opened with (agents/_blocks/artifact-choice.md), or "" for
+ * other backends. Claude Code ships its own Artifact tool (claude.ai pages) that is told to publish
+ * unasked, so it was silently winning over `mc artifact`: the agent now asks the operator which one.
+ * Never throws into a spawn, like leadWorkerBlock.
+ */
+export function artifactChoiceBlock(backendName: string): string {
+  if (backendName !== "claude-code") return "";
+  try {
+    return agentBlock("artifact-choice");
+  } catch (e) {
+    console.error("[terminal] artifact-choice block", e);
+    return "";
+  }
+}
+
 /** The real main checkouts among these repo paths (realpath'd, since the sandbox matches resolved paths). */
 export function mainCheckouts(paths: Array<string | null | undefined>): string[] {
   const out = new Set<string>();
@@ -656,7 +672,7 @@ export async function openSession(
   // WHO the terminal is before it is told how to report. A worker's Lead block sits in the same slot
   // for the same reason — whose worker it is comes before how it reports.
   const sysArg = backend.appendsSystem
-    ? ([row.role === "lead" ? agentPrompt("lead") : null, leadBlock, FOCUS_CONTRACT, ctx, rel].filter(Boolean).join("\n\n") || null)
+    ? ([row.role === "lead" ? agentPrompt("lead") : null, leadBlock, FOCUS_CONTRACT, artifactChoiceBlock(backend.name), ctx, rel].filter(Boolean).join("\n\n") || null)
     : null;
   // Seed the conversation: the ticket context (or a passed seed) is typed in once the CLI has booted.
   // Defined here (a remote spec carries it) but, for a local terminal, still EVALUATED after the spawn
