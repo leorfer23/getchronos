@@ -41,6 +41,10 @@ test("claude buildArgs: fresh dispatch uses --session-id; a resume dispatch swap
   assert.ok(!resumed.includes("--session-id"));
 });
 
+test("claude env: headless jobs get the claude.ai Artifact tools (off by default under -p)", () => {
+  assert.deepEqual(claudeBackend.env({} as any, "/cfg"), { CLAUDE_CONFIG_DIR: "/cfg", CLAUDE_CODE_ARTIFACT: "1" });
+});
+
 test("claude oneShot: no guardrail flags when unset", () => {
   const s = claudeBackend.oneShot({ prompt: "hi", model: "haiku", configDir: "/c" });
   assert.ok(!s.args.includes("--allowed-tools"));

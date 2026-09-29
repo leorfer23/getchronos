@@ -100,8 +100,12 @@ export const claudeBackend: AgentBackend = {
     return a;
   },
 
+  // CLAUDE_CODE_ARTIFACT=1: `claude -p` ships without the claude.ai Artifact tools (interactive
+  // sessions have them), so a headless job could not publish a page. Undocumented switch, found in
+  // the 2.1.284 binary. A workspace that wants them off sets CLAUDE_CODE_DISABLE_ARTIFACT=1 in its
+  // secrets_file or vars — the disable wins over this.
   env(_job, configDir) {
-    return { CLAUDE_CONFIG_DIR: configDir };
+    return { CLAUDE_CONFIG_DIR: configDir, CLAUDE_CODE_ARTIFACT: "1" };
   },
 
   parseLine: jsonLine,

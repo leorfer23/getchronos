@@ -230,6 +230,18 @@ test("caps are 409s that say what to condense — index, index line, hot, branch
   assert.ok(e.problems.some((m) => /memory-deploy is 600\d\/6000/.test(m)));
 });
 
+test("a branch a live write ran past its cap must be condensed this pass, even if the plan leaves it out", () => {
+  const w = seedHappy();
+  createNote({ workspace_id: w.id, slug: "memory-git", title: "Memory: git", body: "# Memory: git\n\n" + "- a git fact that took some words\n".repeat(250) });
+  const b = dreamContext(w);
+  assert.equal(b.branches.find((x) => x.slug === "memory-git")!.over_cap, true);
+  const p = happyPlan(w, b.run);
+  const e = errOf(() => applyPlan(w, p));
+  assert.equal(e.status, 409);
+  assert.ok(e.problems.some((m) => /memory-git is \d+\/6000 chars .*send its whole new body/.test(m)));
+  applyPlan(w, { ...p, branches: { ...p.branches, "memory-git": "# Memory: git\n\n- a git fact that took some words\n" } });
+});
+
 test("shape: rules need a topic, pointers must resolve, slugs must be tree slugs, repo branches need a repo", () => {
   const w = seedHappy();
   createNote({ workspace_id: w.id, title: "Runbook", body: "# Runbook\n" });

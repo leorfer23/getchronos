@@ -273,7 +273,7 @@ export interface DreamBundle {
     lines: { hash: string; section: string | null; text: string; pointer: string | null; pinned: boolean; days_unreinforced: number | null; uses_30d: number }[];
   };
   hot: { chars: number; body: string };
-  branches: { slug: string; chars: number; lines: number; repo: string | null; uses_30d: number; last_used: string | null; stale_soon: number }[];
+  branches: { slug: string; chars: number; over_cap: boolean; lines: number; repo: string | null; uses_30d: number; last_used: string | null; stale_soon: number }[];
   repos: string[];
   inbox: { total_lines: number; total_chars: number; shown: number; left_after_this_pass: number; lines: InboxLine[] };
   worklog: { at: string; what: string; outcome: string; pending: string[]; next: string[]; pr: string | null; ticket: string | null }[];
@@ -327,7 +327,7 @@ export function dreamContext(ws: Workspace, runId?: string | null, now = new Dat
     const repo = b.slug.startsWith("memory-repo-") ? wsRepos.find((r) => `memory-repo-${repoSlug(r.name)}` === b.slug)?.name ?? null : null;
     const bl = memLines(b.body).filter((l) => l.bullet);
     const staleSoon = bl.filter((l) => { const c = clocks.get(l.hash); return !l.pinned && c && daysBetween(c.reinforced, now) >= BRANCH_STALE_DAYS - 14; }).length;
-    return { slug: b.slug, chars: b.body.length, lines: bl.length, repo, uses_30d: uses(b.id), last_used: lastUse(b.id), stale_soon: staleSoon };
+    return { slug: b.slug, chars: b.body.length, over_cap: b.body.length > BRANCH_CAP, lines: bl.length, repo, uses_30d: uses(b.id), last_used: lastUse(b.id), stale_soon: staleSoon };
   }).sort((a, b) => b.uses_30d - a.uses_30d || a.slug.localeCompare(b.slug));
 
   const allInbox = inboxLines(tree.inbox?.body);
@@ -505,9 +505,10 @@ export function preparePlan(ws: Workspace, plan: DreamPlan, now = new Date()): P
   // ── caps + shape ──
   if (newIndex && newIndex.length > INDEX_CAP) caps.push(`memory-index is ${newIndex.length}/${INDEX_CAP} chars — merge or drop lines, or move detail into branches`);
   if (newHot.length > HOT_CAP) caps.push(`memory-hot is ${newHot.length}/${HOT_CAP} chars — fewer threads, one line each`);
-  for (const s of written) {
-    const len = newBranches.get(s)!.length;
-    if (len > BRANCH_CAP) caps.push(`${s} is ${len}/${BRANCH_CAP} chars — condense it, or split a topic into its own branch`);
+  // Every branch the pass leaves standing, not just the ones it rewrote: a live `mc remember` may run
+  // a branch past its cap (memory-tree.ts WRITE_SLACK), and this pass is what brings it back under.
+  for (const [s, body] of newBranches) {
+    if (body.length > BRANCH_CAP) caps.push(`${s} is ${body.length}/${BRANCH_CAP} chars — condense it, or split a topic into its own branch${written.includes(s) ? "" : " (send its whole new body in branches)"}`);
   }
   const idxLines = memLines(newIndex ?? "");
   for (const l of idxLines) {

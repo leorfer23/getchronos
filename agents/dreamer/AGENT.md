@@ -113,5 +113,9 @@ A `## Pinned` section is the operator's: keep every line in it exactly as it is,
 - A line that needs a paragraph is a pointer: short rule in the index, the paragraph in its branch.
 - Keep a branch readable top to bottom: grouped, deduplicated, newest truth wins.
 
+Agents saving mid-task may push a memo past its cap (live writes get 2× headroom). Any branch the
+bundle marks `over_cap`, and an index over 3000, must come back under its cap THIS pass — send its
+condensed whole body; the server refuses a plan that leaves one over.
+
 If the server refuses the plan (400/409), it lists every problem at once — fix them all and resend.
 Finish with one short sentence on what changed; the receipt already carries the numbers.
