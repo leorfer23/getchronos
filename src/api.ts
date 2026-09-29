@@ -50,7 +50,8 @@ import {
   type ChatAttachment,
 } from "./attachments.js";
 import { pdfText } from "./pdf-text.js";
-import { saveDrop, MAX_DROP_BYTES } from "./drops.js";
+import { MAX_DROP_BYTES } from "./drops.js";
+import * as dropRoutes from "./drop-routes.js";
 import { wsTicketsDir } from "./sandbox.js";
 import { jobCreateSpawnError, jobPatchSpawnError } from "./spawn-guard.js";
 import { approve, merge, requestChanges, dismiss, dispatchReview, applyVerdict, ensureReviewForTicket } from "./reviews.js";
@@ -184,9 +185,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * pending line — the same merge that made every keystroke to a Lead pace itself (LEAD_GAP_MS).
  */
 const BROADCAST_GAP_MS = 300;
-
-/** Largest drop forwarded to a remote host: it travels base64 in one control frame (cap 24 MB). */
-const REMOTE_DROP_MAX = 16 * 1024 * 1024;
 
 /**
  * The Desk footer's quick actions as stored, or the shipped set when nothing is stored — and also
@@ -427,8 +425,9 @@ export function adoptLead(toLeadId: string, fromLeadId: string): { workers: numb
 
 export function startServer() {
   const app = express();
-  // 16mb: ticket attachment base64 uploads; normal JSON stays small.
-  app.use(express.json({ limit: "16mb" }));
+  // express.json() for everything, EXCEPT a file dropped on a terminal, which is parsed as raw bytes
+  // first so a dropped .json keeps its bytes (the why is on mountBodyParsers in drop-routes.ts).
+  dropRoutes.mountBodyParsers(app);
 
   const api = express.Router();
   // Requests an agent on another computer made through its host (HOSTS.md): remote, never loopback-
@@ -731,57 +730,20 @@ export function startServer() {
     res.json({ ok: true });
   });
   // A file dragged from Finder onto this terminal on the Desk (or an image pasted into it): raw
-  // bytes in, an absolute path out, which the page then types in as a word. Raw body rather than
-  // multipart because that is what every other upload here takes (/agent/upload,
-  // /tickets/:id/attachments/raw) and a Blob needs no encoding to send that way.
+  // bytes in, an absolute path out, which the page then types in as a word. The handlers live in
+  // drop-routes.ts, which also owns the one rule that makes a drop on a terminal on ANOTHER computer
+  // work — the bytes go over the host link and the path that comes back is a path over there.
   //
-  // Admin-gated with the same inline check as /input above (requireAdmin is a const declared
-  // further down this file). Deliberately NOT open to a Lead, which /input is: a Lead types words
-  // it composed itself, whereas a drop writes attacker-chosen bytes to a path it then hands another
-  // agent. Only the operator at the Desk drops files.
-  api.post(
-    "/sessions/:id/drop",
-    express.raw({ type: () => true, limit: MAX_DROP_BYTES }),
-    async (req, res) => {
-      if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken))
-        return res.status(403).json({ error: "dropping a file on a terminal is admin-gated (x-mc-admin)" });
-      const s = sessions.get(req.params.id);
-      if (!s) return res.status(404).json({ error: "not found" });
-      // A terminal on another host reads files from ITS disk: the bytes go over the link, the host
-      // writes them into its own ~/.mc/drops/<session>, and that path is what gets typed in.
-      if (s.host_id && s.host_id !== LOCAL_HOST_ID) {
-        const h = findHost(s.host_id);
-        if (!(h instanceof RemoteHost) || !h.online) return res.status(409).json({ error: "this terminal's host is offline" });
-        const buf = req.body as Buffer;
-        if (!buf?.length) return res.status(400).json({ error: "empty file" });
-        // One control frame carries it (base64, ×4/3) and the link caps a frame at 24 MB.
-        if (buf.length > REMOTE_DROP_MAX) return res.status(413).json({ error: `a file dropped on a terminal on another host is capped at ${REMOTE_DROP_MAX / 1024 / 1024}MB` });
-        try {
-          const d = await h.drop({
-            session_id: s.id,
-            filename: String(req.get("x-filename") || req.query.filename || "drop"),
-            mime: String(req.get("content-type") || ""),
-            b64: buf.toString("base64"),
-          });
-          return res.status(201).json(d);
-        } catch (e: any) {
-          return res.status(400).json({ error: String(e?.message ?? e) });
-        }
-      }
-      try {
-        res.status(201).json(
-          saveDrop({
-            sessionId: s.id,
-            buffer: req.body as Buffer,
-            filename: String(req.get("x-filename") || req.query.filename || "drop"),
-            mime: String(req.get("content-type") || ""),
-          }),
-        );
-      } catch (e: any) {
-        res.status(400).json({ error: String(e?.message ?? e) });
-      }
-    },
-  );
+  // /drop-path is the same delivery for a file the page only knows by its path on this Mac (the
+  // native wrapper, a file:// URI off the drag): typing that path into a terminal on the M2 names a
+  // file that does not exist there, so the daemon reads it here and forwards the bytes instead.
+  //
+  // Both check the admin token themselves, the same inline check /input makes above, and are NOT
+  // open to a Lead — see the header of drop-routes.ts. The express.raw here is a no-op on the live
+  // app (mountBodyParsers already read the body) and is what keeps the route whole if it is ever
+  // mounted without that.
+  api.post("/sessions/:id/drop", express.raw({ type: () => true, limit: MAX_DROP_BYTES }), dropRoutes.dropRoute);
+  api.post("/sessions/:id/drop-path", dropRoutes.dropPathRoute);
   // ───────────────────────── Worktrees ─────────────────────────
   // A terminal CLAIMS its worktree once it knows which repo it needs. Scoped, not admin-gated: this
   // is an agent isolating its own work, the safest thing it can do. Idempotent — asking twice

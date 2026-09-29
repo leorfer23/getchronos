@@ -211,12 +211,17 @@ describe("surfaces that stay closed to a Lead", () => {
     const deskBody = api.slice(deskAt, deskAt + 350);
     assert.match(deskBody, /operatorMayCloseTerminal/);
     assert.doesNotMatch(deskBody, /leadGate/);
-    // drop
+    // drop + drop-path: mounted straight onto the drop-routes handlers (no Lead gate in between),
+    // and those handlers check the admin token themselves and never consult a Lead scope.
     const dropAt = api.indexOf('"/sessions/:id/drop"');
     assert.ok(dropAt > 0);
     const dropBody = api.slice(dropAt, api.indexOf('"/sessions/:id/worktree"', dropAt));
-    assert.match(dropBody, /x-mc-admin/);
+    assert.match(dropBody, /dropRoutes\.dropRoute\);/);
+    assert.match(dropBody, /api\.post\("\/sessions\/:id\/drop-path", dropRoutes\.dropPathRoute\);/);
     assert.doesNotMatch(dropBody, /leadScope|leadGate/);
+    const routes = fs.readFileSync(path.join(process.cwd(), "src/drop-routes.ts"), "utf8");
+    assert.match(routes, /tokenOk\(req\.get\("x-mc-admin"\), CONFIG\.adminToken\)/);
+    assert.doesNotMatch(routes, /leadScope|leadGate/);
   });
 
   test("/leads/me/close-done is retired (403) — closing is operator-only", () => {

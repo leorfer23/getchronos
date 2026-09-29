@@ -3345,11 +3345,44 @@ qs("#composer").addEventListener("submit", (e) => {
 // an agent can use. It has to go through the daemon: the web hands a page a dropped File with no
 // real path on it, and the WKWebView is no different. So the bytes are uploaded, the daemon writes
 // them where every terminal can read (src/drops.ts → ~/.mc/drops/<session>/), and the absolute path
-// it returns is what gets typed in. A host that DOES know the real path skips all of that.
+// it returns is what gets typed in. A host that DOES know the real path skips all of that — for a
+// terminal on THIS Mac. A terminal on another computer (HOSTS.md) cannot open a path from this
+// Mac's disk, so there a real path goes to the daemon instead, which reads it here and ships the
+// bytes over (src/drop-routes.ts → /drop-path); the path typed in is always one on ITS disk.
 const DROP_MAX = 25 * 1024 * 1024; // keep in step with MAX_DROP_BYTES (src/drops.ts)
+const REMOTE_DROP_MAX = 16 * 1024 * 1024; // keep in step with REMOTE_DROP_MAX (src/drop-routes.ts)
 const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+// What a drag out of Finder may carry. "Files" is what the spec promises, but a WKWebView is free
+// to present the same drag as file URLs only (text/uri-list, or the raw UTI public.file-url) — and
+// a drag the page does not claim is one WebKit finishes itself, by inserting the file's PATH as
+// text into whatever is editable under the pointer (the composer, xterm's hidden textarea). That is
+// how an M2 terminal once got `/Users/<this Mac>/Downloads/google-services.json` typed into it. So
+// any of the three claims the drag; the drop handler reads what it actually got.
+const FILE_DRAG_TYPES = ["Files", "text/uri-list", "public.file-url"];
+const isFileDrag = (e) => [...(e.dataTransfer?.types || [])].some((t) => FILE_DRAG_TYPES.includes(t));
+// file:// URIs off a drag → paths on this Mac. Anything else (an http link dragged out of the page),
+// a file on another machine (file://server/…), and macOS file-reference URLs (/.file/id=…, which
+// only Cocoa can resolve) are not paths we can use, and are dropped here.
+function fileUrlPaths(dt) {
+  let raw = "";
+  try { raw = dt?.getData("text/uri-list") || dt?.getData("public.file-url") || ""; } catch {}
+  const out = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const u = line.trim();
+    if (!/^file:\/\//i.test(u)) continue;
+    try {
+      const x = new URL(u);
+      if (x.hostname && x.hostname !== "localhost") continue;
+      const p = decodeURIComponent(x.pathname).replace(/(.)\/$/, "$1");
+      if (p.startsWith("/") && !p.startsWith("/.file/")) out.push(p);
+    } catch {}
+  }
+  return out;
+}
 // A path is one word to a shell. Quote anything that isn't, so "Screen Shot 2026.png" arrives whole.
 const shq = (p) => (/^[\w@%+=:,./-]+$/.test(p) ? p : "'" + p.replace(/'/g, "'\\''") + "'");
+// Is this terminal on another computer? hostOf is null for this Mac (host_id null or "local").
+const onOtherHost = (id) => { const s = byId(id); return !!(s && hostOf(s)); };
 
 function insertDropped(id, text) {
   const s = byId(id);
@@ -3363,16 +3396,34 @@ function insertDropped(id, text) {
   say.dispatchEvent(new Event("input"));
   say.focus();
 }
+// The paths that came back, typed in as words and named in the toast. Every road ends here.
+function landed(id, out) {
+  if (!out.length) return;
+  insertDropped(id, out.map(shq).join(" "));
+  toast("dropped → " + (out.length > 1 ? out.length + " files" : out[0]));
+}
 
 // Real paths, from a host that has them: the native wrapper's door (evaluateJavaScript →
-// __deskDrop(["/Users/…/x.png"])) and the `file.path` some webviews still set. Nothing to upload,
-// and better — the file stays where the operator keeps it instead of being copied into a drop dir.
-window.__deskDrop = (paths) => {
+// __deskDrop(["/Users/…/x.png"])), the `file.path` some webviews still set, and file:// URIs off a
+// drag. For a terminal on this Mac there is nothing to upload, and better — the file stays where
+// the operator keeps it instead of being copied into a drop dir. For a terminal on another computer
+// the path is meaningless over there: never type it, hand it to the daemon to read and forward.
+window.__deskDrop = async (paths) => {
   const list = [...(paths || [])].filter((p) => typeof p === "string" && p);
   if (!list.length) return;
   if (!S.active) return toast("open a terminal first");
-  insertDropped(S.active, list.map(shq).join(" "));
-  toast("dropped → " + (list.length > 1 ? list.length + " files" : list[0]));
+  const id = S.active;
+  if (!onOtherHost(id)) return landed(id, list);
+  if (!TOKEN) return toast("the daemon token is needed to drop a file");
+  try {
+    const r = await fetch("/api/sessions/" + id + "/drop-path", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-mc-admin": TOKEN },
+      body: JSON.stringify({ paths: list }),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+    landed(id, (await r.json()).paths || []);
+  } catch (e) { toast("drop: " + String(e.message).slice(0, 120)); }
 };
 
 async function dropFiles(files) {
@@ -3383,9 +3434,13 @@ async function dropFiles(files) {
   if (real.length === list.length) return window.__deskDrop(real);
   if (!TOKEN) return toast("the daemon token is needed to drop a file");
   const id = S.active, out = [];
+  // The link to another computer carries a drop in one frame, so its cap is lower than this Mac's.
+  const max = onOtherHost(id) ? REMOTE_DROP_MAX : DROP_MAX;
   for (const f of list) {
-    if (f.size > DROP_MAX) { toast(f.name + ": max 25MB"); continue; }
+    if (f.size > max) { toast(f.name + ": max " + max / 1024 / 1024 + "MB"); continue; }
     try {
+      // The file's own type rides along, even application/json: the daemon parses this route's body
+      // as raw bytes before anything else can (mountBodyParsers in src/drop-routes.ts).
       const r = await fetch("/api/sessions/" + id + "/drop?filename=" + encodeURIComponent(f.name || "drop"), {
         method: "POST",
         headers: { "content-type": f.type || "application/octet-stream", "x-mc-admin": TOKEN },
@@ -3395,33 +3450,53 @@ async function dropFiles(files) {
       out.push((await r.json()).path);
     } catch (e) { toast("drop: " + String(e.message).slice(0, 120)); }
   }
-  if (!out.length) return;
-  insertDropped(id, out.map(shq).join(" "));
-  toast("dropped → " + (out.length > 1 ? out.length + " files" : out[0]));
+  landed(id, out);
 }
 
 // The listeners sit on the DOCUMENT, not on the stage: a file dropped on any element that does not
 // preventDefault navigates the WKWebView to file:// — the Desk disappears and only a relaunch
-// brings it back (static/app.html hit this first). So every file drop on the page is swallowed, and
-// one over the stage is the only one that does something. A drag carrying no "Files" — text moved
-// inside the page, a rail row — is left entirely alone.
+// brings it back (static/app.html hit this first) — or, over an editable element, types the file's
+// local path into it. So every file drop on the page is swallowed, and one over the stage is the
+// only one that does something. CAPTURE phase, so no element under the pointer gets the drag first.
+// A drag carrying none of FILE_DRAG_TYPES — text moved inside the page, a rail row — is left alone,
+// and so is a plain link (text/uri-list, no file:// in it) dropped on something editable: that is
+// a URL being pasted, and the browser's own insertion is the right answer.
 const stageEl = qs("#stage");
 const overStage = (e) => stageEl.contains(e.target);
 let dragDepth = 0; // dragenter/leave fire once per element crossed, so a counter beats a boolean
 const dropOff = () => { dragDepth = 0; stageEl.classList.remove("dropping"); };
-document.addEventListener("dragenter", (e) => { if (hasFiles(e)) dragDepth++; });
-document.addEventListener("dragleave", (e) => { if (hasFiles(e) && --dragDepth <= 0) dropOff(); });
+document.addEventListener("dragenter", (e) => { if (isFileDrag(e)) dragDepth++; }, true);
+document.addEventListener("dragleave", (e) => { if (isFileDrag(e) && --dragDepth <= 0) dropOff(); }, true);
 document.addEventListener("dragover", (e) => {
-  if (!hasFiles(e)) return;
+  if (!isFileDrag(e)) return;
   e.preventDefault();
   stageEl.classList.toggle("dropping", overStage(e));
-});
+}, true);
 document.addEventListener("drop", (e) => {
-  if (!hasFiles(e)) return;
+  if (!isFileDrag(e)) return;
+  const files = [...(e.dataTransfer?.files || [])];
+  const paths = files.length ? [] : fileUrlPaths(e.dataTransfer);
+  if (!files.length && !paths.length && e.target?.closest?.("textarea, input, [contenteditable]")) return;
   e.preventDefault();
   dropOff();
-  if (overStage(e)) dropFiles(e.dataTransfer?.files);
-});
+  if (!overStage(e)) return;
+  if (files.length) dropFiles(files);
+  else if (paths.length) window.__deskDrop(paths);
+}, true);
+// Last line of defence for the same bug: if a file drop ever does slip past the listeners above,
+// WebKit's own insertion announces itself as a cancellable beforeinput "insertFromDrop" on the
+// editable it is about to type into. When that drop carries a file, cancel the insertion and take
+// the drop down the proper road instead — the local path never reaches the composer or the pty.
+document.addEventListener("beforeinput", (e) => {
+  if (e.inputType !== "insertFromDrop" || !overStage(e)) return;
+  const files = [...(e.dataTransfer?.files || [])];
+  const paths = files.length ? [] : fileUrlPaths(e.dataTransfer);
+  if (!files.length && !paths.length) return;
+  e.preventDefault();
+  dropOff();
+  if (files.length) dropFiles(files);
+  else window.__deskDrop(paths);
+}, true);
 // ⌘V with an image on the clipboard: xterm.js can only forward TEXT to the pty, so pasting a
 // screenshot into a terminal does nothing at all today. Same road as a drop — upload, then the path.
 // CAPTURE phase, and that is not optional: xterm's own paste handler calls stopPropagation(), so a
