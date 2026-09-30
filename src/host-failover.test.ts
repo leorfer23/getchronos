@@ -52,7 +52,7 @@ beforeEach(() => {
   posts.length = 0;
   sent.length = 0;
   online = false;
-  hf.resetHostFailover({ bootAt: Date.now() - 60 * MIN });
+  hf.resetHostFailover({ bootAt: Date.now() - 60 * MIN, lastWake: () => null });
   hf.setHostFailoverOps({
     open: async (o: any) => {
       opened.push(o);
@@ -97,8 +97,29 @@ test("grace not reached → nothing moves", async () => {
 test("a brain that just booted waits the grace too, whatever last_seen_at says", async () => {
   remoteRow();
   const now = wentOffline(60 * MIN);
-  hf.resetHostFailover({ bootAt: now - MIN });
+  hf.resetHostFailover({ bootAt: now - MIN, lastWake: () => null });
   assert.deepEqual(hf.dueHosts(now, 5), []);
+});
+
+test("a brain that slept (closed lid, dark wakes) waits the grace again from its last wake", async () => {
+  const s = remoteRow();
+  const now = wentOffline(60 * MIN);
+  let wake = now - 2 * MIN;
+  hf.resetHostFailover({ bootAt: now - 120 * MIN, lastWake: () => wake });
+  assert.equal(hf.dueHosts(now, 5).length, 1, "the pure view has not looked at the clock yet");
+  assert.equal((await hf.sweepHostFailover(now)).length, 0, "the sweep looks first: woke 2m ago");
+  assert.equal(sessions.get(s.id)!.status, "live");
+  wake = now + 3 * MIN; // another dark wake: the grace starts again
+  assert.equal((await hf.sweepHostFailover(now + 6 * MIN)).length, 0);
+  assert.equal((await hf.sweepHostFailover(now + 9 * MIN)).length, 1, "awake 6m and m2 still gone → it moves");
+});
+
+test("no wake time to read (not a Mac, sysctl failed) → boot is the mark, as before", async () => {
+  remoteRow();
+  const now = wentOffline(60 * MIN);
+  hf.resetHostFailover({ bootAt: now - 60 * MIN, lastWake: () => null });
+  hf.noteBrainWake();
+  assert.equal(hf.dueHosts(now, 5).length, 1);
 });
 
 test("offline ≥ grace → moved once to the brain with its conversation; a second sweep is a no-op", async () => {
