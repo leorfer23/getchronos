@@ -12,7 +12,7 @@
  * the host's own lock on workspace isolation: a bug in the brain's placement cannot get past it.
  *
  * PTYs outlive the link. Output goes into a 256 KB `Ring` per channel with a seq; while the link is
- * down nothing is sent and nothing is blocked. When the brain re-attaches it names the last seq it
+ * down nothing is sent and nothing is blocked, and what the ring must evict unacked spills to disk. When the brain re-attaches it names the last seq it
  * has, and only what follows is resent — then live streaming resumes. An exit that happens while the
  * brain is away is held until the brain `release`s the channel.
  */
@@ -22,7 +22,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import pty, { type IPty } from "node-pty";
-import { Ring, chunk, type CheckoutInfo, type HostToBrain, type LiveInfo } from "../hostlink/wire.js";
+import { Ring, chunk, type CheckoutInfo, type HostToBrain, type LiveInfo, type RingSpill } from "../hostlink/wire.js";
 import { expandHomeRelative, isSpawnSpec, type SpawnSpec } from "../hosts/spawn-spec.js";
 import type { SpawnReply } from "../hosts/remote.js";
 import { ensureBranchWorktree } from "../worktree-core.js";
@@ -84,6 +84,8 @@ export type HostTerminalsOptions = {
   prepare?: boolean;
   /** The workspace egress proxies this host runs (phase 5); absent = an egress-policed spawn is refused. */
   egress?: HostEgress;
+  /** Where a channel's ring puts output it must evict before the brain acked it (spill.ts). Absent = lost, reported as a gap. */
+  spill?: (ch: number) => RingSpill;
 };
 
 type Chan = {
@@ -285,7 +287,7 @@ export class HostTerminals {
 
     const term = pty.spawn(cmd, cmdArgs, { name: "xterm-color", cols: spec.cols, rows: spec.rows, cwd, env });
     const ch = this.allocCh();
-    const c: Chan = { ch, sessionId: spec.session_id, pty: term, ring: new Ring(undefined, ch), streaming: !!this.link?.online(), exit: null, exitSent: false, lastOut: Date.now(), modes: new ModeTracker(), tail: null, workspace: spec.workspace, backend: backend.name, cwd, startedAt: Date.now() };
+    const c: Chan = { ch, sessionId: spec.session_id, pty: term, ring: new Ring(undefined, ch, this.o.spill?.(ch) ?? null), streaming: !!this.link?.online(), exit: null, exitSent: false, lastOut: Date.now(), modes: new ModeTracker(), tail: null, workspace: spec.workspace, backend: backend.name, cwd, startedAt: Date.now() };
     this.chans.set(ch, c);
     term.onData((d) => {
       c.lastOut = Date.now();
@@ -300,7 +302,7 @@ export class HostTerminals {
       c.tail?.stop();
       c.exit = { code: exitCode ?? null, signal: signal ? signalName(signal) : null };
       this.sendExit(c);
-      c.forgetT = setTimeout(() => this.chans.delete(ch), EXITED_KEEP_MS);
+      c.forgetT = setTimeout(() => this.forget(ch), EXITED_KEEP_MS);
       c.forgetT.unref?.();
     });
 
@@ -400,6 +402,11 @@ export class HostTerminals {
     const c = this.chans.get(ch);
     if (!c || !c.exit) return;
     if (c.forgetT) clearTimeout(c.forgetT);
+    this.forget(ch);
+  }
+
+  private forget(ch: number): void {
+    this.chans.get(ch)?.ring.dispose();
     this.chans.delete(ch);
   }
 
