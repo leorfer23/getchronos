@@ -746,7 +746,7 @@ export const NewAskSchema = z
      * asking for 'lead' from a terminal with no live Lead falls back to 'robert'.
      */
     route: z.enum(["operator", "robert", "lead"]).optional(),
-    question: z.string().min(1).max(500),
+    question: z.string().min(1).max(1000),
     options: z.array(z.string().min(1).max(80)).min(1).max(6).optional(),
     wait_min: z.number().nonnegative().optional(),
   })
@@ -1049,7 +1049,7 @@ export const NewArtifactSchema = z.object({
   run_id: id.optional(),
   workspace_id: id.optional(),
   by: z.string().max(80).optional(),
-  question: z.string().min(1).max(500).optional(),
+  question: z.string().min(1).max(1000).optional(),
   options: z.array(z.string().min(1).max(80)).min(1).max(6).optional(),
   route: z.enum(["operator", "robert"]).optional(),
   notify: z.boolean().optional(),

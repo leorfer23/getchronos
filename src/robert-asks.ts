@@ -78,7 +78,7 @@ export function liftRobertAsks(
   for (const a of out.actions) {
     if (a.op !== "ask") { rest.push(a); continue; }
     const q = typeof a.question === "string" ? a.question : typeof a.q === "string" ? a.q : "";
-    const question = q.trim().slice(0, 500);
+    const question = q.trim().slice(0, 1000);
     if (!question) continue;
     raised.push(raise({ question, options: cleanOptions(a.options), workspace_id: resolveWs(a.ws ?? a.workspace, wsId) }));
   }
