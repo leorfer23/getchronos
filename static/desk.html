@@ -668,11 +668,12 @@
     background:var(--gc,var(--line)); pointer-events:auto; cursor:pointer; }
   .gut i:hover { width:11px; }
   /* Top / bottom of the terminal. Bottom-right, clear of the scrollbar; faint until the pointer is over the pane. */
-  .tjump { position:absolute; right:26px; bottom:12px; display:flex; flex-direction:column; gap:4px; z-index:4; opacity:.35; transition:opacity .15s; }
+  .tjump { position:absolute; right:26px; bottom:12px; display:flex; flex-direction:column; gap:4px; z-index:4; opacity:.35; }
   .term:hover .tjump { opacity:1; }
-  .tjump button { width:28px; height:28px; border-radius:7px; border:1px solid #C7D8C024; background:#1B201DE6; color:var(--term-ink);
+  .tjump button { width:28px; height:28px; border-radius:7px; border:1px solid color-mix(in srgb, var(--term-ink) 14%, transparent);
+    background:color-mix(in srgb, var(--term-bg) 88%, var(--term-ink)); color:var(--term-ink);
     font-size:15px; line-height:1; padding:0; cursor:pointer; }
-  .tjump button:hover { border-color:#56B69380; color:#fff; }
+  .tjump button:hover { border-color:var(--accent); color:var(--accent); }
   .term-off:not([hidden]) ~ .tjump { display:none; }
   /* The ticker: what this turn touched, under the terminal. One line, never two. */
   .ticker { display:none; align-items:center; gap:9px; padding:4px 14px 5px; background:var(--surface);
