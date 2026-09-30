@@ -1823,6 +1823,7 @@
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/xterm-addon-fit.js"></script>
 <script src="/term-links.js"></script>
+<script src="/term-clip.js"></script>
 <script src="/desk-companion.js"></script>
 <script src="/desk-quick-actions.js"></script>
 <script src="/ask-card.js"></script>
@@ -3594,6 +3595,14 @@ function mountPane(s, host) {
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   try { TermLinks.register(term, openLink); } catch (e) { console.warn("terminal links unavailable", e); }
+  // What claude copies in a pane on another computer reaches THIS clipboard (term-clip.js).
+  try {
+    TermClip.register(term, () => ({
+      clipboard: navigator.clipboard, host: location.hostname,
+      viaDaemon: (text) => api("/clipboard", { method: "POST", body: JSON.stringify({ text, by: "desk" }) }),
+      done: (via) => { if (!via) toast("couldn't copy — select with ⌥ held and ⌘C"); },
+    }));
+  } catch (e) { console.warn("terminal copy unavailable", e); }
   // The pty must never see the page's own chords (font, jump, mode, Robert).
   try { term.attachCustomKeyEventHandler((e) => !(e.type === "keydown" && (fontKey(e) !== null || jumpKey(e) || modeKey(e) || compKey(e) || railKey(e) || qaKey(e) !== null || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k")))); } catch {}
   const mount = document.createElement("div");
