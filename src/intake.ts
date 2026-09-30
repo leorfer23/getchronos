@@ -160,14 +160,15 @@ export function ensureIntakeJob(ws: Workspace): void {
 
   const wsRepos = repos.list(ws.id).filter((r) => r.path && fs.existsSync(r.path));
   const cwd = wsRepos[0]?.path || REPO_ROOT;
-  const model = cfg.model || CONFIG.intakeModel;
+  // An explicit intake config wins; otherwise a model picked on the Jobs page survives the re-sync.
+  const model = cfg.model || existing?.model || CONFIG.intakeModel;
   const fields = {
     goal: intakeGoal(ws, cfg),
     description: `Chief-of-staff intake sweep for ${ws.name}`,
     workspace_id: ws.id,
     // Model path with a provider prefix → opencode; bare alias → the workspace's own backend, so the
     // sweep runs on the same account whose Slack/MCP tools it needs.
-    backend: model.includes("/") ? "opencode" : ws.default_backend,
+    backend: model.includes("/") ? "opencode" : existing?.model === model ? existing.backend : ws.default_backend,
     model,
     cwd,
     add_dirs: wsRepos.map((r) => r.path).filter((p) => p !== cwd),

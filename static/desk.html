@@ -324,7 +324,6 @@
   .jot-view code { font:12.5px ui-monospace,Menlo,monospace; background:var(--surface-2); padding:0 3px; border-radius:3px; }
   .row.jot:not(.open) .jot-view { display:none; }
   .jot-day[hidden] { display:none; }
-  .row.jot.pri-high { box-shadow:inset 2px 0 0 var(--accent); }
   .row.jot.pri-low .txt { opacity:.62; }
   .jot-day { margin:8px 6px 2px; font-size:12px; font-weight:600; color:var(--muted); display:flex; align-items:center; gap:8px; }
   .jot-day .rule { flex:1; height:1px; background:var(--line); }
@@ -1124,6 +1123,8 @@
   .jv-r .nm .l { display:flex; gap:6px; align-items:center; font-size:12.5px; color:var(--muted); white-space:nowrap; overflow:hidden; }
   .jv-r .nm .l span { overflow:hidden; text-overflow:ellipsis; }
   .jv-r .nm .l .ws { flex:none; display:inline-flex; align-items:center; gap:4px; }
+  .jv-mdl { flex:none; max-width:150px; font:inherit; font-size:12px; color:var(--muted); background:transparent; border:1px solid var(--line); border-radius:6px; padding:0 2px; cursor:pointer; }
+  .jv-mdl:hover, .jv-mdl:focus { color:var(--fg); border-color:var(--muted); }
   .jv-r .nm .l .ws i { width:7px; height:7px; border-radius:2px; }
   .jv-tag { flex:none; font-size:11px; font-weight:700; padding:0 6px; border-radius:5px; line-height:17px; }
   .jv-tag.bad { background:var(--danger-soft); color:var(--danger); }
@@ -4060,7 +4061,8 @@ function paintJot(el, j) {
   el.classList.toggle("fu-due", prox === "due");
   el.classList.toggle("fu-today", prox === "today");
   fu.title = st === "live" ? "A follow-up terminal is on it — open it" : st ? "Follow-up " + new Date(j.follow_up_at).toLocaleString() + (j.follow_up_check ? "\nCheck: " + j.follow_up_check : "") : "";
-  const meta = [j.source === "agent" ? "agent" : j.source === "nextday" ? "planned" : "", age(j.created_at)];
+  // Notes already carry the client's colour stripe, so "high" is said in words, not another bar.
+  const meta = [j.priority === "high" ? "▲ high priority" : "", j.source === "agent" ? "agent" : j.source === "nextday" ? "planned" : "", age(j.created_at)];
   if (j.follow_up_count) meta.push(j.follow_up_count === 1 ? "followed up once" : "followed up " + j.follow_up_count + "×");
   qs(".meta", el).textContent = meta.filter(Boolean).join(" · ");
   qs('.jot-bar [data-a="follow"]', el).textContent = st === "due" ? "⏰ Due — reschedule…" : j.follow_up_at ? "⏰ " + fuWhen(j.follow_up_at) + "…" : "⏰ Follow up…";
@@ -5292,7 +5294,7 @@ function jobRowHtml(j) {
   return `<div class="jv-r${J.sel === j.id ? " on" : ""}${j.enabled ? "" : " off"}" data-job="${j.id}">` +
     `<input type="checkbox" data-chk="${j.id}"${J.checked.has(j.id) ? " checked" : ""} title="Select">` +
     `<button class="jv-switch${j.enabled ? " on" : ""}" data-tog="${j.id}" title="${j.enabled ? "Active — click to pause" : "Paused — click to resume"}"></button>` +
-    `<div class="nm"><b title="${esc(j.name)}">${esc(j.name)}</b><div class="l"><span>${esc(schedText(j))}${j.description ? " · " + esc(j.description) : ""}</span>${tags}</div></div>` +
+    `<div class="nm"><b title="${esc(j.name)}">${esc(j.name)}</b><div class="l"><select class="jv-mdl" data-mdl="${j.id}" title="Model for ${esc(j.backend)} — used from the next run">${modelOpts(j.backend, j.model)}</select><span>${esc(schedText(j))}${j.description ? " · " + esc(j.description) : ""}</span>${tags}</div></div>` +
     `<div class="c-strip">${stripHtml(j)}</div>` +
     `<span class="n c-rate${rate != null && rate < 80 ? " bad" : rate != null && rate < 95 ? " warn" : ""}" title="${st.success} ok · ${st.failed} failed · ${st.runs} runs in the window">${rate == null ? `<span class="dim">—</span>` : rate + "%"}</span>` +
     `<span class="n c-avg" title="average successful run · longest ${fmtDur(st.max_sec)}">${st.avg_sec == null ? `<span class="dim">—</span>` : fmtDur(st.avg_sec)}</span>` +
@@ -5396,6 +5398,13 @@ function newJob() {
 }
 const NEW_JOB = () => ({ id: "new", name: "", goal: "", description: "", workspace_id: J.ws !== "all" && J.ws ? J.ws : byId(S.active)?.workspace_id || S.workspaces[0]?.id || null, backend: "claude-code", model: "", cwd: "", trigger_type: "cron", cron_expr: "0 9 * * 1-5", run_at: null, timezone: TZ, allowed_tools: "", disallowed_tools: "", sandbox: "guard", timeout_sec: 3600, max_budget_usd: null, retry_max: 0, verify: 0, notify: "failures", enabled: 1, append_system: "", recent: [], stats: { runs: 0, success: 0, failed: 0, live: 0, cost: 0, avg_sec: null, max_sec: null, streak_failed: 0 } });
 const opt = (v, cur, label) => `<option value="${esc(v)}"${String(v) === String(cur ?? "") ? " selected" : ""}>${esc(label ?? v)}</option>`;
+// A job's model choices: the CLI's own default, the models that CLI lists, and whatever the job
+// already names (a custom id stays selectable rather than silently dropping to the default).
+function modelOpts(backend, cur) {
+  const ms = S.backends.find((b) => b.name === backend)?.models || [];
+  const list = cur && !ms.includes(cur) ? [...ms, cur] : ms;
+  return opt("", cur || "", "default model") + list.map((m) => opt(m, cur)).join("");
+}
 function renderDrawer() {
   const host = qs("#jv-dr");
   const j = J.sel === "new" ? (J.draft || (J.draft = NEW_JOB())) : jobById(J.sel);
@@ -5442,7 +5451,7 @@ function settingsHtml(j) {
       `<label class="f"><span>Standing context <span class="hint">— appended to its system prompt (optional)</span></span><textarea name="append_system" rows="3">${esc(j.append_system || "")}</textarea></label></div>` +
     `<div class="pane" data-pane="agent"><div class="jv-sec">Agent</div>` +
       `<div class="cols"><label class="f"><span>CLI</span><select name="backend">${S.backends.map((b) => opt(b.name, j.backend)).join("")}</select></label>` +
-      `<label class="f"><span>Model</span><input name="model" value="${esc(j.model || "")}" placeholder="default"></label>` +
+      `<label class="f"><span>Model</span><select name="model">${modelOpts(j.backend, j.model)}</select></label>` +
       `<label class="f"><span>Working directory</span><input name="cwd" value="${esc(j.cwd || "")}" placeholder="client's default"></label></div>` +
       `<div class="cols"><label class="f"><span>Allowed tools <span class="hint">empty = all</span></span><input name="allowed_tools" value="${esc(j.allowed_tools || "")}" placeholder="Read,Grep,Glob,WebFetch = read-only"></label>` +
       `<label class="f"><span>Disallowed tools</span><input name="disallowed_tools" value="${esc(j.disallowed_tools || "")}" placeholder="Edit,Write"></label></div>` +
@@ -5593,6 +5602,7 @@ async function runAction(a, btn) {
 const jv = qs("#dlg-jobs");
 jv.addEventListener("click", async (e) => {
   const t = e.target;
+  if (t.closest("[data-mdl]")) return; // the row's model picker: its change handler saves it
   if (J.menu && !t.closest(".jv-menu")) { J.menu = false; const m = qs("#jv-dr .jv-menu > div"); if (m) m.hidden = true; }
   const b = (sel) => t.closest(sel);
   let x;
@@ -5636,7 +5646,23 @@ jv.addEventListener("click", async (e) => {
   if ((x = b("#jv-dr [data-a]"))) { const j = J.sel === "new" ? J.draft : jobById(J.sel); if (j) return jobAction(x.dataset.a, j, x); }
 });
 jv.addEventListener("input", (e) => { if (e.target.closest("#jv-dr") && e.target.matches("input, textarea, select")) J.dirty = true; });
-jv.addEventListener("change", (e) => { if (e.target.closest("#jv-dr") && e.target.matches("select")) J.dirty = true; if (e.target.id === "jv-sort") { J.sort = e.target.value; savePrefs(); renderJobList(); } });
+jv.addEventListener("change", async (e) => {
+  const t = e.target;
+  if (t.matches("[data-mdl]")) {
+    const j = jobById(t.dataset.mdl); if (!j) return;
+    t.disabled = true;
+    if (await patchJob(j.id, { model: t.value || null })) toast(`${j.name} · ${t.value || "default model"} from the next run`);
+    else t.disabled = false;
+    return;
+  }
+  if (t.closest("#jv-dr") && t.matches("select")) J.dirty = true;
+  // Another CLI lists other models: rebuild the picker, keeping the pick when the new CLI has it.
+  if (t.closest("#jv-dr") && t.name === "backend") {
+    const m = qs('#jv-dr [name="model"]');
+    if (m) { const ms = S.backends.find((b) => b.name === t.value)?.models || []; m.innerHTML = modelOpts(t.value, ms.includes(m.value) ? m.value : ""); }
+  }
+  if (t.id === "jv-sort") { J.sort = t.value; savePrefs(); renderJobList(); }
+});
 let jvQ = 0;
 qs("#jv-q").addEventListener("input", (e) => { clearTimeout(jvQ); jvQ = setTimeout(() => { J.q = e.target.value.trim(); renderJobChrome(); renderJobList(); }, 90); });
 qs("#jv-sys").addEventListener("change", async (e) => { J.sys = e.target.checked; J.checked.clear(); savePrefs(); await Promise.all([loadJobs(), J.view === "runs" ? loadFeed() : null]); renderJobs(); });

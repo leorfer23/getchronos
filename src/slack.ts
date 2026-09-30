@@ -134,8 +134,9 @@ export function ensureTriageJob(ws: Workspace): void {
     description: "Triage Slack DMs/@mentions → the workspace inbox (read-only)",
   };
   // Only set enabled on create; on update preserve the user's manual toggle so a daemon
-  // restart / workspace re-sync doesn't re-enable a job the user turned off.
-  if (existing) jobs.update(existing.id, fields);
+  // restart / workspace re-sync doesn't re-enable a job the user turned off. Same for the CLI +
+  // model: a pair he picked on the Jobs page outlives a reboot.
+  if (existing) jobs.update(existing.id, existing.model ? { ...fields, backend: existing.backend, model: existing.model } : fields);
   else jobs.create({ name, ...fields, enabled: true });
   reloadSchedules();
 }

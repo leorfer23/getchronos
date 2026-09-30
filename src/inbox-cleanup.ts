@@ -72,8 +72,9 @@ export function ensureCleanupJob(ws: Workspace, reload = true): void {
     timezone: CONFIG.slackTriageTz,
     description: "Close handled inbox rows + notes, rank the rest by importance (10:00 + 18:00)",
   };
-  // Same rule as the triage job: enabled is set on create only, so a job he switched off stays off.
-  if (existing) jobs.update(existing.id, fields);
+  // Same rule as the triage job: enabled is set on create only, so a job he switched off stays off,
+  // and a CLI + model he picked on the Jobs page stays picked.
+  if (existing) jobs.update(existing.id, existing.model ? { ...fields, backend: existing.backend, model: existing.model } : fields);
   else jobs.create({ name, ...fields, enabled: true });
   if (reload) reloadSchedules();
 }
