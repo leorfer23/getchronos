@@ -8,7 +8,9 @@ import { now } from "./util.js";
  */
 export const INBOX_SOURCES = ["slack", "jira", "clickup"] as const;
 export const INBOX_KINDS = ["dm", "mention", "self_note", "assigned", "comment", "status"] as const;
-export const INBOX_STATES = ["new", "snoozed", "dismissed", "dispatched"] as const;
+export const INBOX_STATES = ["new", "snoozed", "dismissed", "dispatched", "resolved"] as const;
+export const PRIORITIES = ["high", "normal", "low"] as const;
+export type Priority = (typeof PRIORITIES)[number];
 export type InboxSource = (typeof INBOX_SOURCES)[number];
 export type InboxKind = (typeof INBOX_KINDS)[number];
 export type InboxState = (typeof INBOX_STATES)[number];
@@ -31,6 +33,12 @@ export type InboxItem = {
   state: InboxState;
   snooze_until: string | null;
   dispatched_session: string | null;
+  /** Why an agent or the tracker sync closed it (state `resolved`): "you replied in the thread". */
+  resolved_reason: string | null;
+  /** The cleanup job's order within this workspace (0 = first). NULL = filed after the last ranking. */
+  rank: number | null;
+  priority: Priority | null;
+  rank_why: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -72,15 +80,30 @@ export const inbox = {
   get(id: string): InboxItem | undefined {
     return db.prepare("SELECT * FROM inbox_items WHERE id=?").get(id) as InboxItem | undefined;
   },
-  /** Newest first. Default: what still needs him (`new`); `all` adds snoozed/dismissed/dispatched. */
-  list(filter: { workspace_id?: string | null; all?: boolean; limit?: number } = {}): InboxItem[] {
+  /** A full id, or the 8-char prefix `mc inbox list` prints — undefined unless exactly one row matches. */
+  find(idOrPrefix: string): InboxItem | undefined {
+    const s = idOrPrefix.trim().toLowerCase();
+    if (s.length >= 36) return this.get(s);
+    if (!/^[0-9a-f-]{8,}$/.test(s)) return undefined;
+    const r = db.prepare("SELECT * FROM inbox_items WHERE id LIKE ? LIMIT 2").all(s + "%") as InboxItem[];
+    return r.length === 1 ? r[0] : undefined;
+  },
+  /**
+   * Default: what still needs him (`new`) — rows filed since the last ranking first (newest first),
+   * then in the cleanup job's order. `open` adds snoozed (what a re-check must look at); `all` is
+   * everything, newest first.
+   */
+  list(filter: { workspace_id?: string | null; all?: boolean; open?: boolean; state?: InboxState; limit?: number } = {}): InboxItem[] {
     wake();
     const where: string[] = [];
     if (filter.workspace_id) where.push("workspace_id=@workspace_id");
-    if (!filter.all) where.push("state='new'");
+    if (filter.state) where.push("state=@state");
+    else if (filter.open) where.push("state IN ('new','snoozed')");
+    else if (!filter.all) where.push("state='new'");
+    const order = filter.all || filter.state ? "updated_at DESC" : "rank IS NOT NULL, rank, created_at DESC";
     return db.prepare(
-      `SELECT * FROM inbox_items ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY created_at DESC LIMIT @limit`,
-    ).all({ workspace_id: filter.workspace_id ?? null, limit: filter.limit ?? 200 }) as InboxItem[];
+      `SELECT * FROM inbox_items ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY ${order} LIMIT @limit`,
+    ).all({ workspace_id: filter.workspace_id ?? null, state: filter.state ?? null, limit: filter.limit ?? 200 }) as InboxItem[];
   },
   /** Unread (`new`) per workspace — the Desk badge. Only the one workspace for a scoped caller. */
   counts(workspace_id?: string | null): Record<string, number> {
@@ -97,6 +120,31 @@ export const inbox = {
   snooze(id: string, until: string): InboxItem | undefined {
     db.prepare("UPDATE inbox_items SET state='snoozed', snooze_until=?, updated_at=? WHERE id=? AND state IN ('new','snoozed')").run(until, now(), id);
     return this.get(id);
+  },
+  /** Close a row whose ask already happened. Only an open row: a dispatched one belongs to its terminal. */
+  resolve(id: string, reason: string): InboxItem | undefined {
+    db.prepare("UPDATE inbox_items SET state='resolved', resolved_reason=?, snooze_until=NULL, updated_at=? WHERE id=? AND state IN ('new','snoozed')").run(reason, now(), id);
+    return this.get(id);
+  },
+  /** The operator's undo for an agent's (or his own ✕) close: it needs him after all. */
+  reopen(id: string): InboxItem | undefined {
+    db.prepare("UPDATE inbox_items SET state='new', resolved_reason=NULL, rank=NULL, updated_at=? WHERE id=? AND state IN ('resolved','dismissed')").run(now(), id);
+    return this.get(id);
+  },
+  /**
+   * Write one workspace's ranking. `order` is every open row the ranker kept, most important first;
+   * an open row it left out keeps rank NULL and so shows ahead as "not ranked yet". Rows of another
+   * workspace in `order` are ignored — the wall holds even when the ranker gets an id wrong.
+   */
+  rank(workspace_id: string, order: { id: string; priority: Priority; why?: string | null }[]): number {
+    const at = now();
+    const set = db.prepare("UPDATE inbox_items SET rank=@rank, priority=@priority, rank_why=@why, updated_at=@at WHERE id=@id AND workspace_id=@ws AND state IN ('new','snoozed')");
+    let n = 0;
+    db.transaction(() => {
+      db.prepare("UPDATE inbox_items SET rank=NULL WHERE workspace_id=? AND state IN ('new','snoozed')").run(workspace_id);
+      order.forEach((o, i) => { n += set.run({ id: o.id, rank: i, priority: o.priority, why: o.why ?? null, at, ws: workspace_id }).changes; });
+    })();
+    return n;
   },
   /** Take the row for a dispatch. False when it is already dispatched or dismissed — one press, one terminal. */
   claim(id: string): boolean {

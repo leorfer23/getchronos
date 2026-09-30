@@ -11,6 +11,11 @@
  * A row is a notification. The only way an agent starts from one is the operator pressing Dispatch
  * (POST /inbox/:id/dispatch → src/inbox-dispatch.ts). Nothing in this file opens a terminal.
  *
+ * Rows also close on their own once what they asked for has happened (state `resolved`, with a
+ * reason): the tracker sync closes Jira/ClickUp rows (trackerResolutions below), the Slack triage
+ * re-checks its open rows each run, and the twice-daily cleanup job (src/inbox-cleanup.ts) sweeps and
+ * ranks whatever is left. Closing only ever hides a notification — the operator can reopen it.
+ *
  * Everything that arrives here is untrusted external text on its way into an agent prompt (the
  * dispatch brief), so every field passes guard() at ingestion, same as the connector mirror.
  */
@@ -110,7 +115,7 @@ type Draft = Omit<NewInboxItem, "workspace_id">;
  *  - assigned: a task that is his now and was not last time, or a task new to the pull that is his,
  *    still open, and not one Chronos itself mirrors already (a ticket an agent filed and pushed).
  *  - comment/mention: a comment not seen before, not written by him, that @mentions him or sits on
- *    his task. His own comments are his own business.
+ *    his task, and that he has not already answered further down. His own comments are his own business.
  *  - status: his task's tracker label moved, unless Chronos is the one that pushed it there.
  */
 export function diffTracker(
@@ -147,8 +152,12 @@ export function diffTracker(
       items.push({ ...base, kind: "status", external_key: `${source}:${t.id}:status:${t.statusRaw}:${t.updated ?? nowIso}`, title: t.title, why: `Your ${label} task${key(t)} moved: ${p.s || "?"} → ${t.statusRaw || "?"}` });
 
     const seen = new Set(p.c);
+    // A comment he already answered further down the thread is not news — filing it would only
+    // have the resolve pass below close it again.
+    const lastMine = t.comments.reduce((at, c, i) => (c.author_id != null && String(c.author_id) === me ? i : at), -1);
     t.comments.forEach((c, i) => {
       if (seen.has(keys[i])) return;
+      if (i < lastMine) return;
       if (c.author_id != null && String(c.author_id) === me) return;
       const mentioned = (c.mentions ?? []).map(String).includes(me);
       if (!mentioned && !mine) return;
@@ -174,6 +183,43 @@ export function diffTracker(
   return { items, next };
 }
 
+/**
+ * Pure: the open tracker rows this pull shows are already taken care of, with why. Only evidence in
+ * the pull counts — a task that dropped out of the query proves nothing, so its rows stay.
+ *  - the task closed in the tracker → every row on it
+ *  - "assigned" and it is no longer his
+ *  - a comment/mention he has answered: a comment by him after the one that filed the row
+ *  - a status move superseded by a later status row on the same task
+ */
+export function trackerResolutions(
+  open: Pick<InboxItem, "id" | "kind" | "ref" | "external_key" | "created_at">[],
+  tasks: ExternalTask[],
+  me: string,
+  source: InboxSource,
+): { id: string; reason: string }[] {
+  const label = source === "jira" ? "Jira" : source === "clickup" ? "ClickUp" : source;
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const out: { id: string; reason: string }[] = [];
+  for (const r of open) {
+    const t = r.ref ? byId.get(r.ref) : undefined;
+    if (!t) continue;
+    if (isClosedTicketStatus(t.status)) { out.push({ id: r.id, reason: `Closed in ${label} (${t.statusRaw || t.status})` }); continue; }
+    const mine = (t.assignee_ids ?? []).map(String).includes(me);
+    if (r.kind === "assigned" && !mine) { out.push({ id: r.id, reason: `No longer assigned to you in ${label}` }); continue; }
+    if (r.kind === "comment" || r.kind === "mention") {
+      const ck = r.external_key.split(":comment:")[1];
+      const at = ck ? t.comments.findIndex((c) => commentKey(c) === ck) : -1;
+      const replied = t.comments.some((c, i) =>
+        c.author_id != null && String(c.author_id) === me && (at >= 0 ? i > at : !!c.created && c.created > r.created_at));
+      if (replied) out.push({ id: r.id, reason: `You replied on ${label}` });
+      continue;
+    }
+    if (r.kind === "status" && open.some((o) => o.kind === "status" && o.ref === r.ref && o.created_at > r.created_at))
+      out.push({ id: r.id, reason: "Superseded by a later status move" });
+  }
+  return out;
+}
+
 const snapKey = (wsId: string, source: string) => `inbox.tracker:${wsId}:${source}`;
 
 /** Diff one workspace's pull and file what it means. Returns how many rows were new. */
@@ -193,6 +239,11 @@ export function emitTrackerInbox(
   let added = 0;
   for (const d of items) if (addInboxItem({ ...d, workspace_id: wsId })) added++;
   kv.set(snapKey(wsId, source), JSON.stringify(next));
+  const open = inbox.list({ workspace_id: wsId, open: true, limit: 1000 }).filter((r) => r.source === source);
+  for (const { id, reason } of trackerResolutions(open, tasks, me, source)) {
+    const row = inbox.resolve(id, reason);
+    if (row) bus.publish({ topic: "inbox.updated", workspace_id: wsId, item_id: id });
+  }
   if (!prev) console.log(`[inbox] ${source}: baseline recorded for ${Object.keys(next.tasks).length} task(s) — changes from the next sync on`);
   return added;
 }

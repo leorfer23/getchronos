@@ -5,6 +5,21 @@ import { onceDecision } from "./once.js";
 
 const tasks = new Map<string, Cron>();
 
+/**
+ * A cheap daemon-side check that can skip a cron fire before any model runs — keyed by job-name
+ * prefix (e.g. `inbox-cleanup:` skips a client with nothing open). Returns the skip reason, or null.
+ */
+type CronGate = (job: { id: string; name: string; workspace_id: string | null }) => string | null;
+const gates = new Map<string, CronGate>();
+export function registerCronGate(prefix: string, gate: CronGate): void { gates.set(prefix, gate); }
+export function cronSkipReason(job: { id: string; name: string; workspace_id: string | null }): string | null {
+  for (const [prefix, gate] of gates) {
+    if (!job.name.startsWith(prefix)) continue;
+    try { const why = gate(job); if (why) return why; } catch (e) { console.warn(`[scheduler] gate ${prefix} threw:`, e); }
+  }
+  return null;
+}
+
 // True when this job still has a queued/running run — skip stacking cron fires on a long job.
 function hasInflight(jobId: string): boolean {
   return runs.list(jobId, 20).some((r) => r.status === "running" || r.status === "queued");
@@ -27,6 +42,11 @@ export function reloadSchedules(): void {
           try {
             if (hasInflight(job.id)) {
               console.log(`[scheduler] skip cron ${job.id.slice(0, 8)} — prior run still inflight`);
+              return;
+            }
+            const skip = cronSkipReason(job);
+            if (skip) {
+              console.log(`[scheduler] skip cron ${job.name} — ${skip}`);
               return;
             }
             dispatch(job.id, "cron");

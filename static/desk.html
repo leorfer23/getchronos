@@ -324,6 +324,8 @@
   .jot-view code { font:12.5px ui-monospace,Menlo,monospace; background:var(--surface-2); padding:0 3px; border-radius:3px; }
   .row.jot:not(.open) .jot-view { display:none; }
   .jot-day[hidden] { display:none; }
+  .row.jot.pri-high { box-shadow:inset 2px 0 0 var(--accent); }
+  .row.jot.pri-low .txt { opacity:.62; }
   .jot-day { margin:8px 6px 2px; font-size:12px; font-weight:600; color:var(--muted); display:flex; align-items:center; gap:8px; }
   .jot-day .rule { flex:1; height:1px; background:var(--line); }
 
@@ -928,6 +930,11 @@
   .ib-row .acts { grid-column:3; grid-row:2; display:flex; gap:4px; justify-content:flex-end; }
   .ib-row .acts .btn { padding:1px 10px; font-size:13.5px; }
   .ib-row.urgent .t::before { content:"● "; color:var(--danger); }
+  .ib-row.pri-high { box-shadow:inset 2px 0 0 var(--accent); }
+  .ib-row.pri-low .t, .ib-row.pri-low .w { opacity:.62; }
+  .ib-closed { margin-top:14px; font-size:13px; color:var(--faint); }
+  .ib-closed summary { cursor:pointer; }
+  .ib-closed .ib-row .t { font-weight:500; }
   .ib-empty { padding:34px 0; text-align:center; color:var(--faint); }
   /* Memory: the workspace's memory tree on the left (index → topic branches, inbox, other memos), one memo on the right. */
   #dlg-memory { width:min(1080px,96vw); }
@@ -1756,6 +1763,7 @@
     <h3>Inbox <span class="hint" id="ib-hint"></span></h3>
     <div class="tabs" id="ib-ws"></div>
     <div class="ib-list" id="ib-list"></div>
+    <details class="ib-closed" id="ib-closed" hidden><summary></summary><div id="ib-closed-list"></div></details>
     <div class="actions"><button class="btn" id="ib-close">Close</button></div>
   </div>
 </dialog>
@@ -4033,10 +4041,13 @@ function jotEl(j) {
   };
   return el;
 }
+const PRI_LABEL = { high: "High", normal: "Normal", low: "Low" };
 function paintJot(el, j) {
   el.classList.toggle("planned", j.source === "nextday");
   el.classList.toggle("by-agent", j.source === "agent");
-  el.title = j.source === "agent" && j.planned_by ? "Parked by terminal " + j.planned_by.slice(0, 8) : "";
+  el.classList.toggle("pri-high", j.priority === "high");
+  el.classList.toggle("pri-low", j.priority === "low");
+  el.title = [j.priority ? `${PRI_LABEL[j.priority] || j.priority}${j.rank_why ? " — " + j.rank_why : ""}` : "", j.source === "agent" && j.planned_by ? "Parked by terminal " + j.planned_by.slice(0, 8) : ""].filter(Boolean).join("\n");
   el.classList.toggle("open", S.jotOpen.has(j.id));
   el.style.setProperty("--ws", wsColor(j.workspace_id));
   qs(".ws", el).textContent = wsName(j.workspace_id);
@@ -4062,22 +4073,34 @@ function paintJot(el, j) {
   chk.hidden = !(j.follow_up_at && j.follow_up_check);
   chk.innerHTML = chk.hidden ? "" : "<b>Check</b>" + esc(j.follow_up_check);
 }
-// Follow-ups first (soonest first; one being worked on at the very top), then plain notes newest
-// first, then the plan-tomorrow day blocks. A rule labels each block once there is more than one.
+// Follow-ups first (soonest first; one being worked on at the very top), then plain notes, then the
+// plan-tomorrow day blocks. A rule labels each block once there is more than one.
+// Plain notes are grouped per client, clients with the most high-priority notes first; inside a
+// client, notes filed since the last cleanup come first (newest first), then the cleanup's order.
 function jotGroup(j) {
   const st = jotFollowState(j);
   if (st) return "fu";
-  return j.for_date ? "day:" + j.for_date : "notes";
+  return j.for_date ? "day:" + j.for_date : "notes:" + j.workspace_id;
 }
 function renderParked() {
   const q = (qs("#parked-q").value || "").trim().toLowerCase();
   const all = S.jots.filter((j) => j.status === "open");
+  const wsW = {};
+  for (const j of all) if (jotGroup(j).startsWith("notes:")) { const w = (wsW[j.workspace_id] ||= [0, 0]); w[0] += j.priority === "high"; w[1]++; }
   const rows = all
     .filter((j) => !q || (j.title + "\n" + (j.body || "") + "\n" + wsName(j.workspace_id)).toLowerCase().includes(q))
     .sort((a, b) => {
       const ga = jotGroup(a), gb = jotGroup(b);
-      const rank = (g) => (g === "fu" ? 0 : g === "notes" ? 1 : 2);
+      const rank = (g) => (g === "fu" ? 0 : g.startsWith("notes:") ? 1 : 2);
       if (rank(ga) !== rank(gb)) return rank(ga) - rank(gb);
+      if (rank(ga) === 1) {
+        if (ga !== gb) {
+          const x = wsW[a.workspace_id], y = wsW[b.workspace_id];
+          return y[0] - x[0] || y[1] - x[1] || wsName(a.workspace_id).localeCompare(wsName(b.workspace_id));
+        }
+        if ((a.rank == null) !== (b.rank == null)) return a.rank == null ? -1 : 1;
+        if (a.rank != null) return a.rank - b.rank;
+      }
       if (ga === "fu") {
         // Soonest first — overdue ones are simply the soonest. One already being worked sinks to the
         // bottom of the block: its terminal is on the rail, it needs nothing from you here.
@@ -4106,7 +4129,7 @@ function renderParked() {
     labelled.add(g);
     let rule = qs('[data-day="' + g + '"]', host);
     if (!rule) { rule = document.createElement("div"); rule.className = "jot-day"; rule.dataset.day = g; host.appendChild(rule); }
-    const label = g === "fu" ? "⏰ Follow-ups" : g === "notes" ? "📝 Notes" : "🌙 Next Day " + esc(g.slice(9));
+    const label = g === "fu" ? "⏰ Follow-ups" : g.startsWith("notes:") ? "📝 " + esc(wsName(g.slice(6)) || "Notes") : "🌙 Next Day " + esc(g.slice(9));
     rule.innerHTML = label + '<span class="rule"></span>';
     rule.hidden = groups.size < 2;
     rule.style.order = String(2 * i);
@@ -5950,7 +5973,10 @@ qs("#btn-memory").onclick = () => openMemory();
 // What needs you, per client (src/inbox.ts). The badge is the unread count across clients; the page
 // lists them grouped by client, newest first. A row starts nothing: Dispatch opens a terminal that
 // investigates and proposes (POST /inbox/:id/dispatch), Later snoozes it, ✕ lets it go.
-const IB = { counts: {}, items: [], ws: "", later: null, t: 0 };
+const IB = { counts: {}, items: [], closed: [], ws: "", later: null, t: 0 };
+// A client's weight for ordering groups: how many high-priority rows it holds, then how many rows.
+const wsWeight = (items) => [items.filter((i) => i.priority === "high").length, items.length];
+const byWeight = ([, a], [, b]) => { const x = wsWeight(a), y = wsWeight(b); return y[0] - x[0] || y[1] - x[1]; };
 const IB_ICON = { slack: "💬", jira: "🔷", clickup: "✅" };
 function syncInboxBadge() {
   const n = Object.values(IB.counts).reduce((a, b) => a + b, 0);
@@ -5958,8 +5984,12 @@ function syncInboxBadge() {
   qs("#btn-inbox").title = n ? `Inbox — ${n} need${n === 1 ? "s" : ""} you` : "Inbox — nothing needs you";
 }
 async function loadInbox() {
-  const r = await api("/inbox");
+  // The closed list only matters with the page open; the badge refresh stays one request.
+  const open = qs("#dlg-inbox").open;
+  const [r, c] = await Promise.all([api("/inbox"), open ? api("/inbox?state=resolved").catch(() => ({ items: [] })) : { items: IB.closed }]);
   IB.items = r.items || []; IB.counts = r.counts || {};
+  const since = Date.now() - 2 * 86_400_000;
+  IB.closed = (c.items || []).filter((i) => Date.parse(i.updated_at) >= since);
   syncInboxBadge();
   if (qs("#dlg-inbox").open) renderInbox();
 }
@@ -5973,6 +6003,7 @@ async function openInbox() {
 function renderInbox() {
   const total = Object.values(IB.counts).reduce((a, b) => a + b, 0);
   if (IB.ws && !IB.counts[IB.ws]) IB.ws = "";
+  renderInboxClosed();
   const withItems = S.workspaces.filter((w) => IB.counts[w.id]);
   qs("#ib-hint").textContent = total ? `${total} need${total === 1 ? "s" : ""} you` : "";
   qs("#ib-ws").innerHTML = withItems.length > 1
@@ -5980,21 +6011,45 @@ function renderInbox() {
     : "";
   const rows = IB.items.filter((i) => !IB.ws || i.workspace_id === IB.ws);
   if (!rows.length) { qs("#ib-list").innerHTML = `<div class="ib-empty">Nothing needs you.</div>`; return; }
+  // Rows arrive in the cleanup job's order (unranked newcomers first); clients with the most
+  // high-priority rows lead.
   const groups = new Map();
   for (const i of rows) { if (!groups.has(i.workspace_id)) groups.set(i.workspace_id, []); groups.get(i.workspace_id).push(i); }
-  qs("#ib-list").innerHTML = [...groups].map(([ws, items]) =>
+  qs("#ib-list").innerHTML = [...groups].sort(byWeight).map(([ws, items]) =>
     `<div class="ib-grp">${esc(wsName(ws) || "—")} <span>${items.length}</span></div>` + items.map(ibRow).join("")).join("");
+}
+// What an agent or the tracker sync closed in the last two days, with why — one click puts it back.
+function renderInboxClosed() {
+  const d = qs("#ib-closed");
+  const rows = IB.closed.filter((i) => !IB.ws || i.workspace_id === IB.ws);
+  d.hidden = !rows.length;
+  if (!rows.length) return;
+  qs("summary", d).textContent = `${rows.length} closed for you in the last 2 days`;
+  qs("#ib-closed-list").innerHTML = rows.map((i) => {
+    const title = i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${esc(i.title)} ↗</a>` : esc(i.title);
+    return `<div class="ib-row" data-id="${esc(i.id)}"><span class="src">${IB_ICON[i.source] || "•"}</span><div class="t">${title}</div>` +
+      `<div class="m">${esc(wsName(i.workspace_id) || "")} · ${esc(age(i.updated_at))}</div><div class="w">✓ ${esc(i.resolved_reason || "")}</div>` +
+      `<div class="acts"><button class="btn" data-a="reopen" title="It still needs you — put it back">↩ Reopen</button></div></div>`;
+  }).join("");
 }
 function ibRow(i) {
   const title = i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer" title="Open in ${esc(i.source)}">${esc(i.title)} ↗</a>` : esc(i.title);
   const acts = IB.later === i.id
     ? `<button class="btn" data-a="snooze" data-until="2h">2h</button><button class="btn" data-a="snooze" data-until="tomorrow 9:00">Tomorrow 9:00</button><button class="icon" data-a="back" title="Back">‹</button>`
     : `<button class="btn primary" data-a="go" title="Open a terminal in this client that investigates and proposes — it answers no one">Dispatch</button><button class="btn" data-a="later" title="Snooze">Later</button><button class="icon" data-a="dismiss" title="Dismiss">✕</button>`;
-  return `<div class="ib-row${i.urgent ? " urgent" : ""}" data-id="${esc(i.id)}"><span class="src" title="${esc(i.source)} · ${esc(i.kind)}">${IB_ICON[i.source] || "•"}</span>` +
+  const pri = i.priority ? ` pri-${esc(i.priority)}` : "";
+  const rankTip = i.priority ? `${PRI_LABEL[i.priority] || i.priority}${i.rank_why ? " — " + i.rank_why : ""}` : "Not ranked yet — arrived after the last cleanup";
+  return `<div class="ib-row${i.urgent ? " urgent" : ""}${pri}" data-id="${esc(i.id)}" title="${esc(rankTip)}"><span class="src" title="${esc(i.source)} · ${esc(i.kind)}">${IB_ICON[i.source] || "•"}</span>` +
     `<div class="t">${title}</div><div class="m">${i.actor ? esc(i.actor) + " · " : ""}${esc(age(i.created_at))}</div>` +
     `<div class="w" title="${esc(i.why || "")}">${esc(i.why || "")}</div><div class="acts">${acts}</div></div>`;
 }
 qs("#ib-ws").onclick = (e) => { const b = e.target.closest("[data-ws]"); if (!b) return; IB.ws = b.dataset.ws; renderInbox(); };
+qs("#ib-closed-list").onclick = async (e) => {
+  const b = e.target.closest('[data-a="reopen"]'); if (!b) return;
+  b.disabled = true;
+  try { await api("/inbox/" + b.closest("[data-id]").dataset.id + "/reopen", { method: "POST", body: "{}" }); await loadInbox(); }
+  catch (err) { b.disabled = false; toast(errMsg(err)); }
+};
 qs("#ib-list").onclick = async (e) => {
   const b = e.target.closest("[data-a]"); if (!b) return;
   const id = b.closest("[data-id]").dataset.id;

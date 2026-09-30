@@ -23,6 +23,7 @@ import { startIdeas } from "./ideas.js";
 import { startWriteback } from "./writeback.js";
 import { startIntake } from "./intake.js";
 import { installAllSlackMcp } from "./slack.js";
+import { ensureAllCleanupJobs } from "./inbox-cleanup.js";
 import { installAllFffMcp, installRtkRewriteScript } from "./efficiency-tools.js";
 import { startEgress } from "./egress.js";
 import { startActivity } from "./activity.js";
@@ -135,6 +136,7 @@ startFollowUps();
 startDayHeartbeat();
 startStandup();
 installAllSlackMcp();
+ensureAllCleanupJobs();
 installRtkRewriteScript();
 installAllFffMcp();
 

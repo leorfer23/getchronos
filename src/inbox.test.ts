@@ -137,8 +137,8 @@ test("assigned, mention, comment on his task, status move — and never his own 
 
   pull = [
     { ...mine, statusRaw: "In Review", comments: [
-      { id: "c10", author: "Ana", author_id: "acct-ana", body: "can you look?", created: null },
       { id: "c11", author: "Leo", author_id: ME, body: "on it", created: null },
+      { id: "c10", author: "Ana", author_id: "acct-ana", body: "can you look?", created: null },
     ] },
     { ...theirs, comments: [
       { id: "c20", author: "Bob", author_id: "acct-bob", body: "cc @Leo need your call", created: null, mentions: [ME] },

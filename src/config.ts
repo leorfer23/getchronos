@@ -226,6 +226,12 @@ export const CONFIG = {
   // timezone is just the author's. Override per deployment with CHRONOS_SLACK_TRIAGE_TZ.
   slackTriageTz: process.env.CHRONOS_SLACK_TRIAGE_TZ ?? LOCAL_TZ,
   slackTriageModel: process.env.CHRONOS_SLACK_TRIAGE_MODEL ?? "haiku",
+  // Inbox + notes cleanup (src/inbox-cleanup.ts): per workspace, closes what is already handled and
+  // ranks the rest. Operator-requested 2026-09-30 at 10:00 and 18:00 every day, in slackTriageTz.
+  // CHRONOS_INBOX_CLEANUP=0 removes the jobs. A fire with nothing open is skipped before any model runs.
+  inboxCleanup: process.env.CHRONOS_INBOX_CLEANUP !== "0",
+  inboxCleanupCron: process.env.CHRONOS_INBOX_CLEANUP_CRON ?? "0 10,18 * * *",
+  inboxCleanupModel: process.env.CHRONOS_INBOX_CLEANUP_MODEL ?? "sonnet",
   // Observability sweep cadence + thresholds.
   monitorEveryMin: Number(process.env.CHRONOS_MONITOR_MIN ?? 5),
   stuckRunHours: Number(process.env.CHRONOS_STUCK_RUN_HRS ?? 2),   // a 'running' run older than this = stuck
