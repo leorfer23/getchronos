@@ -45,6 +45,8 @@ function parse(argv) {
   }
   return { pos, opt, multi };
 }
+// Set by `mc hook`: a hook must never write to stderr or exit early (see hook()).
+let QUIET_QUEUE = false;
 async function req(method, path, body, headers) {
   const r = await fetch(API + path, {
     method,
@@ -54,6 +56,13 @@ async function req(method, path, body, headers) {
   const text = await r.text();
   let json; try { json = JSON.parse(text); } catch { json = text; }
   if (!r.ok) throw new Error(typeof json === "object" && json?.error ? json.error : `${r.status} ${text}`);
+  // On a host whose brain is away, status writes are queued and answered 202 {queued} (HOSTS.md →
+  // Reconnect and restarts). The write is safe on disk; say so and stop — the caller's success line
+  // would print fields a queued answer does not have.
+  if (r.status === 202 && json?.queued && !QUIET_QUEUE) {
+    console.error(`mc: queued — ${json.note || "brain unreachable; will deliver on reconnect"}`);
+    process.exit(0);
+  }
   return json;
 }
 function readStdin() {
@@ -471,6 +480,7 @@ async function hook(backend) {
   };
   const sid = process.env.MC_SESSION;
   if (!sid) return reply();
+  QUIET_QUEUE = true;
   // A `claude -p` the agent runs from inside its terminal inherits MC_SESSION. Its turns are not the
   // card's: Chronos pins a Desk claude's session id to the terminal id, so anything else is a child.
   if (backend === "claude" && j.session_id && j.session_id !== sid) return reply();

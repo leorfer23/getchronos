@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DATA_HEADER_BYTES, MAX_CONTROL_BYTES, MAX_DATA_PAYLOAD, PROTOCOL_VERSION, RING_BYTES, Ring, SeqTracker, WireError,
-  checkCompat, chunk, decodeControl, decodeData, encodeControl, encodeData,
+  checkCompat, chunk, decodeControl, decodeData, encodeControl, encodeData, type DataFrame,
 } from "./wire.js";
 
 // ───────────────────────────── control ─────────────────────────────
@@ -185,6 +185,72 @@ test("the ring copies input: a caller reusing its buffer does not rewrite histor
   r.append(buf);
   buf.write("XXXX");
   assert.equal(r.since(0).frames[0].bytes.toString(), "orig");
+});
+
+/** A RingSpill in memory, with a byte cap, so the ring's side of the contract is tested without disk. */
+const memSpill = (cap = Infinity) => {
+  let kept: DataFrame[] = [];
+  const s = {
+    kept: () => kept,
+    dropped: false,
+    put: (f: DataFrame) => {
+      if (kept.reduce((n, k) => n + k.bytes.length, 0) + f.bytes.length > cap) return false;
+      kept.push(f);
+      return true;
+    },
+    since: (seq: number) => kept.filter((f) => f.seq > seq),
+    ack: (seq: number) => { kept = kept.filter((f) => f.seq > seq); },
+    drop: () => { kept = []; s.dropped = true; },
+  };
+  return s;
+};
+
+test("with a spill, evicted unacked output is kept and replayed ahead of the ring, in seq order, with no gap", () => {
+  const sp = memSpill();
+  const r = new Ring(10, 2, sp);
+  for (const s of ["aaaa", "bbbb", "cccc", "dddd", "eeee"]) r.append(b(s));
+  assert.ok(r.bytes <= 10);
+  assert.deepEqual(sp.kept().map((f) => f.seq), [1, 2, 3]);
+  const rep = r.since(0);
+  assert.equal(rep.gap, false);
+  assert.deepEqual(rep.frames.map((f) => [f.ch, f.seq, f.bytes.toString()]), [[2, 1, "aaaa"], [2, 2, "bbbb"], [2, 3, "cccc"], [2, 4, "dddd"], [2, 5, "eeee"]]);
+  assert.deepEqual(r.since(2).frames.map((f) => f.seq), [3, 4, 5], "a peer that saw 2 gets the rest, spill included");
+  r.ack(4);
+  assert.deepEqual(sp.kept(), [], "the ack reaches the spill");
+  assert.deepEqual(r.since(4).frames.map((f) => f.seq), [5]);
+  r.dispose();
+  assert.equal(sp.dropped, true);
+});
+
+test("a spill that says no (full) is a gap again, as before", () => {
+  const r = new Ring(4, 0, memSpill(4));
+  for (const s of ["aaaa", "bbbb", "cccc"]) r.append(b(s)); // 1 spilled, 2 refused (full)
+  const rep = r.since(0);
+  assert.equal(rep.gap, true);
+  assert.deepEqual(rep.frames.map((f) => f.seq), [1, 3]);
+});
+
+test("already-acked frames are never spilled", () => {
+  const sp = memSpill();
+  const r = new Ring(8, 0, sp);
+  r.append(b("aaaa"));
+  r.ack(1);
+  r.append(b("bbbb"));
+  r.append(b("cccc"));
+  assert.deepEqual(sp.kept(), []);
+});
+
+test("ring + spill + tracker: a long outage replays every seq exactly once", () => {
+  const ring = new Ring(64, 1, memSpill());
+  const rx = new SeqTracker();
+  const seen: number[] = [];
+  const deliver = (seq: number) => { if (rx.accept(seq) === "ok") seen.push(seq); };
+  for (let i = 0; i < 3; i++) deliver(ring.append(b(`p${i}`)).seq);
+  ring.ack(3);
+  for (let i = 3; i < 500; i++) ring.append(Buffer.alloc(16, i)); // the brain is away: far past the ring
+  for (const f of ring.since(ring.acked).frames) deliver(f.seq);
+  assert.equal(seen.length, 500);
+  assert.deepEqual(seen, Array.from({ length: 500 }, (_, i) => i + 1));
 });
 
 // ───────────────────────────── receiver ─────────────────────────────

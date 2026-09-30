@@ -26,7 +26,9 @@ import { HOST_LABEL, join } from "./join.js";
 import { HostLink } from "./link.js";
 import { startForwarder } from "./forwarder.js";
 import { buildHello, checklist, formatChecklist, hostRoots, probeClis, profiles, sampleHostVitals, scanCheckouts } from "./inventory.js";
-import { VITALS_EVERY_MS } from "../machine.js";
+import { HeavyPool, VITALS_EVERY_MS, heavySlotsForCpus } from "../machine.js";
+import { Outbox } from "./outbox.js";
+import { SpillDir } from "./spill.js";
 import { CONFIG } from "../config.js";
 import { REPO_ROOT } from "../repo-root.js";
 import { HostTerminals } from "./terminals.js";
@@ -117,6 +119,13 @@ async function cmdRun(): Promise<number> {
   void hostBuild().then((b) => { buildCommit = b.commit; }).catch(() => {});
   // PTYs and runs live in this process, not in the link: a dropped link must not take either with it.
   const egress = new HostEgress();
+  // While the brain is away (HOSTS.md → Reconnect and restarts): output past the ring goes to disk,
+  // status writes wait in the outbox, and `mc heavy` is granted here, by the brain's own rule for
+  // this machine (ncpu/6).
+  const spill = new SpillDir(path.join(HOST_HOME, "spill"));
+  const spillFor = (ch: number) => spill.forChannel(ch);
+  const outbox = new Outbox(path.join(HOST_HOME, "outbox"));
+  const heavy = new HeavyPool("this-host", () => heavySlotsForCpus(os.cpus().length));
   const terminals = new HostTerminals({
     egress,
     root: REPO_ROOT,
@@ -127,6 +136,7 @@ async function cmdRun(): Promise<number> {
     cloneRoot: () => hostRoots()[0] ?? null,
     backends: hostBackends(),
     mcPort: mcPort(),
+    spill: spillFor,
   });
   let boundMcPort = mcPort();
   const procs = new HostProcs({
@@ -140,6 +150,7 @@ async function cmdRun(): Promise<number> {
     veto: (ws) => terminals.vetoFor(ws),
     allocCh: () => terminals.allocCh(),
     egress,
+    spill: spillFor,
   });
   terminals.shareChannels((ch) => procs.owns(ch));
   const cf = env("CF_ACCESS_CLIENT_ID") && env("CF_ACCESS_CLIENT_SECRET") ? { id: env("CF_ACCESS_CLIENT_ID"), secret: env("CF_ACCESS_CLIENT_SECRET") } : null;
@@ -166,8 +177,13 @@ async function cmdRun(): Promise<number> {
       worktree_ensure: (a) => procs.worktreeEnsure(a),
     },
   });
+  const replay = () => { if (link.state === "online" && outbox.size) void outbox.drain((q) => link.api(q)); };
+  // A drain stops at the first 5xx; try again on a slow tick rather than hammer a struggling brain.
+  setInterval(replay, 30_000).unref();
   link.on("online", () => {
     console.log(`[host] ${id} online via ${link.url}`);
+    if (outbox.size) console.log(`[host] replaying ${outbox.size} mc write${outbox.size === 1 ? "" : "s"} queued while the brain was away`);
+    replay();
     // Remember the operator's name for this computer, so the menu bar says "m2" even after a
     // restart while the brain is away (not a secret: it is the name on the Desk's Computers list).
     if (link.brainName && link.brainName !== knownName) {
@@ -197,6 +213,8 @@ async function cmdRun(): Promise<number> {
     try {
       fwd = await startForwarder(link, {
         port,
+        outbox,
+        heavy,
         // An allowlist of fields (status.ts): loopback-only and unauthenticated, so never a token, an
         // env var, a workspace or a title — what the menu bar item and `host status` read.
         status: () => buildStatus({

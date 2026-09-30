@@ -45,6 +45,26 @@ export type HostLinkOptions = {
 
 type Handler = (f: any) => void;
 
+/** How long an agent should wait before trying the brain again (the host redials within a minute). */
+export const RETRY_AFTER_S = 60;
+
+/**
+ * The answer to a forwarded `mc` call the brain cannot take right now. Still a 503 — `mc` treats it as
+ * a failure and exits 1 — but with words the agent can act on, printed by `mc` as `mc: <error>`. An
+ * ask gets its own: waiting on an answer nobody can see would stall the agent for nothing.
+ */
+export function unreachable(path: string): ApiResponse {
+  const ask = /^\/api\/asks(?:[/?]|$)/.test(path);
+  const error = ask
+    ? "brain unreachable from this host — the operator can't see asks right now; continue if you can, or retry later"
+    : "brain unreachable from this host — continue if you can, or retry later";
+  return {
+    status: 503,
+    headers: { "content-type": "application/json", "retry-after": String(RETRY_AFTER_S) },
+    body: Buffer.from(JSON.stringify({ error, retry_after_s: RETRY_AFTER_S })),
+  };
+}
+
 /**
  * Connect headers for one URL. CF Access service-token headers only go to a CA-verified (tunnel)
  * URL: sending them to a LAN IP would hand a Cloudflare credential to whatever answers there.
@@ -99,7 +119,7 @@ export class HostLink extends EventEmitter {
   private pingTimer: NodeJS.Timeout | null = null;
   private missed = 0;
   private pingN = 0;
-  private pendingApi = new Map<string, { resolve: (r: ApiResponse) => void; timer: NodeJS.Timeout }>();
+  private pendingApi = new Map<string, { resolve: (r: ApiResponse) => void; timer: NodeJS.Timeout; path: string }>();
   private readonly handlers: Record<string, Handler>;
 
   constructor(private readonly o: HostLinkOptions) {
@@ -151,16 +171,16 @@ export class HostLink extends EventEmitter {
     this.stopped = true;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.clearTimers();
-    for (const [id, p] of this.pendingApi) { clearTimeout(p.timer); p.resolve({ status: 503, headers: {}, body: null }); this.pendingApi.delete(id); }
+    for (const [id, p] of this.pendingApi) { clearTimeout(p.timer); p.resolve(unreachable(p.path)); this.pendingApi.delete(id); }
     const ws = this.ws;
     this.ws = null;
     if (ws) await new Promise<void>((r) => { ws.once("close", () => r()); try { ws.close(1000, "host stopping"); } catch { r(); } setTimeout(r, 1000).unref?.(); });
     this.setState("stopped");
   }
 
-  /** Forward one `mc` HTTP request over the link. Resolves 503 when the brain is not reachable. */
+  /** Forward one `mc` HTTP request over the link. Resolves 503 (`unreachable`) when the brain is not reachable. */
   api(req: ApiRequest, timeoutMs = 75_000): Promise<ApiResponse> {
-    if (this.state !== "online") return Promise.resolve({ status: 503, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ error: "brain unreachable from this host" })) });
+    if (this.state !== "online") return Promise.resolve(unreachable(req.path));
     const req_id = crypto.randomUUID();
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -168,11 +188,11 @@ export class HostLink extends EventEmitter {
         resolve({ status: 504, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ error: "brain did not answer in time" })) });
       }, timeoutMs);
       timer.unref?.();
-      this.pendingApi.set(req_id, { resolve, timer });
+      this.pendingApi.set(req_id, { resolve, timer, path: req.path });
       if (!this.send({ t: "api", req_id, ...req })) {
         clearTimeout(timer);
         this.pendingApi.delete(req_id);
-        resolve({ status: 503, headers: {}, body: null });
+        resolve(unreachable(req.path));
       }
     });
   }
@@ -227,7 +247,7 @@ export class HostLink extends EventEmitter {
       // Link down, not process dead: the PTYs keep running and buffering; the brain re-attaches later.
       this.o.terminals?.linkDown();
       this.o.procs?.linkDown();
-      for (const [id, p] of this.pendingApi) { clearTimeout(p.timer); p.resolve({ status: 503, headers: {}, body: null }); this.pendingApi.delete(id); }
+      for (const [id, p] of this.pendingApi) { clearTimeout(p.timer); p.resolve(unreachable(p.path)); this.pendingApi.delete(id); }
       this.lastError = `closed ${code}${reason?.length ? ` ${reason}` : ""}`;
       this.emit("offline", this.lastError);
       // 4401 revoked / 4403 identity / 4426 version: retrying cannot help, and hammering the brain

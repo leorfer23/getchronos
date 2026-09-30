@@ -208,6 +208,8 @@ Both problems have the same fix:
   brain treats forwarded requests as **remote**. The "no token on loopback = trusted" rule
   (`authz.ts:22-29`) never applies to them. They need the workspace token the brain issued for that
   session, and the session must belong to that host.
+- When the brain is unreachable the forwarder does not just fail: status writes are queued and
+  replayed, `mc heavy` is granted locally, the rest get a readable 503 (see *Reconnect and restarts*).
 - The per-workspace **egress proxy** (`egress.ts`) runs on the host, next to the agent, with the
   policy the brain sends. *(Phase 5: without credential brokering — a workspace whose egress
   intercepts TLS to inject a secret stays on the brain, so no CA exists on a host; see phase 5.)*
@@ -239,6 +241,7 @@ operator never gets a surprise cloud bill.
 
 **Heavy slots are per host.** `mc heavy` asks through the forwarder, and the brain grants from that
 host's pool (`ncpu/6` of *that* machine). Two suites on two machines don't wait for each other.
+While the brain is away the host grants from its own pool of the same size.
 
 ### Reconnect and restarts
 
@@ -246,11 +249,32 @@ What survives what:
 
 | Event | PTYs on that host | What the brain does |
 |---|---|---|
-| Link drops (Wi-Fi, sleep) | keep running; output buffered in the ring | cards show "host offline"; on reconnect `hello.live[]` → re-attach, resend from the last ack |
+| Link drops (Wi-Fi, sleep, the brain's lid closed) | keep running; output buffered in the ring, overflow spilled to disk; `mc` keeps working (below) | cards show "host offline"; on reconnect `hello.live[]` → re-attach, resend from the last ack (spilled output first), then the host replays its queued `mc` writes |
 | Brain restart / deploy | **remote PTYs keep running** | boot reconciles: `listLive()` per host, re-attach. `reapAll()` (`store/sessions.ts:365`) and the boot-time `interrupted` sweep (`db.ts:58-74`) only apply to `host_id = 'local'`. Otherwise every deploy would double the fleet. |
 | `chronos host` restart / update | die with it (children of the host process) | revive with `--resume` **on the same host**, the same path `local` takes after a deploy today |
 | Host offline past `CHRONOS_HOST_FAILOVER_GRACE_MIN` (default 5) | unreachable (powered off, asleep, off the network) | **host failover** (`src/host-failover.ts`): each live terminal on it is reopened on an online computer — the brain when it has the repo, else a host that reported a checkout. The branch is checked out fresh from origin when it was pushed (else a new worktree off the default branch, and the seed says so). A claude terminal resumes its conversation from the brain's transcript mirror (copied to `<profile>/projects/<slug of the new cwd>/<new id>.jsonl`, the only place `claude --resume` looks); any other gets a brief. The old row ends with `end_reason` `host_failover`, one line per host goes to the Desk chat, and when the host reconnects reconcile kills the old process there (its row ended here) — never resumed. Counted from the brain's boot and its last wake from sleep too (`kern.waketime`, dark wakes included — a closed lid on battery wakes the brain for seconds at a time, too short for a host to finish a hello), so neither a brain restart nor a closed lid moves anything that simply has not reconnected yet. `CHRONOS_HOST_FAILOVER=off` restores the wait |
 | Host gone for good | — | Desk → Computers → Remove: its live sessions end, its checkouts are forgotten, its token is revoked |
+
+**While the brain is away, a host keeps its agents working and catches up after** (`src/hostd/`):
+
+- **Status writes are queued.** `mc state`, `mc progress`, card hook events, `mc step`, `mc learn`,
+  `mc remember`, `mc pad add|append` — an explicit allowlist in `outbox.ts` — go to
+  `~/.chronos-host/outbox/` (one 0600 file each, with the request's own headers, so the brain still
+  attributes them to the right terminal). The forwarder answers `202 {queued:true}`; `mc` prints
+  `mc: queued — …` and exits 0. After the welcome they are replayed in order, and while any are left
+  new allowlisted writes queue behind them (a fresh `done` must not be overwritten by a stale
+  `working`). 4xx drops an entry, 503 stops the replay until the next try (30 s), a 5xx five times
+  drops it. Capped at 2000 writes / 16 MB, oldest dropped first. Delivery is at-least-once.
+- **Everything else answers 503 with words**: `{error: "brain unreachable from this host — …",
+  retry_after_s: 60}`, and an ask (`mc ask-robert`) says the operator can't see it right now. Never
+  queued: a question nobody can see is not worth waiting on.
+- **`mc heavy` is granted from the host's own pool** (`ncpu/6`, the brain's rule for this machine),
+  also when the link drops mid-poll. A slot granted locally stays local until released, even after
+  the brain is back — for that overlap the host can briefly run up to twice its suites.
+- **Output past the ring spills to disk** (`spill.ts`, `~/.chronos-host/spill/`, 64 MB per
+  channel): what the ring would evict unacked is appended to a per-channel file with its seq and
+  resent ahead of the ring on attach, so the brain's ack/resend logic sees one unbroken stream. The
+  file goes once the brain acks past it; a full spill is a gap, as before. Wiped at host start.
 
 A host that loses the brain for longer than `CHRONOS_HOST_ORPHAN_MIN` (default: never) can be set
 to stop its agents. By default it lets them finish: the work is committed to git on the host either

@@ -375,6 +375,22 @@ export type Replay = {
 };
 
 /**
+ * Where a `Ring` puts unacked frames it has to evict, instead of losing them: the brain can be away
+ * for hours (a closed lid) while an agent keeps printing. The host backs it with a file per channel
+ * (hostd/spill.ts); this module stays free of I/O. Frames arrive oldest first, in seq order.
+ */
+export interface RingSpill {
+  /** Keep this evicted frame. false = full (or the disk said no): it is lost, and replay reports the hole. */
+  put(f: DataFrame): boolean;
+  /** Kept frames after `seq`, oldest first. */
+  since(seq: number): DataFrame[];
+  /** The peer has everything through `seq`. */
+  ack(seq: number): void;
+  /** The channel is gone: forget everything. */
+  drop(): void;
+}
+
+/**
  * One channel's outbound history, bounded by BYTES (not frames: a burst of tiny frames and one fat
  * repaint should cost the same memory they occupy).
  *
@@ -384,7 +400,9 @@ export type Replay = {
  *
  * When unacked output passes `cap`, the oldest frames are evicted anyway. The alternative — blocking
  * the PTY until the brain acks — would stall an agent because a laptop lid closed, which is exactly
- * what HOSTS.md says must not happen ("PTYs keep running; output buffered in the ring").
+ * what HOSTS.md says must not happen ("PTYs keep running; output buffered in the ring"). With a
+ * `spill`, an evicted unacked frame goes there instead of being lost, and `since()` replays it ahead
+ * of the ring — same seqs, so the brain's ack/resend logic cannot tell the difference.
  */
 export class Ring {
   private frames: DataFrame[] = [];
@@ -395,7 +413,7 @@ export class Ring {
   private lostThrough = 0;
   private ackedThrough = 0;
 
-  constructor(readonly cap = RING_BYTES, readonly ch = 0) {}
+  constructor(readonly cap = RING_BYTES, readonly ch = 0, private readonly spill: RingSpill | null = null) {}
 
   /** Bytes currently held. */
   get bytes(): number { return this.size; }
@@ -418,6 +436,7 @@ export class Ring {
     if (!Number.isSafeInteger(seq) || seq <= this.ackedThrough) return; // stale or duplicate ack
     const upTo = Math.min(seq, this.lastSeq); // an ack from the future is clamped, not trusted
     this.ackedThrough = upTo;
+    this.spill?.ack(upTo);
     while (this.head < this.frames.length && this.frames[this.head].seq <= upTo) {
       this.size -= this.frames[this.head].bytes.length;
       this.head++;
@@ -428,14 +447,20 @@ export class Ring {
   /** Everything after `seq`, oldest first, and whether a hole precedes it. */
   since(seq: number): Replay {
     const from = Math.max(0, seq);
-    const frames = this.frames.slice(this.head).filter((f) => f.seq > from);
+    // Spilled frames are all older than anything still in the ring (eviction is oldest-first).
+    const frames = [...(this.spill?.since(from) ?? []), ...this.frames.slice(this.head).filter((f) => f.seq > from)];
     return { frames, gap: this.lostThrough > from };
+  }
+
+  /** The channel is gone for good: let the spill forget what it kept. */
+  dispose(): void {
+    this.spill?.drop();
   }
 
   private evictOne(): void {
     const f = this.frames[this.head++];
     this.size -= f.bytes.length;
-    if (f.seq > this.ackedThrough) this.lostThrough = Math.max(this.lostThrough, f.seq);
+    if (f.seq > this.ackedThrough && !this.spill?.put(f)) this.lostThrough = Math.max(this.lostThrough, f.seq);
   }
 
   private compact(): void {

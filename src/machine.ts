@@ -274,7 +274,8 @@ function detach(w: Waiter): Poll | null {
  * All pools live on the brain: a slot is a permit, not a process, and the brain is where every
  * `mc heavy` already lands (the host's forwarder carries it). A host restart therefore loses
  * nothing; a brain restart forgets every slot, which is fine — see the API note on why slots are
- * in-memory.
+ * in-memory. The one exception: a host keeps a pool of its own for while its brain is unreachable
+ * (hostd/forwarder.ts), so tests still run one suite per ~6 cores when the brain's lid is closed.
  */
 export class HeavyPool {
   private readonly slots = new Map<string, Slot>();

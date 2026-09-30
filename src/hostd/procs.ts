@@ -23,7 +23,7 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import {
   EXEC_MAX_BYTES, PROC_RING_BYTES, Ring, chunk,
-  type CheckoutInfo, type ExecResult, type ExecSpec, type LiveInfo,
+  type CheckoutInfo, type ExecResult, type ExecSpec, type LiveInfo, type RingSpill,
 } from "../hostlink/wire.js";
 import { expandHomeRelative } from "../hosts/spawn-spec.js";
 import {
@@ -68,6 +68,8 @@ export type HostProcsOptions = CloneOpts & {
   /** SIGTERM → SIGKILL. */
   killGraceMs?: number;
   ringBytes?: number;
+  /** Same as the terminals': evicted unacked stdout goes to disk instead of being lost (spill.ts). */
+  spill?: (ch: number) => RingSpill;
 };
 
 type ProcChan = {
@@ -244,7 +246,7 @@ export class HostProcs {
 
     const ch = this.o.allocCh();
     const c: ProcChan = {
-      ch, runId: spec.run_id, child, ring: new Ring(this.o.ringBytes ?? PROC_RING_BYTES, ch),
+      ch, runId: spec.run_id, child, ring: new Ring(this.o.ringBytes ?? PROC_RING_BYTES, ch, this.o.spill?.(ch) ?? null),
       streaming: !!this.link?.online(), exit: null, exitSent: false, partial: Buffer.alloc(0),
       stderrTail: "", timedOut: false, watchdog: null,
       backend: backend.name, cwd, startedAt: Date.now(), lastOut: Date.now(),
@@ -299,7 +301,7 @@ export class HostProcs {
     if (c.partial.length) { this.emit(c, c.partial); c.partial = Buffer.alloc(0); }
     c.exit = { code, signal: signal ?? null, timed_out: c.timedOut };
     this.sendExit(c);
-    c.forgetT = setTimeout(() => this.chans.delete(c.ch), EXITED_KEEP_MS);
+    c.forgetT = setTimeout(() => this.forget(c.ch), EXITED_KEEP_MS);
     c.forgetT.unref?.();
   }
 
@@ -350,6 +352,11 @@ export class HostProcs {
     const c = this.chans.get(ch);
     if (!c || !c.exit) return;
     if (c.forgetT) clearTimeout(c.forgetT);
+    this.forget(ch);
+  }
+
+  private forget(ch: number): void {
+    this.chans.get(ch)?.ring.dispose();
     this.chans.delete(ch);
   }
 
