@@ -5,7 +5,7 @@
 // Build & run:
 //   swiftc -O desktop/app.swift -o ~/.mc/bin/mc-app && mc-app &
 //
-// Token: same rule as overlay.swift — this process runs unsandboxed as the operator, reads
+// Token: same rule as the retired overlay — this process runs unsandboxed as the operator, reads
 // ~/chronos/.admin-token itself and injects window.__MC_TOKEN__; the daemon never templates the
 // token into HTML (sandboxed job agents keep loopback network and could read it back out).
 
@@ -210,7 +210,7 @@ func jsString(_ s: String) -> String {
 }
 let bridge = Bridge()
 
-// Same read as overlay.swift: env override, else ~/chronos/.admin-token, once at launch.
+// Same token read: env override, else ~/chronos/.admin-token, once at launch.
 func adminToken() -> String? {
   if let env = ProcessInfo.processInfo.environment["CHRONOS_ADMIN_TOKEN"], !env.isEmpty { return env }
   let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("chronos/.admin-token")

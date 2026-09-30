@@ -14,10 +14,10 @@ const home = os.homedir();
 const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 // Admin token gates workspace mutations (create/delete/repos) so sandboxed agents curling
-// localhost can't spin up junk workspaces — only the native overlay, which reads this same file
-// directly (it runs unsandboxed; see desktop/overlay.swift), may mutate workspaces. Persisted in a
+// localhost can't spin up junk workspaces — only the native wrapper, which reads this same file
+// directly (it runs unsandboxed; see desktop/app.swift), may mutate workspaces. Persisted in a
 // sandbox-denied file so agents can't read it, and NEVER served back over HTTP — not even to a
-// loopback caller, since agents share the same loopback path as the overlay and could just curl it
+// loopback caller, since agents share the same loopback path as the wrapper and could just curl it
 // back out (that was PER-4; see src/static-html.ts).
 function loadOrCreateAdminToken(): string {
   if (process.env.CHRONOS_ADMIN_TOKEN) return process.env.CHRONOS_ADMIN_TOKEN;

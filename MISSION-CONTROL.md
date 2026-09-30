@@ -11,7 +11,7 @@
 >
 > **Status:** shipped and running as of **2026-07-12** (hardening `81305ea..33832c9` + `e4860f2`).
 > Present tense = in the code today. Unshipped items are labelled. **Stack:** Node/TS + `better-sqlite3`
-> + Express + `ws` + `node-pty`; native ticket overlay (`static/overlay.html`); Telegram bot.
+> + Express + `ws` + `node-pty`; Telegram bot.
 
 > ### ⚠️ DEPLOY — the only correct restart
 > launchd (`sh.chronos.daemon`, `gui/501`) runs **`dist/index.js`**, not the TS source. A bare
@@ -713,10 +713,10 @@ before timed events.
   (`CHRONOS_STALL_MINUTES`, default 15) and **ask reminders** (`CHRONOS_ASK_REMIND_HOURS`, default
   2h) — see §5b. **Daily digest** at `digestHour`: spend + open/review/live per workspace + review
   queue + unanswered-ask count/oldest age.
-- **Admin token:** `~/chronos/.admin-token` (`0600`, sandbox-denied). The native overlay
-  (`desktop/overlay.swift`) reads the file and injects `window.__MC_TOKEN__` via WKUserScript —
+- **Admin token:** `~/chronos/.admin-token` (`0600`, sandbox-denied). The native wrapper
+  (`desktop/app.swift`) reads the file and injects `window.__MC_TOKEN__` via WKUserScript —
   never the daemon over HTTP (sandboxed agents keep loopback for `mc`/egress, so templating into
-  `/overlay.html` would leak it; see PER-4 / `src/static-html.ts`). Sent as `x-mc-admin`.
+  `/desk` would leak it; see PER-4 / `src/static-html.ts`). Sent as `x-mc-admin`.
 
 ---
 
@@ -780,10 +780,9 @@ GET /inbox?workspace=&all=&open=&state=   GET/POST /workspaces/:id/inbox   POST*
 POST /inbox/:id/resolve   POST /workspaces/:id/rank
 ```
 
-The Express server also serves the native overlay at `/overlay.html` (verbatim HTML via
-`serveHtml` — no token templating; see PER-4 / `src/static-html.ts`); `/` and `/index.html`
-302-redirect there. The same rule serves `/app` (Mission UI), `/desk` (the terminal wall), `/phone`
-and `/altitude` (the fleet from above). A WebSocket serves live transcripts/terminals.
+The Express server serves `/app` (Mission UI), `/desk` (the terminal wall), `/phone`
+and `/altitude` (the fleet from above) as verbatim HTML via `serveHtml` — no token templating;
+see PER-4 / `src/static-html.ts`. `/` and `/index.html` 302-redirect to `/desk`. A WebSocket serves live transcripts/terminals.
 
 `/api/analytics` is scoped like every other workspace-touching route: a caller holding a workspace
 token is pinned to its own workspace whatever `?workspace=` says, and the workspace roster in the
@@ -836,9 +835,8 @@ activity + cost ledgers; Telegram control plane; backups, monitor and recovery c
   time, a chat-style composer, and a triage screen. Put an authenticating tunnel in front of it.
 - **Mission UI** (`static/app.html`, `GET /app`) — Chat / Tickets / Board / Fleet, the full-window
   read-write surface.
-- **Overlay** (`static/overlay.html`) — the compact floating ticket panel. `GET /` and
-  `/index.html` 302 here; the old React dashboard that used to live at `/` was deleted 2026-08-01
-  and `/classic` still 410s.
+- `GET /` and `/index.html` 302 to `/desk`; the old React dashboard that used to live at `/` was
+  deleted 2026-08-01 and `/classic` still 410s. The floating ticket overlay was removed 2026-09-30.
 
 None of these has a build step. `marked` and `DOMPurify` are vendored under `static/vendor/`.
 
@@ -847,9 +845,8 @@ None of these has a build step. `marked` and `DOMPurify` are vendored under `sta
   result schema was live-verified; camelCase `usage` fields, no cost — subscription pricing.)
 - **Native shells are Swift, not Tauri.** `desktop/app.swift` builds to `mc-app` (a normal
   resizable window; it takes the page as an argument — `mc-app /desk` is the terminal wall, a bare
-  `mc-app` opens `/app`), and `desktop/overlay.swift` builds to `mc-overlay` (the always-on-top
-  ticket panel). Both read `.admin-token` themselves and inject `window.__MC_TOKEN__`, which is what
-  lets `/desk` attach to `/term`. `scripts/build-app.sh` bundles the first one.
+  `mc-app` opens `/app`). It reads `.admin-token` itself and injects `window.__MC_TOKEN__`, which is what
+  lets `/desk` attach to `/term`. `scripts/build-app.sh` bundles it.
 - **`desktop/src-tauri/` is vestigial.** A Tauri v2 scaffold from before the Swift shells existed.
   Nothing builds it; `scripts/build-app.sh` reads one file out of it (`icons/icon.icns`). Retiring it
   properly — keep the icons, drop the Rust — is a decision for another day.

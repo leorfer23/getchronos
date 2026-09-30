@@ -7,7 +7,7 @@
 //
 // Usage:
 //   npm run install:launchd            # daemon only
-//   npm run install:launchd -- --all   # daemon + whisper + overlay + cloudflared (skips ones not set up)
+//   npm run install:launchd -- --all   # daemon + whisper + cloudflared (skips ones not set up)
 //   npm run install:launchd -- --print # render to stdout, install nothing
 
 import fs from "node:fs";
@@ -39,7 +39,7 @@ const subs = {
   __PORT__: port,
 };
 
-// Only the daemon is mandatory. whisper needs a downloaded model, overlay needs the mc CLI —
+// Only the daemon is mandatory. whisper needs a downloaded model, the app needs its bundle —
 // installing an agent whose program does not exist just gets launchd into a crash-restart loop,
 // so each optional agent states its precondition and is skipped when unmet.
 const AGENTS = [
@@ -68,11 +68,6 @@ const AGENTS = [
       fs.existsSync(path.join(home, ".mc", "mc-app.app"))
         ? null
         : "~/.mc/mc-app.app not installed (scripts/build-app.sh)",
-  },
-  {
-    label: "sh.chronos.overlay",
-    precondition: () =>
-      fs.existsSync(path.join(home, ".mc", "bin", "mc-overlay")) ? null : "~/.mc/bin/mc-overlay not installed",
   },
   {
     // Opens WhatsApp at login so scheduled sends find it running with a window (see desktop/README.md).

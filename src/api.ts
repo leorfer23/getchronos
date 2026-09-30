@@ -2614,7 +2614,7 @@ export function startServer() {
   });
 
   // Gate workspace/repo/trigger mutations: only the native overlay (which reads the admin token
-  // from ~/chronos/.admin-token itself — it runs unsandboxed, see desktop/overlay.swift) may
+  // from ~/chronos/.admin-token itself — it runs unsandboxed, see desktop/app.swift) may
   // create/edit/delete them. Sandboxed agents are denied that file and the daemon never hands the
   // token out over HTTP, so they can't spin up junk workspaces or mint cross-workspace hooks. Read
   // routes stay open; ticket/memo/job routes stay open (agents need those).
@@ -4690,26 +4690,22 @@ export function startServer() {
   });
 
   app.use("/api", api);
-  // The React dashboard (ui/) is gone — deleted along with its Vite build. The only surviving web
-  // surface is the native overlay (static/overlay.html, a hand-written page with vendored
-  // marked.min.js/purify.min.js under static/vendor/ — no build step). The admin token is NEVER
-  // templated into static HTML, not even for loopback callers: sandboxed job agents keep loopback
-  // network (the sandbox profile allows localhost so `mc`/the egress proxy keep working), so a
-  // token baked into the response is one `curl localhost:7777/overlay.html` away from the very
-  // agents the token file's sandbox-deny exists to keep it from. The native overlay reads
-  // ~/chronos/.admin-token itself (it runs unsandboxed as the operator) and injects it with a
-  // WKUserScript — see desktop/overlay.swift. A page opened in a plain browser therefore has no
-  // token and cannot drive the admin-only routes; use the overlay for those.
+  // The web surfaces are hand-written pages under static/ (vendored marked.min.js/purify.min.js under
+  // static/vendor/ — no build step). The admin token is NEVER templated into static HTML, not even
+  // for loopback callers: sandboxed job agents keep loopback network (the sandbox profile allows
+  // localhost so `mc`/the egress proxy keep working), so a token baked into the response is one
+  // `curl localhost:7777/desk` away from the very agents the token file's sandbox-deny exists to
+  // keep it from. The native wrapper reads ~/chronos/.admin-token itself (it runs unsandboxed as the
+  // operator) and injects it with a WKUserScript — see desktop/app.swift. A page opened in a plain
+  // browser therefore has no token until the operator pastes it once.
   const staticDir = path.join(__dirname, "..", "static");
-  const overlayPath = path.join(staticDir, "overlay.html");
   const noStore = {
     etag: false as const,
     lastModified: false as const,
     setHeaders: (res: express.Response) => res.setHeader("Cache-Control", "no-store, must-revalidate"),
   };
-  const sendOverlay = serveHtml(overlayPath, "Overlay UI missing from static/overlay.html.");
-  // Mission UI (static/app.html): Chat / Tickets / Board / Fleet — the full-window surface the
-  // compact overlay satellites. Same token rules as the overlay: never injected into HTML; the
+  // Mission UI (static/app.html): Chat / Tickets / Board / Fleet — the full-window surface.
+  // Same token rules as the Desk: never injected into HTML; the
   // native wrapper supplies window.__MC_TOKEN__, a plain browser gets the token-free read-write
   // subset (tickets/board/fleet — chat and admin mutations 403).
   const sendApp = serveHtml(path.join(staticDir, "app.html"), "Mission UI missing from static/app.html.");
@@ -4748,14 +4744,11 @@ export function startServer() {
   });
   // Old vanilla dashboard paths — gone permanently.
   app.get(["/classic.html", "/classic", "/legacy.html"], (_req, res) => {
-    res.status(410).type("text").send("Classic UI removed. Use http://localhost:" + CONFIG.port + "/overlay.html");
+    res.status(410).type("text").send("Classic UI removed. Use http://localhost:" + CONFIG.port + "/desk");
   });
   // The React dashboard used to live at "/"; it's gone, so send everyone (including the Tauri
-  // desktop shell, see desktop/) straight to the overlay.
-  app.get(["/", "/index.html"], (_req, res) => res.redirect(302, "/overlay.html"));
-  // Registered before express.static so this handler (no-store + the 503 when the file is missing)
-  // wins over the plain static file it would otherwise serve.
-  app.get("/overlay.html", sendOverlay);
+  // desktop shell, see desktop/) straight to the Desk.
+  app.get(["/", "/index.html"], (_req, res) => res.redirect(302, "/desk"));
   if (fs.existsSync(staticDir)) {
     app.use(express.static(staticDir, noStore));
   }

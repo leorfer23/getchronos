@@ -3,7 +3,7 @@
 // Why a compiled binary and not a shell script: TCC attributes Accessibility to the *process*, and a
 // script's process is whatever shell ran it — on this machine that is Claude Code, whose path carries
 // its version (…/versions/2.1.220) and so loses the grant on every update. A binary at a fixed path
-// holds the grant itself. Same reasoning as mc-overlay.
+// holds the grant itself. Same reasoning as mc-app.
 //
 // No linked device, no reverse-engineered protocol: WhatsApp only ever sees its own official client,
 // so ban exposure stays behavioral (volume, reply-ratio) rather than fingerprint-based.
