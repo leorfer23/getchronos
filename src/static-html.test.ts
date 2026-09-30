@@ -25,7 +25,7 @@ function fakeRes() {
 
 test("serveHtml: sends the file itself, never a templated body — for loopback callers too", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-static-html-"));
-  const file = path.join(dir, "overlay.html");
+  const file = path.join(dir, "desk.html");
   fs.writeFileSync(file, "<!doctype html><html><head><title>x</title></head><body></body></html>");
   try {
     const handler = serveHtml(file, "missing");

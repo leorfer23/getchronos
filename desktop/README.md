@@ -7,7 +7,6 @@ launchd; these are just renderers in real windows, and each reads `.admin-token`
 | File | Builds to | What it is |
 |---|---|---|
 | `app.swift` | `mc-app` (`scripts/build-app.sh`) | Resizable app window. Takes the page as an argument: `mc-app /desk` is the terminal wall, bare `mc-app` opens `/app`. |
-| `overlay.swift` | `mc-overlay` | Always-on-top ticket panel over `/overlay.html`. |
 | `icon.svg` → `icon.icns` | `scripts/build-icon.sh` | The Mac app icon: the hourglass mark from `site/assets/favicon.svg` on the night ground, sized to Apple's icon grid. `build-app.sh` bundles it. |
 | `wapp.swift` | `wapp` (`scripts/build-wapp.sh`) | Drives the real WhatsApp desktop client. See below. |
 | `hostbar.swift` | `~/.chronos-host/bin/chronos-hostbar` (`getchronos host menubar install`) | A **host's** menu bar item: how many agents work on this Mac right now, and on which repos. Reads only the host's loopback `/__host/status`, no token. Ships in the npm package and is compiled on the host. See HOSTS.md → Menu bar. |
@@ -16,7 +15,7 @@ launchd; these are just renderers in real windows, and each reads `.admin-token`
 **`src-tauri/` is vestigial.** It is a Tauri v2 scaffold from before the Swift shells existed, and
 nothing builds it any more — `scripts/build-app.sh` no longer reads anything
 from it (the icon moved to `desktop/icon.icns`). The section below is kept for whoever wants to revive it; it points at `/`, which
-now redirects to the small overlay rather than the dashboard it was written against.
+now redirects to the Desk rather than the dashboard it was written against.
 
 ## The Tauri scaffold (unused)
 
@@ -57,30 +56,6 @@ cargo tauri build        # -> src-tauri/target/release/bundle/macos/Mission Cont
   fallback (redirects to the daemon, or shows "daemon not running").
 - Global shortcut is registered in `src/main.rs`. Add a tray icon there next.
 - `bundle.active` is **false** by default so `cargo tauri dev` runs without needing icons.
-
-## Ticket overlay (floating widget)
-
-Tiny always-on-top panel with full ticket CRUD, grouped by workspace → repo. Page lives at
-`static/overlay.html` (served by the daemon at `/overlay.html`); the native shell is
-`desktop/overlay.swift` — no Tauri/Rust needed:
-
-```bash
-swiftc -O desktop/overlay.swift -o ~/.mc/bin/mc-overlay
-mc-overlay &   # floating panel; drag by top edge, ✕ to close, position persists
-```
-
-In the panel: `＋` new ticket (Enter to save), status pill = dropdown, double-click title to
-edit, `✕` twice to delete. Closed tickets hidden unless "closed" is checked.
-
-### Launch at login
-
-```bash
-cp launchd/sh.chronos.overlay.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/501 ~/Library/LaunchAgents/sh.chronos.overlay.plist
-```
-
-Closing the panel (✕) keeps it closed until next login — no KeepAlive by design.
-Relaunch manually anytime: `mc-overlay &`.
 
 ## wapp (WhatsApp from an agent)
 

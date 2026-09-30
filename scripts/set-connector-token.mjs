@@ -32,7 +32,7 @@ const base = `http://localhost:${port}/api`;
 const die = (msg, code = 2) => { console.error(msg); process.exit(code); };
 if (!slug) die("usage: node scripts/set-connector-token.mjs <workspace-slug> [--key token] [--port 7777] [--dry-run]");
 
-// Same file the native overlay reads. Never passed as an argument for the same reason as the token.
+// Same file the native wrapper reads. Never passed as an argument for the same reason as the token.
 const adminToken =
   process.env.CHRONOS_ADMIN_TOKEN ||
   (() => {

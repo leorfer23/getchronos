@@ -365,7 +365,7 @@
           <div><div style="font-weight:650" id="chat-name">Robert</div><div class="role" id="chat-role"></div></div>
           <button class="btn" id="chat-new" style="margin-left:auto" title="Start a fresh context. Everything above the line stays on screen but stops reaching the agent.">New context</button>
         </div>
-        <div class="banner" id="chat-banner" hidden>No admin token — chat needs the native wrapper (mc-overlay reads ~/chronos/.admin-token). Tickets, Board and Fleet work read-write here.</div>
+        <div class="banner" id="chat-banner" hidden>No admin token — chat needs the native wrapper (mc-app reads ~/chronos/.admin-token). Tickets, Board and Fleet work read-write here.</div>
         <div class="scroll"><div class="thread" id="thread"></div></div>
         <div class="stage" id="chat-stage"></div>
         <div class="composer">
@@ -427,7 +427,7 @@
 <script>
 "use strict";
 // ── plumbing ────────────────────────────────────────────────────────────────
-const TOKEN = window.__MC_TOKEN__ || null; // injected by the native wrapper (see overlay.swift)
+const TOKEN = window.__MC_TOKEN__ || null; // injected by the native wrapper (see desktop/app.swift)
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
 const MENTION = /(^|[^\w@])@([a-z][\w-]*)/gi;

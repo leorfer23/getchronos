@@ -121,7 +121,7 @@ Blank terminal (no seed): empty ⏎. Full spawn dialog (cwd, brief, kind): ⇧N.
 
 ```bash
 npm run install:launchd          # renders launchd/*.plist.template for this machine and loads it
-npm run install:launchd -- --all # also overlay, whisper, cloudflared — skips whatever isn't installed
+npm run install:launchd -- --all # also whisper, cloudflared — skips whatever isn't installed
 ```
 
 The plists are generated rather than committed, because a committed one hardcodes another machine's
@@ -305,7 +305,6 @@ offered under that name.
 |---|---|
 | **Desk** (`/desk`) | the main one — live terminals as a wall of cards, each a real PTY |
 | **Phone** (`/phone`) | a PWA behind your own authenticating tunnel ([Cloudflare setup](./CONFIGURATION.md#4-optional-reach-it-from-your-phone)); triage from bed |
-| **Overlay** (`/overlay.html`) | a small always-on-top native panel, see `desktop/README.md` |
 | **Telegram** | control + notifications with no inbound port, via long-polling |
 | **`mc` CLI** | what agents themselves use: `mc steps`, `mc ask`, `mc review`, `mc learn` |
 | **REST + WebSocket** | everything above is a client of this |
