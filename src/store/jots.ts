@@ -48,6 +48,10 @@ export type Jot = {
   followed_up_at: string | null;
   /** How many follow-ups have fired. Bounds how long agents can keep rescheduling on their own. */
   follow_up_count: number;
+  /** The cleanup job's order among this client's open notes (0 = first). NULL = not ranked yet. */
+  rank: number | null;
+  priority: "high" | "normal" | "low" | null;
+  rank_why: string | null;
 };
 
 export type JotSource = "operator" | "nextday" | "agent";
@@ -63,7 +67,7 @@ export type NewJot = {
   follow_up_check?: string | null;
 };
 
-const COLS = `id,workspace_id,title,body,status,pos,session_id,created_at,updated_at,ran_at,done_at,for_date,source,planned_by,follow_up_at,follow_up_check,follow_up_session,followed_up_at,follow_up_count`;
+const COLS = `id,workspace_id,title,body,status,pos,session_id,created_at,updated_at,ran_at,done_at,for_date,source,planned_by,follow_up_at,follow_up_check,follow_up_session,followed_up_at,follow_up_count,rank,priority,rank_why`;
 
 export const jots = {
   list(filter: { workspace_id?: string; status?: string; for_date?: string; source?: JotSource } = {}): Jot[] {
@@ -111,9 +115,12 @@ export const jots = {
       follow_up_session: null,
       followed_up_at: null,
       follow_up_count: 0,
+      rank: null,
+      priority: null,
+      rank_why: null,
     };
     db.prepare(
-      `INSERT INTO jots (${COLS}) VALUES (@id,@workspace_id,@title,@body,@status,@pos,@session_id,@created_at,@updated_at,@ran_at,@done_at,@for_date,@source,@planned_by,@follow_up_at,@follow_up_check,@follow_up_session,@followed_up_at,@follow_up_count)`,
+      `INSERT INTO jots (${COLS}) VALUES (@id,@workspace_id,@title,@body,@status,@pos,@session_id,@created_at,@updated_at,@ran_at,@done_at,@for_date,@source,@planned_by,@follow_up_at,@follow_up_check,@follow_up_session,@followed_up_at,@follow_up_count,@rank,@priority,@rank_why)`,
     ).run(row);
     return this.get(row.id)!;
   },
@@ -250,6 +257,21 @@ export const jots = {
     db.transaction(() => {
       ids.forEach((id, i) => stmt.run({ id, pos: i, workspace_id, t }));
     })();
+  },
+
+  /**
+   * Write one client's ranking of its open notes, most important first. Same contract as the inbox's:
+   * a note left out stays unranked (shown first, as new), another client's id is ignored. `pos` — the
+   * operator's own drag order — is left alone.
+   */
+  rank(workspace_id: string, order: { id: string; priority: "high" | "normal" | "low"; why?: string | null }[]): number {
+    const set = db.prepare("UPDATE jots SET rank=@rank, priority=@priority, rank_why=@why WHERE id=@id AND workspace_id=@ws AND status='open'");
+    let n = 0;
+    db.transaction(() => {
+      db.prepare("UPDATE jots SET rank=NULL WHERE workspace_id=? AND status='open'").run(workspace_id);
+      order.forEach((o, i) => { n += set.run({ id: o.id, rank: i, priority: o.priority, why: o.why ?? null, ws: workspace_id }).changes; });
+    })();
+    return n;
   },
 
   /** Open-row counts per workspace, for the Desk's per-client badge. */

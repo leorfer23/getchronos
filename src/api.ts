@@ -97,6 +97,7 @@ import { isInternalJob } from "./job-name.js";
 import { jobsBoard, runsFeed, type JobKind } from "./jobs-board.js";
 import { storyFromEvents } from "./run-story.js";
 import { installSlackMcp, slackStatus, ensureTriageJob } from "./slack.js";
+import { ensureCleanupJob } from "./inbox-cleanup.js";
 import { syncWorkspace, pushComment, pushStatus, pushHours, pushClose } from "./connectors/index.js";
 import { isStatusDivergent } from "./connectors/types.js";
 import { refresh as refreshCal, refreshAll as refreshCals, importLocalCalendars, ingestLocal } from "./calendar.js";
@@ -1759,6 +1760,9 @@ export function startServer() {
   api.get("/workspaces/:id/inbox", inboxRoutes.listRoute);
   api.post("/workspaces/:id/inbox", inboxRoutes.addRoute);
   api.post("/inbox/:id/dismiss", inboxRoutes.dismissRoute);
+  api.post("/inbox/:id/resolve", inboxRoutes.resolveRoute);
+  api.post("/inbox/:id/reopen", inboxRoutes.reopenRoute);
+  api.post("/workspaces/:id/rank", inboxRoutes.rankRoute);
   api.post("/inbox/:id/snooze", inboxRoutes.snoozeRoute);
   api.post("/inbox/:id/dispatch", inboxRoutes.dispatchRoute);
 
@@ -2865,7 +2869,9 @@ export function startServer() {
     const body = Array.isArray(req.body?.capabilities)
       ? { ...req.body, capabilities: JSON.stringify(req.body.capabilities) }
       : req.body;
-    const w = wsWithRepos(workspaces.create(body));
+    const created = workspaces.create(body);
+    ensureCleanupJob(created);
+    const w = wsWithRepos(created);
     bus.publish({ topic: "workspace.changed" });
     res.status(201).json(w);
   });

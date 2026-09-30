@@ -2022,6 +2022,24 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       CREATE INDEX IF NOT EXISTS idx_artifact_events ON artifact_events(artifact_id, id);`),
   },
 
+  {
+    version: 143,
+    name: "inbox resolved state + rank/priority on inbox rows and notes — keep the lists lean and ordered",
+    // `resolved`: a row closed because what it asked for already happened (he replied in Slack, the
+    // Jira task closed) — by the tracker sync on its own, or by the workspace's triage/cleanup job with
+    // a reason. Distinct from `dismissed` (his ✕) so an agent's call can be seen and reopened.
+    // rank/priority/rank_why: the twice-daily cleanup job's ordering of what is still open, per client.
+    // rank is 0-based within a workspace; NULL = arrived after the last ranking (shown first).
+    up: (db) => db.exec(`
+      ALTER TABLE inbox_items ADD COLUMN resolved_reason TEXT;
+      ALTER TABLE inbox_items ADD COLUMN rank INTEGER;
+      ALTER TABLE inbox_items ADD COLUMN priority TEXT;
+      ALTER TABLE inbox_items ADD COLUMN rank_why TEXT;
+      ALTER TABLE jots ADD COLUMN rank INTEGER;
+      ALTER TABLE jots ADD COLUMN priority TEXT;
+      ALTER TABLE jots ADD COLUMN rank_why TEXT;`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

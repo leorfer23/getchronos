@@ -1024,6 +1024,17 @@ export const NewInboxItemSchema = z.object({
   ref: z.string().trim().max(120).optional(),
   urgent: z.boolean().optional(),
 });
+// Close a row whose ask already happened — the triage/cleanup job's reason is what the Desk shows.
+export const InboxResolveSchema = z.object({ reason: z.string().trim().min(1).max(300) });
+// The cleanup job's ranking of one client's open inbox rows and notes, most important first.
+const RankEntry = z.object({
+  id: z.string().trim().min(8).max(64),
+  priority: z.enum(["high", "normal", "low"]),
+  why: z.string().trim().max(300).optional(),
+});
+export const RankSchema = z
+  .object({ inbox: z.array(RankEntry).max(300).optional(), notes: z.array(RankEntry).max(300).optional() })
+  .refine((b) => b.inbox || b.notes, { message: "send inbox and/or notes" });
 // Snooze until — same grammar as `mc pad follow`: 2h, +1d, tomorrow 9:00, monday 10, an ISO stamp.
 export const InboxSnoozeSchema = z.object({ until: z.string().trim().min(1).max(80) });
 

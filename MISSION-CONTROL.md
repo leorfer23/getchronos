@@ -262,6 +262,25 @@ operator*, as opposed to what the fleet found to do. Two feeds, neither of which
   Limit: Jira's default JQL only pulls his own tasks, so a mention on someone else's task is only seen
   when `connector_config.jql` widens the pull.
 
+**Keeping it lean** (migration 143): a row whose ask already happened moves to state `resolved`
+with a `resolved_reason`, distinct from the operator's ✕ (`dismissed`).
+- The tracker sync closes Jira/ClickUp rows itself (`trackerResolutions`, zero model cost): task
+  closed → every row on it; `assigned` no longer his; a comment/mention he answered (a comment by him
+  after the filing one); a status row superseded by a later one. A task missing from the pull proves
+  nothing.
+- The Slack triage re-checks up to 20 open Slack rows each run before filing new ones and closes the
+  ones he replied to / reacted to / that were resolved (`mc inbox resolve <id> "<why>"`).
+- **`inbox-cleanup:<slug>`** (src/inbox-cleanup.ts): one cron job per workspace, 10:00 + 18:00 daily
+  (`CHRONOS_INBOX_CLEANUP_CRON`, model `CHRONOS_INBOX_CLEANUP_MODEL`=sonnet, `CHRONOS_INBOX_CLEANUP=0`
+  removes them). Closes handled inbox rows and agent/planner notes (never the operator's own notes),
+  then ranks every open row and note with `mc inbox rank` (`POST /api/workspaces/:id/rank`,
+  priority high|normal|low + why). A fire with nothing open is skipped by a scheduler gate
+  (`registerCronGate`) before any model runs.
+`POST /api/inbox/:id/resolve {reason}` takes the row's own workspace token or admin; `reopen` is admin.
+The Desk orders each client's rows by rank (rows filed since the last ranking first), clients with the
+most high-priority rows first, and shows "N closed for you in the last 2 days" with ↩ Reopen. Notes
+get the same order, grouped per client.
+
 Every field is `guard()`ed at ingestion (it later reaches an agent prompt). On the Desk, 📥 on the bar
 carries the unread count (`/api/desk` → `inbox`); the page lists rows grouped by client, newest first,
 with **Dispatch / Later (2h · tomorrow 9:00) / ✕**. API: `GET /api/inbox` (scoped token → its client
@@ -757,7 +776,8 @@ GET/POST /calendars   PATCH/DELETE /calendars/:id   POST /calendars/{refresh,ing
 GET  /calendar?from=&to=&workspace=      GET /search?q=&workspace=&kind=&since=
 
 # workspace inbox (§5 "The workspace inbox")
-GET /inbox?workspace=&all=   GET/POST /workspaces/:id/inbox   POST* /inbox/:id/{dismiss,snooze,dispatch}
+GET /inbox?workspace=&all=&open=&state=   GET/POST /workspaces/:id/inbox   POST* /inbox/:id/{dismiss,snooze,dispatch,reopen}
+POST /inbox/:id/resolve   POST /workspaces/:id/rank
 ```
 
 The Express server also serves the native overlay at `/overlay.html` (verbatim HTML via
@@ -791,7 +811,7 @@ goal set|done|clear   goal add|list|drop|reopen  (this terminal's finish line, o
 ask "question" [--options a,b]   asks            (mc ask; asks = open asks list)
 answer <id8> "text"                              (operator/Robert side of mc ask)
 tell <TICKET> "directive"   inbox                (operator/Robert → worker mailbox, §5b)
-inbox add|list                                   (the workspace inbox: Slack triage files here — §5)
+inbox add|list|resolve|rank                      (the workspace inbox: Slack triage files here — §5)
 ```
 
 `mc note` is how a worker speaks on the ticket timeline: it appends to the ticket's Work log.

@@ -206,7 +206,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc skill patch <slug> --old "exact text" --new "replacement"        improve a skill in place
   mc skill append <slug> "text" [--heading "..."]                     add to a skill
   (new/patched skills land 'pending' for human approval unless the workspace auto-publishes)
-  mc pad list [--status open|done] [--workspace ID]   the client's parked rows (decided, not started)
+  mc pad list [--status open|done] [--json] [--workspace ID]   the client's parked rows (decided, not started)
   mc pad show <id>                   one row in full — its title, status, and everything written on it
   mc pad add "<title>" [--body "..."] [--follow <when> [--check "..."]]   park a thought (body may be piped on stdin) — any terminal, own client
   mc pad follow <id> <when> [--check "what to look at"]   an agent opens a terminal on this row at <when>: +2d, tomorrow 9:00, monday 10, 2026-10-01 14:00
@@ -339,7 +339,12 @@ const HELP = `mc — Mission Control backlog CLI
   mc inbox add --kind dm|mention|self_note --title "…" --key <dedup> [--why "…"] [--url <link>] [--actor NAME] [--body "…"|-] [--source slack] [--urgent]
                                      file a "needs you" row in this workspace's inbox (a notification only —
                                      work starts when the operator presses Dispatch; --urgent pings his phone)
-  mc inbox list [--all] [--json]    this workspace's inbox (every client's from the operator's shell)
+  mc inbox list [--open|--all] [--json]   this workspace's inbox (every client's from the operator's shell);
+                                     --open = new + snoozed, what a re-check looks at
+  mc inbox resolve <id> "<why>"      close a row whose ask already happened (he replied, it was fixed) —
+                                     the reason shows on the Desk and the operator can reopen it
+  mc inbox rank < ranking.json       this client's order, most important first:
+                                     {"inbox":[{"id","priority":"high|normal|low","why"}],"notes":[…same…]}
   mc ask "question" [--options "a,b,c"] [--wait <min>]   ask the operator a question, wait for an answer
                                      (min 5, 0 = fire-and-forget; on timeout, follow the printed parking
                                      instructions — you'll be resumed automatically once it's answered)
@@ -1417,6 +1422,7 @@ async function heavy(argv) {
       if (sub === "list") {
         if (!wsId) die("pad needs --workspace or MC_WORKSPACE");
         const rows = await req("GET", "/workspaces/" + wsId + "/jots" + (opt.status ? "?status=" + opt.status : ""));
+        if (opt.json) return console.log(JSON.stringify(rows, null, 2));
         if (!rows.length) return console.log("(nothing parked)");
         return console.log(rows.map((j) => {
           const mark = j.status === "done" ? "✓" : j.follow_up_at ? "⏰" : j.session_id ? "▶" : "·";
@@ -2864,8 +2870,24 @@ async function heavy(argv) {
     }
     // The workspace inbox (src/inbox.ts): `add` files one "needs you" row (the Slack triage job's
     // only write), `list` reads them. Bare `mc inbox` stays the run mailbox check below.
-    if (cmd === "inbox" && (pos[1] === "add" || pos[1] === "list" || pos[1] === "ls")) {
+    if (cmd === "inbox" && ["add", "list", "ls", "resolve", "rank"].includes(pos[1])) {
       const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      // Same rule as add: only his own shell is the operator; a job writes with its workspace token.
+      const jobTok = () => { const t = process.env.MC_SESSION || process.env.MC_RUN ? null : adminToken(); return t ? { "x-mc-admin": t } : undefined; };
+      if (pos[1] === "resolve") {
+        const id = pos[2] || die('inbox resolve needs an id: mc inbox resolve <id> "why it no longer needs him"');
+        const reason = opt.reason || pos.slice(3).join(" ") || die('inbox resolve needs a reason: mc inbox resolve <id> "you replied in the thread"');
+        const r = await req("POST", "/inbox/" + encodeURIComponent(id) + "/resolve", { reason }, jobTok());
+        return console.log(`resolved ✓ ${r.id.slice(0, 8)} — ${r.title.slice(0, 60)}`);
+      }
+      if (pos[1] === "rank") {
+        if (!wsId) die("inbox rank needs --workspace or MC_WORKSPACE");
+        const raw = (opt.file ? fs.readFileSync(opt.file, "utf8") : await readStdin()).trim();
+        let body;
+        try { body = JSON.parse(raw); } catch { die('inbox rank reads JSON on stdin: {"inbox":[{"id":"…","priority":"high","why":"…"}],"notes":[…]}'); }
+        const r = await req("POST", "/workspaces/" + wsId + "/rank", body, jobTok());
+        return console.log(`ranked ✓ ${r.inbox ?? 0} inbox · ${r.notes ?? 0} notes`);
+      }
       if (pos[1] === "add") {
         if (!wsId) die("inbox add needs --workspace or MC_WORKSPACE");
         const kind = opt.kind || die('inbox add needs --kind dm|mention|self_note (tracker kinds: assigned|comment|status)');
@@ -2882,7 +2904,7 @@ async function heavy(argv) {
         }, tok ? { "x-mc-admin": tok } : undefined);
         return console.log(r.duplicate ? "already in the inbox" : `inbox ✓ ${r.id.slice(0, 8)}${r.urgent ? " (urgent — pushed)" : ""}`);
       }
-      const q = new URLSearchParams({ ...(opt.all ? { all: "1" } : {}) });
+      const q = new URLSearchParams({ ...(opt.all ? { all: "1" } : {}), ...(opt.open ? { open: "1" } : {}) });
       const r = wsId
         ? await req("GET", "/workspaces/" + wsId + "/inbox" + (q.size ? "?" + q : ""))
         : await req("GET", "/inbox" + (q.size ? "?" + q : ""));
