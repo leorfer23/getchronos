@@ -69,10 +69,10 @@ test("the turn's workspace is the default, a blank question files nothing, no as
   assert.deepEqual(none.asks, []);
 });
 
-test("options are capped at six, 80 chars each; the question at 500", () => {
+test("options are capped at six, 80 chars each; the question at 1000", () => {
   const filed: any[] = [];
-  liftRobertAsks({ reply: "", actions: [{ op: "ask", question: "x".repeat(900), options: Array.from({ length: 9 }, (_, i) => String(i).repeat(100)) }] }, null, (f) => { filed.push(f); return { id: "a".repeat(36) } as any; });
-  assert.equal(filed[0].question.length, 500);
+  liftRobertAsks({ reply: "", actions: [{ op: "ask", question: "x".repeat(1500), options: Array.from({ length: 9 }, (_, i) => String(i).repeat(100)) }] }, null, (f) => { filed.push(f); return { id: "a".repeat(36) } as any; });
+  assert.equal(filed[0].question.length, 1000);
   assert.equal(filed[0].options.length, 6);
   assert.ok(filed[0].options.every((o: string) => o.length === 80));
 });
