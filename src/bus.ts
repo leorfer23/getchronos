@@ -98,6 +98,9 @@ export type BusEvent = (
     }
   // The operator changed a host from the Desk: name, policy, drain/enable, revoke.
   | { topic: "host.updated"; host_id: string; status: string; actor?: string }
+  // A computer's inventory changed between hellos (protocol 1.5): a profile logged in or out, a CLI
+  // installed, a repo cloned, a gh login. `changes` are short phrases ("profile claude-acme logged in").
+  | { topic: "host.inventory"; host_id: string; name: string; reason: string; changes: string[] }
   // A Lead closed its own done workers (`POST /leads/me/close-done`).
   | { topic: "lead.close-done"; lead_id: string; closed: string[]; by: string; actor: string }
   // A live Lead took over an ended Lead's workers/board/inbox (`mc lead adopt`).

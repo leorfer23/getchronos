@@ -304,3 +304,21 @@ test("cursor-agent not logged in is fine when the spawn carries CURSOR_API_KEY",
   assert.equal(hostOf(run(cur, [brainIdle, m2])), "local");
   assert.equal(hostOf(run({ ...cur, needs: { ...cur.needs, cursor_key: true } }, [brainIdle, m2])), "m2");
 });
+
+// Protocol 1.5: a profile directory is not a login. The host probes the keychain item's existence.
+test("a claude profile the host reports as not logged in is refused; unknown is allowed; a key in the env cures it", () => {
+  const brainIdle = brain({ load: load(1.5) });
+  const out = host("m2", { profiles: [{ name: "claude-acme", exists: true, auth: "no" }] });
+  assert.equal(hostOf(run(req(), [brainIdle, out])), "local");
+  const pinned = run(req({ pinned: "m2" }), [brainIdle, out]);
+  assert.equal(pinned.ok, false);
+  assert.match((pinned as any).message, /profile claude-acme not logged in there/);
+  const unknown = host("m2", { profiles: [{ name: "claude-acme", exists: true, auth: "unknown" }] });
+  assert.equal(hostOf(run(req(), [brainIdle, unknown])), "m2", "unknown (keychain not readable from the host process) is not a no");
+  const yes = host("m2", { profiles: [{ name: "claude-acme", exists: true, auth: "yes" }] });
+  assert.equal(hostOf(run(req(), [brainIdle, yes])), "m2");
+  const keyed = req({ needs: { sandbox: "guard", egress_locked: false, claude_key: true } });
+  assert.equal(hostOf(run(keyed, [brainIdle, out])), "m2", "the spawn brings its own credential");
+  // Another backend only needs the profile NAME to resolve: its login is not claude's keychain item.
+  assert.equal(hostOf(run(req({ backend: "cursor-agent" }), [brainIdle, out])), "m2");
+});

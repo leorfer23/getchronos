@@ -25,11 +25,12 @@ import { HOST_HOME, HOST_SECRETS } from "./env.js";
 import { HOST_LABEL, join } from "./join.js";
 import { HostLink } from "./link.js";
 import { startForwarder } from "./forwarder.js";
-import { buildHello, checklist, formatChecklist, hostRoots, probeClis, profiles, sampleHostVitals, scanCheckouts } from "./inventory.js";
+import { buildHello, checklist, collectInventory, formatChecklist, ghAuth, ghDirsToProbe, hostRoots, probeClis, profilesWithAuth, sampleHostVitals, scanCheckouts } from "./inventory.js";
+import { InventoryPusher, type GhDirs } from "./inventory-push.js";
 import { HeavyPool, VITALS_EVERY_MS, heavySlotsForCpus } from "../machine.js";
 import { Outbox } from "./outbox.js";
 import { SpillDir } from "./spill.js";
-import { CONFIG } from "../config.js";
+import { refreshProfiles } from "../config.js";
 import { REPO_ROOT } from "../repo-root.js";
 import { HostTerminals } from "./terminals.js";
 import { HostProcs } from "./procs.js";
@@ -129,7 +130,7 @@ async function cmdRun(): Promise<number> {
   const terminals = new HostTerminals({
     egress,
     root: REPO_ROOT,
-    profiles: () => CONFIG.profiles,
+    profiles: () => refreshProfiles(),
     checkouts: () => scanCheckouts(),
     deny: () => hostDeny(),
     autoClone: env("CHRONOS_HOST_AUTO_CLONE") === "1",
@@ -141,7 +142,7 @@ async function cmdRun(): Promise<number> {
   let boundMcPort = mcPort();
   const procs = new HostProcs({
     root: REPO_ROOT,
-    profiles: () => CONFIG.profiles,
+    profiles: () => refreshProfiles(),
     checkouts: () => scanCheckouts(),
     autoClone: env("CHRONOS_HOST_AUTO_CLONE") === "1",
     cloneRoot: () => hostRoots()[0] ?? null,
@@ -153,6 +154,14 @@ async function cmdRun(): Promise<number> {
     spill: spillFor,
   });
   terminals.shareChannels((ch) => procs.owns(ch));
+  // The inventory between hellos (HOSTS.md → Inventory stays true): pushed when it changes.
+  let sendInventory: (f: Parameters<HostLink["sendControl"]>[0]) => boolean = () => false;
+  const inventory = new InventoryPusher({
+    collect: (gh) => collectInventory(gh),
+    send: (f) => sendInventory(f),
+    watch: { home: os.homedir(), roots: hostRoots() },
+    log: (s) => console.warn(s),
+  });
   const cf = env("CF_ACCESS_CLIENT_ID") && env("CF_ACCESS_CLIENT_SECRET") ? { id: env("CF_ACCESS_CLIENT_ID"), secret: env("CF_ACCESS_CLIENT_SECRET") } : null;
   const link = new HostLink({
     brains: brains(),
@@ -160,15 +169,20 @@ async function cmdRun(): Promise<number> {
     token,
     fp: env("CHRONOS_HOST_CERT_FP") || null,
     cfAccess: cf,
-    hello: async () => ({ ...(await buildHello(id)), live: [...terminals.live(), ...procs.live()] }),
+    hello: async () => {
+      const h = await buildHello(id);
+      inventory.baseline(h);
+      return { ...h, live: [...terminals.live(), ...procs.live()] };
+    },
     terminals,
     procs,
     egress,
     vitals: sampleHostVitals,
     vitalsMs: VITALS_EVERY_MS,
     rpc: {
-      inventory: async () => ({ clis: await probeClis(), profiles: profiles(), checkouts: await scanCheckouts() }),
-      doctor: () => runDoctor(),
+      // Desk → Refresh: a fresh look (profiles re-discovered, logins probed), returned for the brain to apply.
+      inventory: () => inventory.snapshot(),
+      doctor: () => runDoctor(inventory.gh),
       drop: (a) => terminals.drop(a as Parameters<HostTerminals["drop"]>[0]),
       worktree: (a) => terminals.claimWorktree(a as Parameters<HostTerminals["claimWorktree"]>[0]),
       // Phase 5: the ship pipeline where the worktree is (gates, git, gh), the verifier, run worktrees.
@@ -177,10 +191,13 @@ async function cmdRun(): Promise<number> {
       worktree_ensure: (a) => procs.worktreeEnsure(a),
     },
   });
+  sendInventory = (f) => link.sendControl(f);
+  inventory.start();
   const replay = () => { if (link.state === "online" && outbox.size) void outbox.drain((q) => link.api(q)); };
   // A drain stops at the first 5xx; try again on a slow tick rather than hammer a struggling brain.
   setInterval(replay, 30_000).unref();
-  link.on("online", () => {
+  link.on("online", (f: { proto?: string }) => {
+    inventory.online(f?.proto);
     console.log(`[host] ${id} online via ${link.url}`);
     if (outbox.size) console.log(`[host] replaying ${outbox.size} mc write${outbox.size === 1 ? "" : "s"} queued while the brain was away`);
     replay();
@@ -192,8 +209,14 @@ async function cmdRun(): Promise<number> {
     }
   });
   // The brain's policy for this host: an extra veto next to CHRONOS_HOST_DENY, never a loosening.
-  link.on("policy", (f: { deny?: unknown }) => terminals.setPolicy(f?.deny));
-  link.on("offline", (why: string) => console.log(`[host] link down (${why}) — reconnecting`));
+  link.on("policy", (f: { deny?: unknown; gh_dirs?: unknown }) => {
+    terminals.setPolicy(f?.deny);
+    inventory.setGhDirs(f?.gh_dirs);
+  });
+  link.on("offline", (why: string) => {
+    inventory.offline();
+    console.log(`[host] link down (${why}) — reconnecting`);
+  });
   // Phase 6: the brain asks for an update (Desk → Computers → Update). Only when launchd runs this
   // process: a restart is how the new code starts, and a host run by hand cannot restart itself.
   link.on("update", (f: UpdateFrame) => {
@@ -241,6 +264,7 @@ async function cmdRun(): Promise<number> {
   const stop = async () => {
     // A host that stops takes its agents with it (they are its children); the brain revives them
     // with --resume on this host when it comes back (HOSTS.md → Reconnect and restarts).
+    inventory.stop();
     terminals.killAll();
     procs.killAll();
     egress.closeAll();
@@ -332,8 +356,8 @@ async function cmdMenubar(args: string[]): Promise<number> {
   return sub ? 2 : 0;
 }
 
-async function runDoctor(): Promise<{ ok: boolean; text: string }> {
-  const [clis, checkouts] = await Promise.all([probeClis(), scanCheckouts()]);
+async function runDoctor(ghDirs: GhDirs | null = null): Promise<{ ok: boolean; text: string }> {
+  const [clis, profs, checkouts, gh] = await Promise.all([probeClis(), profilesWithAuth(), scanCheckouts(), ghAuth(ghDirsToProbe(ghDirs))]);
   // The preflight's own checks first (bin/host-core.mjs): a broken git or a half-installed tree is
   // what actually stopped the first hosts, and the brain's `doctor` rpc sees the same lines.
   const inst = detectInstall(REPO_ROOT, HOST_HOME);
@@ -351,8 +375,9 @@ async function runDoctor(): Promise<{ ok: boolean; text: string }> {
   const checks = [installed, ...pre, menubar, ...checklist({
     node: process.version,
     clis,
-    profiles: profiles(),
+    profiles: profs,
     checkouts,
+    gh,
     roots: hostRoots(),
     secretsMode: secretsMode(),
     joined: { id: env("CHRONOS_HOST_ID") || null, brains: brains(), fp: env("CHRONOS_HOST_CERT_FP") || null },

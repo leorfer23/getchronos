@@ -82,14 +82,14 @@ export function placementCandidates(now = Date.now()): HostCandidate[] {
   return out;
 }
 
-const profilesOf = (list: Array<{ name: string; exists?: boolean }> | null | undefined) =>
-  (list ?? []).map((p) => ({ name: p.name, exists: !!p.exists }));
+const profilesOf = (list: Array<{ name: string; exists?: boolean; auth?: "yes" | "no" | "unknown" }> | null | undefined) =>
+  (list ?? []).map((p) => ({ name: p.name, exists: !!p.exists, ...(p.auth ? { auth: p.auth } : {}) }));
 
 /**
  * The profiles a host reported, by name: its live hello when connected, else the last one stored.
  * Nothing heard = no profiles, so nothing is assumed set up there. The brain has none to report.
  */
-export function hostProfiles(hostId: string): Array<{ name: string; exists: boolean }> {
+export function hostProfiles(hostId: string): Array<{ name: string; exists: boolean; auth?: "yes" | "no" | "unknown" }> {
   if (hostId === LOCAL_HOST_ID) return [];
   const live = findHost(hostId);
   const hello = live instanceof RemoteHost ? live.hello : null;
@@ -186,6 +186,7 @@ export function placeRequest(o: OpenIntent, openedBy: string): PlaceRequest {
       egress_locked: egressEnforced(o.workspace_id),
       brokered: egressBrokered(o.workspace_id),
       cursor_key: carriesCursorKey(ws),
+      claude_key: carriesClaudeKey(ws),
     },
     pinned: o.host_id || null,
     sticky: sticky ? { host_id: sticky.host_id, why: sticky.why } : null,
@@ -211,6 +212,11 @@ export function placeTerminal(o: OpenIntent, openedBy: string, mode: PlacementMo
     bus.publish({ topic: "host.policy_violation", host_id: hid, workspace_id: req.workspace.id, session_id: o.resumeId ?? null, reason: r.message });
   }
   throw new PlacementError(r);
+}
+
+/** Will a spawn for this workspace carry its own claude credential? Then a host's keychain login is moot. */
+export function carriesClaudeKey(ws: Workspace | null | undefined): boolean {
+  try { const e = childEnv(ws); return !!(e.ANTHROPIC_API_KEY || e.CLAUDE_CODE_OAUTH_TOKEN); } catch { return false; }
 }
 
 /** Will a spawn for this workspace carry CURSOR_API_KEY? Same env the spawn itself is built from. */

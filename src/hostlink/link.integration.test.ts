@@ -514,3 +514,69 @@ test("update: a host from before self-update is refused with the one line to run
   assert.equal(brain.updateStatus(id)?.state, "failed");
   assert.match(brain.updateStatus(id)!.error!, /came back on 0\.1\.0 @ 111111111111/);
 });
+
+test("inventory (1.5): a pushed change updates the brain and is announced; Refresh asks the host and applies its answer", { skip: !HAS_OPENSSL && "no openssl" }, async () => {
+  const { bus } = await import("../bus.js");
+  const { code } = await mintSecret();
+  const r = await join({ url: url(), code, hostHome: path.join(dir, "h-inv"), noLaunchd: true });
+  const env = parseEnvFile(r.secretsFile);
+  const id = env.CHRONOS_HOST_ID;
+  let fresh = { clis: hello(id).capabilities.clis, profiles: [{ name: "claude", dir: "/Users/x/.claude", exists: true, auth: "yes" as const }, { name: "claude-acme", dir: "/Users/x/.claude-acme", exists: true, auth: "no" as const }], checkouts: hello(id).checkouts };
+  const policies: any[] = [];
+  const host = new HostLink({
+    brains: [url()], hostId: id, token: env.CHRONOS_HOST_TOKEN, fp: env.CHRONOS_HOST_CERT_FP,
+    hello: async () => hello(id), vitals: async () => vitals(), backoffMinMs: 50, backoffMaxMs: 200,
+    rpc: { inventory: () => fresh },
+  });
+  host.on("policy", (f) => policies.push(f));
+  const online = once<[HostLinkInfo]>((cb) => brain.onHostOnline(cb));
+  host.start();
+  cleanups.push(() => host.stop());
+  const [info] = await online;
+  assert.equal(info.hello.profiles.length, 1);
+  for (let i = 0; i < 100 && !policies.length; i++) await new Promise((res) => setTimeout(res, 10));
+  assert.ok(Array.isArray(policies[0]?.gh_dirs), "the policy names the gh dirs to check (none here)");
+
+  // Pushed: a profile appeared (logged out) — registry, live hello and bus all hear it.
+  const events: any[] = [];
+  const onBus = (e: any) => { if (e.topic === "host.inventory" && e.host_id === id) events.push(e); };
+  bus.on("event", onBus);
+  try {
+    const got = once<[string, unknown, string[]]>((cb) => brain.onInventory(cb));
+    assert.equal(host.sendControl({ t: "inventory", reason: "profiles", ...fresh }), true);
+    const [hid, , changes] = await got;
+    assert.equal(hid, id);
+    assert.deepEqual(changes, ["profile claude logged in", "profile claude-acme appeared (not logged in)"]);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].reason, "profiles");
+    const caps = JSON.parse(hosts.get(id)!.capabilities_json!);
+    assert.equal(caps.profiles.find((p: any) => p.name === "claude-acme").auth, "no");
+    assert.equal(brain.list().find((l) => l.host_id === id)!.hello.profiles.length, 2, "the live hello placement reads");
+
+    // The same again: nothing to announce.
+    host.sendControl({ t: "inventory", reason: "periodic", ...fresh });
+    await new Promise((res) => setTimeout(res, 100));
+    assert.equal(events.length, 1);
+
+    // Refresh from the Desk: the brain asks, the host answers with what it sees now.
+    fresh = { ...fresh, profiles: fresh.profiles.map((p) => ({ ...p, auth: "yes" as const })) };
+    const app = express();
+    app.use(express.json());
+    app.use("/api", hostRoutes((_req, _res, next) => next(), () => brain));
+    const srv = http.createServer(app);
+    await new Promise<void>((res) => srv.listen(0, "127.0.0.1", () => res()));
+    try {
+      const port = (srv.address() as any).port;
+      const res = await fetch(`http://127.0.0.1:${port}/api/hosts/${id}/refresh`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.deepEqual(body.changes, ["profile claude-acme logged in"]);
+      assert.equal(body.host.checklist.profiles.find((p: any) => p.name === "claude-acme").ok, true);
+      assert.equal((await fetch(`http://127.0.0.1:${port}/api/hosts/h_nope/refresh`, { method: "POST" })).status, 404);
+    } finally {
+      await new Promise<void>((res) => srv.close(() => res()));
+    }
+  } finally {
+    bus.off("event", onBus);
+  }
+});

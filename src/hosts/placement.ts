@@ -49,6 +49,8 @@ export type PlaceRequest = {
     sandbox: string;
     /** The spawn's env will carry CURSOR_API_KEY (workspace secrets or the daemon's own env). */
     cursor_key?: boolean;
+    /** The spawn's env carries its own claude credential (ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN). */
+    claude_key?: boolean;
     egress_locked: boolean;
     /**
      * Phase 5: the workspace's egress brokers a credential (the brain's proxy terminates TLS and
@@ -93,7 +95,8 @@ export type HostCandidate = {
   clis: string[];
   /** CLIs the host reported as installed but NOT logged in (CliInfo.auth === "no"). */
   unauthed?: string[];
-  profiles: Array<{ name: string; exists: boolean }>;
+  /** `auth` (protocol 1.5): logged in per the host's keychain probe; absent/"unknown" = don't know. */
+  profiles: Array<{ name: string; exists: boolean; auth?: "yes" | "no" | "unknown" }>;
   /** Repo ids checked out on this host (repo_checkouts). */
   checkouts: string[];
   auto_clone: boolean;
@@ -201,6 +204,9 @@ export function ineligible(h: HostCandidate, req: PlaceRequest): { kind: "policy
     const p = h.profiles.find((x) => x.name === req.profile);
     // claude-code keeps its login IN the profile dir; the other CLIs only need the name to resolve.
     if (!p || (req.backend === "claude-code" && !p.exists)) return gap(`profile ${req.profile} not set up there`);
+    // The directory is there but the host says nobody is logged into it: the terminal would open on a
+    // login screen. Only a definite "no" refuses — "unknown" (keychain not readable there) is allowed.
+    if (req.backend === "claude-code" && p.auth === "no" && !req.needs.claude_key) return gap(`profile ${req.profile} not logged in there`);
   }
   if (req.repo) {
     if (!req.repo.git_remote) return gap(`repo ${req.repo.name} has no git remote to find it by`);
