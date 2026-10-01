@@ -175,6 +175,10 @@ export function startRemoteTerminals(link: BrainLink = brainLink()): () => void 
       if (h instanceof RemoteHost) h.setOffline();
       for (const s of liveOn(id)) bus.publish({ topic: "session.updated", session_id: s.id });
     }),
+    link.onInventory((id, inv) => {
+      const h = findHost(id);
+      if (h instanceof RemoteHost) h.setInventory(inv);
+    }),
     link.onVitals((id, v) => {
       const h = findHost(id);
       if (h instanceof RemoteHost) h.setVitals(v);

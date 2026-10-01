@@ -424,3 +424,78 @@ test("POST /api/hosts/:id/update and /hosts/update-all: admin only; the brain, a
     await api.close();
   }
 });
+
+// ───────────────────────────── protocol 1.5: inventory between hellos ─────────────────────────────
+
+import { inventoryDiff } from "./inventory-diff.js";
+import { ghDirsFrom } from "./gh-dirs.js";
+import { checklistFor } from "./view.js";
+
+test("inventory: replaces what drifts, re-matches checkouts, keeps the rest; a later hello keeps gh", () => {
+  const reg = new HostRegistry();
+  const c = joinOne(reg);
+  reg.hello(c.host_id, hello(c.host_id));
+  const w = workspaces.create({ slug: "acme", name: "Acme", config_dir: "/tmp/.claude-acme" });
+  const r = repos.create({ workspace_id: w.id, name: "widgets", path: "/brain/widgets", git_remote: "git@github.com:acme/widgets.git" });
+  const res = reg.inventory(c.host_id, {
+    profiles: [{ name: "claude-acme", dir: "/Users/a/.claude-acme", exists: true, auth: "no" }],
+    checkouts: [{ path: "/Users/a/GitHub/widgets", remote_url: "https://github.com/acme/widgets" }],
+    gh: [{ dir: "~/.config/gh-acme", workspaces: ["acme"], auth: "yes", account: "acme-bot" }],
+  })!;
+  assert.equal(res.before?.profiles[0].auth, undefined);
+  assert.equal(res.after.profiles[0].auth, "no");
+  assert.equal(res.after.clis[0].name, "claude", "clis not in the push: kept");
+  assert.equal(res.after.version, "0.2.0");
+  assert.deepEqual(repoCheckouts.forHost(c.host_id).map((x) => x.repo_id), [r.id]);
+  const ck = checklistFor(hosts.get(c.host_id)!, JSON.parse(hosts.get(c.host_id)!.capabilities_json!));
+  assert.deepEqual(ck.profiles, [{ name: "claude-acme", ok: false, auth: "no" }], "a logged-out profile is not ok");
+  assert.equal(ck.workspaces.find((x) => x.slug === "acme")!.profile!.ok, false);
+  assert.deepEqual(ck.gh, [{ dir: "~/.config/gh-acme", workspaces: ["acme"], auth: "yes", account: "acme-bot" }]);
+  // Reconnect: hello rewrites capabilities but has no gh — the last report stays until the next push.
+  reg.hello(c.host_id, hello(c.host_id));
+  assert.equal(JSON.parse(hosts.get(c.host_id)!.capabilities_json!).gh[0].account, "acme-bot");
+  assert.equal(reg.inventory(LOCAL_HOST_ID, { clis: [] }), undefined);
+});
+
+test("inventory diff names what changed — profiles, logins, CLIs, clones, gh — and nothing when nothing did", () => {
+  const before = {
+    clis: [{ name: "claude", path: "/b/claude", version: "2.0" }, { name: "grok", path: "/b/grok", version: "1", auth: "no" as const }],
+    profiles: [{ name: "claude", dir: "/u/.claude", exists: true, auth: "yes" as const }, { name: "claude-old", dir: "/u/.claude-old", exists: true }],
+    checkouts: [{ path: "/u/GitHub/web", remote_url: null }],
+    gh: [{ dir: "default", workspaces: [], auth: "no" as const }],
+  };
+  assert.deepEqual(inventoryDiff(before, before), []);
+  const after = {
+    clis: [{ name: "claude", path: "/b/claude", version: "2.1" }, { name: "grok", path: "/b/grok", version: "1", auth: "yes" as const }, { name: "gh", path: "/b/gh", version: "2" }],
+    profiles: [{ name: "claude", dir: "/u/.claude", exists: true, auth: "yes" as const }, { name: "claude-acme", dir: "/u/.claude-acme", exists: true, auth: "unknown" as const }],
+    checkouts: [{ path: "/u/GitHub/api", remote_url: null }],
+    gh: [{ dir: "default", workspaces: [], auth: "yes" as const }],
+  };
+  assert.deepEqual(inventoryDiff(before, after), [
+    "profile claude-acme appeared (login unknown)",
+    "profile claude-old is gone",
+    "claude updated",
+    "grok logged in",
+    "gh installed",
+    "checked out api",
+    "no longer has web",
+    "gh default logged in",
+  ]);
+  assert.deepEqual(inventoryDiff({ ...before, gh: undefined }, before), [], "gh's first report is not a change");
+});
+
+test("gh dirs for a host: one per distinct GH_CONFIG_DIR, home-relative, brain-policy-denied workspaces left out", () => {
+  const env: Record<string, NodeJS.ProcessEnv> = {
+    a: { GH_CONFIG_DIR: "/Users/op/.config/gh-acme" },
+    b: { GH_CONFIG_DIR: "/Users/op/.config/gh-acme" },
+    c: { GH_CONFIG_DIR: "/Users/op/.config/gh-cedar" },
+    d: {},
+    e: { GH_CONFIG_DIR: "/opt/shared/gh" },
+  };
+  const list = Object.keys(env).map((k) => ({ id: `id-${k}`, slug: k }));
+  assert.deepEqual(ghDirsFrom(list, (w) => env[w.slug], ["c"], "/Users/op"), [
+    { dir: "/opt/shared/gh", workspaces: ["e"] },
+    { dir: "~/.config/gh-acme", workspaces: ["a", "b"] },
+  ]);
+  assert.deepEqual(ghDirsFrom(list, () => { throw new Error("unreadable"); }, [], "/Users/op"), []);
+});

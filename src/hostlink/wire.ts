@@ -19,7 +19,7 @@
  * and accepts any minor (a newer minor only adds optional fields or frame kinds the other side
  * ignores). Bump major only when an existing frame changes meaning.
  */
-export const PROTOCOL_VERSION = "1.4";
+export const PROTOCOL_VERSION = "1.5";
 // 1.1 (phase 3): hello.live[] carries `exit`/`transcript_offset`; `transcript` carries `offset`/`reset`;
 // brain → host `attach` and `release`. All additive: a 1.0 peer ignores what it does not know.
 // 1.2 (phase 4): vitals carry `ncpu`/`load1`/`swapUsedMb`/`swapTotalMb` (the brain runs the governor's
@@ -29,6 +29,10 @@ export const PROTOCOL_VERSION = "1.4";
 // is answered, proc channels ride the same data/ack/attach/release frames a pty does, and the rpc ops
 // `exec` / `oneshot` / `worktree_ensure` exist. A host older than 1.4 is simply never sent a run
 // (placement reads `capabilities.procs`).
+// 1.5: the inventory stays true between hellos — host → brain `inventory` (pushed on change: a new
+// `~/.claude-*` login, a clone, a CLI logged in or out), profiles carry `auth`, the brain's `policy`
+// carries `gh_dirs` and the host reports `gh auth status` for each. A 1.4 brain never sees the frame:
+// the host only pushes to a brain whose welcome says 1.5+.
 
 /** Binary data frame header: magic(1) kind(1) ch(u32) seq(u64). */
 export const DATA_HEADER_BYTES = 14;
@@ -153,7 +157,24 @@ export type CliInfo = {
    */
   auth?: "yes" | "no" | "unknown";
 };
-export type ProfileInfo = { name: string; dir: string; exists: boolean };
+export type ProfileInfo = {
+  name: string; dir: string; exists: boolean;
+  /**
+   * Protocol 1.5: is this profile logged in? claude keeps the login in the keychain item
+   * `Claude Code-credentials-<sha256(dir)[:8]>` (or `.credentials.json` in the dir). Only the item's
+   * EXISTENCE is checked, never its secret. "unknown" = the keychain was not readable from where the
+   * host runs (an SSH session, a locked keychain): placement refuses only "no".
+   */
+  auth?: "yes" | "no" | "unknown";
+};
+/**
+ * Protocol 1.5: `gh auth status` for one GH_CONFIG_DIR a workspace uses on this host (the brain sends
+ * the dirs in `policy.gh_dirs`; "default" = no GH_CONFIG_DIR). Shown in the checklist, never a reason
+ * to refuse placement: plenty of terminals never touch gh.
+ */
+export type GhAuthInfo = { dir: string; workspaces: string[]; auth: "yes" | "no" | "unknown"; account?: string | null; detail?: string | null };
+/** Protocol 1.5: what an `inventory` push or the `inventory` rpc carries — the parts of hello that drift. */
+export type Inventory = { clis: CliInfo[]; profiles: ProfileInfo[]; checkouts: CheckoutInfo[]; gh?: GhAuthInfo[] };
 export type CheckoutInfo = { path: string; remote_url: string | null };
 export type LiveInfo = {
   ch: number;
@@ -233,6 +254,8 @@ export type HostToBrain =
   | { t: "pong"; n: number }
   | { t: "error"; code: string; message: string; id?: string }
   | UpdateStatus
+  /** Protocol 1.5: a fresh inventory, pushed when it changed (`reason` says what prompted the look). */
+  | ({ t: "inventory"; reason?: string } & Inventory)
   | ProcHostToBrain;
 
 export type BrainToHost =
@@ -245,7 +268,8 @@ export type BrainToHost =
   | { t: "kill"; ch: number; signal?: string }
   | { t: "rpc"; id: string; op: string; args?: unknown }
   | { t: "api_result"; req_id: string; status: number; headers: Record<string, string>; body: string | null }
-  | { t: "policy"; deny: string[]; reserve?: unknown }
+  /** `gh_dirs` (1.5): the GH_CONFIG_DIRs workspaces allowed here use (`~/…`), and which workspaces. */
+  | { t: "policy"; deny: string[]; reserve?: unknown; gh_dirs?: Array<{ dir: string; workspaces: string[] }> }
   | { t: "ack"; ch: number; seq: number }
   /**
    * The brain (re)adopts a channel after hello: resend output after `seq` (what the brain already

@@ -129,6 +129,19 @@ function discoverProfiles(): Record<string, string> {
   return out;
 }
 
+/**
+ * Discover the profiles again, in place: `CONFIG.profiles` keeps its identity (callers hold it), its
+ * entries follow `~/.claude-*` as it is now. A host calls this on every hello and inventory push, so a
+ * profile logged in after the process started is seen without a restart. Returns `CONFIG.profiles`.
+ */
+export function refreshProfiles(): Record<string, string> {
+  const next = discoverProfiles();
+  const cur = CONFIG.profiles;
+  for (const k of Object.keys(cur)) if (!(k in next)) delete cur[k];
+  Object.assign(cur, next);
+  return cur;
+}
+
 export const CONFIG = {
   port: Number(process.env.CHRONOS_PORT ?? 7777),
   // Hosts (HOSTS.md): the dedicated LAN listener for `chronos host` links, e.g. "0.0.0.0:7779".

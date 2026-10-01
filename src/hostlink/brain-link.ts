@@ -26,8 +26,10 @@ import express from "express";
 import { WebSocketServer, type WebSocket, type RawData } from "ws";
 import {
   FORWARD_STRIP_HEADERS, MAX_CONTROL_BYTES, PROTOCOL_VERSION, checkCompat, decodeControl, decodeData, encodeControl, encodeData,
-  type BrainToHost, type DataFrame, type Hello, type HostToBrain, type HostVitals,
+  type BrainToHost, type DataFrame, type Hello, type HostToBrain, type HostVitals, type Inventory,
 } from "./wire.js";
+import { inventoryDiff } from "./inventory-diff.js";
+import { ghDirsForHost } from "./gh-dirs.js";
 import { JoinCodes, ensureBrainCert, mintHostCredential, hashToken, legacyHostsFile, type BrainCert } from "./join.js";
 import { HostRegistry } from "./registry.js";
 import { classifyBrainUrl } from "./pin.js";
@@ -37,6 +39,7 @@ import type { HostPatch } from "../store/hosts.js";
 import { validate, HostPatchSchema } from "../validation.js";
 import type { z } from "zod";
 import { bus } from "../bus.js";
+import { CONFIG, refreshProfiles } from "../config.js";
 import { REPO_ROOT } from "../repo-root.js";
 
 export const HOST_PATH = "/host";
@@ -171,6 +174,8 @@ export class BrainLink extends EventEmitter {
   /** Link down, NOT process dead: a host's PTYs keep running through a Wi-Fi drop. */
   onHostOffline(cb: (hostId: string, reason: string) => void): () => void { return this.sub("offline", cb); }
   onVitals(cb: (hostId: string, v: HostVitals) => void): () => void { return this.sub("vitals", cb); }
+  /** Protocol 1.5: a host's inventory changed (pushed, or fetched by Refresh). `changes` is never empty. */
+  onInventory(cb: (hostId: string, inv: Inventory, changes: string[]) => void): () => void { return this.sub("inventory", cb); }
   onData(cb: (hostId: string, f: DataFrame) => void): () => void { return this.sub("data", cb); }
   /** Every control frame not handled here (exit, transcript, …) — Phase 3 consumers hang off this. */
   onControl(cb: (hostId: string, f: HostToBrain) => void): () => void { return this.sub("control", cb); }
@@ -283,6 +288,7 @@ export class BrainLink extends EventEmitter {
       }
       case "api": return void this.forwardApi(link, f);
       case "update_status": return this.onUpdateStatus(link, f);
+      case "inventory": { const { t: _t, reason, ...inv } = f; this.applyInventory(link, inv, reason ?? "pushed"); return; }
       case "error":
         console.warn(`[hostlink] ${link.id} reported ${f.code}: ${f.message}`);
         if (f.id) {
@@ -437,6 +443,45 @@ export class BrainLink extends EventEmitter {
     if (l) this.drop(l, 4401, reason);
   }
 
+  // ───────────── protocol 1.5: inventory between hellos ─────────────
+
+  /**
+   * Store a fresh inventory: the live hello (what placement reads while connected), the registry row
+   * (capabilities + repo_checkouts) and, when anything differs, a `host.inventory` bus event naming it.
+   */
+  private applyInventory(link: Link, inv: Partial<Inventory>, reason: string): string[] {
+    if (!link.hello) return [];
+    let changes: string[] = [];
+    try {
+      const r = this.creds.inventory(link.id, inv);
+      const prev = { clis: link.hello.capabilities?.clis, profiles: link.hello.profiles, checkouts: link.hello.checkouts, gh: r?.before?.gh };
+      if (Array.isArray(inv.clis)) link.hello.capabilities = { ...link.hello.capabilities, clis: inv.clis };
+      if (Array.isArray(inv.profiles)) link.hello.profiles = inv.profiles;
+      if (Array.isArray(inv.checkouts)) link.hello.checkouts = inv.checkouts;
+      changes = inventoryDiff(prev, { ...inv, gh: r?.after.gh });
+    } catch (e: any) {
+      console.warn(`[hostlink] ${link.id}: could not record inventory: ${e?.message ?? e}`);
+      return [];
+    }
+    if (changes.length) {
+      console.log(`[hostlink] ${link.id} (${link.name}) inventory (${reason}): ${changes.join("; ")}`);
+      bus.publish({ topic: "host.inventory", host_id: link.id, name: link.name, reason, changes });
+      this.emit("inventory", link.id, inv, changes);
+    }
+    return changes;
+  }
+
+  /** Desk → Refresh: ask the host to look again now, apply what it says, return what changed. */
+  async refreshInventory(hostId: string, timeoutMs = 60_000): Promise<string[]> {
+    const l = this.links.get(hostId);
+    if (!l?.hello) throw new Error("that computer is not connected");
+    // The workspaces' gh dirs may have changed since hello (a var added on the Desk): send them first.
+    this.pushPolicy(hostId);
+    const v = (await this.request(hostId, "inventory", undefined, timeoutMs)) as Partial<Inventory> | null;
+    const live = this.links.get(hostId);
+    return v && typeof v === "object" && live ? this.applyInventory(live, v, "refresh") : [];
+  }
+
   /** The vitals this brain has seen from a host lately, oldest first. */
   vitalsHistory(hostId: string): HostVitals[] {
     return this.history.get(hostId) ?? [];
@@ -453,7 +498,10 @@ export class BrainLink extends EventEmitter {
     let reserve: unknown;
     try { deny = JSON.parse(row.policy_json || "{}")?.deny ?? []; } catch {}
     try { reserve = row.reserve_json ? JSON.parse(row.reserve_json) : undefined; } catch {}
-    return this.sendControl(hostId, { t: "policy", deny: Array.isArray(deny) ? deny : [], ...(reserve !== undefined ? { reserve } : {}) });
+    // gh_dirs (1.5): which GH_CONFIG_DIRs to report `gh auth status` for. Older hosts ignore it.
+    let gh_dirs: ReturnType<typeof ghDirsForHost> = [];
+    try { gh_dirs = ghDirsForHost(hostId); } catch (e: any) { console.warn(`[hostlink] ${hostId}: gh dirs: ${e?.message ?? e}`); }
+    return this.sendControl(hostId, { t: "policy", deny: Array.isArray(deny) ? deny : [], ...(reserve !== undefined ? { reserve } : {}), gh_dirs });
   }
 
   // ───────────── phase 6: version + update ─────────────
@@ -888,6 +936,24 @@ export function hostRoutes(requireAdmin: express.RequestHandler, link: () => Bra
       try { l.requestUpdate(h.id); started.push(h.id); } catch (e: any) { skipped.push({ id: h.id, name: h.name, reason: String(e?.message ?? e) }); }
     }
     res.json({ started, skipped });
+  });
+  // Protocol 1.5: look at that computer again now (profiles, logins, clones, gh) instead of waiting.
+  r.post("/hosts/:id/refresh", requireAdmin, async (req, res) => {
+    const id = String(req.params.id);
+    if (id === LOCAL_HOST_ID) {
+      // The brain: re-discover its own `~/.claude-*` profiles (a login made since the daemon started).
+      const before = new Set(Object.keys(CONFIG.profiles));
+      const after = Object.keys(refreshProfiles());
+      const changes = [...after.filter((n) => !before.has(n)).map((n) => `profile ${n} appeared`), ...[...before].filter((n) => !after.includes(n)).map((n) => `profile ${n} is gone`)];
+      return res.json({ changes, host: hostsView(link()).find((h) => h.id === id) ?? null });
+    }
+    if (!hosts.get(id)?.token_hash) return res.status(404).json({ error: "no such computer" });
+    try {
+      const changes = await link().refreshInventory(id);
+      res.json({ changes, host: hostsView(link()).find((h) => h.id === id) ?? null });
+    } catch (e: any) {
+      res.status(link().isOnline(id) ? 502 : 409).json({ error: String(e?.message ?? e) });
+    }
   });
   r.post("/hosts/:id/update", requireAdmin, (req, res) => {
     const id = String(req.params.id);

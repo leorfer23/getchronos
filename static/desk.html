@@ -1277,7 +1277,7 @@
   .hws .sub { grid-column:2; font-size:12.5px; color:var(--muted); display:flex; flex-wrap:wrap; gap:3px 10px; }
   .hws.denied .nm { color:var(--muted); }
   .hws .switch.lock { cursor:not-allowed; opacity:.6; }
-  .ck { white-space:nowrap; } .ck.ok::before { content:"✓ "; color:var(--ok); } .ck.no::before { content:"✗ "; color:var(--danger); } .ck.no { color:var(--faint); }
+  .ck { white-space:nowrap; } .ck.ok::before { content:"✓ "; color:var(--ok); } .ck.no::before { content:"✗ "; color:var(--danger); } .ck.no { color:var(--faint); } .ck.unk::before { content:"? "; color:var(--faint); }
   .hclis { display:flex; flex-wrap:wrap; gap:4px 14px; font-size:13.5px; }
   .hcmd { position:relative; margin:0; padding:12px 70px 12px 12px; border-radius:10px; background:var(--term-bg); color:var(--term-ink);
     font:12.5px/1.55 ui-monospace,"SF Mono",Menlo,monospace; white-space:pre-wrap; word-break:break-all; }
@@ -7112,7 +7112,7 @@ const BUS_TOPICS = [
   "session.started", "session.ended", "session.updated",
   "jot.updated", "jot.ran", "jot.followup", "launch.updated", "launch.ran",
   "run.started", "run.ended", "job.updated",
-  "host.online", "host.offline", "host.updated",
+  "host.online", "host.offline", "host.updated", "host.inventory",
   "ask.created", "ask.answered",
   "artifact.created", "artifact.updated", "artifact.event",
   "inbox.updated",
@@ -7131,7 +7131,7 @@ function connectBus() {
       if (C.id && (e.session_id === C.id || (C.pins.pages || []).some((p) => p.id === e.artifact_id))) compPinsLoad(C.id, true);
       return ArtifactView.onEvent(e);
     }
-    if (e.topic === "host.online" || e.topic === "host.offline" || e.topic === "host.updated") return loadHostsSoon();
+    if (e.topic === "host.online" || e.topic === "host.offline" || e.topic === "host.updated" || e.topic === "host.inventory") return loadHostsSoon();
     if (e.topic === "inbox.updated") return loadInboxSoon();
     if (e.topic === "session.activity") {
       const s = byId(e.session_id);
@@ -7502,11 +7502,17 @@ function renderHosts() {
     const veto = w.denied_by === "veto";
     const on = w.allowed;
     const repos = w.repos.map((r) => `<span class="ck ${r.path ? "ok" : "no"}" title="${esc(r.path || "not cloned on this computer")}">${esc(r.name)}</span>`).join("");
-    const prof = w.profile ? `<span class="ck ${w.profile.ok ? "ok" : "no"}" title="${w.profile.ok ? "logged in" : "log in on that Mac: CLAUDE_CONFIG_DIR=~/." + esc(w.profile.name) + " claude"}">${esc(w.profile.name)}</span>` : "";
+    const pAuth = (ck.profiles.find((p) => w.profile && p.name === w.profile.name) || {}).auth;
+    const prof = w.profile ? `<span class="ck ${w.profile.ok ? "ok" : "no"}" title="${w.profile.ok ? (pAuth === "unknown" ? "set up — login not checkable from the host process" : "logged in") : "log in on that Mac: CLAUDE_CONFIG_DIR=~/." + esc(w.profile.name) + " claude"}">${esc(w.profile.name)}</span>` : "";
     const toggle = h.is_brain ? "" : `<span class="switch${on ? " on" : ""}${veto ? " lock" : ""}" data-ws="${esc(w.id)}" title="${veto ? "That Mac refuses this client itself (CHRONOS_HOST_DENY) — change it there" : on ? "Allowed here — click to keep this client off this computer" : "Kept off this computer — click to allow"}"><i></i></span>`;
     return `<div class="hws${on ? "" : " denied"}${toggle ? "" : " plain"}">${toggle}<span class="nm">${esc(w.name)}${veto ? ' <span class="hint">· vetoed on that Mac</span>' : ""}</span><span class="sub">${prof}${repos || (w.repos.length ? "" : '<span class="hint">no repos</span>')}</span></div>`;
   }).join("");
   const clis = ck.clis.map((c) => `<span class="ck ${c.ok ? "ok" : "no"}" title="${esc(c.version || "")}">${esc(c.name)}</span>`).join("") || '<span class="hint">not reported yet</span>';
+  // gh logins per GH_CONFIG_DIR its clients use there (never a reason to refuse work — shown so a PR step does not surprise).
+  const ghs = (ck.gh || []).map((g) => {
+    const tip = (g.auth === "yes" ? "logged in" + (g.account ? " as " + g.account : "") : g.auth === "no" ? "not logged in — " + (g.dir === "default" ? "" : "GH_CONFIG_DIR=" + g.dir + " ") + "gh auth login" : "could not check from the host process") + (g.workspaces.length ? " · " + g.workspaces.join(", ") : "");
+    return `<span class="ck ${g.auth === "yes" ? "ok" : g.auth === "no" ? "no" : "unk"}" title="${esc(tip)}">gh login${g.dir === "default" ? "" : " " + esc(g.dir.split("/").pop())}</span>`;
+  }).join("");
   const meta = h.is_brain
     ? "The brain — the daemon, the Desk and Robert run here."
     : [h.platform, h.version ? "chronos " + h.version + (h.commit ? " @ " + h.commit.slice(0, 7) : "") : "", h.link ? (h.link.via === "lan" ? "on this network" : "through the tunnel") : "", ck.veto.length ? "vetoes " + ck.veto.join(", ") : ""].filter(Boolean).join(" · ");
@@ -7517,11 +7523,13 @@ function renderHosts() {
     <div class="jbody">
       <div class="hsec"><h4>Now</h4>${hVitals(h)}${h.connected && h.admission && !h.admission.ok ? `<div class="hint" style="margin-top:6px;color:var(--danger)">${esc(h.admission.reason)}</div>` : ""}</div>
       <div class="hsec"><h4>Clients <span class="hint">${h.is_brain ? "— profiles and repos on this Mac" : "— which may run here, and what they need on that Mac"}</span></h4>${wsRows || '<span class="hint">no clients yet</span>'}</div>
-      <div class="hsec"><h4>Tools</h4><div class="hclis">${clis}</div></div>
+      <div class="hsec"><h4>Tools${ck.reported_at && !h.is_brain ? ` <span class="hint">— checked ${esc(age(ck.reported_at))} ago</span>` : ""}</h4><div class="hclis">${clis}${ghs}</div></div>
       ${hUpdateSec(h)}
       <div class="hint" style="font-size:12.5px;color:var(--faint)">${esc(meta)}</div>
     </div>
-    ${h.is_brain ? "" : `<div class="jfoot"><span class="sp"></span><button class="btn ghost" id="h-revoke" style="color:var(--danger)">Remove this computer</button></div>`}`;
+    ${h.is_brain ? "" : `<div class="jfoot">${h.connected ? `<button class="btn ghost" id="h-refresh" title="Look at that Mac again now: profiles, logins, clones, gh">Refresh</button>` : ""}<span class="sp"></span><button class="btn ghost" id="h-revoke" style="color:var(--danger)">Remove this computer</button></div>`}`;
+  const rf = qs("#h-refresh");
+  if (rf) rf.onclick = () => hRefresh(h.id, rf);
   const name = qs("#h-name");
   name.onkeydown = (e) => { if (e.key === "Enter") name.blur(); if (e.key === "Escape") { name.value = hLabel(h); name.blur(); } };
   name.onchange = () => { const v = name.value.trim(); if (v && v !== hLabel(h)) hPatch(h.id, { name: v }); else name.value = hLabel(h); };
@@ -7542,6 +7550,15 @@ function renderHosts() {
   if (rv) rv.onclick = () => arm(rv, "Remove — its token stops working now", async () => {
     try { await api("/hosts/" + encodeURIComponent(h.id), { method: "DELETE" }); H.sel = "local"; toast(h.name + " removed"); await loadHosts(); } catch (e) { toast(errMsg(e)); }
   }, 4000);
+}
+async function hRefresh(id, btn) {
+  btn.disabled = true; btn.textContent = "Refreshing…";
+  try {
+    const r = await api("/hosts/" + encodeURIComponent(id) + "/refresh", { method: "POST", body: "{}" });
+    if (r.host && H.list) H.list = H.list.map((x) => (x.id === id ? r.host : x));
+    toast(r.changes && r.changes.length ? r.changes.join(" · ") : "nothing changed");
+    renderHosts();
+  } catch (e) { toast(errMsg(e)); btn.disabled = false; btn.textContent = "Refresh"; }
 }
 async function hPatch(id, body) {
   try {

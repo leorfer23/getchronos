@@ -8,8 +8,9 @@
  *
  *  - **Bus events, not polling, where there is an event**: `host.offline` (armed past the failover
  *    grace, so the wake can say what failover did), `session.host_failover` mode `stuck`,
- *    `host.policy_violation`. A sweep (every 10 min and just after a host says hello) reads
- *    `hostsView()` for what has no event: behind the brain, a needed CLI logged out, and hosts that
+ *    `host.policy_violation`. A sweep (every 10 min, just after a host says hello, and just after a
+ *    `host.inventory` change) reads
+ *    `hostsView()` for what has no event: behind the brain, a needed CLI or claude profile logged out, and hosts that
  *    were already offline with work on them when the brain restarted.
  *  - **Once per host per state.** The key names the host, the kind and the state (the offline
  *    episode, the policy, the brain commit, the CLI + day); a handled key never wakes him again.
@@ -107,6 +108,7 @@ const episodes = new Map<string, Episode>();
 const behindSince = new Map<string, { target: string; since: number }>();
 const loggedOut = new Set<string>();
 let sweepTimer: NodeJS.Timeout | null = null;
+let inventorySweep: NodeJS.Timeout | null = null;
 
 export function resetHostDriveState(): void {
   for (const e of episodes.values()) if (e.timer) clearTimeout(e.timer);
@@ -288,6 +290,29 @@ export function sweepHosts(nowMs = Date.now()): string[] {
           `tell him in one line (which computer, which CLI). Nothing to change in Chronos.`,
       }, nowMs));
     }
+
+    // A claude PROFILE the host reports logged out (protocol 1.5 `auth`): the CLI is fine, but
+    // placement refuses claude work of the workspaces pinned to that account there.
+    const outProfiles = new Set(h.checklist.profiles.filter((p) => p.auth === "no").map((p) => p.name));
+    for (const k of [...loggedOut]) if (k.startsWith(`p:${h.id}:`) && !outProfiles.has(k.slice(`p:${h.id}:`.length))) loggedOut.delete(k);
+    const byProfile = new Map<string, string[]>();
+    for (const w of h.checklist.workspaces) {
+      if (!w.allowed || !w.profile || !outProfiles.has(w.profile.name)) continue;
+      if (cliFor(workspaces.get(w.id)?.default_backend || "claude-code") !== "claude") continue;
+      byProfile.set(w.profile.name, [...(byProfile.get(w.profile.name) ?? []), w.name]);
+    }
+    for (const [profile, wsNames] of byProfile) {
+      const k = `p:${h.id}:${profile}`;
+      if (loggedOut.has(k)) continue;
+      loggedOut.add(k);
+      push(hostWake({
+        host_id: h.id, kind: "logged_out", state: `profile:${profile}:${new Date(nowMs).toISOString().slice(0, 10)}`,
+        say:
+          `Profile ${profile} is NOT LOGGED IN on ${h.name} (the directory is there, its keychain login is not), and ` +
+          `${wsNames.slice(0, 5).join(", ")} run claude on it — placement skips ${h.name} for their work until someone runs ` +
+          `\`CLAUDE_CONFIG_DIR=~/.${profile} claude\` there and logs in. Tell the operator in one line. Nothing to change in Chronos.`,
+      }, nowMs));
+    }
   }
   return woke;
 }
@@ -301,6 +326,11 @@ export function startHostDrive(): void {
         // Its hello just stored fresh capabilities and version: read them once it has settled.
         const t = setTimeout(() => { try { sweepHosts(); } catch (err) { console.error("[host-drive]", err); } }, 10_000);
         t.unref?.();
+      } else if (e.topic === "host.inventory") {
+        // A login or a CLI changed between hellos (protocol 1.5): look now, not at the next tick.
+        if (inventorySweep) clearTimeout(inventorySweep);
+        inventorySweep = setTimeout(() => { inventorySweep = null; try { sweepHosts(); } catch (err) { console.error("[host-drive]", err); } }, 5_000);
+        inventorySweep.unref?.();
       } else if (e.topic === "session.host_failover" && e.mode === "stuck") noteStuck(e.from_host, e.session_id, e.reason);
       else if (e.topic === "host.policy_violation") onPolicyViolation(e);
     } catch (err) {

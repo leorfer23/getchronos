@@ -6,17 +6,18 @@
  * Every probe is best-effort with a short timeout. A host that cannot answer "which claude?" still
  * connects; the Desk shows the gap in red instead of the host never appearing at all.
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
-import { CONFIG } from "../config.js";
+import { refreshProfiles } from "../config.js";
 import { detectOriginUrl } from "../repo-git.js";
 import { machineLoad, readVitals, swapPctOf } from "../machine.js";
 import { REPO_ROOT } from "../repo-root.js";
-import { PROTOCOL_VERSION, type CheckoutInfo, type CliInfo, type Hello, type HostInstall, type HostVitals, type ProfileInfo } from "../hostlink/wire.js";
+import { PROTOCOL_VERSION, type CheckoutInfo, type CliInfo, type GhAuthInfo, type Hello, type HostInstall, type HostVitals, type Inventory, type ProfileInfo } from "../hostlink/wire.js";
 import { checkNode } from "../../bin/host-core.mjs";
-import { commitOf, detectInstall } from "./update.js";
+import { commitOf, defaultRunner, detectInstall, type Runner } from "./update.js";
 
 /** The CLIs a host may be asked to run, plus the two every ship pipeline needs. */
 export const CLI_NAMES = ["claude", "cursor-agent", "grok", "opencode", "gh", "git"] as const;
@@ -110,12 +111,108 @@ export function cursorAuthFrom(out: string): "yes" | "no" | "unknown" {
 
 /**
  * Profiles by NAME, from the same `~/.claude-*` discovery the daemon uses (`CONFIG.profiles`), run
- * against this Mac's home. The brain sends a profile name in a spawn; the host maps it to its own dir.
- * `exists` is only "the directory is there" — whether it is logged in lives in the keychain and is
- * checked when a CLI first runs (Phase 3), not guessed here.
+ * against this Mac's home — and run AGAIN on every call (`refreshProfiles`), so a profile logged in
+ * after this process started is reported on the next hello or inventory push without a restart.
+ * `exists` is only "the directory is there"; `profilesWithAuth` adds whether it is logged in.
  */
 export function profiles(): ProfileInfo[] {
-  return Object.entries(CONFIG.profiles).map(([name, dir]) => ({ name, dir, exists: fs.existsSync(dir) }));
+  return Object.entries(refreshProfiles()).map(([name, dir]) => ({ name, dir, exists: fs.existsSync(dir) }));
+}
+
+/**
+ * The keychain items claude may keep a profile's login in. A spawn always sets CLAUDE_CONFIG_DIR, and
+ * claude then suffixes the service with the first 8 hex of sha256(dir); a login made in a plain shell
+ * for `~/.claude` (no CLAUDE_CONFIG_DIR) lands in the unsuffixed item, so the default dir checks both.
+ */
+export function claudeKeychainServices(dir: string, home = os.homedir()): string[] {
+  const hashed = `Claude Code-credentials-${crypto.createHash("sha256").update(dir).digest("hex").slice(0, 8)}`;
+  return path.resolve(dir) === path.join(home, ".claude") ? [hashed, "Claude Code-credentials"] : [hashed];
+}
+
+/** `security` exit code for errSecItemNotFound. 0 = found; anything else (locked, no GUI session) is no answer. */
+export const SEC_NOT_FOUND = 44;
+
+/**
+ * Is this profile logged in? Cheap and local: claude's plaintext credentials file in the dir (where it
+ * keeps the login when there is no keychain), else the keychain item's EXISTENCE — `security
+ * find-generic-password -s` without `-w`/`-g`, so the secret is never read. A keychain this process
+ * cannot search (an SSH session, a launchd job outside the login session) answers "unknown", never
+ * "no": `reachable` is checked first because a search list without the login keychain says "not
+ * found" for everything.
+ */
+export async function profileAuth(dir: string, o: { run?: Runner; platform?: string; home?: string; reachable?: boolean } = {}): Promise<"yes" | "no" | "unknown"> {
+  if (!fs.existsSync(dir)) return "no";
+  if (fs.existsSync(path.join(dir, CLAUDE_CRED_FILE))) return "yes";
+  if ((o.platform ?? process.platform) !== "darwin") return "unknown";
+  const run = o.run ?? defaultRunner;
+  if (!(o.reachable ?? (await keychainReachable(run)))) return "unknown";
+  let missing = 0;
+  const names = claudeKeychainServices(dir, o.home);
+  for (const name of names) {
+    const r = await run("/usr/bin/security", ["find-generic-password", "-s", name], { timeoutMs: 5000 }).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    if (r.code === 0) return "yes";
+    if (r.code === SEC_NOT_FOUND) missing++;
+  }
+  return missing === names.length ? "no" : "unknown";
+}
+const CLAUDE_CRED_FILE = ".credentials.json";
+
+/** Does this process's keychain search list include the login keychain? (`security list-keychains -d user`.) */
+export async function keychainReachable(run: Runner = defaultRunner): Promise<boolean> {
+  const r = await run("/usr/bin/security", ["list-keychains", "-d", "user"], { timeoutMs: 5000 }).catch(() => null);
+  return !!r && r.code === 0 && /login\.keychain/.test(r.stdout);
+}
+
+/** Profiles with `auth` — what hello and every inventory push report. */
+export async function profilesWithAuth(run: Runner = defaultRunner, platform: string = process.platform): Promise<ProfileInfo[]> {
+  const list = profiles();
+  const reachable = platform === "darwin" ? await keychainReachable(run) : false;
+  return Promise.all(list.map(async (p) => ({ ...p, auth: await profileAuth(p.dir, { run, platform, reachable }) })));
+}
+
+/**
+ * `gh auth status` → yes / no / unknown, plus the account. Wording differs across gh versions (and
+ * between stdout and stderr), so this reads both; a timeout, a locked keyring or a network error is
+ * "unknown". The token line is never kept (gh masks it anyway).
+ */
+export function ghAuthFrom(code: number, out: string): { auth: "yes" | "no" | "unknown"; account: string | null; detail: string | null } {
+  const t = out.replace(/\x1b\[[0-9;]*m/g, "");
+  const acct = /Logged in to \S+ (?:account|as) ([\w.-]+)/i.exec(t)?.[1] ?? null;
+  if (code === 0 && acct) return { auth: "yes", account: acct, detail: null };
+  if (/You are not logged into any|not logged in/i.test(t)) return { auth: "no", account: null, detail: "not logged in" };
+  if (/token .*is invalid/i.test(t)) return { auth: "no", account: acct, detail: "token invalid" };
+  if (/keyring|keychain|timeout|timed out|could not resolve|connection refused|network/i.test(t)) return { auth: "unknown", account: acct, detail: "gh could not check (keyring or network)" };
+  return { auth: "unknown", account: acct, detail: null };
+}
+
+/** `gh auth status` for each dir (`~/…` or absolute; "default" = gh's own). Never blocks long: 10s each. */
+export async function ghAuth(dirs: Array<{ dir: string; workspaces: string[] }>, run: Runner = defaultRunner, ghBin: string | null = which("gh")): Promise<GhAuthInfo[]> {
+  if (!ghBin) return [];
+  return Promise.all(dirs.map(async ({ dir, workspaces }) => {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (dir === "default") delete env.GH_CONFIG_DIR;
+    else env.GH_CONFIG_DIR = expand(dir);
+    const r = await run(ghBin, ["auth", "status"], { env, timeoutMs: 10_000 }).catch(() => null);
+    const v = r ? ghAuthFrom(r.code, `${r.stdout}\n${r.stderr}`) : { auth: "unknown" as const, account: null, detail: "gh did not run" };
+    return { dir, workspaces, ...v };
+  }));
+}
+
+/** The default gh login plus every dir the brain named, de-duplicated by dir. */
+export function ghDirsToProbe(fromBrain: Array<{ dir: string; workspaces: string[] }> | null | undefined): Array<{ dir: string; workspaces: string[] }> {
+  const out = new Map<string, string[]>([["default", []]]);
+  for (const d of fromBrain ?? []) {
+    if (!d || typeof d.dir !== "string" || !d.dir.trim()) continue;
+    const ws = Array.isArray(d.workspaces) ? d.workspaces.filter((w) => typeof w === "string") : [];
+    out.set(d.dir, [...new Set([...(out.get(d.dir) ?? []), ...ws])]);
+  }
+  return [...out].map(([dir, workspaces]) => ({ dir, workspaces }));
+}
+
+/** Everything that can drift between hellos, freshly looked at (profiles re-discovered). */
+export async function collectInventory(ghDirs?: Array<{ dir: string; workspaces: string[] }> | null): Promise<Inventory> {
+  const [clis, profs, checkouts, gh] = await Promise.all([probeClis(), profilesWithAuth(), scanCheckouts(), ghAuth(ghDirsToProbe(ghDirs))]);
+  return { clis, profiles: profs, checkouts, gh };
 }
 
 /**
@@ -178,7 +275,7 @@ export function hostBuild(): Promise<{ commit: string | null; install: HostInsta
 }
 
 export async function buildHello(hostId: string, name = os.hostname().replace(/\.local$/, "")): Promise<Hello> {
-  const [clis, checkouts, build] = await Promise.all([probeClis(), scanCheckouts(), hostBuild()]);
+  const [clis, profs, checkouts, build] = await Promise.all([probeClis(), profilesWithAuth(), scanCheckouts(), hostBuild()]);
   return {
     t: "hello",
     proto: PROTOCOL_VERSION,
@@ -195,7 +292,7 @@ export async function buildHello(hostId: string, name = os.hostname().replace(/\
       procs: true,
       egress: true,
     },
-    profiles: profiles(),
+    profiles: profs,
     checkouts,
     deny: hostDeny(),
     live: [], // PTYs (phase 3) and headless runs (phase 5) that survived a link drop — filled by index.ts.
@@ -236,6 +333,8 @@ export function checklist(input: {
   clis: CliInfo[];
   profiles: ProfileInfo[];
   checkouts: CheckoutInfo[];
+  /** `gh auth status` per GH_CONFIG_DIR (protocol 1.5). A ✗ here never blocks placement: gh is only some work's need. */
+  gh?: GhAuthInfo[];
   roots: string[];
   secretsMode: number | null;
   joined: { id: string | null; brains: string[]; fp: string | null };
@@ -256,7 +355,15 @@ export function checklist(input: {
     out.push({ ok: !!c.path || anyAgent, label: `${c.name}${c.path ? "" : " (optional)"}`, detail: c.path ? `${c.version ?? "?"} (${c.path})` : "not installed" });
   }
   for (const p of input.profiles) {
-    out.push({ ok: p.exists, label: `profile ${p.name}`, detail: p.dir, hint: p.exists ? undefined : `log in: CLAUDE_CONFIG_DIR=${p.dir} claude` });
+    const ok = p.exists && p.auth !== "no";
+    const state = !p.exists ? "" : p.auth === "yes" ? " (logged in)" : p.auth === "no" ? " (not logged in)" : p.auth === "unknown" ? " (login unknown — keychain not readable from here)" : "";
+    out.push({ ok, label: `profile ${p.name}`, detail: `${p.dir}${state}`, hint: ok ? undefined : `log in: CLAUDE_CONFIG_DIR=${p.dir} claude` });
+  }
+  for (const g of input.gh ?? []) {
+    const who = g.workspaces.length ? ` (${g.workspaces.join(", ")})` : "";
+    const fix = g.dir === "default" ? "gh auth login" : `GH_CONFIG_DIR=${g.dir} gh auth login`;
+    const detail = g.auth === "yes" ? `logged in${g.account ? ` as ${g.account}` : ""}` : g.auth === "no" ? g.detail ?? "not logged in" : `unknown${g.detail ? ` — ${g.detail}` : ""}`;
+    out.push({ ok: g.auth !== "no", label: `gh ${g.dir}${who}`, detail, hint: fix });
   }
   for (const r of input.roots) {
     const n = input.checkouts.filter((c) => c.path.startsWith(r)).length;

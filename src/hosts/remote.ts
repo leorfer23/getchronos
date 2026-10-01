@@ -306,6 +306,14 @@ export class RemoteHost implements Host {
     this.offlineSince = null;
   }
 
+  /** Protocol 1.5: the host's inventory changed since its hello — what placement reads from now on. */
+  setInventory(inv: { clis?: Hello["capabilities"]["clis"]; profiles?: Hello["profiles"]; checkouts?: Hello["checkouts"] }): void {
+    if (!this.hello) return;
+    if (Array.isArray(inv.clis)) this.hello = { ...this.hello, capabilities: { ...this.hello.capabilities, clis: inv.clis } };
+    if (Array.isArray(inv.profiles)) this.hello = { ...this.hello, profiles: inv.profiles };
+    if (Array.isArray(inv.checkouts)) this.hello = { ...this.hello, checkouts: inv.checkouts };
+  }
+
   setOffline(): void {
     this.onlineSince = null;
     this.offlineSince = Date.now();
