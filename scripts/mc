@@ -9,6 +9,7 @@
 //   MC_WORKSPACE_TOKEN this workspace's API credential (PER-24) — scopes every call below to it
 //   MC_REPO            repo id (default --repo)
 //   MC_TICKET          the ticket key this agent is working (for `mc done`, `mc note`)
+//   MC_HOST_ID / MC_HOST_NAME / MC_HOST_BRAIN   which computer this agent runs on ("local"/1 = the brain)
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -64,6 +65,50 @@ async function req(method, path, body, headers) {
     process.exit(0);
   }
   return json;
+}
+// `mc whoami`: which computer, workspace, repo and terminal this is. From the env first, so it answers
+// even while the brain is away; then the brain's view of this session, bounded to a few seconds.
+async function whoami(asJson) {
+  const e = process.env;
+  const id8 = (v) => (v ? String(v).slice(0, 8) : "");
+  const me = {
+    host_id: e.MC_HOST_ID || null,
+    host_name: e.MC_HOST_NAME || null,
+    brain: e.MC_HOST_BRAIN === "1" ? true : e.MC_HOST_BRAIN === "0" ? false : null,
+    workspace: e.MC_WORKSPACE || null, workspace_name: e.MC_WORKSPACE_NAME || null,
+    repo: e.MC_REPO || null, repo_name: e.MC_REPO_NAME || null,
+    session: e.MC_SESSION || null, run: e.MC_RUN || null,
+    cwd: process.cwd(), api: API, brain_reachable: null, brain_error: null,
+  };
+  if (me.session) {
+    try {
+      const r = await fetch(API + "/sessions/" + encodeURIComponent(me.session), { headers: { ...WS_TOKEN_HEADERS, ...SESSION_HEADERS }, signal: AbortSignal.timeout(3000) });
+      const s = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(s?.error || `HTTP ${r.status}`);
+      me.brain_reachable = true;
+      // A terminal opened before MC_HOST_* existed: the brain's row still knows where it runs.
+      me.host_id ||= s.host_id || "local";
+      me.host_name ||= s.host_name || me.host_id;
+      if (me.brain === null) me.brain = me.host_id === "local";
+    } catch (err) {
+      me.brain_reachable = false;
+      me.brain_error = String(err?.message ?? err);
+    }
+  }
+  if (asJson) return console.log(JSON.stringify(me, null, 2));
+  const where = me.brain === true ? "the brain — the operator's main Mac"
+    : me.brain === false ? "another computer — localhost, files, browser and dev servers here are NOT the operator's"
+    : "unknown (opened before MC_HOST_ID existed)";
+  const rows = [
+    ["host", `${me.host_name || "?"}${me.host_id && me.host_id !== me.host_name ? ` (${me.host_id})` : ""} — ${where}`],
+    ["workspace", me.workspace ? `${me.workspace_name || "?"} (${id8(me.workspace)})` : "(none)"],
+    ["repo", me.repo ? `${me.repo_name || "?"} (${id8(me.repo)})` : "(none)"],
+    ["session", me.session ? id8(me.session) : me.run ? `run ${id8(me.run)}` : "(none — not a Chronos terminal)"],
+    ["cwd", me.cwd],
+    ["api", me.api + (me.brain === false ? "  (this Mac's mc forwarder → the brain)" : "")],
+  ];
+  if (me.brain_reachable !== null) rows.push(["brain", me.brain_reachable ? "reachable" : `unreachable — ${me.brain_error}`]);
+  console.log(rows.map(([k, v]) => `${k.padEnd(10)} ${v}`).join("\n"));
 }
 function readStdin() {
   return new Promise((resolve) => {
@@ -244,7 +289,7 @@ const HELP = `mc — Mission Control backlog CLI
              [--name N] [--kind client|personal] [--git-name N] [--git-email E]
              [--budget USD] [--concurrent N] [--config-dir DIR] [--secrets FILE]
              (creates config dir + 0600 secrets file, then registers the ws; admin-gated → run on daemon host)
-  mc repo list [--workspace ID]      list repos in a workspace
+  mc repo list [--workspace ID]      list repos in a workspace (on another computer: ITS checkout path)
   mc repo add <name> --path ABS [--workspace ID] [--remote URL] [--branch main] [--delivery commit|pr]
              register a repo in a workspace (admin-gated → run on daemon host)
   mc repo patch <id> [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr]   edit a repo (admin-gated)
@@ -268,7 +313,9 @@ const HELP = `mc — Mission Control backlog CLI
   mc hook claude|cursor|grok  (run by the CLI's lifecycle hooks — not by hand)
   mc statusline claude        (Claude's statusLine — reports usage-limit %, prints "5h 34% · week 71%")
   mc usage                    subscription usage per CLI/profile (Claude 5h/week, Grok week, Cursor —)
-  mc session list [--workspace ID]   live terminals + their tickets
+  mc session list [--workspace ID]   live terminals: id, computer, backend, role, ticket, title
+  mc whoami [--json]                 where THIS terminal runs: computer (MC_HOST_NAME), workspace, repo,
+                                     session, cwd, api — on another computer, localhost and files are its own
   mc session new [--ticket KEY] [--backend b] [--model m] [--workspace ID] [--cwd p] [--title t] [--host id|name]
                  [--goal "what it's for"] [--kind pr|investigation|qa] [--description "the brief"]
                  (--goal repeats: --goal "open the PR" --goal "update the runbook" = one terminal,
@@ -673,6 +720,7 @@ async function heavy(argv) {
     if (cmd === "hook") return await hook(pos[1] || "claude");
     if (cmd === "statusline") return await statusline();
     if (cmd === "usage") return await usage("json" in opt);
+    if (cmd === "whoami") return await whoami("json" in opt);
 
     if (cmd === "pdf") {
       const file = pos[1] || die("usage: mc pdf <file.pdf>");
@@ -1761,7 +1809,10 @@ async function heavy(argv) {
     if (cmd === "repo" && pos[1] === "list") {
       const wsq = opt.workspace || process.env.MC_WORKSPACE;
       const all = await req("GET", "/workspaces");
-      const list = (wsq ? all.filter((w) => w.id === wsq) : all).flatMap((w) => (w.repos || []).map((r) => `${r.id.slice(0, 8)}\t${w.slug}\t${r.name}\t${r.path}\t${r.delivery || "commit"}`));
+      // From a terminal on another computer the brain adds `host_path` (that computer's checkout):
+      // `path` is the brain's own and means nothing here.
+      const where = (r) => ("host_path" in r ? r.host_path || "(not on this host)" : r.path);
+      const list = (wsq ? all.filter((w) => w.id === wsq) : all).flatMap((w) => (w.repos || []).map((r) => `${r.id.slice(0, 8)}\t${w.slug}\t${r.name}\t${where(r)}\t${r.delivery || "commit"}`));
       return console.log(list.length ? list.join("\n") : "(no repos)");
     }
     if (cmd === "repo" && pos[1] === "add") {
@@ -1809,7 +1860,7 @@ async function heavy(argv) {
       const wsq = opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
       const all = await req("GET", "/sessions?" + qs.toString());
       if (!all.length) return console.log("(no live sessions)");
-      return console.log(all.map((s) => `${s.id.slice(0, 8)}\t${s.backend}/${s.model || "·"}\t${s.role}\t${s.ticket_key || "chat"}\t${s.title || ""}`).join("\n"));
+      return console.log(all.map((s) => `${s.id.slice(0, 8)}\t${s.host_name || s.host_id || "local"}\t${s.backend}/${s.model || "·"}\t${s.role}\t${s.ticket_key || "chat"}\t${s.title || ""}`).join("\n"));
     }
     if (cmd === "session" && pos[1] === "new") {
       let ws = opt.workspace || process.env.MC_WORKSPACE, repo = opt.repo || process.env.MC_REPO, ticketId = null;

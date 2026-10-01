@@ -40,6 +40,14 @@ export function checkoutOn(hostId: string, repo: Pick<Repo, "id" | "path">): str
   return repoCheckouts.forHost(hostId).find((c) => c.repo_id === repo.id)?.path ?? null;
 }
 
+/**
+ * Repos as a terminal on `hostId` should see them (`mc repo list` from a host): each with `host_path`,
+ * that computer's checkout, or null when it has none. `path` stays the brain's, as everywhere else.
+ */
+export function reposOnHost<R extends Pick<Repo, "id" | "path">>(list: R[], hostId: string): Array<R & { host_path: string | null }> {
+  return list.map((r) => ({ ...r, host_path: checkoutOn(hostId, r) }));
+}
+
 /** Is this WorkDir the repo's SHARED checkout (never `git add -A` there) rather than a worktree? */
 export function isSharedCheckout(wd: WorkDir, repo: Pick<Repo, "id" | "path"> | undefined | null): boolean {
   if (!repo) return false;

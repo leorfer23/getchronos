@@ -171,6 +171,7 @@ import {
   NewArtifactSchema, UpdateArtifactSchema, ArtifactEventSchema, ArtifactStateSchema } from "./validation.js";
 import { pressureWord, swapPctOf } from "./machine.js";
 import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
+import { hostName, reposOnHost } from "./hosts/workdir.js";
 import { HOST_PATH, brainLink, forwardedHost, hostRoutes } from "./hostlink/brain-link.js";
 import { barRoutes } from "./hostlink/bar.js";
 import { PlacementError } from "./hosts/candidates.js";
@@ -528,20 +529,27 @@ export function startServer() {
   api.get("/sessions", (req, res) => {
     const scope = callerScope(req);
     if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    // `host_name`: the computer each terminal runs on, by the name the operator gave it (mc session list).
+    const names = new Map<string, string>();
+    const named = (id: string | null | undefined) => {
+      const k = id || LOCAL_HOST_ID;
+      if (!names.has(k)) names.set(k, hostName(k));
+      return names.get(k)!;
+    };
     res.json(
       sessions.list({
         ticket_id: req.query.ticket as string | undefined,
         status: req.query.status as string | undefined,
         workspace_id: scope.ws ?? (req.query.workspace as string | undefined),
         limit: req.query.limit ? Number(req.query.limit) : undefined,
-      })
+      }).map((s) => ({ ...s, host_name: named(s.host_id) }))
     );
   });
   api.get("/sessions/:id", (req, res) => {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
-    res.json({ ...s, host_offline: sessionHostOffline(s) });
+    res.json({ ...s, host_offline: sessionHostOffline(s), host_name: hostName(s.host_id || LOCAL_HOST_ID) });
   });
   api.post("/sessions", validate(OpenSessionSchema), async (req, res) => {
     const scope = callerScope(req);
@@ -2857,7 +2865,11 @@ export function startServer() {
   api.get("/workspaces", (req, res) => {
     const all = workspaces.list(req.query.archived === "1");
     const syncs = connectorSyncs.latestByWorkspace();
-    res.json(all.map((w) => ({ ...wsWithRepos(w), last_sync: syncs[w.id] ?? null })));
+    // Asked from a terminal on another computer (the forwarder's stamp, never the caller's): each repo
+    // also carries `host_path`, that computer's checkout of it, or null — `repos.path` is the brain's.
+    const fh = forwardedHost(req);
+    const onHost = (w: any) => fh ? { ...w, repos: reposOnHost(w.repos, fh) } : w;
+    res.json(all.map((w) => ({ ...onHost(wsWithRepos(w)), last_sync: syncs[w.id] ?? null })));
   });
 
   api.post("/workspaces", requireAdmin, validate(NewWorkspaceSchema), (req, res) => {

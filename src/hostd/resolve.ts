@@ -28,6 +28,19 @@ export function hostBaseEnv(home: string): Record<string, string> {
   return base;
 }
 
+/** Who this host is: its id from the join, and the operator's name for it (the Desk's Computers list). */
+export type HostSelf = { id: string; name: string };
+
+/**
+ * MC_HOST_* stamped by the host itself on every agent it spawns, AFTER the brain's env: the host is
+ * the authority on which machine this is, including while the brain is away. MC_HOST_BRAIN is "0"
+ * here by construction — the brain's own agents never come through a host process.
+ */
+export function hostSelfEnv(self: HostSelf | null | undefined): Record<string, string> {
+  if (!self?.id) return {};
+  return { MC_HOST_ID: self.id, MC_HOST_NAME: self.name || self.id, MC_HOST_BRAIN: "0" };
+}
+
 /** One key per repository however it was cloned — the brain's own matcher (hostlink/git-remote.ts). */
 export function remoteKey(url: string | null | undefined): string {
   return normalizeGitRemote(url) ?? "";
