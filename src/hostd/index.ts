@@ -47,8 +47,17 @@ import { installMenubar, menubarPaths, menubarState, refreshMenubar, uninstallMe
 import { buildStatus, isHostStatus, mcPortCandidates as portCandidates } from "./status.js";
 import type { UpdateFrame, UpdateStatus, UpdateTarget } from "../hostlink/wire.js";
 import type { HostSelf } from "./resolve.js";
+import { startCaffeinate } from "../caffeinate.js";
+import { FENCE_TICK_MS, fenceReason } from "./fence.js";
+
+// Same backstop as the brain's (src/index.ts): a stray rejection must not take down the process
+// that every PTY on this Mac is a child of.
+process.on("unhandledRejection", (reason) => {
+  console.error("[host] unhandled rejection (host stays up):", reason);
+});
 
 const env = (k: string) => (process.env[k] ?? "").trim();
+const off = (k: string) => /^(off|0|false|no)$/i.test(env(k));
 const brains = () => env("CHRONOS_HOST_BRAINS").split(",").map((s) => s.trim()).filter(Boolean);
 const mcPort = () => Number(env("CHRONOS_HOST_MC_PORT") || 7777);
 /**
@@ -202,12 +211,45 @@ async function cmdRun(): Promise<number> {
       exec: (a) => procs.exec(a),
       oneshot: (a) => procs.oneshot(a),
       worktree_ensure: (a) => procs.worktreeEnsure(a),
+      // A terminal moved elsewhere while this host was away: save its unpushed work, then stop it.
+      salvage: (a) => terminals.salvage(a as Parameters<HostTerminals["salvage"]>[0]),
       worktree_list: (a) => listHostWorktrees(worktreeDeps, a),
       worktree_remove: (a) => removeHostWorktree(worktreeDeps, a),
     },
   });
   sendInventory = (f) => link.sendControl(f);
   inventory.start();
+  // Awake while there is work (HOSTS.md → Reconnect and restarts): an idle-sleeping host looks gone to
+  // the brain, which moves its terminals after the grace. On battery too (the work is why this Mac is a
+  // host), down to CHRONOS_HOST_AWAKE_MIN_BATTERY %; CHRONOS_HOST_AWAKE_ON_BATTERY=off releases on
+  // battery like the brain does. Frozen work does not count. A closed lid still sleeps.
+  if (!off("CHRONOS_HOST_AWAKE")) {
+    const minPct = Number(env("CHRONOS_HOST_AWAKE_MIN_BATTERY") || 20);
+    startCaffeinate({
+      tag: "[host]",
+      busy: () => [...terminals.work(), ...procs.work()].some((w) => !w.frozen),
+      policy: { onBattery: !off("CHRONOS_HOST_AWAKE_ON_BATTERY"), minBatteryPct: Number.isFinite(minPct) ? minPct : 20 },
+    });
+  }
+  // The fence (fence.ts): a little before the brain would move this host's terminals elsewhere — or as
+  // soon as it refuses this host — every terminal and run here is frozen until it says whose they are.
+  const fenceOff = off("CHRONOS_HOST_FENCE");
+  let fence: { since: number; reason: string } | null = null;
+  const fenceTick = () => {
+    const reason = fenceReason({
+      online: link.state === "online", lastContact: link.lastContact, graceMs: link.graceMs,
+      rejected: link.rejected, disabled: fenceOff, now: Date.now(),
+    });
+    if (!reason) {
+      if (fence && !terminals.frozenCount() && !procs.frozenCount()) fence = null;
+      return;
+    }
+    const n = terminals.freezeAll() + procs.freezeAll();
+    if (n || !fence) fence = { since: fence?.since ?? Date.now(), reason };
+    if (n) console.warn(`[host] fence: froze ${n} terminal${n === 1 ? "" : "s"}/run${n === 1 ? "" : "s"} — ${reason}. They run again when the brain takes them back, or are stopped if it moved them.`);
+  };
+  setInterval(fenceTick, FENCE_TICK_MS).unref();
+  link.on("rejected", () => fenceTick());
   const replay = () => { if (link.state === "online" && outbox.size) void outbox.drain((q) => link.api(q)); };
   // A drain stops at the first 5xx; try again on a slow tick rather than hammer a struggling brain.
   setInterval(replay, 30_000).unref();
@@ -263,6 +305,7 @@ async function cmdRun(): Promise<number> {
           commit: buildCommit,
           work: [...terminals.work(), ...procs.work()],
           home: os.homedir(),
+          fence,
         }),
       });
       // Agents opened from now on point MC_API at the port that actually bound.
@@ -438,6 +481,8 @@ async function cmdStatus(): Promise<number> {
     console.log(`link      ${s.state}${s.url ? ` via ${s.url}` : ""} since ${new Date(Number(s.since)).toLocaleString()}${s.last_error ? ` — last error: ${s.last_error}` : ""}`);
     const work = Array.isArray(s.work) ? (s.work as Array<{ active?: boolean }>) : null;
     if (work) console.log(`work      ${work.length ? `${work.filter((w) => w.active).length} working, ${work.length} running` : "nothing running"}`);
+    const fenced = s.fenced as { since?: number; reason?: string; frozen?: number } | null | undefined;
+    if (fenced) console.log(`fence     ${fenced.frozen} frozen since ${new Date(Number(fenced.since)).toLocaleString()} — ${fenced.reason}`);
   }
   return 0;
 }

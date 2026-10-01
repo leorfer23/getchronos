@@ -29,6 +29,8 @@ export type WorkSource = {
   backend: string;
   startedAt: number;
   lastOut: number;
+  /** Stopped by the fence (fence.ts) until the brain takes it back. */
+  frozen?: boolean;
 };
 
 export type WorkItem = {
@@ -41,6 +43,8 @@ export type WorkItem = {
   started_at: number;
   last_output_at: number;
   active: boolean;
+  /** Stopped by the fence: the brain has not been heard for too long (or refused this host). */
+  frozen: boolean;
 };
 
 export type LinkView = "online" | "reconnecting" | "offline";
@@ -57,6 +61,8 @@ export type HostStatus = {
   commit: string | null;
   work: WorkItem[];
   active: number;
+  /** The fence is up: work here is frozen until the brain says whether it is still this host's. */
+  fenced: { since: number; reason: string; frozen: number } | null;
   at: number;
   // Kept for `host status` and older readers: the raw link state, the brain URL, the last error.
   state: LinkState;
@@ -65,9 +71,10 @@ export type HostStatus = {
 };
 
 /**
- * The link's five internal states, as three a person reads. `connecting` and `offline` (a retry is
- * scheduled) are both "reconnecting" — the host is still trying. `stopped` (the brain refused the
- * credential for good) and `idle` (never started) are "offline": nothing will change on its own.
+ * The link's internal states, as three a person reads. `connecting` and `offline` (a retry is
+ * scheduled) are both "reconnecting" — the host is still trying. `rejected` (the brain refused the
+ * credential, identity or version; retried every 10 minutes), `stopped` and `idle` (never started)
+ * are "offline": nothing will change on its own.
  */
 export function linkView(s: LinkState): LinkView {
   if (s === "online") return "online";
@@ -110,7 +117,8 @@ export function workItem(w: WorkSource, now = Date.now(), home?: string, activeM
     backend: w.backend,
     started_at: w.startedAt,
     last_output_at: w.lastOut,
-    active: now - w.lastOut < activeMs,
+    active: !w.frozen && now - w.lastOut < activeMs,
+    frozen: !!w.frozen,
   };
 }
 
@@ -122,6 +130,7 @@ export function buildStatus(src: {
   commit: string | null;
   work: WorkSource[];
   home?: string;
+  fence?: { since: number; reason: string } | null;
 }, now = Date.now()): HostStatus {
   const link = linkView(src.link.state);
   const lastError = redact(src.link.lastError);
@@ -140,6 +149,7 @@ export function buildStatus(src: {
     commit: src.commit ? src.commit.slice(0, 12) : null,
     work,
     active: work.filter((w) => w.active).length,
+    fenced: src.fence && work.some((w) => w.frozen) ? { since: src.fence.since, reason: src.fence.reason, frozen: work.filter((w) => w.frozen).length } : null,
     at: now,
     state: src.link.state,
     url: redact(src.link.url),

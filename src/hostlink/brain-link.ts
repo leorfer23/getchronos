@@ -103,6 +103,26 @@ export type BrainLinkOptions = {
   verifyCaller?: (headers: Record<string, string>) => boolean | Promise<boolean>;
   /** Public URLs to advertise in join codes (the tunnel). */
   publicUrls?: () => string[];
+  /**
+   * The host-failover grace sent in every welcome (ms), or null when failover is off. A host fences
+   * itself — freezes its work — a little before it (hostd/fence.ts). Default: CONFIG.
+   */
+  failoverGraceMs?: () => number | null;
+};
+
+/**
+ * Why this brain last refused a host that holds a credential (a version it cannot speak, a hello
+ * claiming another id, a revoked/disabled token). In memory, like update records: the host asks again
+ * every 10 minutes (hostd/link.ts), so a brain restart learns it again soon enough.
+ */
+export type LinkRefusal = {
+  code: 4401 | 4403 | 4426;
+  reason: string;
+  at: number;
+  /** What the refused hello said, when there was one (version refusals). */
+  version?: string | null;
+  commit?: string | null;
+  install?: Hello["install"] | null;
 };
 
 // Headers a host may never set on a forwarded request (wire.ts).
@@ -159,6 +179,7 @@ export class BrainLink extends EventEmitter {
    * version the host reports in hello is the lasting truth.
    */
   private readonly updates = new Map<string, UpdateRecord>();
+  private readonly refusals = new Map<string, LinkRefusal>();
 
   constructor(private readonly opts: BrainLinkOptions = {}) {
     super();
@@ -226,6 +247,9 @@ export class BrainLink extends EventEmitter {
     const rec = m && hostId ? this.creds.verify(hostId, m[1]) : null;
     if (!rec) {
       console.warn(`[hostlink] host upgrade refused (bad credential${hostId ? ` for ${hostId.slice(0, 16)}` : ""}) from ${req.socket.remoteAddress} via ${via}`);
+      // Recorded only for a computer this brain knows and is not linked to right now: anyone can type
+      // an id into a header, and that must not paint a working host as refused.
+      if (hostId && !this.links.has(hostId) && this.creds.get(hostId)) this.refuse(hostId, { code: 4401, reason: "its credential was refused (revoked, disabled, or a stale token)" });
       return deny();
     }
     this.wss.handleUpgrade(req, socket, head, (ws) => this.adopt(ws, rec.id, rec.name, via));
@@ -305,13 +329,18 @@ export class BrainLink extends EventEmitter {
     if (link.hello) return; // a second hello on one link is ignored, not re-announced
     const compat = checkCompat(h.proto);
     if (!compat.ok) {
+      // Said out loud and kept: a refused host never reaches `online`, so without this it was simply
+      // gone from the Desk with no reason anywhere (and, before the host retried, stopped for good).
+      this.refuse(link.id, { code: 4426, reason: compat.reason, version: typeof h.version === "string" ? h.version.slice(0, 40) : null, commit: typeof h.commit === "string" ? h.commit : null, install: h.install ?? null }, link.name);
       this.send(link, { t: "error", code: "version", message: compat.reason });
       return this.drop(link, 4426, "incompatible protocol");
     }
     if (h.host_id !== link.id) {
+      this.refuse(link.id, { code: 4403, reason: "its hello named another host id than its credential" }, link.name);
       this.send(link, { t: "error", code: "identity", message: "hello.host_id does not match the credential" });
       return this.drop(link, 4403, "identity mismatch");
     }
+    this.refusals.delete(link.id);
     if (link.helloTimer) { clearTimeout(link.helloTimer); link.helloTimer = null; }
     link.hello = h;
     // The Desk shows the operator's name for a host (set at join, renamed from the Desk); the host's
@@ -322,7 +351,9 @@ export class BrainLink extends EventEmitter {
     this.links.set(link.id, link);
     // `name` (additive; older hosts ignore it): the operator's name for this computer, which the
     // host's menu bar item shows instead of a hostname like "Leonels-MacBook-Pro".
-    this.send(link, { t: "welcome", proto: PROTOCOL_VERSION, host_id: link.id, ping_ms: this.pingMs, name: link.name });
+    // `failover_grace_ms` (1.6): when this brain gives up on the host and moves its terminals — the
+    // host fences itself before then (hostd/fence.ts). null = it never does.
+    this.send(link, { t: "welcome", proto: PROTOCOL_VERSION, host_id: link.id, ping_ms: this.pingMs, name: link.name, failover_grace_ms: this.failoverGraceMs() });
     link.pingTimer = setInterval(() => this.pingTick(link), this.pingMs);
     link.pingTimer.unref?.();
     console.log(`[hostlink] ${link.id} (${link.name}) online via ${link.via} — ${h.platform}/${h.arch}, chronos ${h.version}`);
@@ -380,6 +411,24 @@ export class BrainLink extends EventEmitter {
     } catch {
       return false;
     }
+  }
+
+  private failoverGraceMs(): number | null {
+    if (this.opts.failoverGraceMs) return this.opts.failoverGraceMs();
+    return CONFIG.hostFailover ? Math.round(CONFIG.hostFailoverGraceMin * 60_000) : null;
+  }
+
+  private refuse(hostId: string, r: Omit<LinkRefusal, "at">, name?: string): void {
+    const prev = this.refusals.get(hostId);
+    this.refusals.set(hostId, { ...r, at: Date.now() });
+    if (prev?.code === r.code && prev.reason === r.reason) return; // the 10-minute retry: said once
+    console.warn(`[hostlink] ${hostId}${name ? ` (${name})` : ""} refused (${r.code}): ${r.reason}${r.code === 4426 ? ` — it runs chronos ${r.version ?? "?"} and needs an update` : ""}`);
+    bus.publish({ topic: "host.updated", host_id: hostId, status: "refused", actor: "host" });
+  }
+
+  /** Why this brain last refused a host, while it still does (cleared by its next accepted hello). */
+  refusal(hostId: string): LinkRefusal | null {
+    return this.refusals.get(hostId) ?? null;
   }
 
   // ───────────── outbound API for the rest of the daemon ─────────────

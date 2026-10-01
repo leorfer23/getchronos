@@ -329,7 +329,7 @@ What survives what:
 | Link drops (Wi-Fi, sleep, the brain's lid closed) | keep running; output buffered in the ring, overflow spilled to disk; `mc` keeps working (below) | cards show "host offline"; on reconnect `hello.live[]` → re-attach, resend from the last ack (spilled output first), then the host replays its queued `mc` writes |
 | Brain restart / deploy | **remote PTYs keep running** | boot reconciles: `listLive()` per host, re-attach. `reapAll()` (`store/sessions.ts:365`) and the boot-time `interrupted` sweep (`db.ts:58-74`) only apply to `host_id = 'local'`. Otherwise every deploy would double the fleet. |
 | `chronos host` restart / update | die with it (children of the host process) | revive with `--resume` **on the same host**, the same path `local` takes after a deploy today |
-| Host offline past `CHRONOS_HOST_FAILOVER_GRACE_MIN` (default 5) | unreachable (powered off, asleep, off the network) | **host failover** (`src/host-failover.ts`): each live terminal on it is reopened on an online computer — the brain when it has the repo, else a host that reported a checkout. The branch is checked out fresh from origin when it was pushed (else a new worktree off the default branch, and the seed says so). A claude terminal resumes its conversation from the brain's transcript mirror (copied to `<profile>/projects/<slug of the new cwd>/<new id>.jsonl`, the only place `claude --resume` looks); any other gets a brief. The old row ends with `end_reason` `host_failover`, one line per host goes to the Desk chat, and when the host reconnects reconcile kills the old process there (its row ended here) — never resumed. Counted from the brain's boot and its last wake from sleep too (`kern.waketime`, dark wakes included — a closed lid on battery wakes the brain for seconds at a time, too short for a host to finish a hello), so neither a brain restart nor a closed lid moves anything that simply has not reconnected yet. `CHRONOS_HOST_FAILOVER=off` restores the wait |
+| Host offline past `CHRONOS_HOST_FAILOVER_GRACE_MIN` (default 20) | unreachable (powered off, asleep, off the network) — and **frozen by its own fence** a little before the grace (below) | **host failover** (`src/host-failover.ts`): each live terminal on it is reopened on an online computer — the brain when it has the repo, else the hosts placement would allow (policy, veto, CLI and login, profile, checkout, sandbox — `ineligible()`), most headroom first, the next one when an open fails. The branch is checked out fresh from origin when it was pushed (else a new worktree off the default branch, and the seed says so — and names the `wip/<id8>` branch its unsaved work lands on if the host comes back). A claude terminal resumes its conversation from the brain's transcript mirror (copied to `<profile>/projects/<slug of the new cwd>/<new id>.jsonl`, the only place `claude --resume` looks); any other gets a brief. A ticket's stand-in is never sticky to the dead host (`stickyFor` ignores a `movedFrom` open, and a moved row no longer makes its ticket sticky). A Lead's worker that moves keeps its slice (re-pointed to the stand-in) and its Lead's inbox says `moved → <new id8>`. The host is checked again right before the stand-in opens and before the old row ends: back by then → no move (a stand-in already open is closed again). The old row ends with `end_reason` `host_failover`, one line per host goes to the Desk chat, and when the host reconnects reconcile **salvages** the old process's worktree, then kills it (its row ended here) — never resumed. A move that could not happen is said once, and tried afresh after the host has been back. Counted from the brain's boot and its last wake from sleep too (`kern.waketime`, dark wakes included — a closed lid on battery wakes the brain for seconds at a time, too short for a host to finish a hello), so neither a brain restart nor a closed lid moves anything that simply has not reconnected yet. `CHRONOS_HOST_FAILOVER=off` restores the wait |
 | Host gone for good | — | Desk → Computers → Remove: its live sessions end, its checkouts are forgotten, its token is revoked |
 
 **While the brain is away, a host keeps its agents working and catches up after** (`src/hostd/`):
@@ -354,9 +354,60 @@ What survives what:
   resent ahead of the ring on attach, so the brain's ack/resend logic sees one unbroken stream. The
   file goes once the brain acks past it; a full spill is a gap, as before. Wiped at host start.
 
-A host that loses the brain for longer than `CHRONOS_HOST_ORPHAN_MIN` (default: never) can be set
-to stop its agents. By default it lets them finish: the work is committed to git on the host either
-way.
+#### The fence: two agents never work the same goal
+
+The brain cannot tell a host that is gone from one it merely cannot reach, so failover alone could
+leave the original running beside its stand-in. The host fences itself (`src/hostd/fence.ts`):
+
+- Every `welcome` carries the brain's grace (`failover_grace_ms`, protocol 1.6; null when
+  `CHRONOS_HOST_FAILOVER=off`). A host that has heard nothing from the brain for the grace **less a
+  margin** (a quarter of it, at most 2 minutes: 18 of 20 minutes) freezes every terminal and run it
+  holds — `SIGSTOP` to the terminal's process group (the CLI and the commands it runs), never a kill.
+  Both sides count on their own clock from the last frame they heard; the host's mark is never more
+  than one vitals interval (5 s) later than the brain's, so the margin is the guarantee. A host that
+  slept through the grace freezes on its first tick awake, before its link can come back.
+- Nothing thaws on its own. When the link is back, reconcile decides per channel: `attach` (still
+  this host's — `SIGCONT`, it carries on, output resent as usual) or salvage + `kill` (it was moved).
+  A kill to a frozen process is followed by `SIGCONT`, so it lands.
+- The brain asleep looks the same from the host: a closed lid on the brain pauses the hosts' work
+  after 18 minutes, and it resumes within seconds of the brain waking (the brain itself never moves
+  anything before it has been awake for the whole grace — `kern.waketime`). That is the price of
+  never running a goal twice; `CHRONOS_HOST_FENCE=off` on a host trades it back.
+- Frozen work is visible: `host status` prints a `fence` line, `GET /__host/status` (the menu bar)
+  carries `fenced` and `frozen` per item, and `hello.live[]` marks frozen channels. Frozen work does
+  not count as busy (the host may idle-sleep).
+- Runs (`procs.ts`) share the host process's group, so only the run's CLI is stopped; a command it
+  started keeps going until it ends. A run's own timeout still applies while frozen.
+
+#### Salvage before kill
+
+A moved terminal's worktree may hold what its stand-in was told it lost. When reconcile finds it on
+a returning host, the brain asks the host (rpc `salvage`, `src/hostd/salvage.ts`) to push it first:
+uncommitted changes and unpushed commits become one WIP commit — built on a scratch index from the
+working tree, parented on HEAD, so the worktree, its branch and its index do not move — pushed by sha
+to `wip/<session id8>` with `--no-verify`. Never a force push, never the default branch, never the
+shared checkout (only a linked worktree: the shared one holds other terminals' work). Then the
+process is stopped. The Desk chat gets one line (`m2 is back: … now on origin as wip/ab12cd34 — told
+ef56…`), and the stand-in (found by its placement line) is told the branch to fetch. A failed push
+says where the worktree still is. An older host answers `unknown op` and gets the plain kill.
+
+#### A host the brain refuses
+
+A protocol the brain cannot speak (close 4426), a hello naming another id (4403), a revoked or
+disabled credential (4401, or HTTP 401/403 at the door): the brain logs it once and keeps it
+(`refused` in `GET /api/hosts`; the Desk shows **needs update** / **refused**, and for a version the
+one line to paste on that Mac). The host freezes its work at once (the brain will not take it back),
+shows `rejected` in `host status`, and asks again every 10 minutes instead of giving up for good.
+
+#### Awake while working
+
+A host holds `caffeinate -i` while it has unfrozen work (`src/caffeinate.ts`, the brain's
+`awake.ts` mechanism without the store): an idle-sleeping host looks gone to the brain. On battery
+too — the work is why the Mac is a host — down to 20 % charge. It cannot beat a closed lid.
+
+Not done: an update-only handshake, so the Desk's **Update** button could reach a host refused for
+its protocol (today: the pasted line); resuming a moved claude terminal's conversation ON ANOTHER
+HOST (only the brain holds the transcript mirror, so a remote stand-in gets a brief).
 
 ### The ship pipeline on a host
 
@@ -520,6 +571,9 @@ CHRONOS_HOST_BRAINS=wss://192.168.1.20:7779/host,wss://desk.example.com/host   #
 CHRONOS_HOST_DENY=galley,gfm         # local veto: the brain can never place these here
 CHRONOS_HOST_ROOTS=~/Documents/GitHub # where to look for (and clone) checkouts
 CHRONOS_HOST_AUTO_CLONE=0            # 1 = clone a missing repo on first placement
+CHRONOS_HOST_FENCE=on                # off = never freeze work when the brain is unreachable (see The fence)
+CHRONOS_HOST_AWAKE=on                # off = never hold caffeinate; _ON_BATTERY=off releases on battery
+CHRONOS_HOST_AWAKE_MIN_BATTERY=20    # …and below this charge it releases anyway
 CF_ACCESS_CLIENT_ID=… CF_ACCESS_CLIENT_SECRET=…   # only for a tunnel URL behind Cloudflare Access
 ```
 

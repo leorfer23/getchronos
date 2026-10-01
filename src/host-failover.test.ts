@@ -12,7 +12,9 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 process.env.CHRONOS_CLAUDE_BIN = "/usr/bin/true";
-const { sessions, workspaces, repos, hosts } = await import("./store.js");
+// The mechanics below are written against a 5-minute grace (the default is 20).
+process.env.CHRONOS_HOST_FAILOVER_GRACE_MIN = "5";
+const { sessions, workspaces, repos, hosts, tickets, repoCheckouts, leadSlices, leadEvents } = await import("./store.js");
 const { registerHost } = await import("./hosts/index.js");
 const { RemoteHost } = await import("./hosts/remote.js");
 const { writeTranscript } = await import("./hosts/transcript-mirror.js");
@@ -45,6 +47,8 @@ const gone = repos.create({ workspace_id: ws.id, name: "ghost", path: path.join(
 
 const opened: any[] = [];
 const posts: string[] = [];
+const discarded: string[] = [];
+const told: Array<{ id: string; text: string }> = [];
 const MIN = 60_000;
 
 beforeEach(() => {
@@ -62,7 +66,11 @@ beforeEach(() => {
     feed: () => ["understanding: fix the importer", "act: edited importer.ts"],
     originWorktree: async () => null,
     freshWorktree: async () => null,
+    discard: (s: any, reason: string) => { discarded.push(s.id); sessions.end(s.id, reason); },
+    tell: (id: string, text: string) => { told.push({ id, text }); return null; },
   });
+  discarded.length = 0;
+  told.length = 0;
   // Nothing from an earlier test is still live on the host.
   for (const s of sessions.list({ status: "live" })) if (s.host_id === HOST) sessions.end(s.id);
 });
@@ -146,6 +154,7 @@ test("offline ≥ grace → moved once to the brain with its conversation; a sec
   assert.match(o.seed, /offline for 6 min/);
   assert.match(o.seed, /NOT here/);
   assert.match(o.seed, /push early/);
+  assert.match(o.seed, new RegExp(`wip/${s.id.slice(0, 8)}`), "where its unsaved work lands if m2 comes back");
 
   // The transcript is where `claude --resume <new id>` started in that cwd looks for it.
   const newId = o.agentSessionId as string;
@@ -185,9 +194,10 @@ test("the host comes back → the old process is killed there, never resumed", a
     live: [{ ch: 21, session_id: s.id, kind: "pty", pid: 777, last_seq: 4 }],
   } as any);
   const revived: string[] = [];
-  const r = await reconcileHost(host, { revive: async (x) => { revived.push(x.id); } });
+  const salvaged: string[] = [];
+  const r = await reconcileHost(host, { revive: async (x) => { revived.push(x.id); }, salvage: async (_h, l, row) => { salvaged.push(`${l.ch}:${row.id}`); } });
   assert.deepEqual(r.orphans, [21]);
-  assert.deepEqual(sent.filter((f) => f.ch === 21).map((f) => f.t), ["kill", "release"]);
+  assert.deepEqual(salvaged, [`21:${s.id}`], "its unsaved work is pushed to wip/<id8> before it is stopped (salvageMoved)");
   assert.deepEqual(revived, [], "a failed-over terminal is not revived on its old host");
   assert.equal(sessions.get(s.id)!.status, "ended");
   assert.equal(hf.hostOfflineSince(HOST), null, "online again: nothing is due");
@@ -201,7 +211,7 @@ test("repo on no online computer → stays live, one Desk line saying why, once"
   assert.equal(opened.length, 0);
   assert.equal(sessions.get(s.id)!.status, "live");
   assert.equal(posts.length, 1);
-  assert.match(posts[0], /could not move HF: "fix the importer" — ghost is not checked out on this Mac or on any online computer; it stays on m2/);
+  assert.match(posts[0], /could not move HF: "fix the importer" — ghost is not checked out on this Mac or on any online computer that can run it; it stays on m2/);
   await hf.sweepHostFailover(now + 5 * MIN);
   assert.equal(posts.length, 1, "said once");
 });
@@ -294,4 +304,177 @@ test("the Desk line names each terminal by its project and goal, not a pasted-pr
   assert.equal(hf.titleOf(s), 'Medialab: "ShareOut ask to Robert, 30-day flag backfill"');
   const long = hf.titleOf({ ...s, workspace_id: null, goal: "x".repeat(100) });
   assert.equal(long, `"${"x".repeat(69)}…"`);
+});
+
+// ───────────── liveness and correctness (the fence's other half, ticket moves, Leads, salvage) ─────────────
+
+const otherHosts = new Map<string, InstanceType<typeof RemoteHost>>();
+/** Another computer, online, that reported this repo and these CLIs. */
+function otherHost(id: string, name: string, o: { clis?: string[]; repoId?: string } = {}) {
+  let h = otherHosts.get(id);
+  if (!h) {
+    h = new RemoteHost(id, { isOnline: () => true, sendControl: () => true, request: async () => { throw new Error("no requests"); } });
+    registerHost(h);
+    otherHosts.set(id, h);
+    hosts.create({ id, name, status: "online", token_hash: "y".repeat(64) });
+  }
+  h.setOnline({
+    proto: PROTOCOL_VERSION, version: "0.1.0", host_id: id, name, platform: "darwin", arch: "arm64",
+    capabilities: { clis: (o.clis ?? ["claude"]).map((c) => ({ name: c, path: `/opt/bin/${c}`, version: "1" })), node: process.version, sandbox: true },
+    profiles: [{ name: "claude", dir: "/Users/op/.claude", exists: true }], checkouts: [], deny: [], live: [],
+  } as any);
+  if (o.repoId) repoCheckouts.upsert({ repo_id: o.repoId, host_id: id, path: `/Users/op/GitHub/${name}-checkout` });
+  return h;
+}
+
+test("gaveUp clears when the host comes back: the next time it goes, the move is tried (and said) again", async () => {
+  remoteRow({ repo_id: gone.id });
+  const now = wentOffline(7 * MIN);
+  await hf.sweepHostFailover(now);
+  await hf.sweepHostFailover(now + MIN);
+  assert.equal(posts.length, 1, "said once while it stays gone");
+  hf.noteHostBack(HOST); // what the host.online bus event does
+  await hf.sweepHostFailover(now + 2 * MIN);
+  assert.equal(posts.length, 2, "a fresh try after the host was back");
+});
+
+test("race: the host comes back while the move is being prepared → no stand-in opens", async () => {
+  const s = remoteRow({ worktree_branch: "feat/race" });
+  hf.setHostFailoverOps({
+    open: async (o: any) => { opened.push(o); return sessions.create({ ...o, cwd: o.cwd || "", host_id: o.host_id }); },
+    post: (b: string) => { posts.push(b); },
+    feed: () => [],
+    originWorktree: async () => { online = true; host.setOnline({ proto: PROTOCOL_VERSION, version: "0.1.0", host_id: HOST, name: "m2", platform: "darwin", arch: "arm64", capabilities: { clis: [], node: "", sandbox: true }, profiles: [], checkouts: [], deny: [], live: [] } as any); return null; },
+    freshWorktree: async () => null,
+    discard: (x: any) => { discarded.push(x.id); },
+  });
+  const r = await hf.failoverSession(sessions.get(s.id)!, "m2", 25);
+  assert.equal(r.kind, "skip");
+  assert.equal(opened.length, 0);
+  assert.equal(sessions.get(s.id)!.status, "live", "the original carries on");
+});
+
+test("race: the host comes back while the stand-in opens → the stand-in is closed, the original is not ended", async () => {
+  const s = remoteRow();
+  hf.setHostFailoverOps({
+    open: async (o: any) => {
+      opened.push(o);
+      online = true;
+      host.setOnline({ proto: PROTOCOL_VERSION, version: "0.1.0", host_id: HOST, name: "m2", platform: "darwin", arch: "arm64", capabilities: { clis: [], node: "", sandbox: true }, profiles: [], checkouts: [], deny: [], live: [] } as any);
+      return sessions.create({ ...o, id: o.agentSessionId ?? undefined, cwd: o.cwd || "", host_id: o.host_id });
+    },
+    post: (b: string) => { posts.push(b); },
+    feed: () => [],
+    originWorktree: async () => null,
+    freshWorktree: async () => null,
+    discard: (x: any) => { discarded.push(x.id); sessions.end(x.id, "not needed"); },
+  });
+  const r = await hf.failoverSession(sessions.get(s.id)!, "m2", 25);
+  assert.equal(r.kind, "skip");
+  assert.equal(opened.length, 1);
+  assert.equal(discarded.length, 1, "the stand-in went");
+  assert.equal(sessions.get(s.id)!.status, "live", "the original was never ended");
+  assert.notEqual(sessions.get(s.id)!.end_reason, "host_failover");
+});
+
+test("pickTargets: only hosts placement would allow, most headroom first; one refusing the open is not the end", async () => {
+  otherHost("h_cedar", "cedar", { clis: ["grok"], repoId: gone.id }); // has the repo, not the CLI
+  otherHost("h_atlas", "atlas", { clis: ["claude"], repoId: gone.id });
+  otherHost("h_birch", "birch", { clis: ["claude"], repoId: gone.id });
+  const s = remoteRow({ repo_id: gone.id });
+  const t = hf.pickTargets(sessions.get(s.id)!, repos.get(gone.id)!);
+  assert.ok(Array.isArray(t));
+  assert.deepEqual((t as any[]).map((x) => x.host_id).sort(), ["h_atlas", "h_birch"], "cedar has no claude: never a target");
+
+  hf.setHostFailoverOps({
+    open: async (o: any) => {
+      opened.push(o);
+      if (o.host_id === (t as any[])[0].host_id) throw new Error("spawn refused");
+      return sessions.create({ ...o, cwd: o.cwd || "", host_id: o.host_id });
+    },
+    post: (b: string) => { posts.push(b); },
+    feed: () => [],
+    originWorktree: async () => null,
+    freshWorktree: async () => null,
+  });
+  const now = wentOffline(30 * MIN);
+  const r = await hf.sweepHostFailover(now);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].kind, "moved");
+  assert.equal(opened.length, 2, "tried the best, then the next");
+  assert.equal((r[0] as any).host_id, (t as any[])[1].host_id);
+  for (const id of ["h_cedar", "h_atlas", "h_birch"]) { hosts.update(id, { status: "disabled" }); repoCheckouts.remove(gone.id, id); }
+});
+
+test("ticket-bound move: never sticky to the dead host — a later open on the ticket goes where the stand-in is", async () => {
+  const { placeRequest, ticketWorktreeHost } = await import("./hosts/candidates.js");
+  const t = tickets.create({
+    id: `t-${Date.now()}`, workspace_id: ws.id, repo_id: gone.id, key: "HF-7", slug: "hf-7", title: "importer", status: "in_progress",
+    status_source: "local", priority: "P2", complexity: null, backend: null, model: null, assignee: "agent", file_path: "/tmp/HF-7.md",
+    external_system: null, external_id: null, external_url: null, tags: null,
+  } as any);
+  const older = remoteRow({ ticket_id: t.id, repo_id: gone.id });
+  sessions.end(older.id, "closed");
+  await new Promise((r) => setTimeout(r, 5));
+  const s = remoteRow({ ticket_id: t.id, repo_id: gone.id });
+  assert.equal(ticketWorktreeHost(t, repos.get(gone.id)), HOST, "before: the ticket's work is on m2");
+  // What the failover open asks placement: pinned to its target, never sticky to m2.
+  const req = placeRequest({ workspace_id: ws.id, ticket_id: t.id, repo_id: gone.id, backend: "claude-code", host_id: "local", movedFrom: s.id }, "failover");
+  assert.equal(req.sticky, null);
+  assert.equal(req.pinned, "local");
+  // After the move, the moved row (and the older one on m2) no longer make the ticket sticky to m2.
+  sessions.end(s.id, "host_failover");
+  await new Promise((r) => setTimeout(r, 5));
+  sessions.create({ backend: "claude-code", workspace_id: ws.id, ticket_id: t.id, repo_id: gone.id, cwd: "/tmp", host_id: "local" });
+  assert.equal(ticketWorktreeHost(t, repos.get(gone.id)), null);
+});
+
+test("a Lead's worker moves: its slice follows it, and the Lead's inbox says moved → <new id8>", async () => {
+  const lead = sessions.create({ backend: "claude-code", workspace_id: ws.id, role: "lead", goal: "ship the importer", cwd: "/tmp", host_id: "local" });
+  const w = remoteRow({ lead_id: lead.id });
+  const slice = leadSlices.add(lead.id, "importer");
+  leadSlices.patch(lead.id, slice.n, { session_id: w.id, status: "doing" });
+  const now = wentOffline(6 * MIN);
+  const r = await hf.sweepHostFailover(now);
+  assert.equal(r[0].kind, "moved");
+  const to = (r[0] as any).to;
+  assert.equal(leadSlices.get(lead.id, slice.n)!.session_id, to.id);
+  assert.equal(to.lead_id, lead.id, "the stand-in is the same Lead's worker");
+  const ev = leadEvents.unseen(lead.id).filter((e) => e.session_id === w.id);
+  assert.equal(ev.length, 1, "one inbox row, not a bare `ended` as well");
+  assert.match(JSON.parse(ev[0].payload!).card_line, new RegExp(`^moved → ${to.id.slice(0, 8)}`));
+  sessions.end(lead.id);
+});
+
+test("salvageMoved: the host pushes wip/<id8>; the Desk and the stand-in are told; kill + release follow", async () => {
+  const old = remoteRow();
+  sessions.end(old.id, "host_failover");
+  const next = sessions.create({ backend: "claude-code", workspace_id: ws.id, cwd: "/tmp", host_id: "local" });
+  sessions.setPlacement(next.id, `host failover — continues ${old.id.slice(0, 8)} from m2 (offline 25m)`);
+  const frames: any[] = [];
+  const asked: any[] = [];
+  const fake = {
+    id: HOST, send: (f: any) => { frames.push(f); return true; },
+    salvage: async (a: any) => { asked.push(a); return { status: "saved", branch: `wip/${old.id.slice(0, 8)}`, sha: "abc", dirty: true, ahead: 2, from: "feat/importer" }; },
+  };
+  const r = await hf.salvageMoved(fake, { ch: 21, exit: null }, sessions.get(old.id)!);
+  assert.equal(r?.status, "saved");
+  assert.deepEqual(asked, [{ ch: 21, session_id: old.id, dir: null }]);
+  assert.deepEqual(frames.map((f) => f.t), ["kill", "release"]);
+  assert.equal(posts.length, 1);
+  assert.match(posts[0], new RegExp(`m2 is back: HF: "fix the importer" had uncommitted changes and 2 unpushed commits there, now on origin as \`wip/${old.id.slice(0, 8)}\` — told ${next.id.slice(0, 8)}`));
+  assert.equal(told.length, 1);
+  assert.equal(told[0].id, next.id);
+  assert.match(told[0].text, /git fetch origin wip\//);
+
+  // An older host has no `salvage`: the plain kill it always got, and nothing said.
+  posts.length = 0;
+  frames.length = 0;
+  const r2 = await hf.salvageMoved({ ...fake, salvage: async () => { throw new Error("unknown op salvage"); } }, { ch: 22, exit: null }, sessions.get(old.id)!);
+  assert.equal(r2, null);
+  assert.deepEqual(frames.map((f) => f.t), ["kill", "release"]);
+  assert.equal(posts.length, 0);
+  // Nothing only that disk had: nothing to say.
+  assert.equal(hf.salvageLines({ status: "clean" }, { label: "m2", title: "x", standIn: null }), null);
+  assert.match(hf.salvageLines({ status: "failed", branch: "wip/x", detail: "rejected (fetch first)", dir: "/w" }, { label: "m2", title: "x", standIn: null })!.desk, /could not save x's unpushed work to `wip\/x` — rejected \(fetch first\); its worktree is still on m2 at \/w/);
 });

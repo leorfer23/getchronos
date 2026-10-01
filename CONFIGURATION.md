@@ -491,7 +491,7 @@ On the brain:
 | `CHRONOS_HOST_INSTALL` | `git` | how the join command installs Chronos on a new Mac: `git` (clone + `npm ci` into `$HOME/.chronos-host/app`) or `npm` (`npx -y getchronos@<the brain's version> host join …` — only once the package is published) |
 | `CHRONOS_HOST_TRANSCRIPTS` | `<hostlink dir>/transcripts` | where the brain mirrors remote terminals' CLI transcripts (one `<session>.jsonl` each), which Focus and the usage ledger read |
 | `CHRONOS_HOST_FAILOVER` | on | a computer offline for longer than the grace below with live Desk terminals on it: each one is reopened on an online computer (the brain first, when it has the repo) — a claude terminal resumes its mirrored conversation, any other gets a brief — and the old one is ended with `end_reason` `host_failover`. When the host comes back its copy is killed, never resumed. One line per host in the Desk chat (`src/host-failover.ts`). `off` = they wait for the host |
-| `CHRONOS_HOST_FAILOVER_GRACE_MIN` | `5` | minutes a host must stay offline before its terminals move (counted from the brain's boot too, so a restart never moves work that simply has not reconnected yet). A lid closed for a minute or a Wi-Fi blip moves nothing |
+| `CHRONOS_HOST_FAILOVER_GRACE_MIN` | `20` | minutes a host must stay offline before its terminals move (counted from the brain's boot and last wake too, so a restart or a closed lid never moves work that simply has not reconnected yet). Sent to every host in its welcome: a host freezes its own work a little before it passes (HOSTS.md → The fence), so the original and its stand-in never run together |
 | `CHRONOS_PLACEMENT` | `auto` | the kill switch, for terminals AND headless runs. `auto`: sticky, then pinned, else most headroom. `pinned`: Phase 3 — only a pinned or sticky terminal leaves the brain, and no new run does. `local`: every new terminal and run starts on the brain and a pin to another computer is refused (409); work that already lives on a host (a terminal, a ticket worktree, a resumed transcript) still goes back there |
 | `CHRONOS_BRAIN_RESERVE` | `25` | headroom points (0–100 scale: half CPU against `CHRONOS_MAX_LOAD_PER_CORE`, half free RAM, minus 25/50 for memory pressure warning/critical) taken off the brain's score before computers are compared, so the brain — which also runs the daemon, the Desk and Robert — takes overflow, not first pick. `0` = the brain competes as an equal |
 
@@ -541,6 +541,10 @@ from npm: `npx getchronos host <cmd>`.
 | `CHRONOS_HOST_CERT_FP` | written by join | the pinned brain cert's SHA-256 |
 | `CHRONOS_HOST_DENY` | — | local veto: workspace slugs (or ids) this Mac refuses, whatever the brain says — checked before anything is forked. The brain's own deny list for this host (its `policy` frame) is applied too, and can only add refusals |
 | `CHRONOS_HOST_AUTO_CLONE` | `0` | `1` = a terminal for a repo this Mac has no checkout of clones it into the first `CHRONOS_HOST_ROOTS` entry; otherwise the spawn is refused with the remote named |
+| `CHRONOS_HOST_FENCE` | `on` | `off` = never freeze this Mac's terminals and runs when the brain has been unreachable for (almost) its failover grace, or refuses this host. On by default: it is what keeps a moved terminal and its stand-in from both working (HOSTS.md → The fence) |
+| `CHRONOS_HOST_AWAKE` | `on` | hold `caffeinate -i` while this Mac has unfrozen work, so it does not idle-sleep and look gone to the brain. `off` = never |
+| `CHRONOS_HOST_AWAKE_ON_BATTERY` | `on` | keep holding it on battery (`off` = release on battery, like the brain) … |
+| `CHRONOS_HOST_AWAKE_MIN_BATTERY` | `20` | … down to this charge (%) |
 | `CHRONOS_HOST_ROOTS` | `~/Documents/GitHub` | where to look for checkouts (comma- or colon-separated): each root, its children, and one grouping level below (`<root>/<client>/<repo>`) |
 | `CHRONOS_HOST_MC_PORT` | `7777`, then `7787`–`7796` | the loopback `mc` forwarder agents' `MC_API` points at. Unset, it takes 7777 or — when that is taken, e.g. by a Chronos daemon on the same Mac — the first free port of 7787–7796; set it to pin one. The menu bar item (HOSTS.md → Menu bar) reads this one key from `.secrets` to find the host, and probes the same list otherwise |
 | `CHRONOS_HOST_HOME` | `~/.chronos-host` | the host's state dir (`.secrets`, logs) and its code (`app/`: the clone, or npm's install of `getchronos`; `app.prev/` is the version before the last update) |
@@ -647,8 +651,12 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_HOST_CERT_FP` | — | `src/hostd/index.ts` |
 | `CHRONOS_HOST_AUTO_CLONE` | `0` | `src/hostd/index.ts` |
 | `CHRONOS_HOST_DENY` | — | `src/hostd/inventory.ts` |
+| `CHRONOS_HOST_AWAKE` | `"on"` | `src/hostd/index.ts` |
+| `CHRONOS_HOST_AWAKE_MIN_BATTERY` | `20` | `src/hostd/index.ts` |
+| `CHRONOS_HOST_AWAKE_ON_BATTERY` | `"on"` | `src/hostd/index.ts` |
 | `CHRONOS_HOST_FAILOVER` | `"on"` | `src/config.ts` |
-| `CHRONOS_HOST_FAILOVER_GRACE_MIN` | `5` | `src/config.ts` |
+| `CHRONOS_HOST_FAILOVER_GRACE_MIN` | `20` | `src/config.ts` |
+| `CHRONOS_HOST_FENCE` | `"on"` | `src/hostd/index.ts` |
 | `CHRONOS_HOST_HOME` | `~/.chronos-host` | `src/hostd/env.ts` |
 | `CHRONOS_HOST_ID` | — | `src/hostd/index.ts` |
 | `CHRONOS_HOST_LISTEN` | — | `src/config.ts` |
