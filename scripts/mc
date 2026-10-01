@@ -473,6 +473,12 @@ const HELP = `mc — Mission Control backlog CLI
                                      exit code). A single targeted test file does not need it.
   mc machine                         how loaded this Mac is: load per core, swap, free memory, heavy
                                      slots in use, and whether an agent may open a terminal right now
+  mc hosts [list]                    every computer (HOSTS.md): status, load, live terminals, version,
+                                     what is wrong. Without the admin token: names, room, and whether
+                                     your workspace may run there. Placement is automatic; --host pins
+  mc hosts show <name>               one computer in full: vitals, CLIs, profiles, workspaces, update
+  mc hosts drain|resume <name>       stop new work landing there / take work again (admin)
+  mc hosts update <name|all>         update it to the brain's version — its terminals restart (admin)
   mc status                          daemon health: active / queued / spend
   mc reviews                         every review waiting on you (shared command)
   mc cost [today|7d|30d]             combined spend (headless + Desk) by workspace (shared command)
@@ -1897,7 +1903,9 @@ async function heavy(argv) {
         // presented that Lead's credential — the daemon reads it from the header, not from here.
         slice: opt.slice ? Number(opt.slice) : undefined,
       }, LEAD_HEADERS);
-      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})`);
+      // Where it landed and why (HOSTS.md → Placement) — only once there was a choice to make.
+      const where = s.host_name || s.placement ? ` → ${s.host_name || "this Mac"}${s.placement ? ` (${s.placement})` : ""}` : "";
+      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})${where}`);
     }
     // A Lead (LEADS.md): Robert's deputy for one goal, in one workspace. Opened the same way as any
     // other terminal (POST /sessions, role "lead") — the daemon does the rest (its own lead_token,
@@ -3118,6 +3126,78 @@ async function heavy(argv) {
         }
       }
       return console.log(await render());
+    }
+    // The computers (HOSTS.md). With the admin token: the full view, and drain/resume/update. Without
+    // it (a terminal, a Lead): GET /hosts/brief — names, up/down, room, and whether YOUR workspace may
+    // run there.
+    if (cmd === "hosts") {
+      const sub = pos[1] || "list";
+      const admin = adminToken();
+      if (!admin) {
+        if (sub !== "list") die(`mc hosts ${sub} is admin-gated (run it on the brain, or ask Robert)`);
+        const wsq = opt.workspace || process.env.MC_WORKSPACE;
+        const b = await req("GET", "/hosts/brief" + (wsq ? `?workspace=${encodeURIComponent(wsq)}` : ""));
+        return console.log(b.hosts.map((h) =>
+          `${h.name}${h.is_brain ? " (brain)" : ""}\t${h.online ? h.status : "OFFLINE"}\t${h.headroom == null ? "room ?" : `room ${Math.round(h.headroom)}%`}\t${h.live} live` +
+          `\t${h.may_run === null ? "" : h.may_run ? "you may run here" : `not for you: ${h.why_not}`}${h.full && h.online ? ` · full: ${h.full}` : ""}`,
+        ).join("\n"));
+      }
+      const H = { "x-mc-admin": admin };
+      const view = (await req("GET", "/hosts", undefined, H)).hosts;
+      const find = (ref) => {
+        if (!ref) die(`which computer? (${view.map((h) => h.name).join(", ")})`);
+        const r = String(ref).toLowerCase();
+        const hit = view.filter((h) => h.id === ref || h.name.toLowerCase() === r || h.id.startsWith(ref));
+        if (hit.length !== 1) die(`${hit.length ? "ambiguous" : "no"} computer \`${ref}\` — ${view.map((h) => h.name).join(", ")}`);
+        return hit[0];
+      };
+      const pct = (n) => (n == null ? "?" : `${Math.round(n)}%`);
+      const lastV = (h) => h.vitals.history[h.vitals.history.length - 1] || {};
+      const notes = (h) => [
+        h.admission.ok ? "" : `full: ${h.admission.reason}`,
+        ...h.checklist.clis.filter((c) => c.auth === "no").map((c) => `${c.name} logged out`),
+        h.update?.status?.state === "failed" ? `update failed: ${h.update.status.error || "?"}` : h.update?.status && h.update.status.state !== "done" && h.update.status.state !== "current" ? `updating (${h.update.status.state})` : "",
+      ].filter(Boolean).join(" · ");
+      if (sub === "list") {
+        return console.log(view.map((h) => {
+          const v = lastV(h);
+          const status = h.is_brain ? "brain" : h.connected ? h.status : h.status === "disabled" ? "disabled" : "OFFLINE";
+          const ver = h.is_brain ? (h.commit || h.version || "?").slice(0, 8) : `${(h.commit || h.version || "?").slice(0, 8)}${h.update?.available ? " (behind)" : ""}`;
+          return `${h.name}\t${status}\tcpu ${pct(v.cpu)} ram ${pct(v.ram)}\t${h.live_sessions} live\t${ver}${notes(h) ? `\t${notes(h)}` : ""}`;
+        }).join("\n"));
+      }
+      if (sub === "show") {
+        const h = find(pos[2]);
+        const v = lastV(h);
+        const ws = h.checklist.workspaces;
+        return console.log([
+          `${h.name} (${h.id}) · ${h.is_brain ? "brain" : h.connected ? `${h.status}, via ${h.link?.via || "?"}` : `OFFLINE since ${h.last_seen_at || "?"}`} · ${h.platform}`,
+          `load: cpu ${pct(v.cpu)} ram ${pct(v.ram)} · ${h.vitals.load_per_core ?? "?"}/core · ${h.admission.ok ? "takes agents" : `FULL — ${h.admission.reason}`} · ${h.live_sessions} live`,
+          `version: ${h.version || "?"} ${(h.commit || "").slice(0, 8)}${h.update ? ` · ${h.update.available ? `behind the brain (${(h.update.target.commit || h.update.target.version || "").slice(0, 8)})${h.update.supported ? " — mc hosts update " + h.name : h.update.manual ? " — by hand: " + h.update.manual : ""}` : "current"}${h.update.status ? ` · last update ${h.update.status.state}${h.update.status.error ? ": " + h.update.status.error : ""}` : ""}` : ""}`,
+          `clis: ${h.checklist.clis.map((c) => `${c.name}${c.ok ? "" : c.auth === "no" ? " (logged out)" : " (missing)"}`).join(", ") || "—"}`,
+          `profiles: ${h.checklist.profiles.map((p) => `${p.name}${p.ok ? "" : " (missing)"}`).join(", ") || "—"}`,
+          `workspaces: ${ws.map((w) => `${w.slug}${w.allowed ? "" : ` (denied by ${w.denied_by})`}`).join(", ") || "—"}`,
+          ...(h.policy?.deny?.length ? [`policy deny: ${h.policy.deny.join(", ")}`] : []),
+          ...(h.reserve ? [`reserve: ${JSON.stringify(h.reserve)}`] : []),
+        ].join("\n"));
+      }
+      if (sub === "drain" || sub === "resume") {
+        const h = find(pos[2]);
+        const out = await req("PATCH", `/hosts/${encodeURIComponent(h.id)}`, { status: sub === "drain" ? "draining" : "online" }, H);
+        return console.log(`${out?.name || h.name} → ${out?.status || "?"}${sub === "drain" ? " (finishes what it has, takes no new work)" : ""}`);
+      }
+      if (sub === "update") {
+        if (pos[2] === "all") {
+          const out = await req("POST", "/hosts/update-all", {}, H);
+          const nm = (id) => view.find((h) => h.id === id)?.name || id;
+          return console.log(`updating ${out.started.length ? out.started.map(nm).join(", ") : "nothing (every connected host is current)"}` +
+            (out.skipped.length ? ` · skipped ${out.skipped.map((x) => `${x.name}: ${x.reason}`).join("; ")}` : ""));
+        }
+        const h = find(pos[2]);
+        const out = await req("POST", `/hosts/${encodeURIComponent(h.id)}/update`, {}, H);
+        return console.log(`${h.name}: update ${out.update?.state || "requested"} → ${(out.update?.target?.commit || out.update?.target?.version || "").slice(0, 8)} (its terminals restart and resume there)`);
+      }
+      die("mc hosts [list] | show <name> | drain <name> | resume <name> | update <name|all>");
     }
     // How loaded the Mac is right now, and whether an agent would be let on it (src/machine.ts).
     if (cmd === "machine") {

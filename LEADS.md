@@ -22,6 +22,9 @@ X is shipped — and only talks to him or Robert when it must.
   prohibition: it never communicates outside Chronos. No Slack, no email, no Telegram, no third-party
   message, no comment on someone else's PR. It speaks to the operator through its card and asks, and
   to Robert through `mc ask-robert`.
+- **Workers land on whichever computer placement picks** (HOSTS.md → Placement): `mc session new`
+  prints where (`→ m2 (most headroom …)`), `mc hosts` shows the computers and whether this workspace
+  may run on each, and `--host <name>` pins one only when the work needs that machine.
 - **Ends with a receipt.** `mc goal done` after its workers are closed, with a Summary that names
   what landed (PR URLs, what was verified, what was skipped).
 

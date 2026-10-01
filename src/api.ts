@@ -121,7 +121,7 @@ import { transcribe, audioFilename, transcribeFailure } from "./transcribe.js";
 import { speak, voiceFor, listVoices } from "./speak.js";
 import { askManagerWeb, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurnSmart, setSticky } from "./thread-router.js";
-import { robertWakes, leadEvents, leadSlices, memoryRelations, type RobertWake, type LeadEvent } from "./store.js";
+import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type LeadEvent } from "./store.js";
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
 import { leadEventPayload, waitForLeadEvents } from "./robert-drive.js";
 import { fileReport, leadEventLines } from "./lead-report.js";
@@ -175,6 +175,7 @@ import { hostName, reposOnHost } from "./hosts/workdir.js";
 import { HOST_PATH, brainLink, forwardedHost, hostRoutes } from "./hostlink/brain-link.js";
 import { barRoutes } from "./hostlink/bar.js";
 import { PlacementError } from "./hosts/candidates.js";
+import { hostBriefRoutes } from "./hosts/brief.js";
 import { kv } from "./store/kv.js";
 import { noteClaudeStatusline, usageSnapshot } from "./usage-meter.js";
 import { defaultQuickActions, QUICK_ACTIONS_KV, type QuickAction } from "./quick-actions.js";
@@ -599,7 +600,8 @@ export function startServer() {
       // Stamped here, from the credential, for the same reason `lead_id` is — and silently ignored
       // without one, because a worker naming a slice number is naming a board it cannot see.
       if (lead && slice) leadSlices.patch(lead.leadId, slice, { session_id: s.id, status: "doing" });
-      res.status(201).json(s);
+      // Which computer it landed on, by name, beside `placement` (why) — `mc session new` prints both.
+      res.status(201).json({ ...s, host_name: s.host_id && s.host_id !== LOCAL_HOST_ID ? hosts.get(s.host_id)?.name ?? s.host_id : null });
     } catch (e: any) {
       // A placement refusal knows its status: 403 for a workspace a computer may not run, 409 for a
       // computer that cannot take it now, 400 for "every computer is full" (as a saturated brain was).
@@ -2641,6 +2643,8 @@ export function startServer() {
   // The brain's menu bar item (desktop/hostbar.swift --brain): the whole fleet, every 3 s. Here and not
   // in hostRoutes because it reads pty activity from terminal.ts, which brain-link.ts must not import.
   api.use(barRoutes(requireAdmin, { link: brainLink, activity: sessionActivity }));
+  // Where work can go, for anyone in a workspace — no admin token (src/hosts/brief.ts).
+  api.use(hostBriefRoutes());
   api.use(hostRoutes(requireAdmin));
 
   // Every live terminal whose goal is ticked, closed in one call — Desk / phone / Telegram ✅ only.

@@ -15,6 +15,7 @@ MUTATIONS — you ARE authorized to act. Execute create/run/stop/change operatio
 {{> settings}}
 {{> wall}}
 {{> wall-hands}}
+{{> hosts}}
 {{> terminal-prompts}}
 {{> terminal-drive}}
 {{> leads}}

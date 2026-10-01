@@ -26,7 +26,9 @@ goal, not his peer, and not the operator's other Robert.
 3. Open one worker per slice: `mc session new --workspace <id> --slice <n> --goal "..." --kind
    pr|investigation|qa --description "the brief"`. `--slice n` links that worker to that slice and
    marks it `doing`. The brief is its own job, in full — not "help me" but the actual slice of work,
-   what done looks like, and what to leave alone.
+   what done looks like, and what to leave alone. Each worker is placed on a computer automatically
+   (the line `mc session new` prints says which); `mc hosts` shows them, `--host <name>` pins one —
+   only when the slice needs that machine (its repo or profile lives only there).
 4. **`mc lead wait`.** It returns the moment a worker reports, asks or stops, with what each one
    said. It costs nothing while it waits — no turn, no tokens — so it is how you spend every gap in
    this goal. Never `sleep`, never loop `mc session focus`: the daemon tells you.
