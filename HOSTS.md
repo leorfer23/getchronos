@@ -214,6 +214,19 @@ Both problems have the same fix:
   policy the brain sends. *(Phase 5: without credential brokering — a workspace whose egress
   intercepts TLS to inject a secret stays on the brain, so no CA exists on a host; see phase 5.)*
 
+**`mc` commands that name a path.** A path an agent on a host types is a path on THAT disk, so every
+command that carries one either goes to the host or carries the content instead:
+
+| Command | On a host |
+|---|---|
+| `mc worktree list` | the brain asks every online host about the caller's workspace repos (rpc `worktree_list`, by git remote, each with its default branch); rows carry `host_id` and the host's `repo_path`. An offline host's trees are not listed until it reconnects; a host from before the op lists none. |
+| `mc worktree rm` | routed by the tree's host (`removeWorktreeAs` prefers the caller's own computer when a path or branch exists on two). The brain checks who may (owner / Lead / Robert) and its own sessions on that host for busy; the host (rpc `worktree_remove`, `src/hostd/worktrees.ts`) checks what may: a `.chronos-worktrees` tree that git lists for its checkout of that repo, never the checkout itself, never one a terminal or run there is in, never uncommitted edits or unpushed commits without `--force` — the same `removeWorktreeAt` (`worktree-core.ts`) the brain runs on its own trees. The terminal's host offline → 409 saying so. |
+| end of a ticket terminal | the brain's clean-only cleanup runs on the host (`worktree_remove` with `mode: "cleanup"`); host offline → left there. |
+| worktree reaper | `reapDoneWorktrees` also asks each online host, on the monitor's sweep and 60 s after a host's hello: the same rule as the brain's own (an `mc/<key>` branch of a finished ticket, clean, nothing working in it). That is also how a tree left by a terminal that ended while its host was away goes. |
+| `mc pdf <file>` | sends the file's bytes (`{b64}`, ≤ 11 MB, inside the 16 MB JSON limit) — always when `MC_HOST_ID` names a host, else when the brain answers *not found* for the path. Bytes are read by the caller, so no path scope applies. |
+| `mc job new` | the job is pinned to the forwarding host (`jobs.host_id`; its cwd stays the host's path) when the cwd is one of the workspace's checkouts that host reported, a folder in one, or a worktree under one (`src/hosts/job-cwd.ts`); otherwise refused with the checkouts it does have. Never the old silent fallback to the brain's `$HOME`. |
+| `mc ticket get` | the ticket's markdown lives on the brain, so a remote terminal's seed says `mc ticket get <key>` instead of a path; the brain's tickets dir is not granted on a host. |
+
 ### Agents know where they are
 
 An agent on m2 that says "open http://localhost:5173" is pointing the operator at the brain's port
@@ -781,8 +794,11 @@ it was.
      workspaces' registered repos; a host cannot tell whose an unregistered clone is, and is never
      told another client's repos). Keystrokes typed while a host is offline are dropped, not queued.
      A failover stand-in opens on the walled terminal's host. The workspace's `default_dir` landing
-     dir is a brain path, so a repo-less remote terminal lands in the first workspace checkout on the
-     host, else its home. The spawn frame carries `resume_cwd` only for a directory the host itself
+     dir is a brain path, so a repo-less remote terminal (`cwd_hint: "landing"`) lands in a landing
+     dir the host builds from its own checkouts of the workspace's repos — `~/.chronos-landing/<slug>`,
+     one symlink per checkout, only symlinks ever added or pruned (`src/hostd/landing.ts`) — in the one
+     checkout when there is only one, else its home. A CLI transcript that never appears is logged
+     once on the host (the brain's mirror stays empty, so a failover would brief instead of resume). The spawn frame carries `resume_cwd` only for a directory the host itself
      reported for that row (or the terminal it stands in for).
 4. **Placement and governor.** `place()` with policy, veto, capabilities and headroom; per-host
    admission and heavy slots; brain reserve; drain; refusal reasons across hosts.

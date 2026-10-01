@@ -18,7 +18,7 @@ import { isEarlyDeath, reportEarlyDeath } from "./desk-incidents.js";
 import { lastActivityState, reviveSeedFor } from "./revive.js";
 import { childEnv } from "./child-env.js";
 import { sanitizeCwd } from "./spawn-guard.js";
-import { ensureTicketWorktree, cleanupWorktree } from "./worktrees.js";
+import { ensureTicketWorktree, cleanupWorktree, cleanupRemoteWorktree } from "./worktrees.js";
 import { egressBrokered, egressEnforced, egressEnv, egressLocked, egressPolicy } from "./egress.js";
 import { niceWrap } from "./machine.js";
 import { findHost, hostFor, LOCAL_HOST_ID, type PtyHandle } from "./hosts/index.js";
@@ -1037,8 +1037,10 @@ function installLive(
       const repo = row.repo_id ? repos.get(row.repo_id) : undefined;
       const latest = runs.latestForTicket(row.ticket_id);
       const buildRunning = latest?.status === "running" || latest?.status === "queued";
-      // A remote terminal's worktree is on its host, under that host's checkout: never touched from here.
+      // A remote terminal's worktree is on its host, under that host's checkout: the host removes it
+      // by the same rule (clean only), or keeps it for the reaper while it is offline.
       if (repo?.path && !buildRunning && !w.remote) void cleanupWorktree(repo.path, cwd);
+      else if (repo && !buildRunning && w.remote && row.host_id) void cleanupRemoteWorktree(row.host_id, repo, cwd || row.cwd);
       bus.publish({ topic: "ticket.updated", ticket_id: row.ticket_id });
     }
     bus.publish({ topic: "session.ended", session_id: row.id });
@@ -1346,7 +1348,9 @@ function ticketSeed(ticketId: string, remote = false): string | null {
   const where = `workspace ${ws?.name ?? "?"}${repo?.name ? " · repo " + repo.name : ""}`;
   // No specific repo → tell the agent the workspace's repos so it knows it can work across any of them.
   const wsRepos = ws ? repos.list(ws.id).map((r) => r.name) : [];
-  const repoNote = !repo && wsRepos.length ? ` You may work across any repo in this workspace: ${wsRepos.join(", ")} (cwd is ${wsRepos[0]}; cd into others as needed). ` : " ";
+  // On another host the cwd is that host's landing dir or checkout (hostd/landing.ts), not the brain's first repo.
+  const cwdNote = remote ? "cd into the one you need" : `cwd is ${wsRepos[0]}; cd into others as needed`;
+  const repoNote = !repo && wsRepos.length ? ` You may work across any repo in this workspace: ${wsRepos.join(", ")} (${cwdNote}). ` : " ";
   const body = getBody(t).slice(0, 4000);
   // The ticket file is a path on the BRAIN's disk; a terminal on another host reads it through `mc`.
   const read = remote ? `Run \`mc ticket get ${t.key}\` for full context.` : `Read ${t.file_path} for full context.`;
