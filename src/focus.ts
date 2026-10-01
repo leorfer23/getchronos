@@ -39,6 +39,9 @@ export interface FocusCtx {
   // host streams the raw lines over the link, and the brain keeps them in a mirror file. When set,
   // this file IS the transcript — the per-backend locate (which looks under this Mac's home) is skipped.
   transcriptFile?: string;
+  // …and that host's name. A loopback link it says ("http://localhost:5173") is on THAT machine, so it
+  // reaches the board as "localhost:5173 (on m2)" — text, not a link that would open the brain's port.
+  hostName?: string;
 }
 
 const focusMetricsSince = new Date().toISOString();
@@ -228,6 +231,31 @@ export function printedLinks(text: string): string[] {
     if (out.length === MAX_LINKS) break;
   }
   return out;
+}
+
+// http(s)://localhost, 127.x, 0.0.0.0 or [::1], with its port and path.
+const LOOPBACK_URL = /\bhttps?:\/\/(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\])(?::\d+)?(?![\w-]|\.[\w-])(?:[/?#][^\s)<>"'\]]*)?/gi;
+/**
+ * A loopback link from a terminal on another computer, made honest: "http://localhost:5173/x" →
+ * "localhost:5173/x (on m2)". The scheme goes so the Desk does not turn it into a link that opens
+ * the BRAIN's port; the tag says where it lives. Idempotent, and a no-op without a host name.
+ */
+export function tagLoopbackLinks(text: string, hostName: string | null | undefined): string {
+  if (!hostName || !text) return text;
+  const tag = ` (on ${hostName})`;
+  return text.replace(LOOPBACK_URL, (m, off: number, all: string) => {
+    const u = m.replace(/[.,;:!?]+$/, "");
+    const rest = m.slice(u.length);
+    const bare = u.replace(/^https?:\/\//i, "");
+    return all.startsWith(tag, off + m.length) ? bare + rest : bare + tag + rest;
+  });
+}
+
+/** The same, over events: a remote terminal's feed (FocusCtx.hostName), every kind but `think`. */
+export function tagHostEvents(evs: FocusEvent[], hostName: string | null | undefined): FocusEvent[] {
+  if (!hostName) return evs;
+  for (const e of evs) if (e.kind !== "think" && typeof e.text === "string") e.text = tagLoopbackLinks(e.text, hostName);
+  return evs;
 }
 
 /**
@@ -470,7 +498,7 @@ export function hasTranscript(ctx: FocusCtx): boolean {
 export function snapshotFocus(ctx: FocusCtx): FocusEvent[] {
   const a = adapterFor(ctx.backend);
   const f = locateTranscript(ctx);
-  return f ? a.parse(f) : [];
+  return f ? tagHostEvents(a.parse(f), ctx.hostName) : [];
 }
 
 // ── live poll → bus ──
@@ -509,7 +537,7 @@ export function startFocus(ctx: FocusCtx) {
     busy: false,
   };
   const emit = (evs: FocusEvent[]) => {
-    for (const ev of evs) {
+    for (const ev of tagHostEvents(evs, ctx.hostName)) {
       if (t.seen.has(ev.seq)) continue;
       t.seen.add(ev.seq);
       // Only claude and codex stamp their records. For the others this poll IS the clock: the event
