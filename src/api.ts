@@ -121,7 +121,7 @@ import { transcribe, audioFilename, transcribeFailure } from "./transcribe.js";
 import { speak, voiceFor, listVoices } from "./speak.js";
 import { askManagerWeb, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurnSmart, setSticky } from "./thread-router.js";
-import { robertWakes, leadEvents, leadSlices, memoryRelations, type RobertWake, type LeadEvent } from "./store.js";
+import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type LeadEvent } from "./store.js";
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
 import { leadEventPayload, waitForLeadEvents } from "./robert-drive.js";
 import { fileReport, leadEventLines } from "./lead-report.js";
@@ -171,9 +171,11 @@ import {
   NewArtifactSchema, UpdateArtifactSchema, ArtifactEventSchema, ArtifactStateSchema } from "./validation.js";
 import { pressureWord, swapPctOf } from "./machine.js";
 import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
+import { hostName, reposOnHost } from "./hosts/workdir.js";
 import { HOST_PATH, brainLink, forwardedHost, hostRoutes } from "./hostlink/brain-link.js";
 import { barRoutes } from "./hostlink/bar.js";
 import { PlacementError } from "./hosts/candidates.js";
+import { hostBriefRoutes } from "./hosts/brief.js";
 import { kv } from "./store/kv.js";
 import { noteClaudeStatusline, usageSnapshot } from "./usage-meter.js";
 import { defaultQuickActions, QUICK_ACTIONS_KV, type QuickAction } from "./quick-actions.js";
@@ -528,20 +530,27 @@ export function startServer() {
   api.get("/sessions", (req, res) => {
     const scope = callerScope(req);
     if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    // `host_name`: the computer each terminal runs on, by the name the operator gave it (mc session list).
+    const names = new Map<string, string>();
+    const named = (id: string | null | undefined) => {
+      const k = id || LOCAL_HOST_ID;
+      if (!names.has(k)) names.set(k, hostName(k));
+      return names.get(k)!;
+    };
     res.json(
       sessions.list({
         ticket_id: req.query.ticket as string | undefined,
         status: req.query.status as string | undefined,
         workspace_id: scope.ws ?? (req.query.workspace as string | undefined),
         limit: req.query.limit ? Number(req.query.limit) : undefined,
-      })
+      }).map((s) => ({ ...s, host_name: named(s.host_id) }))
     );
   });
   api.get("/sessions/:id", (req, res) => {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
-    res.json({ ...s, host_offline: sessionHostOffline(s) });
+    res.json({ ...s, host_offline: sessionHostOffline(s), host_name: hostName(s.host_id || LOCAL_HOST_ID) });
   });
   api.post("/sessions", validate(OpenSessionSchema), async (req, res) => {
     const scope = callerScope(req);
@@ -591,7 +600,8 @@ export function startServer() {
       // Stamped here, from the credential, for the same reason `lead_id` is — and silently ignored
       // without one, because a worker naming a slice number is naming a board it cannot see.
       if (lead && slice) leadSlices.patch(lead.leadId, slice, { session_id: s.id, status: "doing" });
-      res.status(201).json(s);
+      // Which computer it landed on, by name, beside `placement` (why) — `mc session new` prints both.
+      res.status(201).json({ ...s, host_name: s.host_id && s.host_id !== LOCAL_HOST_ID ? hosts.get(s.host_id)?.name ?? s.host_id : null });
     } catch (e: any) {
       // A placement refusal knows its status: 403 for a workspace a computer may not run, 409 for a
       // computer that cannot take it now, 400 for "every computer is full" (as a saturated brain was).
@@ -2633,6 +2643,8 @@ export function startServer() {
   // The brain's menu bar item (desktop/hostbar.swift --brain): the whole fleet, every 3 s. Here and not
   // in hostRoutes because it reads pty activity from terminal.ts, which brain-link.ts must not import.
   api.use(barRoutes(requireAdmin, { link: brainLink, activity: sessionActivity }));
+  // Where work can go, for anyone in a workspace — no admin token (src/hosts/brief.ts).
+  api.use(hostBriefRoutes());
   api.use(hostRoutes(requireAdmin));
 
   // Every live terminal whose goal is ticked, closed in one call — Desk / phone / Telegram ✅ only.
@@ -2857,7 +2869,11 @@ export function startServer() {
   api.get("/workspaces", (req, res) => {
     const all = workspaces.list(req.query.archived === "1");
     const syncs = connectorSyncs.latestByWorkspace();
-    res.json(all.map((w) => ({ ...wsWithRepos(w), last_sync: syncs[w.id] ?? null })));
+    // Asked from a terminal on another computer (the forwarder's stamp, never the caller's): each repo
+    // also carries `host_path`, that computer's checkout of it, or null — `repos.path` is the brain's.
+    const fh = forwardedHost(req);
+    const onHost = (w: any) => fh ? { ...w, repos: reposOnHost(w.repos, fh) } : w;
+    res.json(all.map((w) => ({ ...onHost(wsWithRepos(w)), last_sync: syncs[w.id] ?? null })));
   });
 
   api.post("/workspaces", requireAdmin, validate(NewWorkspaceSchema), (req, res) => {

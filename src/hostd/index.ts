@@ -45,6 +45,7 @@ import { writeHostPlist } from "./join.js";
 import { installMenubar, menubarPaths, menubarState, refreshMenubar, uninstallMenubar, type MenubarDeps } from "./menubar.js";
 import { buildStatus, isHostStatus, mcPortCandidates as portCandidates } from "./status.js";
 import type { UpdateFrame, UpdateStatus, UpdateTarget } from "../hostlink/wire.js";
+import type { HostSelf } from "./resolve.js";
 
 const env = (k: string) => (process.env[k] ?? "").trim();
 const brains = () => env("CHRONOS_HOST_BRAINS").split(",").map((s) => s.trim()).filter(Boolean);
@@ -127,6 +128,9 @@ async function cmdRun(): Promise<number> {
   const spillFor = (ch: number) => spill.forChannel(ch);
   const outbox = new Outbox(path.join(HOST_HOME, "outbox"));
   const heavy = new HeavyPool("this-host", () => heavySlotsForCpus(os.cpus().length));
+  // Who this host is, for MC_HOST_* on every agent and for the menu bar. Read when called: the link
+  // (and the brain's name for this computer) is created below and only answers once it is online.
+  const self = (): HostSelf => ({ id, name: link.brainName ?? knownName ?? os.hostname().replace(/\.local$/, "") });
   const terminals = new HostTerminals({
     egress,
     root: REPO_ROOT,
@@ -138,6 +142,7 @@ async function cmdRun(): Promise<number> {
     backends: hostBackends(),
     mcPort: mcPort(),
     spill: spillFor,
+    self,
   });
   let boundMcPort = mcPort();
   const procs = new HostProcs({
@@ -152,6 +157,7 @@ async function cmdRun(): Promise<number> {
     allocCh: () => terminals.allocCh(),
     egress,
     spill: spillFor,
+    self,
   });
   terminals.shareChannels((ch) => procs.owns(ch));
   // The inventory between hellos (HOSTS.md → Inventory stays true): pushed when it changes.
@@ -242,7 +248,7 @@ async function cmdRun(): Promise<number> {
         // env var, a workspace or a title — what the menu bar item and `host status` read.
         status: () => buildStatus({
           hostId: id,
-          name: link.brainName ?? knownName ?? os.hostname().replace(/\.local$/, ""),
+          name: self().name,
           link: { state: link.state, since: link.since, url: link.url, lastError: link.lastError },
           version: chronosVersion(),
           commit: buildCommit,

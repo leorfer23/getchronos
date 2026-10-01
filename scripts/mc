@@ -9,6 +9,7 @@
 //   MC_WORKSPACE_TOKEN this workspace's API credential (PER-24) — scopes every call below to it
 //   MC_REPO            repo id (default --repo)
 //   MC_TICKET          the ticket key this agent is working (for `mc done`, `mc note`)
+//   MC_HOST_ID / MC_HOST_NAME / MC_HOST_BRAIN   which computer this agent runs on ("local"/1 = the brain)
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -64,6 +65,50 @@ async function req(method, path, body, headers) {
     process.exit(0);
   }
   return json;
+}
+// `mc whoami`: which computer, workspace, repo and terminal this is. From the env first, so it answers
+// even while the brain is away; then the brain's view of this session, bounded to a few seconds.
+async function whoami(asJson) {
+  const e = process.env;
+  const id8 = (v) => (v ? String(v).slice(0, 8) : "");
+  const me = {
+    host_id: e.MC_HOST_ID || null,
+    host_name: e.MC_HOST_NAME || null,
+    brain: e.MC_HOST_BRAIN === "1" ? true : e.MC_HOST_BRAIN === "0" ? false : null,
+    workspace: e.MC_WORKSPACE || null, workspace_name: e.MC_WORKSPACE_NAME || null,
+    repo: e.MC_REPO || null, repo_name: e.MC_REPO_NAME || null,
+    session: e.MC_SESSION || null, run: e.MC_RUN || null,
+    cwd: process.cwd(), api: API, brain_reachable: null, brain_error: null,
+  };
+  if (me.session) {
+    try {
+      const r = await fetch(API + "/sessions/" + encodeURIComponent(me.session), { headers: { ...WS_TOKEN_HEADERS, ...SESSION_HEADERS }, signal: AbortSignal.timeout(3000) });
+      const s = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(s?.error || `HTTP ${r.status}`);
+      me.brain_reachable = true;
+      // A terminal opened before MC_HOST_* existed: the brain's row still knows where it runs.
+      me.host_id ||= s.host_id || "local";
+      me.host_name ||= s.host_name || me.host_id;
+      if (me.brain === null) me.brain = me.host_id === "local";
+    } catch (err) {
+      me.brain_reachable = false;
+      me.brain_error = String(err?.message ?? err);
+    }
+  }
+  if (asJson) return console.log(JSON.stringify(me, null, 2));
+  const where = me.brain === true ? "the brain — the operator's main Mac"
+    : me.brain === false ? "another computer — localhost, files, browser and dev servers here are NOT the operator's"
+    : "unknown (opened before MC_HOST_ID existed)";
+  const rows = [
+    ["host", `${me.host_name || "?"}${me.host_id && me.host_id !== me.host_name ? ` (${me.host_id})` : ""} — ${where}`],
+    ["workspace", me.workspace ? `${me.workspace_name || "?"} (${id8(me.workspace)})` : "(none)"],
+    ["repo", me.repo ? `${me.repo_name || "?"} (${id8(me.repo)})` : "(none)"],
+    ["session", me.session ? id8(me.session) : me.run ? `run ${id8(me.run)}` : "(none — not a Chronos terminal)"],
+    ["cwd", me.cwd],
+    ["api", me.api + (me.brain === false ? "  (this Mac's mc forwarder → the brain)" : "")],
+  ];
+  if (me.brain_reachable !== null) rows.push(["brain", me.brain_reachable ? "reachable" : `unreachable — ${me.brain_error}`]);
+  console.log(rows.map(([k, v]) => `${k.padEnd(10)} ${v}`).join("\n"));
 }
 function readStdin() {
   return new Promise((resolve) => {
@@ -244,7 +289,7 @@ const HELP = `mc — Mission Control backlog CLI
              [--name N] [--kind client|personal] [--git-name N] [--git-email E]
              [--budget USD] [--concurrent N] [--config-dir DIR] [--secrets FILE]
              (creates config dir + 0600 secrets file, then registers the ws; admin-gated → run on daemon host)
-  mc repo list [--workspace ID]      list repos in a workspace
+  mc repo list [--workspace ID]      list repos in a workspace (on another computer: ITS checkout path)
   mc repo add <name> --path ABS [--workspace ID] [--remote URL] [--branch main] [--delivery commit|pr]
              register a repo in a workspace (admin-gated → run on daemon host)
   mc repo patch <id> [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr]   edit a repo (admin-gated)
@@ -268,7 +313,9 @@ const HELP = `mc — Mission Control backlog CLI
   mc hook claude|cursor|grok  (run by the CLI's lifecycle hooks — not by hand)
   mc statusline claude        (Claude's statusLine — reports usage-limit %, prints "5h 34% · week 71%")
   mc usage                    subscription usage per CLI/profile (Claude 5h/week, Grok week, Cursor —)
-  mc session list [--workspace ID]   live terminals + their tickets
+  mc session list [--workspace ID]   live terminals: id, computer, backend, role, ticket, title
+  mc whoami [--json]                 where THIS terminal runs: computer (MC_HOST_NAME), workspace, repo,
+                                     session, cwd, api — on another computer, localhost and files are its own
   mc session new [--ticket KEY] [--backend b] [--model m] [--workspace ID] [--cwd p] [--title t] [--host id|name]
                  [--goal "what it's for"] [--kind pr|investigation|qa] [--description "the brief"]
                  (--goal repeats: --goal "open the PR" --goal "update the runbook" = one terminal,
@@ -426,6 +473,12 @@ const HELP = `mc — Mission Control backlog CLI
                                      exit code). A single targeted test file does not need it.
   mc machine                         how loaded this Mac is: load per core, swap, free memory, heavy
                                      slots in use, and whether an agent may open a terminal right now
+  mc hosts [list]                    every computer (HOSTS.md): status, load, live terminals, version,
+                                     what is wrong. Without the admin token: names, room, and whether
+                                     your workspace may run there. Placement is automatic; --host pins
+  mc hosts show <name>               one computer in full: vitals, CLIs, profiles, workspaces, update
+  mc hosts drain|resume <name>       stop new work landing there / take work again (admin)
+  mc hosts update <name|all>         update it to the brain's version — its terminals restart (admin)
   mc status                          daemon health: active / queued / spend
   mc reviews                         every review waiting on you (shared command)
   mc cost [today|7d|30d]             combined spend (headless + Desk) by workspace (shared command)
@@ -673,6 +726,7 @@ async function heavy(argv) {
     if (cmd === "hook") return await hook(pos[1] || "claude");
     if (cmd === "statusline") return await statusline();
     if (cmd === "usage") return await usage("json" in opt);
+    if (cmd === "whoami") return await whoami("json" in opt);
 
     if (cmd === "pdf") {
       const file = pos[1] || die("usage: mc pdf <file.pdf>");
@@ -1761,7 +1815,10 @@ async function heavy(argv) {
     if (cmd === "repo" && pos[1] === "list") {
       const wsq = opt.workspace || process.env.MC_WORKSPACE;
       const all = await req("GET", "/workspaces");
-      const list = (wsq ? all.filter((w) => w.id === wsq) : all).flatMap((w) => (w.repos || []).map((r) => `${r.id.slice(0, 8)}\t${w.slug}\t${r.name}\t${r.path}\t${r.delivery || "commit"}`));
+      // From a terminal on another computer the brain adds `host_path` (that computer's checkout):
+      // `path` is the brain's own and means nothing here.
+      const where = (r) => ("host_path" in r ? r.host_path || "(not on this host)" : r.path);
+      const list = (wsq ? all.filter((w) => w.id === wsq) : all).flatMap((w) => (w.repos || []).map((r) => `${r.id.slice(0, 8)}\t${w.slug}\t${r.name}\t${where(r)}\t${r.delivery || "commit"}`));
       return console.log(list.length ? list.join("\n") : "(no repos)");
     }
     if (cmd === "repo" && pos[1] === "add") {
@@ -1809,7 +1866,7 @@ async function heavy(argv) {
       const wsq = opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
       const all = await req("GET", "/sessions?" + qs.toString());
       if (!all.length) return console.log("(no live sessions)");
-      return console.log(all.map((s) => `${s.id.slice(0, 8)}\t${s.backend}/${s.model || "·"}\t${s.role}\t${s.ticket_key || "chat"}\t${s.title || ""}`).join("\n"));
+      return console.log(all.map((s) => `${s.id.slice(0, 8)}\t${s.host_name || s.host_id || "local"}\t${s.backend}/${s.model || "·"}\t${s.role}\t${s.ticket_key || "chat"}\t${s.title || ""}`).join("\n"));
     }
     if (cmd === "session" && pos[1] === "new") {
       let ws = opt.workspace || process.env.MC_WORKSPACE, repo = opt.repo || process.env.MC_REPO, ticketId = null;
@@ -1846,7 +1903,9 @@ async function heavy(argv) {
         // presented that Lead's credential — the daemon reads it from the header, not from here.
         slice: opt.slice ? Number(opt.slice) : undefined,
       }, LEAD_HEADERS);
-      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})`);
+      // Where it landed and why (HOSTS.md → Placement) — only once there was a choice to make.
+      const where = s.host_name || s.placement ? ` → ${s.host_name || "this Mac"}${s.placement ? ` (${s.placement})` : ""}` : "";
+      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})${where}`);
     }
     // A Lead (LEADS.md): Robert's deputy for one goal, in one workspace. Opened the same way as any
     // other terminal (POST /sessions, role "lead") — the daemon does the rest (its own lead_token,
@@ -3067,6 +3126,78 @@ async function heavy(argv) {
         }
       }
       return console.log(await render());
+    }
+    // The computers (HOSTS.md). With the admin token: the full view, and drain/resume/update. Without
+    // it (a terminal, a Lead): GET /hosts/brief — names, up/down, room, and whether YOUR workspace may
+    // run there.
+    if (cmd === "hosts") {
+      const sub = pos[1] || "list";
+      const admin = adminToken();
+      if (!admin) {
+        if (sub !== "list") die(`mc hosts ${sub} is admin-gated (run it on the brain, or ask Robert)`);
+        const wsq = opt.workspace || process.env.MC_WORKSPACE;
+        const b = await req("GET", "/hosts/brief" + (wsq ? `?workspace=${encodeURIComponent(wsq)}` : ""));
+        return console.log(b.hosts.map((h) =>
+          `${h.name}${h.is_brain ? " (brain)" : ""}\t${h.online ? h.status : "OFFLINE"}\t${h.headroom == null ? "room ?" : `room ${Math.round(h.headroom)}%`}\t${h.live} live` +
+          `\t${h.may_run === null ? "" : h.may_run ? "you may run here" : `not for you: ${h.why_not}`}${h.full && h.online ? ` · full: ${h.full}` : ""}`,
+        ).join("\n"));
+      }
+      const H = { "x-mc-admin": admin };
+      const view = (await req("GET", "/hosts", undefined, H)).hosts;
+      const find = (ref) => {
+        if (!ref) die(`which computer? (${view.map((h) => h.name).join(", ")})`);
+        const r = String(ref).toLowerCase();
+        const hit = view.filter((h) => h.id === ref || h.name.toLowerCase() === r || h.id.startsWith(ref));
+        if (hit.length !== 1) die(`${hit.length ? "ambiguous" : "no"} computer \`${ref}\` — ${view.map((h) => h.name).join(", ")}`);
+        return hit[0];
+      };
+      const pct = (n) => (n == null ? "?" : `${Math.round(n)}%`);
+      const lastV = (h) => h.vitals.history[h.vitals.history.length - 1] || {};
+      const notes = (h) => [
+        h.admission.ok ? "" : `full: ${h.admission.reason}`,
+        ...h.checklist.clis.filter((c) => c.auth === "no").map((c) => `${c.name} logged out`),
+        h.update?.status?.state === "failed" ? `update failed: ${h.update.status.error || "?"}` : h.update?.status && h.update.status.state !== "done" && h.update.status.state !== "current" ? `updating (${h.update.status.state})` : "",
+      ].filter(Boolean).join(" · ");
+      if (sub === "list") {
+        return console.log(view.map((h) => {
+          const v = lastV(h);
+          const status = h.is_brain ? "brain" : h.connected ? h.status : h.status === "disabled" ? "disabled" : "OFFLINE";
+          const ver = h.is_brain ? (h.commit || h.version || "?").slice(0, 8) : `${(h.commit || h.version || "?").slice(0, 8)}${h.update?.available ? " (behind)" : ""}`;
+          return `${h.name}\t${status}\tcpu ${pct(v.cpu)} ram ${pct(v.ram)}\t${h.live_sessions} live\t${ver}${notes(h) ? `\t${notes(h)}` : ""}`;
+        }).join("\n"));
+      }
+      if (sub === "show") {
+        const h = find(pos[2]);
+        const v = lastV(h);
+        const ws = h.checklist.workspaces;
+        return console.log([
+          `${h.name} (${h.id}) · ${h.is_brain ? "brain" : h.connected ? `${h.status}, via ${h.link?.via || "?"}` : `OFFLINE since ${h.last_seen_at || "?"}`} · ${h.platform}`,
+          `load: cpu ${pct(v.cpu)} ram ${pct(v.ram)} · ${h.vitals.load_per_core ?? "?"}/core · ${h.admission.ok ? "takes agents" : `FULL — ${h.admission.reason}`} · ${h.live_sessions} live`,
+          `version: ${h.version || "?"} ${(h.commit || "").slice(0, 8)}${h.update ? ` · ${h.update.available ? `behind the brain (${(h.update.target.commit || h.update.target.version || "").slice(0, 8)})${h.update.supported ? " — mc hosts update " + h.name : h.update.manual ? " — by hand: " + h.update.manual : ""}` : "current"}${h.update.status ? ` · last update ${h.update.status.state}${h.update.status.error ? ": " + h.update.status.error : ""}` : ""}` : ""}`,
+          `clis: ${h.checklist.clis.map((c) => `${c.name}${c.ok ? "" : c.auth === "no" ? " (logged out)" : " (missing)"}`).join(", ") || "—"}`,
+          `profiles: ${h.checklist.profiles.map((p) => `${p.name}${p.ok ? "" : " (missing)"}`).join(", ") || "—"}`,
+          `workspaces: ${ws.map((w) => `${w.slug}${w.allowed ? "" : ` (denied by ${w.denied_by})`}`).join(", ") || "—"}`,
+          ...(h.policy?.deny?.length ? [`policy deny: ${h.policy.deny.join(", ")}`] : []),
+          ...(h.reserve ? [`reserve: ${JSON.stringify(h.reserve)}`] : []),
+        ].join("\n"));
+      }
+      if (sub === "drain" || sub === "resume") {
+        const h = find(pos[2]);
+        const out = await req("PATCH", `/hosts/${encodeURIComponent(h.id)}`, { status: sub === "drain" ? "draining" : "online" }, H);
+        return console.log(`${out?.name || h.name} → ${out?.status || "?"}${sub === "drain" ? " (finishes what it has, takes no new work)" : ""}`);
+      }
+      if (sub === "update") {
+        if (pos[2] === "all") {
+          const out = await req("POST", "/hosts/update-all", {}, H);
+          const nm = (id) => view.find((h) => h.id === id)?.name || id;
+          return console.log(`updating ${out.started.length ? out.started.map(nm).join(", ") : "nothing (every connected host is current)"}` +
+            (out.skipped.length ? ` · skipped ${out.skipped.map((x) => `${x.name}: ${x.reason}`).join("; ")}` : ""));
+        }
+        const h = find(pos[2]);
+        const out = await req("POST", `/hosts/${encodeURIComponent(h.id)}/update`, {}, H);
+        return console.log(`${h.name}: update ${out.update?.state || "requested"} → ${(out.update?.target?.commit || out.update?.target?.version || "").slice(0, 8)} (its terminals restart and resume there)`);
+      }
+      die("mc hosts [list] | show <name> | drain <name> | resume <name> | update <name|all>");
     }
     // How loaded the Mac is right now, and whether an agent would be let on it (src/machine.ts).
     if (cmd === "machine") {

@@ -6,7 +6,9 @@ import { randomUUID } from "node:crypto";
 import { caKeyFile, leafKeyFile } from "./egress-ca.js";
 import { inRepo } from "./repo-root.js";
 // Builtins + repo-root only, like egress-ca: no cycle back through config.
-import { brainKeyFile, hostlinkDir } from "./hostlink/join.js";
+import { hostlinkDir } from "./hostlink/join.js";
+import { mirrorRoot } from "./hosts/transcript-mirror.js";
+import { hostHomeDir } from "./hostd/home.js";
 
 const home = os.homedir();
 
@@ -515,6 +517,9 @@ export const CONFIG = {
     perSessionHour: Math.max(1, Number(process.env.CHRONOS_ROBERT_DRIVE_PER_TERMINAL_HOUR ?? 4)),
     globalHour: Math.max(1, Number(process.env.CHRONOS_ROBERT_DRIVE_PER_HOUR ?? 30)),
     maxAgeHours: Number(process.env.CHRONOS_ROBERT_DRIVE_MAX_AGE_H ?? 12),
+    // Computers (src/robert-host-drive.ts): a host must sit behind the brain this long before Robert
+    // hears about it — a deploy makes every host "behind" for the minutes an update takes.
+    hostBehindHours: Math.max(1, Number(process.env.CHRONOS_ROBERT_HOST_BEHIND_H ?? 24)),
   },
   // A Lead's own wake budget (LEADS.md), deliberately NOT Robert's. A Lead steering six workers
   // legitimately hears from them an order of magnitude more often than Robert hears from the whole
@@ -605,10 +610,7 @@ export const CONFIG = {
           // Same "resolved, not hardcoded" reasoning: CHRONOS_EGRESS_CA_DIR must not move the keys
           // out of the deny list.
           caKeyFile(), leafKeyFile(),
-          // The brain's host-link TLS key (src/hostlink/join.ts): whoever reads it can impersonate
-          // the brain to every pinned host on the LAN. hosts.json holds only token hashes, but it is
-          // the list of machines allowed in, and no agent has a reason to read it.
-          brainKeyFile(), path.join(hostlinkDir(), "hosts.json"),
+          // Host-link state (the brain's TLS key, the host's token and outbox) is in `sealed` below.
           // Holds every project's API token — same rationale as .admin-token above.
           dbPath, `${dbPath}-wal`, `${dbPath}-shm`,
           // NOTE: ~/Library/Keychains intentionally NOT denied — Claude reads its own auth token
@@ -619,6 +621,20 @@ export const CONFIG = {
           `${home}/Library/Application Support/BraveSoftware`,
         ]),
       ...splitPaths(process.env.CHRONOS_PROTECTED_SECRETS_EXTRA)],
+    // Chronos's own multi-computer state, denied (read+write) to every agent AFTER a workspace's
+    // sandbox_allow re-grant, and not replaced by CHRONOS_PROTECTED_SECRETS: no workspace is ever
+    // trusted with these, and on a host serving two clients each holds the other client's credentials.
+    //  - hostlink/: the brain's TLS key (whoever reads it can impersonate the brain to every pinned
+    //    host), the joined hosts' token hashes, and the transcripts remote terminals stream back.
+    //  - the host's home (~/.chronos-host): `.secrets` holds CHRONOS_HOST_TOKEN (impersonate this
+    //    host to the brain) and Access credentials; `outbox/` holds queued `mc` writes carrying each
+    //    workspace's token; `spill/` holds every terminal's output. Agents run as the same user, so
+    //    mode 0600 does not keep them out — this does. Named on the brain too: harmless when absent,
+    //    and it covers a Mac that is both. Seatbelt matches resolved paths, so a symlinked dir is
+    //    named by its target as well.
+    sealed: [...new Set([hostlinkDir(), mirrorRoot(), hostHomeDir()].flatMap((p) => {
+      try { return [p, fs.realpathSync(p)]; } catch { return [p]; }
+    }))],
     // Denied, but a job's own cwd / add_dirs are re-granted (so a job scoped INTO one of these
     // still works, while jobs elsewhere can't touch sibling project folders).
     // No portable default: where project checkouts live differs per machine, so this is

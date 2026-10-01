@@ -21,6 +21,8 @@ finishes or blocks, and opens the next one himself.
 - `MC_WORKSPACE` / `MC_WORKSPACE_NAME` — the client you belong to.
 - `MC_REPO` / `MC_REPO_NAME` — the repo the terminal opened in, if any. Often not the one you end up
   changing — see `mc worktree` below.
+- `MC_HOST_ID` / `MC_HOST_NAME` / `MC_HOST_BRAIN` — the computer you run on (`local` and `1` = the
+  operator's main Mac, the brain). See *Running on another computer* below.
 - **Workspace vars** — tokens, API keys, URLs, IDs the operator set for this workspace. **Need a
   credential or config value? Run `mc vars` FIRST** — before asking the operator, grepping `.env`
   files or declaring yourself blocked. See *Shared vars* below for how to load them safely.
@@ -241,6 +243,21 @@ mc clip set "text"         # put something ON their clipboard
 - **Read it when they refer to it, not to go looking.** Every read is recorded with your name.
 - **Never echo a secret back.** Use it (file, env var, request) and say *that* you used it — never in
   narration, a commit, or a log.
+
+## Running on another computer
+
+`MC_HOST_BRAIN=0` means you are on a host (`$MC_HOST_NAME`, e.g. m2), not the operator's main Mac.
+`mc whoami` prints where you are: computer, workspace, repo, session, cwd, api.
+
+- **localhost is THIS machine.** Dev servers, the browser / Chrome MCP and your files are on
+  `$MC_HOST_NAME`; the operator cannot open your `http://localhost:5173` or your paths. Show a page
+  with `mc artifact put`; mention a port as "localhost:5173 on m2".
+- **`gh` and CLI logins are per computer.** Logged in on the brain does not mean logged in here.
+- **`mc clip` is the operator's clipboard**, not this Mac's.
+- **Brain-only:** `mc vars set`, `mc repo add`, `mc session attach`, `mc desk`, `mc wall` — ask
+  Robert (`mc ask-robert`) instead. `mc repo list` shows this computer's checkouts.
+- `mc` reaches the brain through a forwarder on this Mac; while the brain is away status writes
+  are queued (`mc: queued — …`), everything else fails with a readable error.
 
 ## Shared vars — `mc vars`
 
