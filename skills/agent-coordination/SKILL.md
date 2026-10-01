@@ -35,7 +35,7 @@ mc session list                      # live terminals + ids
 mc session focus <ID> [-n 20]        # what one terminal is doing, in plain English (read-only, free)
 
 # Wait for another terminal to settle — blocks server-side, never busy-poll
-curl -s -X POST "http://localhost:7777/api/sessions/<ID>/wait" \
+curl -s -X POST "${MC_API:-http://localhost:7777/api}/sessions/<ID>/wait" \
   -H "x-mc-workspace-token: $MC_WORKSPACE_TOKEN" -H 'Content-Type: application/json' \
   -d '{"until":"settled","timeout_ms":300000}'
 # 200 = settled (body has the state) · 408 = timed out · until also takes "done", "blocked", or a list

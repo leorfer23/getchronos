@@ -8,7 +8,7 @@ import { FLUSH_MS, clampRate, fanOut, type TermClient } from "./term-fanout.js";
 import { ScreenMirror, type Screen } from "./term-screen.js";
 import { ModeTracker } from "./term-modes.js";
 import { pasteOf, seedEnterMsFor, ttyCooked, typeSeed } from "./term-seed.js";
-import { sessions, sessionGoals, workspaces, repos, tickets, runs, jobs, notes as notesStore, kv } from "./store.js";
+import { sessions, sessionGoals, workspaces, repos, tickets, runs, jobs, notes as notesStore, kv, hosts } from "./store.js";
 import { backendAllowed, getBackend, workspaceBackends } from "./backends/index.js";
 import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow } from "./sandbox.js";
 import { ensureDropDir } from "./drops.js";
@@ -199,12 +199,16 @@ export function ensurePtyHelper() {
 // Env injected into every spawned agent so it can drive the backlog via the `mc` CLI (~/.mc/bin/mc):
 // MC_* give it its context; PATH makes `mc` callable. ~/.mc/bin sits outside any workspace repo so
 // the per-workspace sandbox still grants read+exec.
-export function mcEnv(workspaceId?: string | null, repoId?: string | null, ticketId?: string | null): Record<string, string> {
+// MC_HOST_*: which computer the agent runs on (HOSTS.md → "Agents know where they are"). A host
+// re-stamps all three from its own identity at spawn (hostd/terminals.ts, procs.ts), so a remote
+// agent's values are the host's word, not the brain's guess.
+export function mcEnv(workspaceId?: string | null, repoId?: string | null, ticketId?: string | null, hostId: string = LOCAL_HOST_ID): Record<string, string> {
   const ws = workspaceId ? workspaces.get(workspaceId) : undefined;
   const repo = repoId ? (repos.get?.(repoId) as any) : undefined;
   const tk = ticketId ? tickets.get(ticketId) : undefined;
   return {
     MC_API: `http://localhost:${CONFIG.port}/api`,
+    ...hostEnv(hostId),
     MC_WORKSPACE: workspaceId ?? "",
     MC_WORKSPACE_NAME: ws?.name ?? "",
     // Scopes this session's `mc` calls to its own workspace (PER-24) — see checkScope in api.ts.
@@ -215,6 +219,31 @@ export function mcEnv(workspaceId?: string | null, repoId?: string | null, ticke
     MC_TICKET_TITLE: tk?.title ?? "",
     PATH: `${os.homedir()}/.mc/bin:${process.env.PATH ?? ""}`,
   };
+}
+
+/** MC_HOST_ID / MC_HOST_NAME / MC_HOST_BRAIN for an agent on `hostId`, as the brain knows it. */
+export function hostEnv(hostId: string = LOCAL_HOST_ID): Record<string, string> {
+  return { MC_HOST_ID: hostId, MC_HOST_NAME: hostLabel(hostId), MC_HOST_BRAIN: hostId === LOCAL_HOST_ID ? "1" : "0" };
+}
+
+/** The operator's name for a computer (the Desk's Computers list), else its id. */
+export function hostLabel(hostId: string): string {
+  try { return hosts.get(hostId)?.name || hostId; } catch { return hostId; }
+}
+
+/**
+ * The one line a terminal on ANOTHER computer is opened with (agents/_blocks/on-host.md), or "" on the
+ * brain. Without it an agent on m2 told the operator to open http://localhost:5173 — which, clicked on
+ * the Desk, opens the brain's port 5173. Never throws into a spawn, like leadWorkerBlock.
+ */
+export function onHostBlock(hostId: string): string {
+  if (!hostId || hostId === LOCAL_HOST_ID) return "";
+  try {
+    return agentBlock("on-host", { host_name: hostLabel(hostId) });
+  } catch (e) {
+    console.error("[terminal] on-host block", e);
+    return "";
+  }
 }
 
 const BUF_CAP = 256 * 1024; // scrollback kept in memory for replay on (re)attach
@@ -672,8 +701,11 @@ export async function openSession(
   // A Lead's persona goes first, ahead of the standing Focus/worktree contract (LEADS.md): it is
   // WHO the terminal is before it is told how to report. A worker's Lead block sits in the same slot
   // for the same reason — whose worker it is comes before how it reports.
+  // Which computer it is on, when that is not the operator's own Mac: localhost, files, the browser
+  // and dev servers all mean THAT machine (agents/_blocks/on-host.md). Nothing on the brain.
+  const hostBlock = onHostBlock(targetHost);
   const sysArg = backend.appendsSystem
-    ? ([row.role === "lead" ? agentPrompt("lead") : null, leadBlock, FOCUS_CONTRACT, artifactChoiceBlock(backend.name), ctx, rel].filter(Boolean).join("\n\n") || null)
+    ? ([row.role === "lead" ? agentPrompt("lead") : null, leadBlock, FOCUS_CONTRACT, hostBlock, artifactChoiceBlock(backend.name), ctx, rel].filter(Boolean).join("\n\n") || null)
     : null;
   // Seed the conversation: the ticket context (or a passed seed) is typed in once the CLI has booted.
   // Defined here (a remote spec carries it) but, for a local terminal, still EVALUATED after the spawn
@@ -698,7 +730,7 @@ export async function openSession(
     // contract alone into a bare exploratory chat).
     // A resumed chat already carries them from its first prompt: pasting them again would be a new turn.
     if (!backend.appendsSystem && !opts.resumeId && (seed || ctx)) {
-      const pre = [leadBlock, FOCUS_CONTRACT, ctx].filter(Boolean).join("\n\n");
+      const pre = [leadBlock, FOCUS_CONTRACT, hostBlock, ctx].filter(Boolean).join("\n\n");
       seed = pre + (seed ? `\n\n--- Your task ---\n${seed}` : "");
     }
     return seed;
@@ -816,7 +848,7 @@ export async function openSession(
     env = {
       ...childEnv(ws),
       ...Object.fromEntries(Object.entries(backend.env({} as any, configDir)).filter(([, v]) => v !== configDir)),
-      ...mcEnv(opts.workspace_id, opts.repo_id, row.ticket_id),
+      ...mcEnv(opts.workspace_id, opts.repo_id, row.ticket_id, targetHost),
       MC_SESSION: row.id,
       ...(row.role === "lead"
         ? { MC_LEAD_TOKEN: sessions.leadToken(row.id) ?? "", MC_AGENT_NAME: `lead:${row.id.slice(0, 8)}`, MC_LEAD: "1" }
@@ -909,7 +941,7 @@ export async function openSession(
     cursorConfigDir: env.CURSOR_CONFIG_DIR,
     ...(spawnSessionId && spawnSessionId !== focusSessionId ? { transcriptSessionId: spawnSessionId } : {}),
     // A remote CLI writes its transcript on its host, which streams it into this mirror.
-    ...(remote ? { transcriptFile: mirrorFile(row.id) } : {}),
+    ...(remote ? { transcriptFile: mirrorFile(row.id), hostName: hostLabel(targetHost) } : {}),
   };
   const entry = installLive(row, term, focusCtx, { titleDone: !!ticketTitle, backendName: backend.name, configDir, workspaceId: opts.workspace_id ?? null, remote });
 
@@ -1491,7 +1523,7 @@ export function adoptRemoteSession(row: Session, term: PtyHandle): boolean {
   const configDir = ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude;
   const focusCtx: FocusCtx = {
     sessionId: row.id, backend: backend.name, cwd: row.cwd, configDir,
-    sinceMs: Date.parse(row.created_at) || 0, transcriptFile: mirrorFile(row.id),
+    sinceMs: Date.parse(row.created_at) || 0, transcriptFile: mirrorFile(row.id), hostName: hostLabel(row.host_id),
   };
   // Its scrollback was in the dead brain's memory; the host resends what it still holds, and the
   // attach jiggle repaints a full-screen TUI. The title and first prompt are already on the row.
@@ -1574,7 +1606,7 @@ export function focusEvents(id: string): FocusEvent[] {
   const backend = getBackend(s.backend).name;
   // A terminal that ran on another host: its story is in the mirror its host streamed here.
   const remote = !!s.host_id && s.host_id !== LOCAL_HOST_ID;
-  return snapshotFocus({ sessionId: id, backend, cwd: s.cwd ?? os.homedir(), configDir, sinceMs: 0, cursorConfigDir: workspaceCursorDir(ws), ...(remote ? { transcriptFile: mirrorFile(id) } : {}) });
+  return snapshotFocus({ sessionId: id, backend, cwd: s.cwd ?? os.homedir(), configDir, sinceMs: 0, cursorConfigDir: workspaceCursorDir(ws), ...(remote ? { transcriptFile: mirrorFile(id), hostName: hostLabel(s.host_id!) } : {}) });
 }
 // The card's lifecycle hooks (term-hooks.ts), for whichever CLI this terminal runs. Idempotent, and a
 // failure only costs the card its hook signals — the pty fallback still paints it.

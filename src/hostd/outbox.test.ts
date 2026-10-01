@@ -60,7 +60,9 @@ test("over the count or byte cap, the oldest are dropped (and logged)", () => {
   assert.equal(lines.length, 2);
   assert.match(lines[0], /dropped the 1 oldest/);
   const small = new Outbox(tmp(), { maxBytes: 600, ...quiet });
-  const one = Buffer.byteLength(JSON.stringify({ ...req("/api/sessions/s1/status"), at: Date.now() }));
+  const probe = new Outbox(tmp(), quiet);
+  probe.put(req("/api/sessions/s1/status"));
+  const one = probe.bytes; // what an entry weighs on disk, after the dropped headers
   for (let i = 0; i < 5; i++) small.put(req("/api/sessions/s1/status", i));
   assert.equal(small.size, Math.floor(600 / one));
   assert.ok(small.bytes <= 600);
@@ -91,4 +93,18 @@ test("a thrown send stops the replay; concurrent drains share one pass", async (
   const [a, b] = await Promise.all([o.drain(send), o.drain(send)]);
   assert.deepEqual(a, b);
   assert.equal(calls, 1);
+});
+
+test("on disk: only what replay needs — headers the brain drops anyway never reach the file", async () => {
+  const dir = tmp();
+  const ob = new Outbox(dir, quiet);
+  const r = req("/api/sessions/s1/status");
+  r.headers = { ...r.headers, "x-mc-admin": "admintok", authorization: "Bearer hosttok", cookie: "c=1", "cf-access-client-secret": "cfsec", Host: "localhost:7777" };
+  ob.put(r);
+  const raw = fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0]), "utf8");
+  for (const s of ["admintok", "hosttok", "c=1", "cfsec", "localhost:7777"]) assert.ok(!raw.includes(s), `${s} must not be written`);
+  const seen: ApiRequest[] = [];
+  await ob.drain(async (q) => { seen.push(q); return ok(); });
+  assert.deepEqual(seen[0].headers, { "x-mc-workspace-token": "wstok", "content-type": "application/json" });
+  assert.equal(seen[0].session_id, "s1", "the session rides on the frame, not the header");
 });

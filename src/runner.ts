@@ -419,7 +419,7 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
     // checkout / worktree / profile / sandbox / egress on its own disk and builds the argv itself.
     const built = remoteProcSpec(job, runId, host, {
       effJob, context, sessionId, nativeResume, steerMode, sandboxMode, profileDir, profile: routed.profile, backendName: backend.name,
-      env: { ...childEnv(ws), ...Object.fromEntries(Object.entries(backend.env(job, profileDir)).filter(([, v]) => v !== profileDir)), ...mcEnv(job.workspace_id, null, job.ticket_id), MC_RUN: runId },
+      env: { ...childEnv(ws), ...Object.fromEntries(Object.entries(backend.env(job, profileDir)).filter(([, v]) => v !== profileDir)), ...mcEnv(job.workspace_id, null, job.ticket_id, host.id), MC_RUN: runId },
     });
     if ("error" in built) return failBeforeSpawn(job, runId, built.error);
     try {

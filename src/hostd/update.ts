@@ -21,10 +21,10 @@
  * this same host (remote-terminals.ts), the path every host restart already takes.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { REPO_ROOT } from "../repo-root.js";
+import { hostHomeDir } from "./home.js";
 import { HOST_LABEL, PACKAGE_NAME, installKind, type InstallKind } from "../../bin/host-core.mjs";
 import type { UpdateStatus, UpdateTarget } from "../hostlink/wire.js";
 
@@ -47,9 +47,7 @@ export function detectInstall(pkgRoot = REPO_ROOT, hostHome = defaultHostHome())
   return { kind, pkgRoot, appDir: kind === "npm" ? path.join(hostHome, "app") : pkgRoot };
 }
 
-export function defaultHostHome(): string {
-  return process.env.CHRONOS_HOST_HOME || path.join(os.homedir(), ".chronos-host");
-}
+export const defaultHostHome = hostHomeDir;
 
 /** The package root inside an app dir of `kind` — where its bin/ and package.json are. */
 export const pkgRootIn = (appDir: string, kind: "git" | "npm") => (kind === "npm" ? path.join(appDir, "node_modules", PACKAGE_NAME) : appDir);

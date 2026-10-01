@@ -214,6 +214,28 @@ Both problems have the same fix:
   policy the brain sends. *(Phase 5: without credential brokering — a workspace whose egress
   intercepts TLS to inject a secret stays on the brain, so no CA exists on a host; see phase 5.)*
 
+### Agents know where they are
+
+An agent on m2 that says "open http://localhost:5173" is pointing the operator at the brain's port
+5173. So every agent is told which computer it is on, and the board does not pretend otherwise:
+
+- **Env.** Every terminal and headless run gets `MC_HOST_ID`, `MC_HOST_NAME` (the operator's name for
+  the computer) and `MC_HOST_BRAIN` (`1` on the brain, whose id is `local`). The brain sets them in
+  `mcEnv`; a host re-stamps them from its own identity at spawn (`hostd/resolve.ts` `hostSelfEnv`),
+  so they are right even while the brain is away.
+- **Prompt.** A terminal on a host is opened with one short block (`agents/_blocks/on-host.md`):
+  localhost, files, the browser and logins are THIS machine's; show the operator a page with
+  `mc artifact put`; `mc clip` is the operator's clipboard. Nothing is added on the brain.
+- **`mc whoami`** prints computer, workspace, repo, session, cwd and api — from the env first, then
+  the brain's view of the session (bounded, so it still answers while the brain is away).
+- **`mc session list`** shows each terminal's computer (`host_name` on `GET /sessions`), and
+  **`mc repo list`** from a host shows that host's checkout (`host_path`, added to `GET /workspaces`
+  only for a forwarded request) or "not on this host".
+- **Loopback links on the board.** A remote terminal's Focus feed rewrites `http://localhost:5173/x`
+  to `localhost:5173/x (on m2)` (`focus.ts` `tagLoopbackLinks`): text, not a link that would open the
+  brain's port. Hosts are not reachable by address from the brain (they dial out), so nothing is
+  rewritten to a LAN URL.
+
 ### Placement
 
 `POST /sessions` and the dispatcher pick a host with one pure function (`place()`, unit-tested like
@@ -259,8 +281,9 @@ What survives what:
 
 - **Status writes are queued.** `mc state`, `mc progress`, card hook events, `mc step`, `mc learn`,
   `mc remember`, `mc pad add|append` — an explicit allowlist in `outbox.ts` — go to
-  `~/.chronos-host/outbox/` (one 0600 file each, with the request's own headers, so the brain still
-  attributes them to the right terminal). The forwarder answers `202 {queued:true}`; `mc` prints
+  `~/.chronos-host/outbox/` (one 0600 file each, with the request's own headers minus those the
+  brain drops anyway — admin token, `authorization`, cookies, Access headers — so the brain still
+  attributes them to the right terminal; sealed from agents, see *Security*). The forwarder answers `202 {queued:true}`; `mc` prints
   `mc: queued — …` and exits 0. After the welcome they are replayed in order, and while any are left
   new allowlisted writes queue behind them (a fresh `done` must not be overwritten by a stale
   `working`). 4xx drops an entry, 503 stops the replay until the next try (30 s), a 5xx five times
@@ -333,6 +356,14 @@ Mac today. So the design protects the **link** and the **boundaries between work
   trust-on-first-use.
 - **Host token:** 32 random bytes, stored hashed (`token_hash`), revocable from the Desk. The host
   keeps it in its own `.secrets` with mode 600.
+- **The host's state is sealed from its agents.** Agents run as the same user as `chronos host`, so
+  mode 600 does not keep them out. Every Seatbelt profile (Desk terminals, headless runs, the
+  verifier) denies read+write of the whole host home (`CHRONOS_HOST_HOME`, default `~/.chronos-host`:
+  `.secrets`, `outbox/`, `spill/`) and the brain's `hostlink/` dir (TLS key, host token hashes,
+  transcript mirrors) — `CONFIG.sandbox.sealed`, the last rules in the profile, after the agent's cwd
+  and any `sandbox_allow` re-grant, and not replaced by `CHRONOS_PROTECTED_SECRETS`. Without it, one
+  client's agent could read the host token or another client's queued workspace token. Sandbox
+  mode `off` has no profile and no seal.
 - **Least data per host.** A host receives its own sessions' spawns, input and API responses. It
   never gets the bus firehose, the DB, other hosts' vitals, or another workspace's secrets.
   `workspace_vars` and `secrets_file` values are sent inside the `spawn` frame, only for the
