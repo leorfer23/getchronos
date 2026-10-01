@@ -52,7 +52,7 @@
     "evals:export": "node scripts/export-eval-cases.mjs"
   },
   "dependencies": {
-    "@playwright/mcp": "^0.0.79",
+    "@playwright/mcp": "^0.0.82",
     "@xterm/headless": "^6.0.0",
     "better-sqlite3": "^13.0.3",
     "croner": "^9.0.0",
