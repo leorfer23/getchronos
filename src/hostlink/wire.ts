@@ -130,6 +130,18 @@ export type ExecResult = {
 export const EXEC_MAX_BYTES = 8 * 1024 * 1024;
 // ── end phase 5 ──
 
+/**
+ * Headers a host may never set on a forwarded `mc` request (the brain drops them, brain-link.ts). The
+ * admin token is the dashboard's and never crosses to a host; x-mc-host / x-mc-remote /
+ * x-mc-forwarded are the brain's own stamps; x-mc-session comes from the frame's session_id. The
+ * host's outbox drops them too before a request touches disk: nothing replay needs is lost.
+ */
+export const FORWARD_STRIP_HEADERS: ReadonlySet<string> = new Set([
+  "host", "connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "trailer",
+  "content-length", "x-mc-admin", "x-mc-host", "x-mc-session", "x-mc-remote", "x-mc-forwarded", "authorization", "cookie",
+  "cf-access-client-id", "cf-access-client-secret", "cf-access-jwt-assertion",
+]);
+
 // ───────────────────────────── control frames ─────────────────────────────
 
 export type CliInfo = {
