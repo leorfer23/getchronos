@@ -306,7 +306,7 @@ export class HostLink extends EventEmitter {
   private onWelcome(f: Extract<BrainToHost, { t: "welcome" }>): void {
     this.attempt = 0;
     if (typeof f.name === "string" && f.name.trim()) this.brainName = f.name.trim().slice(0, 64);
-    // Protocol 1.5: the brain's failover grace (null/absent = it does not move terminals).
+    // Protocol 1.6: the brain's failover grace (null/absent = it does not move terminals).
     this.graceMs = typeof f.failover_grace_ms === "number" && Number.isFinite(f.failover_grace_ms) && f.failover_grace_ms >= 0 ? f.failover_grace_ms : null;
     this.lastContact = Date.now();
     this.rejected = null;
@@ -323,10 +323,23 @@ export class HostLink extends EventEmitter {
       this.send({ t: "ping", n: ++this.pingN });
     }, pingMs);
     this.pingTimer.unref?.();
-    const pushVitals = () => void this.o.vitals().then((v) => this.send({ t: "vitals", ...v })).catch(() => {});
+    const pushVitals = () => void this.o.vitals().then((v) => { this.vitalsError = null; this.send({ t: "vitals", ...v }); }).catch((e) => this.onVitalsError(e));
     pushVitals();
     this.vitalsTimer = setInterval(pushVitals, this.o.vitalsMs ?? 5000);
     this.vitalsTimer.unref?.();
+  }
+
+  /**
+   * A vitals sample failed. Without vitals the brain's placement can only say "no recent vitals", so
+   * say why — here and to the brain (an `error` frame it logs) — once per distinct error, not every 5s.
+   */
+  private vitalsError: string | null = null;
+  private onVitalsError(e: unknown): void {
+    const msg = String((e as Error)?.message ?? e).slice(0, 300);
+    if (msg === this.vitalsError) return;
+    this.vitalsError = msg;
+    console.warn(`[host] vitals failed: ${msg}`);
+    this.send({ t: "error", code: "vitals", message: msg });
   }
 
   private async onRpc(f: Extract<BrainToHost, { t: "rpc" }>): Promise<void> {

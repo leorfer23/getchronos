@@ -124,7 +124,7 @@ export function routeProfileForHost(
   pinned: string,
   pinnedName: string,
   workspaceId: string | null | undefined,
-  hostProfiles: ReadonlyArray<{ name: string; exists: boolean }>,
+  hostProfiles: ReadonlyArray<{ name: string; exists: boolean; auth?: "yes" | "no" | "unknown" }>,
   now = Date.now(),
   deps: Omit<RouteDeps, "exists"> & { profiles?: Record<string, string> } = {},
 ): HostRouted {
@@ -132,7 +132,8 @@ export function routeProfileForHost(
   const nameOf = (dir: string) => profileNameFor(dir, profiles, "");
   const onHost = (dir: string) => {
     const n = nameOf(dir);
-    return !!n && hostProfiles.some((p) => p.name === n && p.exists);
+    // A sibling the host reports as logged out is not one to switch to (protocol 1.5 `auth`).
+    return !!n && hostProfiles.some((p) => p.name === n && p.exists && p.auth !== "no");
   };
   const routed = routeConfigDir(pinned, workspaceId, now, { ...deps, exists: onHost });
   if (routed.reason) return { ...routed, profile: nameOf(routed.dir), note: null };

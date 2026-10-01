@@ -39,6 +39,7 @@ import { locateTranscript, transcriptIsJsonl, type FocusCtx } from "../focus.js"
 import type { AgentBackend } from "../backends/types.js";
 import { ensureRoot, hostBaseEnv, hostSelfEnv, isDir, mainCheckouts, remoteKey, resolveRepos, safeRef, signalName, vetoReason, type HostSelf } from "./resolve.js";
 import { egressForSpawn, type HostEgress } from "./egress.js";
+import { ensureLandingDir } from "./landing.js";
 import type { WorkSource } from "./status.js";
 import { signalGroup } from "./fence.js";
 import { salvageWorktree, type SalvageResult } from "./salvage.js";
@@ -88,6 +89,8 @@ export type HostTerminalsOptions = {
   egress?: HostEgress;
   /** Where a channel's ring puts output it must evict before the brain acked it (spill.ts). Absent = lost, reported as a gap. */
   spill?: (ch: number) => RingSpill;
+  /** Where repo-less terminals' landing dirs are built (landing.ts). Default `<home>/.chronos-landing`. */
+  landingRoot?: string;
   /** Who this host is — stamped on every agent as MC_HOST_ID / MC_HOST_NAME (read per spawn: the name can arrive late). */
   self?: () => HostSelf;
 };
@@ -115,12 +118,32 @@ type Chan = {
 };
 
 
+/**
+ * How long a terminal may run without its CLI transcript appearing before the host says so. Until it
+ * appears nothing reaches the brain's mirror, and a failover then reopens the terminal with a brief
+ * instead of resuming the conversation — worth one line in the host log, never a silent fallback.
+ */
+const TRANSCRIPT_MISSING_WARN_MS = 2 * 60_000;
+
 /** Incremental tail of one CLI transcript: whole lines only, by byte offset. */
-class TranscriptTail {
+export class TranscriptTail {
   file: string | null = null;
   offset = 0;
   private timer: NodeJS.Timeout | null = null;
-  constructor(private readonly ctx: FocusCtx, private readonly emit: (delta: string, offset: number, reset: boolean) => boolean) {}
+  private readonly startedAt = Date.now();
+  private warned = new Set<string>();
+  constructor(
+    private readonly ctx: FocusCtx,
+    private readonly emit: (delta: string, offset: number, reset: boolean) => boolean,
+    private readonly log: (line: string) => void = (l) => console.warn(l),
+    private readonly missingWarnMs = TRANSCRIPT_MISSING_WARN_MS,
+  ) {}
+  /** Once per distinct reason per terminal: the poll runs every 700ms. */
+  private warnOnce(key: string, line: string): void {
+    if (this.warned.has(key)) return;
+    this.warned.add(key);
+    this.log(`[host] transcript ${this.ctx.sessionId.slice(0, 8)} (${this.ctx.backend}): ${line}`);
+  }
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => this.poll(), TRANSCRIPT_MS);
@@ -133,8 +156,16 @@ class TranscriptTail {
   /** Read what was appended and send it. Returns false when the send failed (offset not advanced). */
   poll(): void {
     let file: string | null = null;
-    try { file = locateTranscript(this.ctx); } catch {}
-    if (!file) return;
+    try {
+      file = locateTranscript(this.ctx);
+    } catch (e: any) {
+      this.warnOnce(`err:${e?.message ?? e}`, `could not look for it — ${e?.message ?? e}`);
+    }
+    if (!file) {
+      if (Date.now() - this.startedAt >= this.missingWarnMs)
+        this.warnOnce("missing", `none found under ${this.ctx.configDir ?? "its profile"} for ${this.ctx.cwd} — the brain's mirror stays empty, so a failover would reopen it with a brief instead of resuming`);
+      return;
+    }
     let reset = false;
     if (file !== this.file) {
       reset = this.file !== null; // a different file than the one we were streaming
@@ -173,9 +204,11 @@ export class HostTerminals {
   private nextCh = (crypto.randomBytes(4).readUInt32BE(0) % 0x3fffffff) + 1;
   private link: TerminalsLink | null = null;
   readonly home: string;
+  private readonly landingRoot: string;
 
   constructor(private readonly o: HostTerminalsOptions) {
     this.home = o.home ?? os.homedir();
+    this.landingRoot = o.landingRoot ?? path.join(this.home, ".chronos-landing");
     ensurePtyHelper();
   }
 
@@ -284,6 +317,9 @@ export class HostTerminals {
     if (spec.resume_cwd && isDir(spec.resume_cwd)) cwd = spec.resume_cwd;
     else if (repoPath && spec.worktree && safeRef(spec.worktree.branch) && safeRef(spec.worktree.base)) cwd = (await ensureBranchWorktree(repoPath, spec.worktree.base, spec.worktree.branch)) ?? repoPath;
     else if (repoPath) cwd = repoPath;
+    // No repo: the workspace's landing dir, built here from this host's own checkouts (landing.ts) —
+    // the brain's `default_dir` is a path on the brain. One checkout here = land in it, as the brain does.
+    else if (spec.cwd_hint === "landing" && spec.workspace && wsRepoPaths.length > 1) cwd = ensureLandingDir(this.landingRoot, spec.workspace.slug, wsRepoPaths) ?? wsRepoPaths[0];
     else if (wsRepoPaths[0]) cwd = wsRepoPaths[0];
 
     // Every workspace repo + its worktree root (a strict profile must allow a later `mc worktree`),

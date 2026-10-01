@@ -38,14 +38,14 @@ test("hostsLine: load and live per computer, offline for how long, and what is w
     view({ name: "m5", connected: false, status: "offline", last_seen_at: new Date(NOW - 12 * 60_000).toISOString(), live_sessions: 2, vitals: { history: [], load_per_core: null, pressure: null, swap_pct: null, ram: null } }),
     view({
       name: "atlas", status: "draining", admission: { ok: false, reason: "load 3.1/core" },
-      checklist: { clis: [{ name: "claude", ok: false, version: null, auth: "no" }], profiles: [], workspaces: [], veto: [], reported_at: null },
+      checklist: { clis: [{ name: "claude", ok: false, version: null, auth: "no" }], profiles: [{ name: "claude-acme", ok: false, auth: "no" }, { name: "claude", ok: true, auth: "unknown" }], gh: [], workspaces: [], veto: [], reported_at: null },
       update: { available: true, supported: true, target: { version: "1.0.0", commit: "b".repeat(40) }, manual: null, status: null },
     }),
   ], NOW);
   assert.equal(
     line,
     "HOSTS: local (brain) cpu 25% ram 62% 3 live · m2 cpu 45% ram 50% 1 live · m5 OFFLINE 12m 2 live · " +
-      "atlas cpu 25% ram 62% 0 live, draining, full (load 3.1/core), claude logged out, behind brain (update)",
+      "atlas cpu 25% ram 62% 0 live, draining, full (load 3.1/core), claude logged out, profile claude-acme logged out, behind brain (update)",
   );
 });
 

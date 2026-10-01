@@ -4,6 +4,8 @@ import { SeqTracker, type BrainToHost, type DataFrame, type ExecResult, type Exe
 import { isSpawnSpec, type SpawnSpec } from "./spawn-spec.js";
 import { isProcSpec, type OneshotResult, type OneshotSpec, type ProcSpec, type WorktreeEnsureArgs } from "./proc-spec.js";
 import { mirrorSize, writeTranscript } from "./transcript-mirror.js";
+import type { HostWorktree, WorktreeListArgs, WorktreeRemoveArgs } from "../hostd/worktrees.js";
+import type { RemoveWorktreeResult } from "../worktree-core.js";
 import type { Disposable, HeavySlotPool, Host, HostVitals, LiveInfo, ProcHandle, ProcSpawn, PtyHandle, PtySpawn } from "./types.js";
 
 // A computer the brain drives over a host link (HOSTS.md phase 3). Everything the daemon does to a
@@ -304,6 +306,14 @@ export class RemoteHost implements Host {
     this.offlineSince = null;
   }
 
+  /** Protocol 1.5: the host's inventory changed since its hello — what placement reads from now on. */
+  setInventory(inv: { clis?: Hello["capabilities"]["clis"]; profiles?: Hello["profiles"]; checkouts?: Hello["checkouts"] }): void {
+    if (!this.hello) return;
+    if (Array.isArray(inv.clis)) this.hello = { ...this.hello, capabilities: { ...this.hello.capabilities, clis: inv.clis } };
+    if (Array.isArray(inv.profiles)) this.hello = { ...this.hello, profiles: inv.profiles };
+    if (Array.isArray(inv.checkouts)) this.hello = { ...this.hello, checkouts: inv.checkouts };
+  }
+
   setOffline(): void {
     this.onlineSince = null;
     this.offlineSince = Date.now();
@@ -446,7 +456,7 @@ export class RemoteHost implements Host {
   }
 
   /**
-   * Protocol 1.5: a terminal moved off this host while it was away — push what only its worktree has
+   * Protocol 1.6: a terminal moved off this host while it was away — push what only its worktree has
    * to `wip/<id8>`, then stop it (hostd/terminals.ts salvage). A push can take a while; an older host
    * answers "unknown op".
    */
@@ -457,6 +467,22 @@ export class RemoteHost implements Host {
   /** `mc worktree` for a terminal on this host: created under the host's own checkout of the repo. */
   async claimWorktree(args: { session_id: string; git_remote: string; branch: string; base: string }): Promise<{ path: string }> {
     return (await this.link.request(this.id, "worktree", args, 90_000)) as { path: string };
+  }
+
+  /**
+   * The host's Chronos worktrees of these repos, with what each holds (`mc worktree list`). Throws
+   * `unknown op worktree_list` on a host that predates it — callers treat that as "none to show".
+   */
+  async listWorktrees(args: WorktreeListArgs): Promise<HostWorktree[]> {
+    if (!this.online) throw new Error(`host ${this.hello?.name ?? this.id} is offline`);
+    const r = await this.link.request(this.id, "worktree_list", args, 120_000);
+    return Array.isArray(r) ? (r as HostWorktree[]) : [];
+  }
+
+  /** Remove one of the host's worktrees under the same rules as one on the brain (hostd/worktrees.ts). */
+  async removeWorktree(args: WorktreeRemoveArgs): Promise<RemoveWorktreeResult> {
+    if (!this.online) throw new Error(`host ${this.hello?.name ?? this.id} is offline`);
+    return (await this.link.request(this.id, "worktree_remove", args, 90_000)) as RemoveWorktreeResult;
   }
 
   /** A headless run (phase 5): the host resolves everything from the ProcSpec and answers where it ran. */

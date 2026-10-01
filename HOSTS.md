@@ -147,10 +147,51 @@ owner:
   on the brain breaks. Hosts report their checkouts by scanning their landing dirs and matching
   `git remote get-url origin` to `repos.git_remote` (today's `repo-scan.ts`, run on the host).
 - **Profiles by name.** Workspaces keep `config_dir` for `local`. Each host reports a registry of
-  `profile name → dir` (the same `~/.claude-*` discovery as `config.ts:108`, run on the host). The
-  spec carries the name.
+  `profile name → dir` (the same `~/.claude-*` discovery as `config.ts:108`, run on the host, and run
+  again on every hello and inventory look — see *Inventory stays true*), each with `auth`: whether it
+  is logged in. The spec carries the name.
 - **`sessions.host_id`** (default `local`). `sessions.cwd`, `worktree_path` and `pid` are
   interpreted on that host. `runs.host_id` does the same for headless runs.
+
+### Inventory stays true
+
+`hello` carries a host's inventory once per connection; a link that stays up for a week would keep
+reporting the day it connected. So (protocol 1.5) the host looks again — profiles re-discovered,
+logins probed, roots re-scanned, CLIs re-checked (`src/hostd/inventory-push.ts`):
+
+- **every 10 minutes**, and ~2s after a `~/.claude-*` directory or a top-level entry under a
+  `CHRONOS_HOST_ROOTS` root changes (`fs.watch`, non-recursive; a new profile directory is looked at
+  again 2 minutes later, because the login finishes after the `mkdir`), and when the brain's policy
+  names new GH_CONFIG_DIRs;
+- and pushes an `inventory` frame **only when something differs** from what the brain last heard
+  (only to a brain whose welcome says 1.5+).
+
+The brain stores it like a hello (live hello for placement, `capabilities_json` + `repo_checkouts`)
+and, when anything changed, publishes **`host.inventory`** `{host_id, name, reason, changes[]}` —
+short phrases like `profile claude-acme logged in`, `checked out web`, `gh ~/.config/gh-acme not
+logged in`. The Desk repaints on it; anything that wants to wake on "a computer can now do X" can
+listen for it.
+
+- **Profile login (`auth: yes|no|unknown`).** claude keeps a profile's login in the keychain item
+  `Claude Code-credentials-<first 8 hex of sha256(dir)>` (the default `~/.claude` also checks the
+  unsuffixed item), or in a credentials file in the dir. The host checks the item's **existence**
+  with `security find-generic-password -s <name>` — never `-w`/`-g`, the secret is never read. A
+  process whose keychain search list has no login keychain (an SSH session; launchd outside the
+  login session) answers `unknown`, never `no`. Placement refuses a claude-code terminal on a
+  profile reported `no` ("profile X not logged in there") unless the workspace env carries
+  `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`; `unknown` is allowed. Profile routing on a host
+  skips a sibling reported `no`.
+- **gh login.** The brain's `policy` frame carries `gh_dirs`: each distinct `GH_CONFIG_DIR` the
+  workspaces allowed there carry in their env (`~/…`). The host runs `gh auth status` (10s timeout)
+  for each, plus gh's default, and reports `gh[] {dir, workspaces, auth, account}`. Shown in the
+  Desk's Tools row and in `doctor`; **never** a placement veto.
+- **Refresh.** `POST /api/hosts/:id/refresh` (admin; Desk → Computers → *Refresh*) re-sends the
+  policy, then asks the host's `inventory` rpc for a fresh look and applies it; the answer lists what
+  changed. For `local` it re-discovers the brain's own profiles. A 1.4 host answers the same rpc
+  (without logins or gh), so Refresh works on it too.
+- **Vitals failures are said.** A host whose vitals sample throws logs `[host] vitals failed: …` once
+  per distinct error and sends it to the brain (`[hostlink] <id> reported vitals: …`), so "no recent
+  vitals" in a placement refusal has a cause to find.
 
 ### Transport
 
@@ -180,9 +221,10 @@ host → brain   hello{host_id, version, platform, capabilities, profiles, check
                data{ch, seq, bytes}   exit{ch, code, signal}   transcript{ch, delta}
                api{req_id, session_id, method, path, headers, body}         ← mc forwarder
                rpc_result{id, ok, value|error}
+               inventory{reason, clis, profiles, checkouts, gh}           ← 1.5, on change
 brain → host   spawn_pty{id, spec}  spawn_proc{id, spec}  write{ch, bytes}  resize{ch, cols, rows}
                kill{ch, signal}  rpc{id, op, args}  api_result{req_id, status, body}
-               policy{deny[], reserve}  ack{ch, seq}
+               policy{deny[], reserve, gh_dirs[]}  ack{ch, seq}
                update{id, target{version, commit}}                             ← phase 6
 host → brain   update_status{id, state: running|restarting|failed|current, step?, error?}
 both           ping/pong (15s; 2 missed = link down, NOT process dead)
@@ -213,6 +255,19 @@ Both problems have the same fix:
 - The per-workspace **egress proxy** (`egress.ts`) runs on the host, next to the agent, with the
   policy the brain sends. *(Phase 5: without credential brokering — a workspace whose egress
   intercepts TLS to inject a secret stays on the brain, so no CA exists on a host; see phase 5.)*
+
+**`mc` commands that name a path.** A path an agent on a host types is a path on THAT disk, so every
+command that carries one either goes to the host or carries the content instead:
+
+| Command | On a host |
+|---|---|
+| `mc worktree list` | the brain asks every online host about the caller's workspace repos (rpc `worktree_list`, by git remote, each with its default branch); rows carry `host_id` and the host's `repo_path`. An offline host's trees are not listed until it reconnects; a host from before the op lists none. |
+| `mc worktree rm` | routed by the tree's host (`removeWorktreeAs` prefers the caller's own computer when a path or branch exists on two). The brain checks who may (owner / Lead / Robert) and its own sessions on that host for busy; the host (rpc `worktree_remove`, `src/hostd/worktrees.ts`) checks what may: a `.chronos-worktrees` tree that git lists for its checkout of that repo, never the checkout itself, never one a terminal or run there is in, never uncommitted edits or unpushed commits without `--force` — the same `removeWorktreeAt` (`worktree-core.ts`) the brain runs on its own trees. The terminal's host offline → 409 saying so. |
+| end of a ticket terminal | the brain's clean-only cleanup runs on the host (`worktree_remove` with `mode: "cleanup"`); host offline → left there. |
+| worktree reaper | `reapDoneWorktrees` also asks each online host, on the monitor's sweep and 60 s after a host's hello: the same rule as the brain's own (an `mc/<key>` branch of a finished ticket, clean, nothing working in it). That is also how a tree left by a terminal that ended while its host was away goes. |
+| `mc pdf <file>` | sends the file's bytes (`{b64}`, ≤ 11 MB, inside the 16 MB JSON limit) — always when `MC_HOST_ID` names a host, else when the brain answers *not found* for the path. Bytes are read by the caller, so no path scope applies. |
+| `mc job new` | the job is pinned to the forwarding host (`jobs.host_id`; its cwd stays the host's path) when the cwd is one of the workspace's checkouts that host reported, a folder in one, or a worktree under one (`src/hosts/job-cwd.ts`); otherwise refused with the checkouts it does have. Never the old silent fallback to the brain's `$HOME`. |
+| `mc ticket get` | the ticket's markdown lives on the brain, so a remote terminal's seed says `mc ticket get <key>` instead of a path; the brain's tickets dir is not granted on a host. |
 
 ### Agents know where they are
 
@@ -304,7 +359,7 @@ What survives what:
 The brain cannot tell a host that is gone from one it merely cannot reach, so failover alone could
 leave the original running beside its stand-in. The host fences itself (`src/hostd/fence.ts`):
 
-- Every `welcome` carries the brain's grace (`failover_grace_ms`, protocol 1.5; null when
+- Every `welcome` carries the brain's grace (`failover_grace_ms`, protocol 1.6; null when
   `CHRONOS_HOST_FAILOVER=off`). A host that has heard nothing from the brain for the grace **less a
   margin** (a quarter of it, at most 2 minutes: 18 of 20 minutes) freezes every terminal and run it
   holds — `SIGSTOP` to the terminal's process group (the CLI and the commands it runs), never a kill.
@@ -370,7 +425,7 @@ a call, and changes to them are the operator's (`agents/_blocks/hosts.md`, in bo
 
 - **What he sees.** With more than one computer, his turn opens with a `HOSTS:` line ahead of FLEET
   NOW (`src/fleet-line.ts`, from `hostsView()`): per computer cpu/ram, live terminals, and what is
-  wrong — `m5 OFFLINE 12m`, `draining`, `full (…)`, `claude logged out`, `behind brain (update)`. A
+  wrong — `m5 OFFLINE 12m`, `draining`, `full (…)`, `claude logged out`, `profile claude-acme logged out`, `behind brain (update)`. A
   terminal on a host ends its FLEET NOW row with ` · @m2`, plus ` · ⚠ m2 offline` while that link is
   down. A brain with no joined host builds none of it (one SELECT) and reads exactly as before.
 - **`mc hosts`.** `mc hosts` lists the computers (status, load, live, commit/behind, notes), `mc hosts
@@ -385,7 +440,9 @@ a call, and changes to them are the operator's (`agents/_blocks/hosts.md`, in bo
   wakes, all-workspaces scope): a host offline past the failover grace + 2 min *with terminals on it*
   (an idle laptop closing is not news); terminals host failover could not move (`session.host_failover`
   mode `stuck`, batched per host); a `host.policy_violation`; a CLI that an allowed workspace's default
-  backend needs reported logged out; a connected host behind the brain for
+  backend needs reported logged out, or a claude profile those workspaces are pinned to reported
+  logged out (protocol 1.5 `auth`; a `host.inventory` change triggers a sweep within seconds); a
+  connected host behind the brain for
   `CHRONOS_ROBERT_HOST_BEHIND_H` hours (default 24). Once per host per state (the offline episode, the
   policy, the brain commit, the CLI and day). Off with ⚙ Settings → Robert → *Wake on computer
   trouble* (`robert.hosts`, `CHRONOS_ROBERT_HOST_WAKES=0`) or the master `robert.enabled`; every new
@@ -489,9 +546,11 @@ On the new Mac (the Desk's **+ Add** shows the same list):
    connect…* turns into ✓.
 3. The computer's page in **Computers** shows what it reported: its version, CLIs, which clients may
    run there (toggle to keep one off it — that writes the brain policy; a client the Mac vetoes itself
-   is shown locked), each client's profile logged in or not, and each repo cloned or not. Fix anything
-   ✗ on that Mac (`claude` login per profile, `gh auth login`, `git clone` under
-   `CHRONOS_HOST_ROOTS`). `npm run host -- doctor` there prints the same checklist, preflight first.
+   is shown locked), each client's profile logged in or not, each repo cloned or not, and each gh
+   login its clients use. Fix anything ✗ on that Mac (`claude` login per profile, `gh auth login`,
+   `git clone` under `CHRONOS_HOST_ROOTS`), then **Refresh** — or wait: the host notices within
+   minutes (*Inventory stays true*). `npm run host -- doctor` there prints the same checklist,
+   preflight first.
 
 The LaunchAgent runs `bin/getchronos.mjs host run` with **the node that ran `npm ci`**
 (`process.execPath` at join, #50) — never whatever a login shell finds — addressed by Homebrew's
@@ -657,6 +716,9 @@ of them.
 | The host stopped starting after `brew upgrade` | The plist named a `Cellar/<version>` node that `brew cleanup` deleted | Re-run the join line (plists now use `opt/<formula>`); a Desk update rewrites the plist too |
 | `menubar install` says `swiftc not found` | No Xcode command-line tools (the `/usr/bin/swiftc` shim does not count) | `xcode-select --install`, then install again |
 | The menu bar item shows `–` | The host process is not running, or answers on a port the item does not try | `npm run host -- status`; a pinned `CHRONOS_HOST_MC_PORT` in `.secrets` is read by both |
+| Placement says `profile X not logged in there` | The profile directory exists but its keychain login does not | `CLAUDE_CONFIG_DIR=~/.X claude` on that Mac, log in, then Desk → Computers → **Refresh** |
+| A profile logged in since the host started is not offered | Before 1.5 profiles were discovered once per process | Handled: re-discovered on every look; Refresh to see it now |
+| Placement says `no recent vitals from X` | The host's vitals sampler throws | `host.err.log` there (and the brain's log) has `vitals failed: <why>`, once per distinct error |
 | Terminals fail with `posix_spawnp failed` | node-pty's `spawn-helper` lost its exec bit (npm ships it 644) | Handled by the postinstall, also when installed from npm; the preflight prints the `chmod +x` line |
 
 Host-side logs: `~/.chronos-host/host.out.log` and `host.err.log`. Onboarding and updates add
@@ -835,8 +897,11 @@ it was.
      workspaces' registered repos; a host cannot tell whose an unregistered clone is, and is never
      told another client's repos). Keystrokes typed while a host is offline are dropped, not queued.
      A failover stand-in opens on the walled terminal's host. The workspace's `default_dir` landing
-     dir is a brain path, so a repo-less remote terminal lands in the first workspace checkout on the
-     host, else its home. The spawn frame carries `resume_cwd` only for a directory the host itself
+     dir is a brain path, so a repo-less remote terminal (`cwd_hint: "landing"`) lands in a landing
+     dir the host builds from its own checkouts of the workspace's repos — `~/.chronos-landing/<slug>`,
+     one symlink per checkout, only symlinks ever added or pruned (`src/hostd/landing.ts`) — in the one
+     checkout when there is only one, else its home. A CLI transcript that never appears is logged
+     once on the host (the brain's mirror stays empty, so a failover would brief instead of resume). The spawn frame carries `resume_cwd` only for a directory the host itself
      reported for that row (or the terminal it stands in for).
 4. **Placement and governor.** `place()` with policy, veto, capabilities and headroom; per-host
    admission and heavy slots; brain reserve; drain; refusal reasons across hosts.
@@ -846,7 +911,8 @@ it was.
        nor by the host's reported veto — a pin or sticky row refused for policy is a 403 and a
        `host.policy_violation`; not a cloud backend; not egress-locked; macOS with sandbox-exec when
        sandboxed; the backend's CLI on the host's PATH; the workspace's profile NAME reported, and
-       logged-in (`exists`) for claude-code; the repo in `repo_checkouts` for that host, or the host
+       its dir there (`exists`) for claude-code — and, since protocol 1.5, not reported logged out
+       (`auth: "no"`; see *Inventory stays true*); the repo in `repo_checkouts` for that host, or the host
        reports `auto_clone`; a repo with no git remote cannot go to a host). Then sticky → pinned →
        most headroom → nobody has room, exactly as above. The brain is always eligible: every guard it
        has always had still runs in `openSession`.

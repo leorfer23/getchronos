@@ -185,6 +185,31 @@ test("sweep: a CLI placement needs there is logged out → one wake; logging bac
   assert.equal(sweepHosts(NOW + 25 * HOUR).length, 0, "no transition since — not a new state");
 });
 
+test("sweep: a claude profile the host reports logged out (1.5 auth) → one wake naming it; logging in re-arms it", () => {
+  const prof = (auth: "no" | "yes") => hv({ checklist: {
+    ...hv({}).checklist,
+    profiles: [{ name: "claude-acme", ok: auth === "yes", auth }],
+    workspaces: [{ id: ws.id, slug: ws.slug, name: ws.name, allowed: true, denied_by: null, profile: { name: "claude-acme", ok: auth === "yes" }, repos: [] }],
+  } });
+  setHostViewProbe(() => [prof("no")]);
+  assert.equal(sweepHosts(NOW).length, 1);
+  const [w] = wakes();
+  assert.equal(w.key, `${HOST_DRIVE_KEY}h_m2:logged_out:profile:claude-acme:2026-10-01`);
+  assert.match(say(w), /Profile claude-acme is NOT LOGGED IN on m2/);
+  assert.match(say(w), /CLAUDE_CONFIG_DIR=~\/\.claude-acme claude/);
+  assert.deepEqual(sweepHosts(NOW + 60_000), [], "still logged out: same state");
+  setHostViewProbe(() => [prof("yes")]);
+  assert.deepEqual(sweepHosts(NOW + 2 * 60_000), []);
+  setHostViewProbe(() => [prof("no")]);
+  assert.equal(sweepHosts(NOW + 25 * HOUR).length, 1, "logged out again on another day: a new wake");
+  // A workspace that runs another CLI does not need the claude login there: not news.
+  db.exec("DELETE FROM robert_wakes");
+  resetHostDriveState();
+  workspaces.update(ws.id, { default_backend: "grok" } as any);
+  setHostViewProbe(() => [prof("no")]);
+  assert.deepEqual(sweepHosts(NOW + 26 * HOUR), []);
+});
+
 test("sweep: a host already offline with work when the brain came up gets the offline wake", () => {
   setHostViewProbe(() => [hv({ connected: false, status: "offline", live_sessions: 2, last_seen_at: new Date(NOW - HOUR).toISOString() })]);
   onM2("still there");

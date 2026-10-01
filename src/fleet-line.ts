@@ -41,6 +41,7 @@ export function hostsLine(view: HostView[], now = Date.now()): string {
       h.status === "draining" || h.status === "disabled" ? h.status : "",
       h.admission.ok ? "" : `full (${h.admission.reason})`,
       ...h.checklist.clis.filter((c) => c.auth === "no").map((c) => `${c.name} logged out`),
+      ...(h.checklist.profiles ?? []).filter((p) => p.auth === "no").map((p) => `profile ${p.name} logged out`),
       h.update?.status?.state === "failed" ? "update failed" : h.update?.available ? "behind brain (update)" : "",
     ].filter(Boolean);
     return `${h.name}${h.is_brain ? " (brain)" : ""} cpu ${pct(last?.cpu)} ram ${pct(last?.ram)} ${h.live_sessions} live` + (notes.length ? `, ${notes.join(", ")}` : "");

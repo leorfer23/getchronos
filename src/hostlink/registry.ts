@@ -5,6 +5,8 @@
  *  - **join** inserts the row: operator's name, the token's hash, the cert fingerprint it pinned.
  *  - **hello** refreshes what the host reported (capabilities, profiles, checkouts, veto, version)
  *    and marks it online; its checkouts become `repo_checkouts` rows matched by git remote.
+ *  - **inventory** (protocol 1.5) refreshes the parts that drift — CLIs, profiles and their logins,
+ *    checkouts, gh logins — between hellos, when the host pushes them or the Desk asks.
  *  - **link down** marks it offline. **Revoke** disables it and forgets the token hash.
  *
  * `status` carries two things at once, so the transitions are deliberate: `draining` and `disabled`
@@ -14,7 +16,7 @@
 import fs from "node:fs";
 import { hosts, repoCheckouts, repos, LOCAL_HOST_ID } from "../store.js";
 import type { HostRow } from "../types.js";
-import type { CheckoutInfo, CliInfo, Hello, HostInstall, ProfileInfo } from "./wire.js";
+import type { CheckoutInfo, CliInfo, GhAuthInfo, Hello, HostInstall, Inventory, ProfileInfo } from "./wire.js";
 import { tokenMatches, type HostRecord } from "./join.js";
 
 export type HostStatus = HostRow["status"];
@@ -33,6 +35,8 @@ export type HostCapabilities = {
   clis: CliInfo[];
   profiles: ProfileInfo[];
   checkouts: CheckoutInfo[];
+  /** Protocol 1.5: `gh auth status` per GH_CONFIG_DIR its workspaces use there. Absent = not reported yet. */
+  gh?: GhAuthInfo[];
   /** The host's own veto (CHRONOS_HOST_DENY), as reported. The host enforces it; the brain shows it. */
   veto: string[];
   reported_at: string;
@@ -121,6 +125,9 @@ export class HostRegistry {
       ...(typeof h.commit === "string" && /^[0-9a-f]{7,40}$/.test(h.commit) ? { commit: h.commit } : {}),
       ...(h.install === "git" || h.install === "npm" || h.install === "dev" ? { install: h.install } : {}),
     };
+    // gh is not in hello (the host reports it once the brain's policy names the dirs): keep the last.
+    const prevGh = parseCapabilities(row.capabilities_json)?.gh;
+    if (prevGh) caps.gh = prevGh;
     this.seenWritten.set(hostId, at);
     const updated = hosts.update(hostId, {
       platform: caps.platform || row.platform,
@@ -131,6 +138,27 @@ export class HostRegistry {
     });
     this.syncCheckouts(hostId, caps.checkouts);
     return updated;
+  }
+
+  /**
+   * A fresh inventory (pushed by the host, or fetched by Refresh): replace the parts that drift and
+   * re-match its checkouts. Returns what was stored before and after, for the caller's diff.
+   */
+  inventory(hostId: string, inv: Partial<Inventory>, at = Date.now()): { before: HostCapabilities | null; after: HostCapabilities } | undefined {
+    const row = hosts.get(hostId);
+    if (!row || hostId === LOCAL_HOST_ID) return undefined;
+    const before = parseCapabilities(row.capabilities_json);
+    const after: HostCapabilities = {
+      ...(before ?? { version: "", proto: "", platform: row.platform ?? "", arch: "", hostname: "", node: "", sandbox: false, clis: [], profiles: [], checkouts: [], veto: [] }),
+      ...(Array.isArray(inv.clis) ? { clis: inv.clis } : {}),
+      ...(Array.isArray(inv.profiles) ? { profiles: inv.profiles } : {}),
+      ...(Array.isArray(inv.checkouts) ? { checkouts: inv.checkouts } : {}),
+      ...(Array.isArray(inv.gh) ? { gh: inv.gh } : {}),
+      reported_at: iso(at),
+    };
+    hosts.update(hostId, { capabilities_json: JSON.stringify(after) });
+    if (Array.isArray(inv.checkouts)) this.syncCheckouts(hostId, after.checkouts);
+    return { before, after };
   }
 
   /** Frames arrived: keep last_seen_at roughly current without a write per vitals frame. */

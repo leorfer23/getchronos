@@ -139,7 +139,10 @@ export function updateVerdict(brain: UpdateTarget, host: { version: string | nul
 
 export type Checklist = {
   clis: Array<{ name: string; ok: boolean; version: string | null; auth?: "yes" | "no" | "unknown" }>;
-  profiles: Array<{ name: string; ok: boolean }>;
+  /** ok = the directory is there and the host does not say it is logged out (`auth`, protocol 1.5). */
+  profiles: Array<{ name: string; ok: boolean; auth?: "yes" | "no" | "unknown" }>;
+  /** Protocol 1.5: `gh auth status` per GH_CONFIG_DIR its workspaces use there. Shown, never a placement veto. */
+  gh: Array<{ dir: string; workspaces: string[]; auth: "yes" | "no" | "unknown"; account: string | null }>;
   /** Every workspace: may it run here (brain policy, host veto), and are its repos checked out. */
   workspaces: Array<{
     id: string; slug: string; name: string;
@@ -166,7 +169,7 @@ export function remoteAdmission(v: HostVitals | null, cfg = CONFIG.machine): Adm
 export const profileNameOf = (configDir: string | null | undefined): string | null =>
   configDir ? path.basename(configDir).replace(/^\./, "") || null : null;
 
-function localCaps(): Pick<HostCapabilities, "clis" | "profiles" | "veto" | "reported_at"> {
+function localCaps(): Pick<HostCapabilities, "clis" | "profiles" | "veto" | "reported_at" | "gh"> {
   return {
     clis: CLI_NAMES.map((name) => ({ name, path: which(name), version: null })),
     profiles: Object.entries(CONFIG.profiles).map(([name, dir]) => ({ name, dir, exists: fs.existsSync(dir) })),
@@ -175,11 +178,12 @@ function localCaps(): Pick<HostCapabilities, "clis" | "profiles" | "veto" | "rep
   };
 }
 
-export function checklistFor(row: HostRow, caps: Pick<HostCapabilities, "clis" | "profiles" | "veto" | "reported_at"> | null): Checklist {
+export function checklistFor(row: HostRow, caps: Pick<HostCapabilities, "clis" | "profiles" | "veto" | "reported_at" | "gh"> | null): Checklist {
   const policy = parsePolicy(row.policy_json);
   const veto = caps?.veto ?? [];
   const checkouts = new Map(repoCheckouts.forHost(row.id).map((c) => [c.repo_id, c.path]));
   const profiles = caps?.profiles ?? [];
+  const usable = (p: { exists: boolean; auth?: string }) => !!p.exists && p.auth !== "no";
   return {
     // "ok" is "placement may send this CLI's work here": installed AND not reported as logged out.
     clis: (caps?.clis ?? []).map((c) => ({
@@ -187,7 +191,8 @@ export function checklistFor(row: HostRow, caps: Pick<HostCapabilities, "clis" |
       version: c.path && c.auth === "no" ? `${c.version ?? "installed"} · not logged in` : c.version ?? null,
       ...(c.auth ? { auth: c.auth } : {}),
     })),
-    profiles: profiles.map((p) => ({ name: p.name, ok: !!p.exists })),
+    profiles: profiles.map((p) => ({ name: p.name, ok: usable(p), ...(p.auth ? { auth: p.auth } : {}) })),
+    gh: (caps?.gh ?? []).map((g) => ({ dir: g.dir, workspaces: g.workspaces ?? [], auth: g.auth, account: g.account ?? null })),
     workspaces: workspaces.list().map((w) => {
       const byPolicy = policy.deny.includes(w.id) || policy.deny.includes(w.slug);
       const byVeto = veto.includes(w.id) || veto.includes(w.slug);
@@ -196,7 +201,7 @@ export function checklistFor(row: HostRow, caps: Pick<HostCapabilities, "clis" |
         id: w.id, slug: w.slug, name: w.name,
         allowed: !byPolicy && !byVeto,
         denied_by: byVeto ? "veto" as const : byPolicy ? "policy" as const : null,
-        profile: pn ? { name: pn, ok: profiles.some((p) => p.name === pn && p.exists) } : null,
+        profile: pn ? { name: pn, ok: profiles.some((p) => p.name === pn && usable(p)) } : null,
         repos: repos.list(w.id).map((r) => ({ id: r.id, name: r.name, path: checkouts.get(r.id) ?? null })),
       };
     }),
