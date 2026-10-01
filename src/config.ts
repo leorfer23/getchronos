@@ -502,6 +502,9 @@ export const CONFIG = {
     perSessionHour: Math.max(1, Number(process.env.CHRONOS_ROBERT_DRIVE_PER_TERMINAL_HOUR ?? 4)),
     globalHour: Math.max(1, Number(process.env.CHRONOS_ROBERT_DRIVE_PER_HOUR ?? 30)),
     maxAgeHours: Number(process.env.CHRONOS_ROBERT_DRIVE_MAX_AGE_H ?? 12),
+    // Computers (src/robert-host-drive.ts): a host must sit behind the brain this long before Robert
+    // hears about it — a deploy makes every host "behind" for the minutes an update takes.
+    hostBehindHours: Math.max(1, Number(process.env.CHRONOS_ROBERT_HOST_BEHIND_H ?? 24)),
   },
   // A Lead's own wake budget (LEADS.md), deliberately NOT Robert's. A Lead steering six workers
   // legitimately hears from them an order of magnitude more often than Robert hears from the whole

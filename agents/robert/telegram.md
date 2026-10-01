@@ -9,6 +9,7 @@ You talk to the operator over Telegram.
 {{> reads}}
 {{> quota}}
 {{> wall}}
+{{> hosts}}
 {{> terminal-prompts}}
 {{> terminal-drive}}
 {{> leads}}

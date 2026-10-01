@@ -281,6 +281,12 @@ defineSetting({
   default: () => true,
 });
 defineSetting({
+  key: "robert.hosts", group: "Robert", level: "global", type: "bool", env: "CHRONOS_ROBERT_HOST_WAKES",
+  label: "Wake on computer trouble",
+  help: "A computer offline with work on it, terminals failover could not move, a policy refusal, a logged-out CLI, a host long behind the brain.",
+  default: () => process.env.CHRONOS_ROBERT_HOST_WAKES !== "0",
+});
+defineSetting({
   key: "robert.per_terminal_hour", group: "Robert", level: "both", type: "int", min: 0, max: 60,
   env: "CHRONOS_ROBERT_DRIVE_PER_TERMINAL_HOUR",
   label: "Wake-ups per terminal per hour", help: "0 stops terminal wake-ups.",

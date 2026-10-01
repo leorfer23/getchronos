@@ -883,6 +883,16 @@ export function armedWakes(): { session_id: string; kind: DriveKind; key: string
     .sort((a, b) => a.fire_at - b.fire_at);
 }
 
+/**
+ * One wake that is not about a terminal (a computer — src/robert-host-drive.ts) against the same
+ * fleet-wide hourly ceiling (robert.per_hour). True = under it, and now counted.
+ */
+export function chargeFleetWake(nowMs = Date.now()): boolean {
+  if (!underCaps([], global, nowMs, { perSession: 1, global: setting<number>("robert.per_hour") })) return false;
+  global = [...global, nowMs].filter((t) => nowMs - t < HOUR);
+  return true;
+}
+
 export function noteDriveInput(sessionId: string, by: string, atMs = Date.now()): void {
   if (by === "operator") operatorTyped.set(sessionId, atMs);
 }
@@ -912,6 +922,12 @@ export function startRobertDrive(): void {
       console.error("[robert-drive]", err);
     }
   });
+  // Computers going away, work they could not hand over, refusals, logins, updates — the same
+  // queue, caps and on/off switches, keyed per host instead of per terminal. Late import: it reads
+  // chargeFleetWake from this module.
+  void import("./robert-host-drive.js")
+    .then((m) => m.startHostDrive())
+    .catch((err) => console.error("[host-drive]", err));
   // Lead wakes and inbox rows are a keystroke log, not an audit trail: 7 days is far longer than any
   // stop survives, and the only thing older rows could still do is suppress a wake about a terminal
   // nobody remembers.

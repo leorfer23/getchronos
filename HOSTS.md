@@ -289,6 +289,37 @@ leave a runaway gate. `gh` runs where the worktree is, so the host needs `gh` lo
 workspace. The host capability report covers it and placement checks it. Merges by PR URL can stay
 on the brain.
 
+### Robert and the fleet
+
+Robert runs the computers the way he runs the terminals: he can see them, he is woken when one needs
+a call, and changes to them are the operator's (`agents/_blocks/hosts.md`, in both his surfaces).
+
+- **What he sees.** With more than one computer, his turn opens with a `HOSTS:` line ahead of FLEET
+  NOW (`src/fleet-line.ts`, from `hostsView()`): per computer cpu/ram, live terminals, and what is
+  wrong — `m5 OFFLINE 12m`, `draining`, `full (…)`, `claude logged out`, `behind brain (update)`. A
+  terminal on a host ends its FLEET NOW row with ` · @m2`, plus ` · ⚠ m2 offline` while that link is
+  down. A brain with no joined host builds none of it (one SELECT) and reads exactly as before.
+- **`mc hosts`.** `mc hosts` lists the computers (status, load, live, commit/behind, notes), `mc hosts
+  show <name>` prints one in full, `mc hosts drain|resume <name>` and `mc hosts update <name|all>`
+  call the admin routes. Without the admin token (a terminal, a Lead) it reads `GET /api/hosts/brief`
+  instead (`src/hosts/brief.ts`): per computer name, online, headroom, live count, and whether *the
+  caller's own* workspace may run there (`ineligible()`, the verdict placement acts on) — never another
+  workspace's policy, the inventory or a token. A workspace token answers for its own workspace only.
+- **Where a terminal went.** `POST /api/sessions` answers with `placement` (why) and `host_name`, and
+  `mc session new` prints them: `spawned session 1a2b3c4d (claude-code/·) → m2 (most headroom (…))`.
+- **What wakes him** (`src/robert-host-drive.ts`, same durable queue and Desk thread as terminal
+  wakes, all-workspaces scope): a host offline past the failover grace + 2 min *with terminals on it*
+  (an idle laptop closing is not news); terminals host failover could not move (`session.host_failover`
+  mode `stuck`, batched per host); a `host.policy_violation`; a CLI that an allowed workspace's default
+  backend needs reported logged out; a connected host behind the brain for
+  `CHRONOS_ROBERT_HOST_BEHIND_H` hours (default 24). Once per host per state (the offline episode, the
+  policy, the brain commit, the CLI and day). Off with ⚙ Settings → Robert → *Wake on computer
+  trouble* (`robert.hosts`, `CHRONOS_ROBERT_HOST_WAKES=0`) or the master `robert.enabled`; every new
+  host wake counts against `robert.per_hour` with the terminal wakes.
+- **What he may do.** Read anything. Pin a terminal (`--host`) only with a reason; placement is the
+  default. Draining, disabling, revoking, policy and updates are confirm-first (a UI ask on the Desk, a
+  ✅ card on Telegram); he never loosens a policy to make a refusal go away.
+
 ---
 
 ## Security
