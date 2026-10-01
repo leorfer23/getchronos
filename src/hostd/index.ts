@@ -35,6 +35,7 @@ import { REPO_ROOT } from "../repo-root.js";
 import { HostTerminals } from "./terminals.js";
 import { HostProcs } from "./procs.js";
 import { HostEgress } from "./egress.js";
+import { listHostWorktrees, removeHostWorktree, sameDir, type HostWorktreeDeps } from "./worktrees.js";
 import { hostBackends } from "./backends.js";
 import { hostDeny, hostBuild, chronosVersion } from "./inventory.js";
 import { spawn } from "node:child_process";
@@ -168,6 +169,12 @@ async function cmdRun(): Promise<number> {
     watch: { home: os.homedir(), roots: hostRoots() },
     log: (s) => console.warn(s),
   });
+  // `mc worktree list|rm`, the end-of-terminal cleanup and the reaper, for this host's own trees
+  // (worktrees.ts). Busy = a terminal or run here is working in it right now.
+  const worktreeDeps: HostWorktreeDeps = {
+    checkouts: () => scanCheckouts(),
+    busy: (dir, ignore) => [...terminals.work(), ...procs.work()].some((w) => w.id !== ignore && sameDir(w.cwd, dir)),
+  };
   const cf = env("CF_ACCESS_CLIENT_ID") && env("CF_ACCESS_CLIENT_SECRET") ? { id: env("CF_ACCESS_CLIENT_ID"), secret: env("CF_ACCESS_CLIENT_SECRET") } : null;
   const link = new HostLink({
     brains: brains(),
@@ -195,6 +202,8 @@ async function cmdRun(): Promise<number> {
       exec: (a) => procs.exec(a),
       oneshot: (a) => procs.oneshot(a),
       worktree_ensure: (a) => procs.worktreeEnsure(a),
+      worktree_list: (a) => listHostWorktrees(worktreeDeps, a),
+      worktree_remove: (a) => removeHostWorktree(worktreeDeps, a),
     },
   });
   sendInventory = (f) => link.sendControl(f);

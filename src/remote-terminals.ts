@@ -27,8 +27,12 @@ import { RemoteHost, type HostLinkPort } from "./hosts/remote.js";
 import { adoptRemoteSession, isLive, openSession, remoteResumable, resumeOpts } from "./terminal.js";
 import { lastActivityState, reviveSeedFor } from "./revive.js";
 import { reconcileRuns } from "./remote-runs.js";
+import { reapRemoteWorktrees } from "./worktrees.js";
 import type { Session } from "./types.js";
 import type { LiveInfo } from "./hostlink/wire.js";
+
+/** How long after a host's hello its finished-ticket worktrees are reaped (reconcile settles first). */
+const REAP_AFTER_HELLO_MS = 60_000;
 
 export type ReconcileResult = { reattached: string[]; adopted: string[]; lost: string[]; orphans: number[] };
 
@@ -162,6 +166,9 @@ export function startRemoteTerminals(link: BrainLink = brainLink()): () => void 
             console.log(`[hosts] ${info.host_id} runs reconciled — reattached ${r.reattached.length}, adopted ${r.adopted.length}, lost ${r.lost.length}, stopped ${r.orphans.length}`);
         })
         .catch((e) => console.warn(`[hosts] run reconcile ${info.host_id} failed: ${e?.message ?? e}`));
+      // Finished tickets' trees it kept while it was away (worktrees.ts) — after reconcile has settled
+      // which terminals and runs are still in them.
+      setTimeout(() => void reapRemoteWorktrees(h).catch((e) => console.warn(`[hosts] worktree reap ${info.host_id} failed: ${e?.message ?? e}`)), REAP_AFTER_HELLO_MS).unref?.();
     }),
     link.onHostOffline((id, reason) => {
       const h = findHost(id);

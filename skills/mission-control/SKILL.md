@@ -228,6 +228,8 @@ It's a real git worktree sharing the repo's object store — cheap, and idempote
   remote and not already in the base (a squash-merged PR whose branch was deleted counts as landed —
   that is not a reason to stop). `--force` only when that work is truly throwaway. Another terminal's
   tree is Robert's — you are refused on it. If you leave yours, say in your `Summary:` why.
+- **On another computer** (a host chip on your card) all of this works the same: the tree is made,
+  listed and removed on that computer, and `mc worktree list` marks such rows `on <host>`.
 
 ## The operator's clipboard — `mc clip`
 
@@ -256,6 +258,8 @@ mc clip set "text"         # put something ON their clipboard
 - **`mc clip` is the operator's clipboard**, not this Mac's.
 - **Brain-only:** `mc vars set`, `mc repo add`, `mc session attach`, `mc desk`, `mc wall` — ask
   Robert (`mc ask-robert`) instead. `mc repo list` shows this computer's checkouts.
+- **Work here, not there:** `mc worktree` / `mc worktree rm` act on this computer's trees, `mc pdf`
+  sends the file's bytes, and `mc job new` pins the job to this computer (cwd = one of its checkouts).
 - `mc` reaches the brain through a forwarder on this Mac; while the brain is away status writes
   are queued (`mc: queued — …`), everything else fails with a readable error.
 
@@ -414,6 +418,8 @@ mc job update <id|name> [--cwd dir] [--sandbox guard|strict] [--model m] [--cron
 
 `--cwd` must be inside this workspace's repos/worktrees/landing dir (or exactly `$HOME`), and `--sandbox`
 can't go below the workspace floor — either is refused with the reason, never silently swapped.
+From a terminal on another computer the job is pinned to that computer and its cwd must be one of the
+workspace's checkouts there (or a folder / worktree in one) — cd into it first.
 
 Only when the operator asks for recurring or scheduled work.
 

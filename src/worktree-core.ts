@@ -171,3 +171,128 @@ export async function ensureOriginBranchWorktree(repoPath: string, branch: strin
     return null;
   }
 }
+
+/** What a worktree is holding that removing it would destroy. */
+export type WorktreeState = {
+  path: string;
+  branch: string | null;
+  /** Uncommitted edits — the only thing git cannot get back. */
+  dirty: boolean;
+  dirty_files: number;
+  /** Commits on this branch that no remote has. Survive removal (shared object store), but they
+   *  become invisible: nothing but the branch name points at them afterwards. */
+  unpushed: number;
+  /** A terminal is working here right now. */
+  busy: boolean;
+};
+
+/**
+ * Read what a worktree holds, without changing anything — the store-free half of worktrees.ts's
+ * worktreeState, so a host answers the same question about its own trees with the same code. `busy`
+ * is the caller's to know (the brain reads its sessions, a host its own processes).
+ */
+export async function worktreeStateAt(repoPath: string, wtPath: string, defaultBranch: string, busy = false): Promise<WorktreeState> {
+  const out: WorktreeState = { path: wtPath, branch: null, dirty: false, dirty_files: 0, unpushed: 0, busy };
+  try {
+    const status = await git(wtPath, ["status", "--porcelain"]);
+    out.dirty_files = status ? status.split("\n").filter(Boolean).length : 0;
+    out.dirty = out.dirty_files > 0;
+  } catch {
+    // Unreadable tree — treat as dirty so nothing removes what it could not inspect.
+    out.dirty = true;
+  }
+  try {
+    out.branch = (await git(wtPath, ["rev-parse", "--abbrev-ref", "HEAD"])) || null;
+  } catch {}
+  try {
+    // `@{u}` throws when there is no upstream at all — a branch never pushed. Count its commits
+    // against the default base instead, so "never pushed" reads as unpushed rather than as zero.
+    let range: string;
+    try {
+      await git(wtPath, ["rev-parse", "--abbrev-ref", "@{u}"]);
+      range = "@{u}..HEAD";
+    } catch {
+      range = `${await baseRef(repoPath, defaultBranch || "main")}..HEAD`;
+    }
+    const n = Number(await git(wtPath, ["rev-list", "--count", range])) || 0;
+    out.unpushed = n && (await alreadyLanded(repoPath, wtPath, defaultBranch)) ? 0 : n;
+  } catch {}
+  return out;
+}
+
+/**
+ * Commits that "look unpushed" but are not at risk: the normal end of a PR is a squash-merge that
+ * deletes the remote branch, after which `@{u}` is gone and every commit on the branch counts against
+ * the base — and the terminal that did everything right is refused its own cleanup. Two ways out:
+ * the commits are reachable from SOME remote ref (pushed under another name), or the branch's whole
+ * change already sits in the base as one patch (a synthetic squash of HEAD onto the merge-base that
+ * `git cherry` finds upstream). Anything else — including a squash the base has since edited over —
+ * stays unpushed, so a false "no" costs a `--force` decision and never a lost commit.
+ */
+async function alreadyLanded(repoPath: string, wtPath: string, defaultBranch: string): Promise<boolean> {
+  try {
+    if (!(await git(wtPath, ["remote"]))) return false;
+    if (Number(await git(wtPath, ["rev-list", "--count", "HEAD", "--not", "--remotes"])) === 0) return true;
+    const base = await baseRef(repoPath, defaultBranch || "main");
+    if (base === "HEAD") return false;
+    const mb = await git(wtPath, ["merge-base", base, "HEAD"]);
+    const tree = await git(wtPath, ["rev-parse", "HEAD^{tree}"]);
+    const squash = await git(wtPath, ["-c", "user.name=chronos", "-c", "user.email=chronos@localhost", "commit-tree", tree, "-p", mb, "-m", "chronos: squash probe"]);
+    return (await git(wtPath, ["cherry", base, squash])).startsWith("-");
+  } catch {
+    return false;
+  }
+}
+
+export type RemoveWorktreeResult =
+  | { ok: true; removed: string; state: WorktreeState }
+  | { ok: false; error: string; state?: WorktreeState };
+
+/**
+ * The deliberate-removal rules, store-free (worktrees.ts removeWorktree on the brain, hostd/worktrees.ts
+ * on a host): only a Chronos worktree, never the main checkout, never a busy one, and — unless forced —
+ * never one holding uncommitted edits or commits no remote has. `busy` is asked after the cheap checks;
+ * `owner` only words the refusal ("another terminal").
+ */
+export async function removeWorktreeAt(
+  repoPath: string,
+  wtPath: string,
+  opts: { force?: boolean; owner?: boolean; defaultBranch: string; busy: () => boolean },
+): Promise<RemoveWorktreeResult> {
+  if (!repoPath || !wtPath) return { ok: false, error: "need a repo and a worktree path" };
+  if (wtPath === repoPath) return { ok: false, error: "that is the main checkout, not a worktree" };
+  if (!wtPath.includes(".chronos-worktrees")) return { ok: false, error: "not a Chronos worktree — refusing" };
+  if (!fs.existsSync(wtPath)) return { ok: false, error: "no such worktree (already gone?)" };
+  if (!(await isGitRepo(repoPath))) return { ok: false, error: "not a git repo" };
+
+  const state = await worktreeStateAt(repoPath, wtPath, opts.defaultBranch, opts.busy());
+  if (state.busy)
+    return { ok: false, error: `${opts.owner ? "another" : "a"} terminal is working in there right now`, state };
+  if (!opts.force) {
+    if (state.dirty)
+      return { ok: false, error: `${state.dirty_files} uncommitted file(s) — would be lost`, state };
+    if (state.unpushed)
+      return { ok: false, error: `${state.unpushed} commit(s) not on any remote`, state };
+  }
+  try {
+    await git(repoPath, ["worktree", "remove", "--force", wtPath], 30_000);
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e).slice(0, 200), state };
+  }
+  if (fs.existsSync(wtPath)) return { ok: false, error: "git reported success but the path is still there", state };
+  return { ok: true, removed: wtPath, state };
+}
+
+// Remove a worktree once its terminal ends — but ONLY if clean (no uncommitted changes). The branch
+// and its commits live in the shared object store, so removing a clean checkout loses nothing; a
+// dirty one is left untouched so no in-progress work is destroyed. No-op unless the path is one of
+// this repo's worktrees.
+export async function cleanupWorktree(repoPath: string, wtPath: string): Promise<void> {
+  try {
+    if (!repoPath || !wtPath || wtPath === repoPath || !(await isGitRepo(repoPath))) return;
+    if (!wtPath.includes(".chronos-worktrees")) return; // only our own
+    const dirty = (await git(wtPath, ["status", "--porcelain"])) !== "";
+    if (dirty) return;
+    await git(repoPath, ["worktree", "remove", "--force", wtPath]);
+  } catch {}
+}
