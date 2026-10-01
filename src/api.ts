@@ -73,6 +73,7 @@ import { sessionUsage, snapshotUsage } from "./session-usage.js";
 import { applyHook, declare as declareStatus, sessionGoalReached, setProgress, statusOf } from "./term-status.js";
 import { parseEvery, watchView } from "./desk-watch.js";
 import { clipboardEnabled, readClipboard, writeClipboard } from "./clipboard.js";
+import { hostJobPin } from "./hosts/job-cwd.js";
 import { ensureSessionWorktree, listAllWorktrees, remoteWorktreeBranch, removeWorktreeAs, type WorktreeState } from "./worktrees.js";
 import { askRobertEnabled, askerLabel, escalateAsk } from "./ask-robert.js";
 import * as noteSvc from "./notes.js";
@@ -333,7 +334,7 @@ export async function leadCloseDone(
   const closed: string[] = [];
   const skipped: { id8: string; reason: string }[] = [];
   for (const w of workers) {
-    const wt = trees.find((t) => t.path === w.worktree_path || t.path === w.cwd) ?? null;
+    const wt = trees.find((t) => t.host_id === (w.host_id || LOCAL_HOST_ID) && (t.path === w.worktree_path || t.path === w.cwd)) ?? null;
     const why = leadCloseRefusal(w, sessionActivity(w.id), wt);
     if (why) {
       skipped.push({ id8: w.id.slice(0, 8), reason: why });
@@ -2213,6 +2214,18 @@ export function startServer() {
       if (req.body?.workspace_id && req.body.workspace_id !== scope.ws)
         return res.status(403).json({ error: "workspace token does not match requested workspace" });
       req.body = { ...req.body, workspace_id: scope.ws };
+    }
+    // From an agent on another computer its cwd is a path THERE: pin the job to that host, or refuse
+    // with why — never judge it against this disk, never fall back to the brain's $HOME (job-cwd.ts).
+    const fh = forwardedHost(req);
+    if (fh && fh !== LOCAL_HOST_ID && req.body.cwd) {
+      const pin = hostJobPin(fh, req.body.workspace_id, String(req.body.cwd));
+      if (!pin.ok) return res.status(400).json({ error: pin.error });
+      const spawnErr = jobCreateSpawnError({ ...req.body, cwd: undefined, add_dirs: undefined });
+      if (spawnErr) return res.status(400).json({ error: spawnErr });
+      const job = jobs.create({ ...req.body, cwd: pin.cwd, host_id: pin.host_id });
+      reloadSchedules();
+      return res.status(201).json(job);
     }
     const spawnErr = jobCreateSpawnError(req.body);
     if (spawnErr) return res.status(400).json({ error: spawnErr });
@@ -4520,6 +4533,19 @@ export function startServer() {
   api.post("/pdf/text", async (req, res) => {
     const scope = callerScope(req);
     if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    // The file's own bytes (`b64`) — what `mc pdf` sends from an agent on another computer, whose path
+    // means nothing on this disk. Nothing here is read from disk, so no path scope applies: the caller
+    // already holds the bytes.
+    if (typeof req.body?.b64 === "string" && req.body.b64) {
+      const buf = Buffer.from(req.body.b64, "base64");
+      if (!buf.subarray(0, 5).equals(Buffer.from("%PDF-"))) return res.status(400).json({ error: "not a pdf" });
+      try {
+        const text = await pdfText(buf);
+        return res.json({ text, chars: text.length, empty: !text });
+      } catch (e: any) {
+        return res.status(400).json({ error: String(e?.message ?? e) });
+      }
+    }
     const raw = String(req.body?.path || "");
     if (!raw) return res.status(400).json({ error: "path required" });
     let p: string;

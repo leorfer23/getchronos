@@ -676,8 +676,23 @@ async function heavy(argv) {
 
     if (cmd === "pdf") {
       const file = pos[1] || die("usage: mc pdf <file.pdf>");
-      // Extraction runs in the daemon (pdf.js lives there; this script has no node_modules).
-      const out = await req("POST", "/pdf/text", { path: path.resolve(file) });
+      const abs = path.resolve(file);
+      // Extraction runs in the daemon (pdf.js lives there; this script has no node_modules). On another
+      // computer the path means nothing to the brain, so the file's bytes go instead — always when this
+      // terminal says it runs on a host, else whenever the brain cannot find the path on its own disk.
+      const viaBytes = () => {
+        let st;
+        try { st = fs.statSync(abs); } catch { die(`no such file: ${file}`); }
+        // Base64 inside the daemon's 16 MB JSON limit (and the host forwarder's).
+        if (st.size > 11 * 1024 * 1024) die(`${file} is ${Math.round(st.size / 1048576)} MB — too big to send to the brain from here (max 11 MB); vision-Read the pages you need instead`);
+        return req("POST", "/pdf/text", { b64: fs.readFileSync(abs).toString("base64") });
+      };
+      let out;
+      if (process.env.MC_HOST_ID && process.env.MC_HOST_ID !== "local") out = await viaBytes();
+      else {
+        try { out = await req("POST", "/pdf/text", { path: abs }); }
+        catch (e) { if (!/not found/i.test(e.message) || !fs.existsSync(abs)) throw e; out = await viaBytes(); }
+      }
       if (out.empty) return console.error("(no text layer — likely a scanned PDF; vision-Read the file itself)");
       return console.log(out.text);
     }
@@ -1347,12 +1362,13 @@ async function heavy(argv) {
       } catch (e) {
         // An explicit --cwd is refused loudly. The implicit one (wherever the shell happens to be) keeps
         // the old $HOME default, but says so instead of swapping it silently.
-        if (opt.cwd || !/^cwd rejected/.test(e.message)) throw e;
+        // On another computer there is no "default": the brain's $HOME is not this Mac's (the brain says why).
+        if (opt.cwd || !/^cwd rejected/.test(e.message) || (process.env.MC_HOST_ID && process.env.MC_HOST_ID !== "local")) throw e;
         console.error(`note: ${body.cwd} is not an allowed job dir — using the default ($HOME); pass --cwd to choose`);
         delete body.cwd;
         j = await req("POST", "/jobs", body);
       }
-      return console.log(`created job ${j.id.slice(0, 8)} — ${j.name} · cwd ${j.cwd} · sandbox ${j.sandbox}${opt.cron ? ` (cron ${opt.cron})` : opt.at ? ` (once at ${j.run_at})` : ""}`);
+      return console.log(`created job ${j.id.slice(0, 8)} — ${j.name} · cwd ${j.cwd}${j.host_id && j.host_id !== "local" ? ` on ${j.host_id}` : ""} · sandbox ${j.sandbox}${opt.cron ? ` (cron ${opt.cron})` : opt.at ? ` (once at ${j.run_at})` : ""}`);
     }
     if (cmd === "skill") {
       const wsId = opt.workspace || process.env.MC_WORKSPACE;
@@ -2377,6 +2393,7 @@ async function heavy(argv) {
         return console.log(
           worktrees.map((w) =>
             `${w.dirty ? "●" : w.unpushed ? "◆" : "○"} ${w.repo} · ${w.branch || "?"}` +
+            (w.host_id && w.host_id !== "local" ? ` · on ${w.host_id}` : "") +
             (w.busy ? " · BUSY" : "") +
             (w.dirty ? ` · ${w.dirty_files} uncommitted` : "") +
             (w.unpushed ? ` · ${w.unpushed} unpushed` : "") +

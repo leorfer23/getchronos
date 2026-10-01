@@ -1,14 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ticketBranch } from "./tickets.js";
-import { db, repos, runs, sessions, tickets, workspaces } from "./store.js";
+import { db, repos, runs, sessions, tickets, workspaces, LOCAL_HOST_ID } from "./store.js";
 import { isClosedTicketStatus, type Repo, type Session } from "./types.js";
+import { findHost, hostOnline, remoteHosts, type Host } from "./hosts/index.js";
+import { RemoteHost } from "./hosts/remote.js";
+import { normalizeGitRemote } from "./hostlink/git-remote.js";
+import type { HostWorktree } from "./hostd/worktrees.js";
 
-import { baseRef, ensureBranchWorktree, existingWorktree, git, isGitRepo, listWorktrees, worktreeRootFor } from "./worktree-core.js";
+import {
+  baseRef, cleanupWorktree, ensureBranchWorktree, existingWorktree, git, isGitRepo, listWorktrees, removeWorktreeAt, worktreeRootFor,
+  worktreeStateAt, type RemoveWorktreeResult, type WorktreeState,
+} from "./worktree-core.js";
 
-// The plain-git helpers (git, isGitRepo, listWorktrees, existingWorktree, baseRef) live in
-// worktree-core.ts so a `chronos host` can run them without the store; re-exported for callers here.
-export { isGitRepo };
+// The plain-git helpers (git, isGitRepo, listWorktrees, existingWorktree, baseRef) and the store-free
+// state/remove/cleanup rules live in worktree-core.ts so a `chronos host` can run them without the
+// store; re-exported for callers here.
+export { isGitRepo, cleanupWorktree, type WorktreeState };
 
 function worktreeRoot(repo: Repo): string {
   // Sibling of the repo (never inside its working tree). basename keeps repos with the same name in
@@ -170,19 +178,18 @@ export async function remoteWorktreeBranch(
   return claimedByOther ? `${wanted}-${sess.id.slice(0, 4)}` : wanted;
 }
 
-/** What a worktree is holding that removing it would destroy. */
-export type WorktreeState = {
-  path: string;
-  branch: string | null;
-  /** Uncommitted edits — the only thing git cannot get back. */
-  dirty: boolean;
-  dirty_files: number;
-  /** Commits on this branch that no remote has. Survive removal (shared object store), but they
-   *  become invisible: nothing but the branch name points at them afterwards. */
-  unpushed: number;
-  /** A terminal is working here right now. */
-  busy: boolean;
-};
+const defaultBranchOf = (repoPath: string) => repos.list().find((r) => r.path === repoPath)?.default_branch || "main";
+
+/**
+ * Is a terminal of THIS brain working in that tree? Only the brain's own (`local`) terminals: a path on
+ * another computer can spell the same as one here (two Macs, one username), and that host answers for
+ * its own trees (hostd/worktrees.ts). `ignoreSession`: the owner removing its own tree is standing in it
+ * by definition — only OTHER live terminals make it busy.
+ */
+const localBusy = (wtPath: string, ignoreSession?: string) =>
+  sessions
+    .list({ status: "live" })
+    .some((s) => s.id !== ignoreSession && (s.host_id || LOCAL_HOST_ID) === LOCAL_HOST_ID && (s.cwd === wtPath || s.worktree_path === wtPath));
 
 /** Read what a worktree holds, without changing anything. The input to every delete decision. */
 export async function worktreeState(
@@ -190,63 +197,8 @@ export async function worktreeState(
   wtPath: string,
   opts: { ignoreSession?: string } = {},
 ): Promise<WorktreeState> {
-  const out: WorktreeState = { path: wtPath, branch: null, dirty: false, dirty_files: 0, unpushed: 0, busy: false };
-  try {
-    const status = await git(wtPath, ["status", "--porcelain"]);
-    out.dirty_files = status ? status.split("\n").filter(Boolean).length : 0;
-    out.dirty = out.dirty_files > 0;
-  } catch {
-    // Unreadable tree — treat as dirty so nothing removes what it could not inspect.
-    out.dirty = true;
-  }
-  try {
-    out.branch = (await git(wtPath, ["rev-parse", "--abbrev-ref", "HEAD"])) || null;
-  } catch {}
-  try {
-    // `@{u}` throws when there is no upstream at all — a branch never pushed. Count its commits
-    // against the default base instead, so "never pushed" reads as unpushed rather than as zero.
-    let range: string;
-    try {
-      await git(wtPath, ["rev-parse", "--abbrev-ref", "@{u}"]);
-      range = "@{u}..HEAD";
-    } catch {
-      const repo = repos.list().find((r) => r.path === repoPath);
-      range = `${await baseRef(repoPath, repo?.default_branch || "main")}..HEAD`;
-    }
-    const n = Number(await git(wtPath, ["rev-list", "--count", range])) || 0;
-    out.unpushed = n && (await alreadyLanded(repoPath, wtPath)) ? 0 : n;
-  } catch {}
-  // `ignoreSession`: the owner removing its own tree is standing in it by definition — only OTHER
-  // live terminals make it busy.
-  out.busy = sessions
-    .list({ status: "live" })
-    .some((s) => s.id !== opts.ignoreSession && (s.cwd === wtPath || s.worktree_path === wtPath));
-  return out;
-}
-
-/**
- * Commits that "look unpushed" but are not at risk: the normal end of a PR is a squash-merge that
- * deletes the remote branch, after which `@{u}` is gone and every commit on the branch counts against
- * the base — and the terminal that did everything right is refused its own cleanup. Two ways out:
- * the commits are reachable from SOME remote ref (pushed under another name), or the branch's whole
- * change already sits in the base as one patch (a synthetic squash of HEAD onto the merge-base that
- * `git cherry` finds upstream). Anything else — including a squash the base has since edited over —
- * stays unpushed, so a false "no" costs a `--force` decision and never a lost commit.
- */
-async function alreadyLanded(repoPath: string, wtPath: string): Promise<boolean> {
-  try {
-    if (!(await git(wtPath, ["remote"]))) return false;
-    if (Number(await git(wtPath, ["rev-list", "--count", "HEAD", "--not", "--remotes"])) === 0) return true;
-    const repo = repos.list().find((r) => r.path === repoPath);
-    const base = await baseRef(repoPath, repo?.default_branch || "main");
-    if (base === "HEAD") return false;
-    const mb = await git(wtPath, ["merge-base", base, "HEAD"]);
-    const tree = await git(wtPath, ["rev-parse", "HEAD^{tree}"]);
-    const squash = await git(wtPath, ["-c", "user.name=chronos", "-c", "user.email=chronos@localhost", "commit-tree", tree, "-p", mb, "-m", "chronos: squash probe"]);
-    return (await git(wtPath, ["cherry", base, squash])).startsWith("-");
-  } catch {
-    return false;
-  }
+  const st = await worktreeStateAt(repoPath, wtPath, defaultBranchOf(repoPath));
+  return { ...st, busy: localBusy(wtPath, opts.ignoreSession) };
 }
 
 /**
@@ -262,29 +214,13 @@ export async function removeWorktree(
   repoPath: string,
   wtPath: string,
   opts: { force?: boolean; owner?: string } = {},
-): Promise<{ ok: true; removed: string; state: WorktreeState } | { ok: false; error: string; state?: WorktreeState }> {
-  if (!repoPath || !wtPath) return { ok: false, error: "need a repo and a worktree path" };
-  if (wtPath === repoPath) return { ok: false, error: "that is the main checkout, not a worktree" };
-  if (!wtPath.includes(".chronos-worktrees")) return { ok: false, error: "not a Chronos worktree — refusing" };
-  if (!fs.existsSync(wtPath)) return { ok: false, error: "no such worktree (already gone?)" };
-  if (!(await isGitRepo(repoPath))) return { ok: false, error: "not a git repo" };
-
-  const state = await worktreeState(repoPath, wtPath, { ignoreSession: opts.owner });
-  if (state.busy)
-    return { ok: false, error: `${opts.owner ? "another" : "a"} terminal is working in there right now`, state };
-  if (!opts.force) {
-    if (state.dirty)
-      return { ok: false, error: `${state.dirty_files} uncommitted file(s) — would be lost`, state };
-    if (state.unpushed)
-      return { ok: false, error: `${state.unpushed} commit(s) not on any remote`, state };
-  }
-  try {
-    await git(repoPath, ["worktree", "remove", "--force", wtPath], 30_000);
-  } catch (e: any) {
-    return { ok: false, error: String(e?.message ?? e).slice(0, 200), state };
-  }
-  if (fs.existsSync(wtPath)) return { ok: false, error: "git reported success but the path is still there", state };
-  return { ok: true, removed: wtPath, state };
+): Promise<RemoveWorktreeResult> {
+  return removeWorktreeAt(repoPath, wtPath, {
+    force: opts.force,
+    owner: !!opts.owner,
+    defaultBranch: defaultBranchOf(repoPath),
+    busy: () => localBusy(wtPath, opts.owner),
+  });
 }
 
 const samePath = (a: string | null | undefined, b: string | null | undefined): boolean => {
@@ -306,9 +242,11 @@ function lossSentence(state: WorktreeState): string {
  * Used for the owner path and for a Lead recognising a worker's (live or ended) tree.
  */
 function sessionClaimsWorktree(
-  sess: Pick<Session, "id" | "worktree_path" | "worktree_branch">,
-  wt: { path: string; branch: string | null },
+  sess: Pick<Session, "id" | "worktree_path" | "worktree_branch"> & { host_id?: string | null },
+  wt: { path: string; branch: string | null; host_id?: string },
 ): boolean {
+  // A claim is on the computer the terminal ran on: the same path or branch on another Mac is not it.
+  if (wt.host_id && (sess.host_id || LOCAL_HOST_ID) !== wt.host_id) return false;
   return samePath(sess.worktree_path, wt.path)
     || (!!wt.branch && (wt.branch === sess.worktree_branch || wt.branch === legacyDeskBranch(sess.id)));
 }
@@ -355,10 +293,18 @@ export async function removeWorktreeAs(
   const listWs = caller.admin ? undefined : (lead?.ws ?? sess!.workspace_id ?? undefined);
   const all = await listAllWorktrees(listWs);
   if (ref === "@mine") ref = sess?.worktree_path || sess?.worktree_branch || (sess ? legacyDeskBranch(sess.id) : ref);
-  // A terminal naming its repo ("mc worktree rm inventory-docs") means the tree it claimed there.
-  const wt = all.find((w) => samePath(w.path, ref) || w.branch === ref)
+  // A terminal naming its repo ("mc worktree rm inventory-docs") means the tree it claimed there. The
+  // same path or branch can exist on two computers: the caller's own computer is looked at first.
+  const myHost = sess ? sess.host_id || LOCAL_HOST_ID : null;
+  const pick = (hit: (w: ListedWorktree) => boolean) => all.find((w) => w.host_id === myHost && hit(w)) ?? all.find(hit);
+  const wt = pick((w) => samePath(w.path, ref) || w.branch === ref)
     ?? (sess ? all.find((w) => w.repo.toLowerCase() === ref.toLowerCase() && sessionClaimsWorktree(sess, w)) : undefined);
-  if (!wt) return { status: 404, body: { error: `no Chronos worktree matching "${ref}"` } };
+  if (!wt) {
+    // A terminal on another computer whose computer is not answering: its tree is there, just unlisted.
+    if (sess && myHost !== LOCAL_HOST_ID && !hostOnline(myHost))
+      return { status: 409, body: { error: `this terminal's computer (${hostName(findHost(myHost!), myHost!)}) is offline — its worktrees can be removed once it reconnects` } };
+    return { status: 404, body: { error: `no Chronos worktree matching "${ref}"` } };
+  }
   const owns = !!sess && sessionClaimsWorktree(sess, wt);
   // A Lead may remove a tree its worker claimed — live or ended — inside its workspace. Never another
   // Lead's, never the operator's own, never an orphan outside its workersOf set.
@@ -374,7 +320,7 @@ export async function removeWorktreeAs(
   // Force on a worker's tree is the operator's yes. A Lead carries the refusal to `mc ask-robert`; it
   // never invents the override itself (LEADS.md Powers). Own-tree force via MC_SESSION still works.
   if (opts.force && leadOwns && !owns) {
-    const state = await worktreeState(wt.repo_path, wt.path);
+    const state = wt.host_id === LOCAL_HOST_ID ? await worktreeState(wt.repo_path, wt.path) : wt;
     return {
       status: 403,
       body: {
@@ -383,7 +329,10 @@ export async function removeWorktreeAs(
     };
   }
   // Lead removing a worker's tree: do NOT pass owner — a live worker still in the tree must 409 busy.
-  const out = await removeWorktree(wt.repo_path, wt.path, { force: !!opts.force, owner: owns ? sess!.id : undefined });
+  const owner = owns ? sess!.id : undefined;
+  const out = wt.host_id === LOCAL_HOST_ID
+    ? await removeWorktree(wt.repo_path, wt.path, { force: !!opts.force, owner })
+    : await removeRemoteWorktree(wt, { force: !!opts.force, owner });
   if (!out.ok) return { status: 409, body: out };
   const clearId = owns ? sess!.id : leadOwns ? workerOwner!.id : null;
   const cleared = !!clearId && (
@@ -409,17 +358,26 @@ export async function removeWorktreeAs(
   };
 }
 
+/** One row of `mc worktree list`: where it is (`host_id`, `repo_path` on that host) and what it holds. */
+export type ListedWorktree = WorktreeState & {
+  repo: string;
+  repo_id: string;
+  repo_path: string;
+  session_id: string | null;
+  host_id: string;
+};
+
 /**
  * Every Chronos worktree across every repo, with what each is holding. For `mc worktree list`.
  * Pass `workspaceId` to scope to one workspace's repos; omit (admin/unscoped callers only) to see
- * every workspace's worktrees.
+ * every workspace's worktrees. Trees on other computers come from each online host (remoteWorktrees);
+ * an offline host's trees are simply not listed until it reconnects.
  */
-export async function listAllWorktrees(workspaceId?: string): Promise<
-  Array<WorktreeState & { repo: string; repo_path: string; session_id: string | null }>
-> {
-  const live = sessions.list({ status: "live" });
-  const out: Array<WorktreeState & { repo: string; repo_path: string; session_id: string | null }> = [];
-  for (const repo of repos.list(workspaceId)) {
+export async function listAllWorktrees(workspaceId?: string): Promise<ListedWorktree[]> {
+  const live = sessions.list({ status: "live" }).filter((s) => (s.host_id || LOCAL_HOST_ID) === LOCAL_HOST_ID);
+  const list = repos.list(workspaceId);
+  const out: ListedWorktree[] = [];
+  for (const repo of list) {
     if (!repo?.path || !fs.existsSync(repo.path) || !(await isGitRepo(repo.path))) continue;
     for (const wt of await listWorktrees(repo.path)) {
       if (!wt.path.includes(".chronos-worktrees")) continue;
@@ -428,26 +386,114 @@ export async function listAllWorktrees(workspaceId?: string): Promise<
         ...st,
         branch: st.branch ?? wt.branch,
         repo: repo.name,
+        repo_id: repo.id,
         repo_path: repo.path,
         session_id: live.find((s) => s.cwd === wt.path || s.worktree_path === wt.path)?.id ?? null,
+        host_id: LOCAL_HOST_ID,
       });
     }
   }
-  return out;
+  return out.concat(await remoteWorktrees(list));
 }
 
-// Remove a worktree once its terminal ends — but ONLY if clean (no uncommitted changes). The branch
-// and its commits live in the shared object store, so removing a clean checkout loses nothing; a
-// dirty one is left untouched so no in-progress work is destroyed. No-op unless the path is one of
-// this repo's worktrees.
-export async function cleanupWorktree(repoPath: string, wtPath: string): Promise<void> {
+const onlineRemote = (only?: Host): RemoteHost[] =>
+  (only ? [only] : remoteHosts()).filter((h): h is RemoteHost => h instanceof RemoteHost && h.online);
+
+/** Live terminals of THIS brain that run on host `hostId` and sit in (or claimed) `p`. */
+const liveOnHostIn = (hostId: string, p: string, ignoreSession?: string) =>
+  sessions.list({ status: "live" }).filter((s) => s.host_id === hostId && s.id !== ignoreSession && (s.cwd === p || s.worktree_path === p));
+
+const hostName = (h: Host | undefined, id: string) => (h as RemoteHost | undefined)?.hello?.name ?? id;
+
+/**
+ * The trees of `list`'s repos on every online host (hostd/worktrees.ts). A host is asked only about
+ * repos by git remote, and its answer is copied field by field: nothing it adds reaches the API.
+ */
+async function remoteWorktrees(list: Repo[], only?: Host): Promise<ListedWorktree[]> {
+  const asked = list.filter((r) => !!r.git_remote);
+  const hosts = asked.length ? onlineRemote(only) : [];
+  if (!hosts.length) return [];
+  const byKey = new Map<string, Repo>();
+  for (const r of asked) { const k = normalizeGitRemote(r.git_remote); if (k && !byKey.has(k)) byKey.set(k, r); }
+  const args = { repos: [...byKey.values()].map((r) => ({ git_remote: r.git_remote!, default_branch: r.default_branch })) };
+  const per = await Promise.all(hosts.map(async (h) => {
+    let got: HostWorktree[];
+    try {
+      got = await h.listWorktrees(args);
+    } catch (e: any) {
+      // A host from before `worktree_list` has nothing to show here; anything else is worth a line.
+      if (!/unknown op/.test(String(e?.message ?? e))) console.warn(`[worktrees] ${h.id}: list failed: ${e?.message ?? e}`);
+      return [];
+    }
+    const rows: ListedWorktree[] = [];
+    for (const w of got) {
+      const repo = byKey.get(normalizeGitRemote(w?.git_remote) ?? "");
+      if (!repo || typeof w.path !== "string") continue;
+      const here = liveOnHostIn(h.id, w.path);
+      rows.push({
+        path: w.path,
+        branch: typeof w.branch === "string" ? w.branch : null,
+        dirty: !!w.dirty,
+        dirty_files: Number(w.dirty_files) || 0,
+        unpushed: Number(w.unpushed) || 0,
+        busy: !!w.busy || here.length > 0,
+        repo: repo.name,
+        repo_id: repo.id,
+        repo_path: String(w.repo_path ?? ""),
+        session_id: here[0]?.id ?? null,
+        host_id: h.id,
+      });
+    }
+    return rows;
+  }));
+  return per.flat();
+}
+
+/**
+ * removeWorktree for a tree on another computer: the brain's half of "busy" (a terminal of its own on
+ * that host claimed or sits in it), then the host's own rules on its own disk (hostd/worktrees.ts).
+ */
+async function removeRemoteWorktree(wt: ListedWorktree, opts: { force: boolean; owner?: string }): Promise<RemoveWorktreeResult> {
+  const h = findHost(wt.host_id);
+  if (!(h instanceof RemoteHost) || !h.online) return { ok: false, error: `its computer (${hostName(h, wt.host_id)}) is offline — try again once it reconnects`, state: wt };
+  if (liveOnHostIn(wt.host_id, wt.path, opts.owner).length)
+    return { ok: false, error: `${opts.owner ? "another" : "a"} terminal is working in there right now`, state: { ...wt, busy: true } };
+  const repo = repos.get(wt.repo_id);
+  if (!repo?.git_remote) return { ok: false, error: "its repo has no git remote to find it by on that computer" };
   try {
-    if (!repoPath || !wtPath || wtPath === repoPath || !(await isGitRepo(repoPath))) return;
-    if (!wtPath.includes(".chronos-worktrees")) return; // only our own
-    const dirty = (await git(wtPath, ["status", "--porcelain"])) !== "";
-    if (dirty) return;
-    await git(repoPath, ["worktree", "remove", "--force", wtPath]);
-  } catch {}
+    return await h.removeWorktree({ git_remote: repo.git_remote, default_branch: repo.default_branch, path: wt.path, force: opts.force, owner: opts.owner ?? null });
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e).slice(0, 200), state: wt };
+  }
+}
+
+/**
+ * The end-of-terminal cleanup (terminal.ts) for a terminal that ran on another computer: the same
+ * cleanupWorktree rule, run there — only a clean tree goes. A host that is offline (or predates the op)
+ * keeps it; a finished ticket's tree is then reaped when the host is next seen (reapRemoteWorktrees).
+ */
+export async function cleanupRemoteWorktree(hostId: string, repo: Pick<Repo, "git_remote" | "default_branch">, wtPath: string): Promise<void> {
+  if (!repo.git_remote || !wtPath || !wtPath.includes(".chronos-worktrees")) return;
+  const h = findHost(hostId);
+  if (!(h instanceof RemoteHost) || !h.online) {
+    console.log(`[worktrees] ${hostId} is offline — leaving ${path.basename(wtPath)} there for the reaper`);
+    return;
+  }
+  try {
+    await h.removeWorktree({ git_remote: repo.git_remote, default_branch: repo.default_branch, path: wtPath, mode: "cleanup" });
+  } catch (e: any) {
+    if (!/unknown op/.test(String(e?.message ?? e))) console.warn(`[worktrees] ${hostId}: cleanup of ${path.basename(wtPath)} failed: ${e?.message ?? e}`);
+  }
+}
+
+/** Branches of tickets still open: their trees stay (done and dismissed alike are finished). */
+function openTicketBranches(): Set<string> {
+  return new Set(
+    tickets
+      .list()
+      .filter((t) => !isClosedTicketStatus(t.status))
+      .map((t) => ticketBranch(t.key))
+  );
 }
 
 // Reap worktrees whose ticket is finished. cleanupWorktree only fires when a TERMINAL closes
@@ -462,12 +508,7 @@ export async function reapDoneWorktrees(): Promise<number> {
   // Branch → keep, for every ticket still open (done and dismissed alike are finished). Unknown
   // branches are kept too, so a
   // hand-made mc/* worktree or another repo's live ticket is never touched.
-  const keep = new Set(
-    tickets
-      .list()
-      .filter((t) => !isClosedTicketStatus(t.status))
-      .map((t) => ticketBranch(t.key))
-  );
+  const keep = openTicketBranches();
   const busyPaths = new Set(
     sessions
       .list({ status: "live" })
@@ -489,5 +530,38 @@ export async function reapDoneWorktrees(): Promise<number> {
     }
   }
   if (removed) console.log(`[worktrees] reaped ${removed} finished-ticket worktree(s)`);
+  return removed + (await reapRemoteWorktrees(undefined, keep));
+}
+
+/**
+ * reapDoneWorktrees for the trees on other computers — the same rule, nothing looser: an `mc/<key>`
+ * branch whose ticket is finished, clean, no terminal or run in it (the host's own processes and this
+ * brain's sessions on that host), no active run pinned there. Each host removes its own (`cleanup`
+ * mode: a dirty tree is left). Runs with the monitor's sweep and when a host comes back online
+ * (remote-terminals.ts), which is also where a terminal that ended while its host was away gets its
+ * tree back. `only` = one host.
+ */
+export async function reapRemoteWorktrees(only?: Host, keep = openTicketBranches()): Promise<number> {
+  const hosts = onlineRemote(only);
+  if (!hosts.length) return 0;
+  const all = repos.list();
+  let removed = 0;
+  for (const h of hosts) {
+    for (const w of await remoteWorktrees(all, h)) {
+      if (!w.branch?.startsWith("mc/") || keep.has(w.branch)) continue;
+      if (w.busy || w.dirty) continue;
+      if (runs.activeTicketRunsInCwd(w.path).length) continue;
+      const repo = repos.get(w.repo_id);
+      if (!repo?.git_remote) continue;
+      try {
+        const r = await h.removeWorktree({ git_remote: repo.git_remote, default_branch: repo.default_branch, path: w.path, mode: "cleanup" });
+        if (r?.ok) removed++;
+      } catch (e: any) {
+        console.warn(`[worktrees] ${h.id}: reap of ${path.basename(w.path)} failed: ${e?.message ?? e}`);
+        break; // the host went away mid-sweep: the next sweep or hello picks up the rest
+      }
+    }
+  }
+  if (removed) console.log(`[worktrees] reaped ${removed} finished-ticket worktree(s) on other computers`);
   return removed;
 }
