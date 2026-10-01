@@ -52,6 +52,11 @@ export type HostView = {
   install: HostInstall | null;
   /** Phase 6: is it behind the brain, can the Desk update it, and how the last update went. null for the brain. */
   update: HostUpdateView | null;
+  /**
+   * The brain refuses its link right now (brain-link.ts LinkRefusal): `needs_update` for a protocol it
+   * cannot speak, else a credential or identity problem. null when it is not refused.
+   */
+  refused: { code: number; reason: string; at: number; needs_update: boolean } | null;
 };
 
 // ── phase 6: version + update ──
@@ -98,6 +103,17 @@ export const UPDATE_STALE_MS = 20 * 60_000;
 /** The one line that updates a pre-phase-6 host by hand, the first time. $HOME, never `~`. */
 export const MANUAL_GIT_UPDATE =
   'cd "$HOME/.chronos-host/app" && git fetch -q origin main && git reset -q --hard FETCH_HEAD && npm ci --no-audit --no-fund && launchctl kickstart -k gui/$(id -u)/sh.chronos.host';
+/** The same for an npm install: its own `host update` (update.ts), run from where the LaunchAgent runs it. */
+export const MANUAL_NPM_UPDATE =
+  'node "$HOME/.chronos-host/app/node_modules/getchronos/bin/getchronos.mjs" host update';
+
+/**
+ * A host this brain refuses for its protocol cannot be sent `update` (no link gets that far), so the
+ * Desk shows the line to paste on it instead. Pure.
+ */
+export function refusedUpdate(brain: UpdateTarget, install: HostInstall | null | undefined, status: UpdateRecord | null): HostUpdateView {
+  return { available: true, supported: false, target: brain, manual: install === "npm" ? MANUAL_NPM_UPDATE : install === "dev" ? null : MANUAL_GIT_UPDATE, status };
+}
 
 /**
  * Is this host behind the brain, and can the Desk do something about it? Pure.
@@ -205,7 +221,7 @@ export function hostsView(link: BrainLink): HostView[] {
         return {
           id: h.id, name: h.name, platform: h.platform, status: h.status, connected: true, is_brain: true,
           created_at: h.created_at, last_seen_at: new Date().toISOString(), policy, reserve,
-          link: null, version: brainBuild().version, commit: brainBuild().commit, install: null, update: null,
+          link: null, version: brainBuild().version, commit: brainBuild().commit, install: null, update: null, refused: null,
           vitals: {
             history: snap.history.map((s) => ({ at: s.at, cpu: s.cpu, ram: s.ram, gpu: s.gpu })),
             load_per_core: v.load.loadPerCore, pressure: v.load.pressureLevel, swap_pct: swapPctOf(v.load), ram: snap.ram,
@@ -217,21 +233,25 @@ export function hostsView(link: BrainLink): HostView[] {
       }
       const l = online.get(h.id) ?? null;
       const caps = parseCapabilities(h.capabilities_json);
+      const no = l ? null : link.refusal(h.id);
       const hist = link.vitalsHistory(h.id);
       const last = l?.vitals ?? null;
       return {
         id: h.id, name: h.name, platform: h.platform, status: h.status, connected: !!l, is_brain: false,
         created_at: h.created_at, last_seen_at: l ? new Date(l.last_seen_at).toISOString() : h.last_seen_at, policy, reserve,
         link: l ? { via: l.via, connected_at: l.connected_at, last_seen_at: l.last_seen_at } : null,
-        version: l?.hello.version ?? caps?.version ?? null,
+        version: l?.hello.version ?? no?.version ?? caps?.version ?? null,
         commit: (l ? l.hello.commit : caps?.commit) ?? null,
         install: (l ? l.hello.install : caps?.install) ?? null,
-        update: updateVerdict(brainBuild(), {
-          version: l?.hello.version ?? caps?.version ?? null,
-          commit: (l ? l.hello.commit : caps?.commit) ?? null,
-          install: (l ? l.hello.install : caps?.install) ?? null,
-          connected: !!l,
-        }, link.updateStatus(h.id)),
+        update: no?.code === 4426
+          ? refusedUpdate(brainBuild(), no.install ?? caps?.install, link.updateStatus(h.id))
+          : updateVerdict(brainBuild(), {
+            version: l?.hello.version ?? caps?.version ?? null,
+            commit: (l ? l.hello.commit : caps?.commit) ?? null,
+            install: (l ? l.hello.install : caps?.install) ?? null,
+            connected: !!l,
+          }, link.updateStatus(h.id)),
+        refused: no ? { code: no.code, reason: no.reason, at: no.at, needs_update: no.code === 4426 } : null,
         vitals: {
           history: l ? hist.map((s) => ({ at: s.at, cpu: s.cpu, ram: s.ram, gpu: s.gpu })) : [],
           load_per_core: last?.loadPerCore ?? null, pressure: last?.pressure ?? null, swap_pct: last?.swapPct ?? null, ram: null,

@@ -30,7 +30,8 @@ import {
   expandPathTokens, isProcSpec,
   type OneshotResult, type OneshotSpec, type ProcSpec, type WorktreeEnsureArgs,
 } from "../hosts/proc-spec.js";
-import { ensureBranchWorktree, worktreeRootFor, worktreeSandboxDirs } from "../worktree-core.js";
+import { tryBranchWorktree, worktreeRootFor, worktreeSandboxDirs } from "../worktree-core.js";
+import { signalGroup } from "./fence.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "../agent-prep.js";
 import { ensureTrustedCwd } from "../claude-trust.js";
 import { sandboxAvailable, sandboxWrap, workspaceSandboxAllow } from "../sandbox.js";
@@ -94,6 +95,8 @@ type ProcChan = {
   startedAt: number;
   /** Last stdout or stderr byte: the menu bar's "working" (status.ts ACTIVE_MS). */
   lastOut: number;
+  /** SIGSTOPped by the fence (fence.ts) since this time; null while running. */
+  frozen: number | null;
 };
 
 /** An exited run the brain never releases (it is gone for good) is forgotten after this. */
@@ -141,14 +144,39 @@ export class HostProcs {
   live(): LiveInfo[] {
     return [...this.chans.values()].map((c) => ({
       ch: c.ch, session_id: c.runId, kind: "proc" as const, pid: c.child.pid ?? null, last_seq: c.ring.lastSeq, exit: c.exit,
+      ...(c.frozen ? { frozen: true } : {}),
     }));
   }
 
   /** What the menu bar lists (status.ts): every run still running. Internal shape; never the workspace. */
   work(): WorkSource[] {
     return [...this.chans.values()].filter((c) => !c.exit).map((c) => ({
-      kind: "run" as const, id: c.runId, cwd: c.cwd, backend: c.backend, startedAt: c.startedAt, lastOut: c.lastOut,
+      kind: "run" as const, id: c.runId, cwd: c.cwd, backend: c.backend, startedAt: c.startedAt, lastOut: c.lastOut, frozen: !!c.frozen,
     }));
+  }
+
+  /**
+   * The fence (fence.ts): stop every running run where it stands. A run shares this process's group,
+   * so the CLI alone is stopped (a command it started keeps going until it ends). Its watchdog keeps
+   * counting: a run frozen past its timeout is stopped for good, as it would have been.
+   */
+  freezeAll(now = Date.now()): number {
+    let n = 0;
+    for (const c of this.chans.values()) {
+      if (c.exit || c.frozen) continue;
+      if (signalGroup(c.child.pid, "SIGSTOP", false)) { c.frozen = now; n++; }
+    }
+    return n;
+  }
+
+  frozenCount(): number {
+    return [...this.chans.values()].filter((c) => c.frozen && !c.exit).length;
+  }
+
+  private thaw(c: ProcChan): void {
+    if (!c.frozen) return;
+    c.frozen = null;
+    signalGroup(c.child.pid, "SIGCONT", false);
   }
 
   /** The link dropped: stop streaming. Runs keep running; their stdout keeps landing in the ring. */
@@ -252,7 +280,7 @@ export class HostProcs {
       ch, runId: spec.run_id, child, ring: new Ring(this.o.ringBytes ?? PROC_RING_BYTES, ch, this.o.spill?.(ch) ?? null),
       streaming: !!this.link?.online(), exit: null, exitSent: false, partial: Buffer.alloc(0),
       stderrTail: "", timedOut: false, watchdog: null,
-      backend: backend.name, cwd, startedAt: Date.now(), lastOut: Date.now(),
+      backend: backend.name, cwd, startedAt: Date.now(), lastOut: Date.now(), frozen: null,
     };
     this.chans.set(ch, c);
     child.stdout!.on("data", (b: Buffer) => this.onStdout(c, b));
@@ -296,6 +324,7 @@ export class HostProcs {
     // Same order as the brain's watchdog: EOF first (a steer-mode CLI ends on it), then the signal.
     try { c.child.stdin?.end(); } catch {}
     try { c.child.kill("SIGTERM"); } catch {}
+    this.thaw(c);
     setTimeout(() => { if (!c.exit) { try { c.child.kill("SIGKILL"); } catch {} } }, this.o.killGraceMs ?? 10_000).unref?.();
   }
 
@@ -328,6 +357,8 @@ export class HostProcs {
     const c = this.chans.get(ch);
     if (!c || c.exit) return;
     try { c.child.kill((signal || "SIGTERM") as NodeJS.Signals); } catch {}
+    // A stopped process holds every signal but SIGKILL until it runs again: let it take this one.
+    this.thaw(c);
   }
 
   ack(ch: number, seq: number): void {
@@ -343,6 +374,11 @@ export class HostProcs {
     if (!c || (runId && c.runId !== runId)) {
       this.link?.send({ t: "exit", ch, code: null, signal: "SIGLOST" });
       return;
+    }
+    // Re-adopted = still this host's: a fenced run carries on.
+    if (c.frozen) {
+      console.log(`[host] run ${c.runId.slice(0, 8)} thawed — the brain took it back`);
+      this.thaw(c);
     }
     c.ring.ack(seq);
     for (const f of c.ring.since(seq).frames) this.link?.sendData(ch, f.seq, f.bytes);
@@ -364,7 +400,7 @@ export class HostProcs {
   }
 
   killAll(): void {
-    for (const c of this.chans.values()) if (!c.exit) { try { c.child.kill("SIGTERM"); } catch {} }
+    for (const c of this.chans.values()) if (!c.exit) { try { c.child.kill("SIGTERM"); } catch {} this.thaw(c); }
   }
 
   // ───────────── exec: the ship pipeline's commands ─────────────
@@ -429,9 +465,9 @@ export class HostProcs {
     if (veto) throw new VetoError(veto);
     if (!safeRef(a?.branch) || !safeRef(a?.base || "main")) throw new Error("bad branch name");
     const r = await resolveRepos(this.o, { id: "_", git_remote: String(a.git_remote ?? "") }, []);
-    const p = await ensureBranchWorktree(r.repoPath!, String(a.base || "main"), a.branch);
-    if (!p) throw new Error(`could not create a worktree for ${a.branch} on this host (not a git repo, or the branch is checked out elsewhere)`);
-    return { path: p };
+    const w = await tryBranchWorktree(r.repoPath!, String(a.base || "main"), a.branch);
+    if ("error" in w) throw new Error(`could not create a worktree for ${a.branch} on this host: ${w.error}`);
+    return { path: w.path };
   }
 }
 

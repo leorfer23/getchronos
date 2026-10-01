@@ -20,10 +20,16 @@
  *    resolved here, gets a brief instead: goal, what it was asked, its summary, a replay of its feed.
  *
  * One move per terminal: the old row is ended by the move, so it is never `live` on that host again,
- * and a sweep only looks at live rows. When the host comes back, its hello still lists the old
- * process; reconcile (remote-terminals.ts) kills any reported channel whose row ended here, so two
- * agents never work the same goal. A move that could not happen (no computer has the repo) is said
- * once in the Desk chat and left alone until the host returns or the daemon restarts.
+ * and a sweep only looks at live rows. Two agents never work the same goal:
+ *  - the host fences itself first (hostd/fence.ts): every welcome tells it this grace, and a little
+ *    before it passes without a word from the brain, the host freezes (SIGSTOP) its terminals;
+ *  - when the host comes back, its hello still lists the old process; reconcile (remote-terminals.ts)
+ *    salvages what only that disk had to `wip/<id8>` on origin (salvageMoved below), then kills it.
+ *    A frozen terminal that was NOT moved is re-attached, which thaws it;
+ *  - a host that comes back while a move is under way stops the move (checked again right before the
+ *    stand-in opens and before the old row ends).
+ * A move that could not happen (no computer has the repo, or none can run it) is said once in the
+ * Desk chat and left alone until the host returns or the daemon restarts.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -35,7 +41,8 @@ import { hosts, leadEvents, leadSlices, repoCheckouts, repos, sessions, tickets,
 import { getBackend } from "./backends/index.js";
 import { findHost, hostOnline } from "./hosts/index.js";
 import { RemoteHost } from "./hosts/remote.js";
-import { placementCandidates } from "./hosts/candidates.js";
+import { placementCandidates, placeRequest } from "./hosts/candidates.js";
+import { headroom, ineligible } from "./hosts/placement.js";
 import { mirrorFile } from "./hosts/transcript-mirror.js";
 import { ensureOriginBranchWorktree, worktreeRootFor } from "./worktree-core.js";
 import { ensureSessionWorktree } from "./worktrees.js";
@@ -43,10 +50,12 @@ import { checkCwd } from "./spawn-guard.js";
 import { ticketBranch } from "./tickets.js";
 import { renderLinesReplay } from "./replay.js";
 import { originalBrief } from "./terminal-failover.js";
-import { focusEvents, killSession, openSession, resolveCwd } from "./terminal.js";
+import { focusEvents, killSession, openSession, resolveCwd, sendInput } from "./terminal.js";
 import { postRobertToDesk } from "./robert-desk.js";
+import { notifyLead } from "./robert-drive.js";
 import { lastActivityState } from "./revive.js";
 import type { Repo, Session } from "./types.js";
+import type { LiveInfo } from "./hostlink/wire.js";
 
 /** `sessions.end_reason` of a terminal that was moved off an offline computer. */
 export const HOST_FAILOVER_END_REASON = "host_failover";
@@ -65,6 +74,10 @@ export interface HostFailoverOps {
   freshWorktree(repo: Repo, sess: Parameters<typeof ensureSessionWorktree>[1]): Promise<{ path: string; branch: string } | null>;
   /** The old terminal's Focus feed, as `kind: text` lines (read from the transcript mirror). */
   feed(id: string): string[];
+  /** Close a stand-in that is not needed after all (its old host came back mid-move). */
+  discard(s: Session, reason: string): void;
+  /** Type one line into a live terminal (the stand-in, when its predecessor's work was salvaged). */
+  tell(id: string, text: string): string | null;
 }
 
 const defaultOps: HostFailoverOps = {
@@ -82,6 +95,11 @@ const defaultOps: HostFailoverOps = {
   originWorktree: ensureOriginBranchWorktree,
   freshWorktree: ensureSessionWorktree,
   feed: (id) => focusEvents(id).map((e) => `${e.kind}: ${e.text}`),
+  discard: (s, reason) => {
+    killSession(s.id, reason);
+    bus.publish({ topic: "session.ended", session_id: s.id });
+  },
+  tell: (id, text) => sendInput(id, { text }, "failover"),
 };
 
 let ops: HostFailoverOps = defaultOps;
@@ -100,8 +118,8 @@ export function setHostFailoverOps(o: Partial<HostFailoverOps>): void { ops = { 
 let awakeSince = Date.now();
 /** Sessions being moved right now (host.offline timer and the periodic sweep can overlap). */
 const inFlight = new Set<string>();
-/** Sessions a move was tried for and could not happen — said once, not every sweep. */
-const gaveUp = new Set<string>();
+/** Sessions a move was tried for and could not happen — said once, not every sweep. Session → its host. */
+const gaveUp = new Map<string, string>();
 
 export function resetHostFailover(o: { bootAt?: number; lastWake?: () => number | null } = {}): void {
   awakeSince = o.bootAt ?? Date.now();
@@ -125,6 +143,14 @@ function macLastWake(): number | null {
   }
 }
 let lastWake: () => number | null = macLastWake;
+
+/**
+ * A host is back: whatever could not be moved off it is its own again — and if it goes away again,
+ * the next grace gets a fresh try (and a fresh Desk line) instead of a silence until the next restart.
+ */
+export function noteHostBack(hostId: string): void {
+  for (const [sid, hid] of gaveUp) if (hid === hostId) gaveUp.delete(sid);
+}
 
 /** Move the awake mark up to the latest wake, so time the brain spent asleep is never a host's absence. */
 export function noteBrainWake(): void {
@@ -203,17 +229,33 @@ export function repoOf(s: Session): Repo | null {
 export type Target = { host_id: string } | { stuck: string };
 
 /**
- * Where a terminal goes: the brain when it has the repo (or there is no repo to have), else an online
- * host — not the dead one, not draining or disabled — that reported a checkout of it.
+ * Where a terminal can go, best first: the brain alone when it has the repo (or there is no repo to
+ * have), else every online host — not the dead one — that placement would let run it (policy and veto,
+ * the CLI and its login, the profile, the checkout or auto-clone, the sandbox: `ineligible()`), most
+ * headroom first. A move is admission-exempt, as for `place()`: it takes the dead terminal's place.
  */
+export function pickTargets(s: Session, repo: Repo | null): Array<{ host_id: string }> | { stuck: string } {
+  if (!repo) return [{ host_id: LOCAL_HOST_ID }];
+  if (repo.path && fs.existsSync(repo.path)) return [{ host_id: LOCAL_HOST_ID }];
+  const req = placeRequest({
+    workspace_id: s.workspace_id, repo_id: repo.id, ticket_id: s.ticket_id, backend: s.backend, movedFrom: s.id,
+  }, "failover");
+  const why: string[] = [];
+  const ok: Array<{ id: string; score: number; name: string }> = [];
+  for (const c of placementCandidates()) {
+    if (c.is_brain || c.id === s.host_id) continue;
+    const no = ineligible(c, req);
+    if (no) { if (c.online && (c.checkouts.includes(repo.id) || c.auto_clone)) why.push(`${c.name}: ${no.reason}`); continue; }
+    ok.push({ id: c.id, score: headroom(c, CONFIG.machine), name: c.name });
+  }
+  if (ok.length) return ok.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).map((c) => ({ host_id: c.id }));
+  return { stuck: `${repo.name} is not checked out on this Mac or on any online computer that can run it${why.length ? ` (${why.join("; ")})` : ""}` };
+}
+
+/** The first of pickTargets — where a terminal goes. */
 export function pickTarget(s: Session, repo: Repo | null): Target {
-  if (!repo) return { host_id: LOCAL_HOST_ID };
-  if (repo.path && fs.existsSync(repo.path)) return { host_id: LOCAL_HOST_ID };
-  const other = placementCandidates().find(
-    (c) => !c.is_brain && c.online && c.id !== s.host_id && c.status === "online" && c.checkouts.includes(repo.id),
-  );
-  if (other) return { host_id: other.id };
-  return { stuck: `${repo.name} is not checked out on this Mac or on any online computer` };
+  const t = pickTargets(s, repo);
+  return Array.isArray(t) ? t[0] : t;
 }
 
 // ──────────────────────────── the conversation ────────────────────────────
@@ -275,9 +317,12 @@ export function hostFailoverSeed(i: {
   note?: string | null;
   replay?: string | null;
   why?: string | null;
+  /** `wip/<old id8>`: where the old terminal's unpushed work lands if its computer comes back. */
+  wip?: string | null;
 }): string {
   const lost =
-    `NOTHING from ${i.from}'s disk came with it: uncommitted changes, unpushed commits and files created there are NOT here.`;
+    `NOTHING from ${i.from}'s disk came with it: uncommitted changes, unpushed commits and files created there are NOT here.` +
+    (i.wip ? ` If ${i.from} comes back, Chronos pushes whatever only it had to the branch \`${i.wip}\` on origin and tells you here — merge or cherry-pick from it then.` : "");
   const check =
     "Before continuing, check the real state (git status, git log --oneline -5, git fetch and compare with origin), " +
     "redo whatever only existed on " + i.from + ", and push early and often from now on so a move never loses work again.";
@@ -319,125 +364,156 @@ export async function failoverSession(s: Session, label: string, mins: number): 
   const backend = getBackend(cur.backend);
   if (backend.kind === "cloud") return { kind: "skip" };
   const repo = repoOf(cur);
-  const target = pickTarget(cur, repo);
-  if ("stuck" in target) return { kind: "stuck", from: cur, why: target.stuck };
-  const local = target.host_id === LOCAL_HOST_ID;
-  const where = local ? "on the brain (this Mac)" : `on ${hostLabel(target.host_id)}`;
+  const targets = pickTargets(cur, repo);
+  if (!Array.isArray(targets)) return { kind: "stuck", from: cur, why: targets.stuck };
   const newId = randomUUID();
   const want = cur.worktree_branch ?? (cur.ticket_id ? (() => { const t = tickets.get(cur.ticket_id!); return t ? ticketBranch(t.key) : null; })() : null);
+  const wip = wipBranchFor(cur.id);
 
-  // The directory, on the target. A remote target resolves its own (it gets intent, not paths).
-  let cwd: string | undefined;
-  let branch: string | null = null;
-  let note: string | null = null;
-  try {
-    if (local && repo) {
-      if (want) {
-        const p = await ops.originWorktree(repo.path, want);
-        if (p) {
-          cwd = p; branch = want;
-          note = `Your branch \`${want}\` was checked out fresh from origin at ${p}: only what was PUSHED from ${label} is in it.`;
-        } else {
-          const w = await ops.freshWorktree(repo, { id: newId, workspace_id: cur.workspace_id, goal: cur.goal, spawn_goal: cur.spawn_goal, title: cur.title, worktree_branch: null });
-          if (w) {
-            cwd = w.path; branch = w.branch;
-            note = `Your branch \`${want}\` is not on origin (it was never pushed), so none of its commits are here. ` +
-              `You are in a NEW worktree at ${w.path} on branch \`${w.branch}\`, off ${repo.default_branch}.`;
+  // Brain first (alone when it has the repo), else each host placement allows, best first: one host
+  // refusing the open is not the end of the move.
+  const failed: string[] = [];
+  for (const target of targets) {
+    const local = target.host_id === LOCAL_HOST_ID;
+    const where = local ? "on the brain (this Mac)" : `on ${hostLabel(target.host_id)}`;
+
+    // The directory, on the target. A remote target resolves its own (it gets intent, not paths).
+    let cwd: string | undefined;
+    let branch: string | null = null;
+    let note: string | null = null;
+    try {
+      if (local && repo) {
+        if (want) {
+          const p = await ops.originWorktree(repo.path, want);
+          if (p) {
+            cwd = p; branch = want;
+            note = `Your branch \`${want}\` was checked out fresh from origin at ${p}: only what was PUSHED from ${label} is in it.`;
           } else {
-            cwd = repo.path;
-            note = `Your branch \`${want}\` could not be checked out here, and a new worktree could not be created. You are in the shared checkout ` +
-              `${repo.path}, which is read-only — claim a worktree with \`mc worktree ${repo.name}\` before editing.`;
+            const w = await ops.freshWorktree(repo, { id: newId, workspace_id: cur.workspace_id, goal: cur.goal, spawn_goal: cur.spawn_goal, title: cur.title, worktree_branch: null });
+            if (w) {
+              cwd = w.path; branch = w.branch;
+              note = `Your branch \`${want}\` is not on origin (it was never pushed), so none of its commits are here. ` +
+                `You are in a NEW worktree at ${w.path} on branch \`${w.branch}\`, off ${repo.default_branch}.`;
+            } else {
+              cwd = repo.path;
+              note = `Your branch \`${want}\` could not be checked out here, and a new worktree could not be created. You are in the shared checkout ` +
+                `${repo.path}, which is read-only — claim a worktree with \`mc worktree ${repo.name}\` before editing.`;
+            }
           }
+        } else {
+          cwd = repo.path;
+          note = `On ${label} it worked in the shared checkout. You are in this Mac's checkout of ${repo.name} (${repo.path}), which is read-only — ` +
+            `claim a worktree with \`mc worktree ${repo.name}\` before editing.`;
         }
-      } else {
-        cwd = repo.path;
-        note = `On ${label} it worked in the shared checkout. You are in this Mac's checkout of ${repo.name} (${repo.path}), which is read-only — ` +
-          `claim a worktree with \`mc worktree ${repo.name}\` before editing.`;
+      } else if (local) {
+        cwd = resolveCwd({ workspace_id: cur.workspace_id });
+      } else if (want && repo) {
+        note = `Its branch was \`${want}\`. If it was pushed, claim a worktree (\`mc worktree ${repo.name}\`), then \`git fetch origin ${want}\` and continue from it; if not, start a fresh branch.`;
       }
-    } else if (local) {
-      cwd = resolveCwd({ workspace_id: cur.workspace_id });
-    } else if (want && repo) {
-      note = `Its branch was \`${want}\`. If it was pushed, claim a worktree (\`mc worktree ${repo.name}\`), then \`git fetch origin ${want}\` and continue from it; if not, start a fresh branch.`;
+    } catch (e: any) {
+      return { kind: "stuck", from: cur, why: `could not prepare its repo: ${e?.message ?? e}` };
     }
-  } catch (e: any) {
-    return { kind: "stuck", from: cur, why: `could not prepare its repo: ${e?.message ?? e}` };
-  }
-  // The cwd must be one openSession will keep as-is (it drops a disallowed one and picks its own),
-  // and — for a resume — exactly the directory the transcript is filed under.
-  let cwdOk = false;
-  if (cwd) {
-    const c = checkCwd(cwd, cur.workspace_id);
-    if (c.ok) { cwd = c.path; cwdOk = true; }
-    else {
-      if (note) note += ` (That directory was refused as a working directory here, so you start somewhere else: cd into it before working.)`;
-      cwd = undefined;
-      branch = null;
-    }
-  }
-
-  // The conversation: resume a mirrored claude transcript, else a brief.
-  let mode: "resume" | "brief" = "brief";
-  let why: string | null = null;
-  const mirror = mirrorFile(cur.id);
-  const hasMirror = (() => { try { return fs.statSync(mirror).size > 0; } catch { return false; } })();
-  if (backend.name === "claude-code" && backend.supportsResume && backend.pinsSession) {
-    if (!local) why = "a resume needs the transcript on the computer that runs it, and only the brain holds it";
-    else if (!hasMirror) why = "no transcript of it was mirrored to the brain";
-    else if (!cwdOk || !cwd) why = "its directory could not be resolved on this Mac";
-    else {
-      try {
-        if (copyClaudeTranscript(mirror, configDirFor(cur), cwd, newId)) mode = "resume";
-        else why = "its transcript could not be copied into this Mac's claude profile";
-      } catch (e: any) {
-        why = `its transcript could not be copied: ${e?.message ?? e}`;
+    // The cwd must be one openSession will keep as-is (it drops a disallowed one and picks its own),
+    // and — for a resume — exactly the directory the transcript is filed under.
+    let cwdOk = false;
+    if (cwd) {
+      const c = checkCwd(cwd, cur.workspace_id);
+      if (c.ok) { cwd = c.path; cwdOk = true; }
+      else {
+        if (note) note += ` (That directory was refused as a working directory here, so you start somewhere else: cd into it before working.)`;
+        cwd = undefined;
+        branch = null;
       }
     }
-  } else {
-    why = `${backend.name} cannot resume a conversation from another computer`;
-  }
 
-  let seed: string;
-  if (mode === "resume") {
-    seed = hostFailoverSeed({ mode, from: label, mins, where, goal: cur.goal ?? cur.spawn_goal ?? null, note });
-  } else {
-    let feed: string[] = [];
-    try { feed = ops.feed(cur.id); } catch {}
-    const replay = renderLinesReplay(feed, `A Desk terminal on ${label} (${cur.backend}${cur.model ? "/" + cur.model : ""}) stopped when its computer went offline`, "its Focus feed", 6000);
-    seed = hostFailoverSeed({
-      mode, from: label, mins, where, why, note, replay,
-      goal: cur.goal ?? cur.spawn_goal ?? null,
-      brief: originalBrief(cur.first_prompt),
-      summary: cur.summary ?? null,
-      lastState: lastActivityState(cur.id),
-    });
-  }
+    // The conversation: resume a mirrored claude transcript, else a brief.
+    let mode: "resume" | "brief" = "brief";
+    let why: string | null = null;
+    const mirror = mirrorFile(cur.id);
+    const hasMirror = (() => { try { return fs.statSync(mirror).size > 0; } catch { return false; } })();
+    if (backend.name === "claude-code" && backend.supportsResume && backend.pinsSession) {
+      if (!local) why = "a resume needs the transcript on the computer that runs it, and only the brain holds it";
+      else if (!hasMirror) why = "no transcript of it was mirrored to the brain";
+      else if (!cwdOk || !cwd) why = "its directory could not be resolved on this Mac";
+      else {
+        try {
+          if (copyClaudeTranscript(mirror, configDirFor(cur), cwd, newId)) mode = "resume";
+          else why = "its transcript could not be copied into this Mac's claude profile";
+        } catch (e: any) {
+          why = `its transcript could not be copied: ${e?.message ?? e}`;
+        }
+      }
+    } else {
+      why = `${backend.name} cannot resume a conversation from another computer`;
+    }
 
-  let next: Session;
-  try {
-    next = await ops.open({
-      workspace_id: cur.workspace_id,
-      repo_id: repo?.id ?? cur.repo_id,
-      ticket_id: cur.ticket_id,
-      backend: cur.backend,
-      model: cur.model,
-      role: cur.role,
-      goal: cur.goal,
-      goal_kind: cur.goal_kind,
-      lead_id: cur.lead_id,
-      title: cur.title ?? undefined,
-      created_by: "failover",
-      host_id: target.host_id,
-      // Empty = openSession resolves it (a remote host always does its own).
-      cwd: local && cwd ? cwd : "",
-      seed,
-      movedFrom: cur.id,
-      ...(mode === "resume" ? { agentSessionId: newId, resumeAgent: true } : {}),
-    });
-  } catch (e: any) {
-    return { kind: "stuck", from: cur, why: `opening it ${where} failed: ${e?.message ?? e}` };
-  }
+    let seed: string;
+    if (mode === "resume") {
+      seed = hostFailoverSeed({ mode, from: label, mins, where, goal: cur.goal ?? cur.spawn_goal ?? null, note, wip });
+    } else {
+      let feed: string[] = [];
+      try { feed = ops.feed(cur.id); } catch {}
+      const replay = renderLinesReplay(feed, `A Desk terminal on ${label} (${cur.backend}${cur.model ? "/" + cur.model : ""}) stopped when its computer went offline`, "its Focus feed", 6000);
+      seed = hostFailoverSeed({
+        mode, from: label, mins, where, why, note, replay, wip,
+        goal: cur.goal ?? cur.spawn_goal ?? null,
+        brief: originalBrief(cur.first_prompt),
+        summary: cur.summary ?? null,
+        lastState: lastActivityState(cur.id),
+      });
+    }
 
-  if (local && repo && branch && cwd) sessions.setWorktree(next.id, { path: cwd, branch, repo_id: repo.id });
+    // The host may have come back while the directory and the transcript were being prepared: then
+    // it is its own again (reconcile re-attached it), and a stand-in would be a second agent on it.
+    if (hostOnline(cur.host_id)) return backAgain(cur, label, "before its stand-in opened");
+    let next: Session;
+    try {
+      next = await ops.open({
+        workspace_id: cur.workspace_id,
+        repo_id: repo?.id ?? cur.repo_id,
+        ticket_id: cur.ticket_id,
+        backend: cur.backend,
+        model: cur.model,
+        role: cur.role,
+        goal: cur.goal,
+        goal_kind: cur.goal_kind,
+        lead_id: cur.lead_id,
+        title: cur.title ?? undefined,
+        created_by: "failover",
+        host_id: target.host_id,
+        // Empty = openSession resolves it (a remote host always does its own).
+        cwd: local && cwd ? cwd : "",
+        seed,
+        movedFrom: cur.id,
+        ...(mode === "resume" ? { agentSessionId: newId, resumeAgent: true } : {}),
+      });
+    } catch (e: any) {
+      failed.push(`opening it ${where} failed: ${e?.message ?? e}`);
+      continue;
+    }
+    // …and again once the stand-in is open, before the old row ends (nothing awaits between this
+    // check and endOld): the stand-in goes, the original carries on.
+    if (hostOnline(cur.host_id)) {
+      try { ops.discard(next, `its predecessor's computer (${label}) came back`); } catch (e: any) { console.warn(`[host-failover] discarding ${id8(next.id)} failed: ${e?.message ?? e}`); }
+      return backAgain(cur, label, `after its stand-in ${id8(next.id)} opened — closed it again`);
+    }
+    return finishMove(cur, next, { label, mins, where, mode, why, host_id: target.host_id, branch, cwd: local && repo && branch && cwd ? cwd : null, repo });
+  }
+  return { kind: "stuck", from: cur, why: failed.join("; ") || "no computer could open it" };
+}
+
+function backAgain(cur: Session, label: string, when: string): MoveResult {
+  console.warn(`[host-failover] ${id8(cur.id)}: ${label} came back ${when} — not moved`);
+  return { kind: "skip" };
+}
+
+/** The stand-in is open and the old host is still gone: end the old one and hand over what it held. */
+function finishMove(
+  cur: Session,
+  next: Session,
+  m: { label: string; mins: number; where: string; mode: "resume" | "brief"; why: string | null; host_id: string; branch: string | null; cwd: string | null; repo: Repo | null },
+): MoveResult {
+  if (m.cwd && m.branch && m.repo) sessions.setWorktree(next.id, { path: m.cwd, branch: m.branch, repo_id: m.repo.id });
   ops.endOld(cur, HOST_FAILOVER_END_REASON);
   // The unique live handle frees up only once the old row is ended.
   if (cur.agent_name) { try { sessions.setAgentName(next.id, cur.agent_name); } catch {} }
@@ -450,17 +526,121 @@ export async function failoverSession(s: Session, label: string, mins: number): 
     } catch (e: any) {
       console.warn(`[host-failover] ${id8(cur.id)}: handing its workers to ${id8(next.id)} failed: ${e?.message ?? e}`);
     }
+  } else if (cur.lead_id) {
+    relinkWorker(cur, next, m.where);
   }
-  sessions.setPlacement(next.id, `host failover — continues ${id8(cur.id)} from ${label} (offline ${mins}m)`);
-  const reason = `${label} offline ${mins}m → continued ${where} in ${id8(next.id)} (${mode})`;
+  sessions.setPlacement(next.id, `host failover — continues ${id8(cur.id)} from ${m.label} (offline ${m.mins}m)`);
+  const reason = `${m.label} offline ${m.mins}m → continued ${m.where} in ${id8(next.id)} (${m.mode})`;
   bus.publish({
     topic: "session.host_failover", session_id: cur.id, workspace_id: cur.workspace_id,
-    from_host: cur.host_id, to_host: target.host_id, to_session_id: next.id, mode, reason,
+    from_host: cur.host_id, to_host: m.host_id, to_session_id: next.id, mode: m.mode, reason,
   });
   bus.publish({ topic: "session.updated", session_id: cur.id });
   bus.publish({ topic: "session.updated", session_id: next.id });
-  console.warn(`[host-failover] ${id8(cur.id)} on ${label}: ${reason}${why && mode === "brief" ? ` — brief: ${why}` : ""}`);
-  return { kind: "moved", from: cur, to: sessions.get(next.id) ?? next, host_id: target.host_id, mode };
+  console.warn(`[host-failover] ${id8(cur.id)} on ${m.label}: ${reason}${m.why && m.mode === "brief" ? ` — brief: ${m.why}` : ""}`);
+  return { kind: "moved", from: cur, to: sessions.get(next.id) ?? next, host_id: m.host_id, mode: m.mode };
+}
+
+/**
+ * A Lead's WORKER moved: its slice now names the stand-in (the board is how a Lead rebuilds its map
+ * after a compaction), and its inbox says where it went — one `ended` row whose line is
+ * `moved → <new id8>`, in place of the bare end robert-drive files (it skips host_failover ends).
+ */
+export function relinkWorker(cur: Session, next: Session, where: string): void {
+  const leadId = cur.lead_id;
+  if (!leadId) return;
+  try {
+    for (const sl of leadSlices.list(leadId)) if (sl.session_id === cur.id) leadSlices.patch(leadId, sl.n, { session_id: next.id });
+    leadEvents.add({
+      lead_id: leadId,
+      session_id: cur.id,
+      kind: "ended",
+      key: null,
+      payload: {
+        id8: id8(cur.id), goal: cur.goal || cur.spawn_goal || null,
+        card_line: `moved → ${id8(next.id)} ${where} (its computer went offline) — it is your worker now`,
+        last_result: null, last_said: null, phase: "ended", progress: null,
+      },
+    });
+    notifyLead(leadId);
+  } catch (e: any) {
+    console.warn(`[host-failover] ${id8(cur.id)}: telling its Lead ${id8(leadId)} it moved failed: ${e?.message ?? e}`);
+  }
+}
+
+// ──────────────────────────── when the old host comes back ────────────────────────────
+
+/** `wip/<id8>`: where a moved terminal's unpushed work goes (hostd/salvage.ts names it the same). */
+export const wipBranchFor = (sessionId: string) => `wip/${id8(sessionId)}`;
+
+/** What the host's `salvage` op answers (hostd/salvage.ts SalvageResult) — read defensively. */
+export type SalvageReport = { status: string; branch?: string; sha?: string; dirty?: boolean; ahead?: number; from?: string | null; dir?: string; detail?: string };
+
+/** The live stand-in that continues a moved terminal (its placement line names it), if any. */
+export function standInFor(oldId: string): Session | null {
+  const mark = `continues ${id8(oldId)} `;
+  return sessions.list({ status: "live" }).find((x) => (x.placement ?? "").includes(mark)) ?? null;
+}
+
+/**
+ * The words for one salvage, for the Desk and for the stand-in. Pure. Null when there is nothing to
+ * say to anyone (its worktree held nothing only that disk had).
+ */
+export function salvageLines(r: SalvageReport, o: { label: string; title: string; standIn: string | null }): { desk: string; tell: string | null } | null {
+  const what = [r.dirty ? "uncommitted changes" : null, r.ahead ? `${r.ahead} unpushed commit${r.ahead === 1 ? "" : "s"}` : null].filter(Boolean).join(" and ") || "its work";
+  if (r.status === "saved" && r.branch) {
+    const to = o.standIn ? ` — told ${o.standIn}` : "";
+    return {
+      desk: `${o.label} is back: ${o.title} had ${what} there, now on origin as \`${r.branch}\`${to}; its old process was stopped`,
+      tell: o.standIn
+        ? `[Chronos] ${o.label} came back. What only it had of the work you took over (${what}) is now on origin as the branch \`${r.branch}\`` +
+          ` (a WIP commit on top of ${r.from ? `\`${r.from}\`` : "its HEAD"}). Run \`git fetch origin ${r.branch}\` and merge or cherry-pick what you still need.`
+        : null,
+    };
+  }
+  if (r.status === "failed") {
+    return {
+      desk: `${o.label} is back: could not save ${o.title}'s unpushed work${r.branch ? ` to \`${r.branch}\`` : ""} — ${r.detail ?? "unknown error"}; ` +
+        `its worktree is still on ${o.label}${r.dir ? ` at ${r.dir}` : ""}. Its old process was stopped`,
+      tell: null,
+    };
+  }
+  return null;
+}
+
+/**
+ * A terminal this brain moved while its host was away is still running there (frozen by the fence, or
+ * not, on an older host). Ask the host to push what only its disk has to `wip/<id8>` and stop it
+ * (hostd/terminals.ts salvage), then say what happened — in the Desk chat and to the stand-in. An older
+ * host that has no `salvage` gets the plain kill it always got. Never throws.
+ */
+export async function salvageMoved(
+  h: { id: string; send(f: any): boolean; salvage(a: { ch: number; session_id: string; dir: string | null }): Promise<unknown> },
+  l: Pick<LiveInfo, "ch" | "exit">,
+  row: Session,
+): Promise<SalvageReport | null> {
+  let r: SalvageReport | null = null;
+  try {
+    r = (await h.salvage({ ch: l.ch, session_id: row.id, dir: row.worktree_path ?? null })) as SalvageReport;
+  } catch (e: any) {
+    console.warn(`[host-failover] salvage of ${id8(row.id)} on ${hostLabel(h.id)}: ${e?.message ?? e} — stopping it as before`);
+  }
+  // The host stops it itself after a salvage; the kill covers an older host (or a salvage that failed).
+  if (!l.exit) h.send({ t: "kill", ch: l.ch });
+  h.send({ t: "release", ch: l.ch });
+  if (!r || typeof r !== "object") return null;
+  const label = hostLabel(h.id);
+  const next = standInFor(row.id);
+  const words = salvageLines(r, { label, title: titleOf(row), standIn: next ? id8(next.id) : null });
+  console.log(`[host-failover] salvage of ${id8(row.id)} on ${label}: ${r.status}${r.branch ? ` (${r.branch})` : ""}${r.detail ? ` — ${r.detail}` : ""}`);
+  if (words) {
+    try { ops.post(words.desk); } catch (e: any) { console.warn(`[host-failover] Desk line failed: ${e?.message ?? e}`); }
+    if (words.tell && next) {
+      const err = ops.tell(next.id, words.tell);
+      if (err) console.warn(`[host-failover] could not tell ${id8(next.id)} about ${r.branch}: ${err}`);
+    }
+  }
+  return r;
 }
 
 // The goal reads as what the terminal is for; its title is often the first words of a pasted prompt.
@@ -497,10 +677,10 @@ export async function failoverHost(hostId: string, since: number, rows: Session[
     inFlight.add(s.id);
     try {
       const r = await failoverSession(s, label, mins);
-      if (r.kind === "stuck") gaveUp.add(s.id);
+      if (r.kind === "stuck") gaveUp.set(s.id, hostId);
       results.push(r);
     } catch (e: any) {
-      gaveUp.add(s.id);
+      gaveUp.set(s.id, hostId);
       results.push({ kind: "stuck", from: s, why: String(e?.message ?? e) });
     } finally {
       inFlight.delete(s.id);
@@ -544,6 +724,7 @@ export function startHostFailover(): void {
   const later = (ms: number) => { const t = setTimeout(run, ms); t.unref?.(); };
   bus.on("event", (e: BusEvent) => {
     if (e.topic === "host.offline") later(graceMs + 1_000);
+    else if (e.topic === "host.online") noteHostBack(e.host_id);
   });
   later(graceMs + 5_000); // after a brain restart: hosts that never came back
   const every = setInterval(run, 60_000);

@@ -17,7 +17,10 @@
  *  - NOT reported → its process is gone (the host restarted). End it here, and — like a local
  *    terminal after a deploy — reopen it with --resume ON THE SAME HOST when its CLI can resume.
  * And per channel the host reports that no live row here owns (ended while the host was away) → stop
- * it there.
+ * it there — after saving what only that disk has when it was MOVED (host failover: salvageMoved).
+ *
+ * Re-attaching is also what thaws a terminal the host froze behind its fence (hostd/fence.ts): an
+ * `attach` means "still yours"; a `kill` means "it was moved".
  */
 import { bus } from "./bus.js";
 import { sessions } from "./store.js";
@@ -27,6 +30,7 @@ import { RemoteHost, type HostLinkPort } from "./hosts/remote.js";
 import { adoptRemoteSession, isLive, openSession, remoteResumable, resumeOpts } from "./terminal.js";
 import { lastActivityState, reviveSeedFor } from "./revive.js";
 import { reconcileRuns } from "./remote-runs.js";
+import { HOST_FAILOVER_END_REASON, salvageMoved } from "./host-failover.js";
 import type { Session } from "./types.js";
 import type { LiveInfo } from "./hostlink/wire.js";
 
@@ -47,7 +51,7 @@ export function ensureRemoteHost(id: string, link: HostLinkPort): RemoteHost {
  */
 export async function reconcileHost(
   h: RemoteHost,
-  opts: { revive?: (row: Session) => Promise<unknown> } = {},
+  opts: { revive?: (row: Session) => Promise<unknown>; salvage?: (h: RemoteHost, l: LiveInfo, row: Session) => Promise<unknown> } = {},
 ): Promise<ReconcileResult> {
   const out: ReconcileResult = { reattached: [], adopted: [], lost: [], orphans: [] };
   const reported = new Map<string, LiveInfo>();
@@ -89,8 +93,15 @@ export async function reconcileHost(
       console.warn(`[hosts] ${h.id} reports session ${l.session_id.slice(0, 8)} this brain does not know — leaving it`);
       continue;
     }
-    if (!l.exit) h.send({ t: "kill", ch: l.ch });
-    h.send({ t: "release", ch: l.ch });
+    if (row.end_reason === HOST_FAILOVER_END_REASON) {
+      // Moved while the host was away: its worktree may hold what the stand-in was told it lost. The
+      // host pushes that to wip/<id8>, then stops it; kill + release follow. Not awaited — a push must
+      // not hold up re-attaching every other terminal on this host.
+      void (opts.salvage ?? salvageMoved)(h, l, row).catch((e) => console.warn(`[hosts] salvage ${l.session_id.slice(0, 8)} on ${h.id}: ${e?.message ?? e}`));
+    } else {
+      if (!l.exit) h.send({ t: "kill", ch: l.ch });
+      h.send({ t: "release", ch: l.ch });
+    }
     out.orphans.push(l.ch);
   }
   for (const row of lost) {

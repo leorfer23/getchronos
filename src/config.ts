@@ -557,7 +557,8 @@ export const CONFIG = {
   // and the old one is ended (end_reason host_failover). off → they wait for the host to come back.
   hostFailover: !/^(off|0|false|no)$/i.test(process.env.CHRONOS_HOST_FAILOVER ?? "on"),
   // Minutes a host must stay offline first: a laptop lid closed or a Wi-Fi blip must not move work.
-  hostFailoverGraceMin: ((g) => (Number.isFinite(g) ? Math.max(0, g) : 5))(Number(process.env.CHRONOS_HOST_FAILOVER_GRACE_MIN ?? 5)),
+  // The host fences itself (freezes its work) a little before this passes — hostd/fence.ts.
+  hostFailoverGraceMin: ((g) => (Number.isFinite(g) ? Math.max(0, g) : 20))(Number(process.env.CHRONOS_HOST_FAILOVER_GRACE_MIN ?? 20)),
   // Minutes before a timed calendar event to fire a Mac + Telegram reminder (0 = off).
   reminderLeadMin: Number(process.env.CHRONOS_REMINDER_LEAD ?? 10),
   // Calendar noise filters (case-insensitive substring match). Hidden from agenda + reminders.

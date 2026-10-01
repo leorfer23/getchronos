@@ -93,6 +93,7 @@ before(async () => {
     pingMs: 150,
     apiTarget: () => ({ host: "127.0.0.1", port: stubPort }),
     verifyCaller: (h) => h["x-mc-workspace-token"] === WS_TOKEN,
+    failoverGraceMs: () => 90_000,
   });
   const srv = await brain.listen("127.0.0.1:0", cert);
   listenerPort = (srv.address() as any).port;
@@ -167,6 +168,9 @@ test("run: host connects with pinning, brain gets hello then vitals, RPC works, 
   assert.equal(info.hello.capabilities.clis[0].name, "claude");
   const [vid, v] = await vitalsP;
   assert.equal(vid, id);
+  // The welcome told the host when the brain gives up on it — what its fence counts against.
+  assert.equal(host.graceMs, 90_000);
+  assert.ok(host.lastContact && Date.now() - host.lastContact < 5_000);
   assert.equal(v.loadPerCore, 0.4);
   assert.equal(brain.list()[0].vitals?.cpu, 12);
   const row = hosts.get(id)!;
@@ -281,10 +285,21 @@ test("version: a host speaking another major is refused with an 'update this hos
   const frames: any[] = [];
   ws.on("message", (m) => frames.push(decodeControl(m as Buffer)));
   const closed = new Promise<number>((r) => ws.once("close", (code) => r(code)));
-  ws.send(encodeControl(hello(id, { proto: "2.0" })));
+  ws.send(encodeControl(hello(id, { proto: "2.0", version: "9.9.9", install: "git" })));
   assert.equal(await closed, 4426);
   assert.equal(frames[0]?.code, "version");
   assert.match(frames[0]?.message, /update this host/);
+  // Not silent any more: the brain keeps why, and the Computers view says "needs update" with the line to paste.
+  assert.equal(brain.refusal(id)?.code, 4426);
+  // (Viewed as if its last good link were gone — the running host from the test above is still up.)
+  const asIfGone = { list: () => [], vitalsHistory: () => [], updateStatus: () => null, refusal: (h: string) => brain.refusal(h) } as unknown as BrainLink;
+  const me = hostsView(asIfGone).find((h) => h.id === id)!;
+  assert.equal(me.connected, false);
+  assert.equal(me.refused?.needs_update, true);
+  assert.match(me.refused!.reason, /incompatible/);
+  assert.equal(me.version, "9.9.9");
+  assert.equal(me.update?.available, true);
+  assert.equal(me.update?.manual, MANUAL_GIT_UPDATE);
 });
 
 test("identity: a hello claiming another host id is refused", { skip: !HAS_OPENSSL && "no openssl" }, async () => {
@@ -326,12 +341,28 @@ test("revoke: the credential stops working and a live link is dropped", { skip: 
   const off = once((cb) => brain.onHostOffline(cb));
   assert.equal(brain.revoke(env.CHRONOS_HOST_ID), true);
   await off;
-  await new Promise((r) => setTimeout(r, 100));
-  assert.equal(host.state, "stopped", "a revoked host does not hammer the brain with retries");
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(host.state, "rejected", "a revoked host does not hammer the brain with retries…");
+  assert.equal(host.rejected?.code, 4401, "…but it does not stop for good either: it asks again every 10 minutes");
   await assert.rejects(rawConnect(env.CHRONOS_HOST_ID, env.CHRONOS_HOST_TOKEN), /HTTP 401/);
   const row = hosts.get(env.CHRONOS_HOST_ID)!;
   assert.equal(row.status, "disabled");
   assert.equal(row.token_hash, null);
+  await host.stop();
+});
+
+test("a refused credential at the door: the host says why, fences, and asks again slowly instead of every minute", { skip: !HAS_OPENSSL && "no openssl" }, async () => {
+  const { id } = joined!;
+  const host = new HostLink({ brains: [url()], hostId: id, token: "not-the-token", fp: cert.fingerprint, hello: async () => hello(id), vitals: async () => vitals(), backoffMinMs: 20, rejectedRetryMs: 150 });
+  const rejected = new Promise<any>((r) => host.once("rejected", r));
+  host.start();
+  const r = await rejected;
+  assert.equal(r.code, 4401);
+  assert.equal(host.state, "rejected");
+  assert.match(host.lastError ?? "", /refused 4401/);
+  // It asks again (here after 150ms) — and is refused again, without ever giving up.
+  const again = await new Promise<any>((res) => host.once("rejected", res));
+  assert.equal(again.code, 4401);
   await host.stop();
 });
 

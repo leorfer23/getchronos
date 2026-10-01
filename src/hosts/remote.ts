@@ -445,6 +445,15 @@ export class RemoteHost implements Host {
     return (await this.link.request(this.id, "drop", args, 60_000)) as { path: string; name: string; size: number; mime: string };
   }
 
+  /**
+   * Protocol 1.5: a terminal moved off this host while it was away — push what only its worktree has
+   * to `wip/<id8>`, then stop it (hostd/terminals.ts salvage). A push can take a while; an older host
+   * answers "unknown op".
+   */
+  async salvage(args: { ch: number; session_id: string; dir: string | null }): Promise<unknown> {
+    return this.link.request(this.id, "salvage", args, 180_000);
+  }
+
   /** `mc worktree` for a terminal on this host: created under the host's own checkout of the repo. */
   async claimWorktree(args: { session_id: string; git_remote: string; branch: string; base: string }): Promise<{ path: string }> {
     return (await this.link.request(this.id, "worktree", args, 90_000)) as { path: string };

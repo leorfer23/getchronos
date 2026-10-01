@@ -15,7 +15,7 @@ import type { HostProcs } from "./procs.js";
 import type { HostEgress } from "./egress.js";
 import { classifyBrainUrl, pinBrain, pinnedTlsOptions } from "../hostlink/pin.js";
 
-export type LinkState = "idle" | "connecting" | "online" | "offline" | "stopped";
+export type LinkState = "idle" | "connecting" | "online" | "offline" | "rejected" | "stopped";
 
 export type ApiRequest = Omit<Extract<HostToBrain, { t: "api" }>, "t" | "req_id">;
 export type ApiResponse = { status: number; headers: Record<string, string>; body: Buffer | null };
@@ -32,6 +32,8 @@ export type HostLinkOptions = {
   pingMs?: number;
   backoffMinMs?: number;
   backoffMaxMs?: number;
+  /** After the brain refused this host (credential, identity, version): how long until it asks again. */
+  rejectedRetryMs?: number;
   cfAccess?: { id: string; secret: string } | null;
   /** rpc ops beyond the built-ins. Return a value, or throw to answer ok:false. */
   rpc?: Record<string, (args: unknown) => Promise<unknown> | unknown>;
@@ -47,6 +49,10 @@ type Handler = (f: any) => void;
 
 /** How long an agent should wait before trying the brain again (the host redials within a minute). */
 export const RETRY_AFTER_S = 60;
+/** A refused host asks again this often: slow enough not to be noise, quick enough to notice a fix. */
+export const REJECTED_RETRY_MS = 10 * 60_000;
+/** Close codes that mean "this brain will not take this host as it is" (brain-link.ts). */
+export const REJECT_CODES: Record<number, string> = { 4401: "credential revoked or host disabled", 4403: "identity mismatch", 4426: "needs update" };
 
 /**
  * The answer to a forwarded `mc` call the brain cannot take right now. Still a 503 — `mc` treats it as
@@ -97,7 +103,7 @@ export async function openBrainSocket(raw: string, fp: string | null, headers: R
     onCreate?.(ws);
     ws.once("open", () => { ws.off("error", reject); resolve(ws); });
     ws.once("unexpected-response", (_req, res) => {
-      reject(new Error(`brain refused the connection: HTTP ${res.statusCode}`));
+      reject(Object.assign(new Error(`brain refused the connection: HTTP ${res.statusCode}`), { status: res.statusCode }));
       ws.terminate();
     });
     ws.once("error", reject);
@@ -111,6 +117,16 @@ export class HostLink extends EventEmitter {
   lastError: string | null = null;
   /** The operator's name for this computer, as the brain's last welcome said (null before one / older brains). */
   brainName: string | null = null;
+  /**
+   * The brain's host-failover grace, from its last welcome: how long it waits before it reopens this
+   * host's terminals elsewhere. null = it does not (failover off, or a brain older than the fence).
+   */
+  graceMs: number | null = null;
+  /** The last frame heard from the brain while welcomed — what the fence counts from (fence.ts). */
+  lastContact: number | null = null;
+  /** Set while the brain refuses this host; cleared by the next welcome. */
+  rejected: { code: number; reason: string; at: number } | null = null;
+  private brainSaid: string | null = null;
   private ws: WebSocket | null = null;
   private stopped = false;
   private attempt = 0;
@@ -158,7 +174,7 @@ export class HostLink extends EventEmitter {
       policy: (f) => this.emit("policy", f),
       // Phase 6: index.ts runs update.ts and answers with update_status frames via sendControl().
       update: (f) => this.emit("update", f),
-      error: (f) => { console.warn(`[host] brain says ${f.code}: ${f.message}`); this.lastError = `${f.code}: ${f.message}`; },
+      error: (f) => { console.warn(`[host] brain says ${f.code}: ${f.message}`); this.lastError = `${f.code}: ${f.message}`; this.brainSaid = String(f.message ?? "").slice(0, 300) || null; },
     };
   }
 
@@ -202,6 +218,7 @@ export class HostLink extends EventEmitter {
   private async cycle(): Promise<void> {
     if (this.stopped) return;
     this.setState("connecting");
+    let refused: number | null = null;
     for (const url of this.o.brains) {
       if (this.stopped) return;
       try {
@@ -213,10 +230,31 @@ export class HostLink extends EventEmitter {
         return;
       } catch (e: any) {
         this.lastError = `${url}: ${e?.message ?? e}`;
+        if (e?.status === 401 || e?.status === 403) refused = e.status;
         console.warn(`[host] ${this.lastError}`);
       }
     }
+    // A brain answered and refused the credential: the same as a 4401 close.
+    if (refused) return this.reject(refused === 401 ? 4401 : 4403, `HTTP ${refused}: the brain does not accept this host's credential`);
     this.scheduleRetry();
+  }
+
+  /**
+   * The brain will not take this host as it is (revoked or disabled, identity, protocol version).
+   * Hammering it cannot help, but giving up for good (as this once did) left the PTYs running with no
+   * brain, forever. So: say why (status, menu bar), fence (index.ts freezes the work — the brain will
+   * not take it back), and ask again every 10 minutes, in case the operator fixed it on his side.
+   */
+  private reject(code: number, reason: string): void {
+    if (this.stopped) return;
+    this.rejected = { code, reason, at: Date.now() };
+    this.lastError = `refused ${code} (${REJECT_CODES[code] ?? "refused"}): ${reason}`;
+    console.warn(`[host] brain refused this host — ${this.lastError}; asking again in ${Math.round((this.o.rejectedRetryMs ?? REJECTED_RETRY_MS) / 60_000)} min`);
+    this.setState("rejected");
+    this.emit("rejected", this.rejected);
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => void this.cycle(), this.o.rejectedRetryMs ?? REJECTED_RETRY_MS);
+    this.retryTimer.unref?.();
   }
 
   private scheduleRetry(): void {
@@ -233,7 +271,9 @@ export class HostLink extends EventEmitter {
   private adopt(ws: WebSocket, url: string): void {
     this.ws = ws;
     this.url = url;
+    this.brainSaid = null;
     ws.on("message", (raw, isBinary) => {
+      if (this.state === "online") this.lastContact = Date.now();
       if (isBinary) return; // brain → host binary (PTY input) arrives with Phase 3
       let f: BrainToHost;
       try { f = decodeControl(raw as Buffer) as BrainToHost; } catch { return void ws.close(4400, "bad frame"); }
@@ -250,23 +290,26 @@ export class HostLink extends EventEmitter {
       for (const [id, p] of this.pendingApi) { clearTimeout(p.timer); p.resolve(unreachable(p.path)); this.pendingApi.delete(id); }
       this.lastError = `closed ${code}${reason?.length ? ` ${reason}` : ""}`;
       this.emit("offline", this.lastError);
-      // 4401 revoked / 4403 identity / 4426 version: retrying cannot help, and hammering the brain
-      // with a dead credential is noise. Stay down; `doctor` / the Desk says why.
-      if (code === 4401 || code === 4403 || code === 4426) {
-        console.warn(`[host] brain closed the link permanently (${this.lastError}) — not retrying`);
-        this.stopped = true;
-        this.setState("stopped");
-        return;
-      }
+      // 4401 revoked / 4403 identity / 4426 version: a quick retry cannot help — ask again slowly.
+      if (code in REJECT_CODES) return this.reject(code, this.brainSaid ?? (reason?.length ? String(reason) : REJECT_CODES[code]));
       this.scheduleRetry();
     });
     ws.on("error", () => {});
-    void this.o.hello().then((h) => this.send(h));
+    // A hello that cannot be built (a scan that throws) must not become an unhandled rejection: the
+    // brain drops a link with no hello after 10s, and the redial tries again.
+    void this.o.hello().then((h) => this.send(h)).catch((e) => {
+      this.lastError = `could not build hello: ${e?.message ?? e}`;
+      console.warn(`[host] ${this.lastError}`);
+    });
   }
 
   private onWelcome(f: Extract<BrainToHost, { t: "welcome" }>): void {
     this.attempt = 0;
     if (typeof f.name === "string" && f.name.trim()) this.brainName = f.name.trim().slice(0, 64);
+    // Protocol 1.5: the brain's failover grace (null/absent = it does not move terminals).
+    this.graceMs = typeof f.failover_grace_ms === "number" && Number.isFinite(f.failover_grace_ms) && f.failover_grace_ms >= 0 ? f.failover_grace_ms : null;
+    this.lastContact = Date.now();
+    this.rejected = null;
     this.setState("online");
     this.emit("online", f);
     this.o.egress?.flush();

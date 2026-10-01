@@ -119,6 +119,9 @@ export type OpenIntent = {
  * one computer, then a directory the caller named on the brain.
  */
 export function stickyFor(o: OpenIntent): { host_id: string; why: string; fresh: boolean } | null {
+  // A host-failover stand-in goes where host-failover.ts chose (its pin): where the work lived is the
+  // very computer it cannot run on, and its ticket's last terminal is the one being replaced.
+  if (o.movedFrom) return null;
   if (o.resumeId) {
     const r = sessions.get(o.resumeId);
     return { host_id: r?.host_id || LOCAL_HOST_ID, why: "its CLI transcript is on that computer", fresh: false };
@@ -153,7 +156,9 @@ export function stickyFor(o: OpenIntent): { host_id: string; why: string; fresh:
  * Which computer holds a ticket's worktree, if any: the brain when the directory exists there; else the
  * host a build job was pinned to (phase 5: tickets.ts creates the worktree on the host it places the
  * build on), else the host of the last terminal that worked it. A host that was removed took its
- * worktree with it: nothing to be sticky to any more.
+ * worktree with it: nothing to be sticky to any more. A terminal that was moved OFF its host (host
+ * failover) is not where the ticket's work is any more — its stand-in is, so the newest terminal
+ * that was not moved decides, and only when it ran on a host.
  */
 export function ticketWorktreeHost(t: { id: string; key: string }, repo: { path: string | null } | undefined): string | null {
   const wt = repo?.path ? path.join(worktreeRootFor(repo.path), ticketBranch(t.key).replace(/\//g, "-")) : null;
@@ -161,8 +166,8 @@ export function ticketWorktreeHost(t: { id: string; key: string }, repo: { path:
   const joined = (id: string | null | undefined) => !!id && id !== LOCAL_HOST_ID && !!hosts.get(id)?.token_hash;
   const job = db.prepare("SELECT host_id FROM jobs WHERE ticket_id = ? AND host_id IS NOT NULL AND host_id != 'local' ORDER BY created_at DESC, rowid DESC LIMIT 1").get(t.id) as { host_id: string } | undefined;
   if (joined(job?.host_id)) return job!.host_id;
-  const prev = sessions.list({ ticket_id: t.id }).find((s) => s.host_id && s.host_id !== LOCAL_HOST_ID);
-  if (joined(prev?.host_id)) return prev!.host_id;
+  const prev = sessions.list({ ticket_id: t.id }).find((s) => s.end_reason !== "host_failover");
+  if (prev && joined(prev.host_id)) return prev.host_id!;
   return null;
 }
 

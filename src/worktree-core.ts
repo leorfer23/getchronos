@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 // code the brain uses, without importing the store — worktrees.ts pulls in the DB, and a host must
 // never open (or create) a Chronos database of its own.
 //
-// Everything here is behaviour-identical to what worktrees.ts had inline; worktrees.ts re-uses it.
+// It started as what worktrees.ts had inline; worktrees.ts re-uses it.
 
 const execFileAsync = promisify(execFile);
 
@@ -78,16 +78,55 @@ export async function baseRef(repoPath: string, defaultBranch: string): Promise<
   return "HEAD";
 }
 
+/** git's own words for a failed command: its `fatal:`/`error:` line (never a `hint:`), else the error message. */
+export function gitError(e: any): string {
+  return gitLine(String(e?.stderr || e?.message || e || ""));
+}
+
+export function gitLine(stderr: string): string {
+  const lines = stderr.split("\n").map((l) => l.trim()).filter((l) => l && !/^hint:/.test(l));
+  return (lines.find((l) => /^(fatal|error):/.test(l)) ?? lines[lines.length - 1] ?? "git failed").slice(0, 300);
+}
+
 /**
- * Ensure (creating if needed) a worktree for `branch` of the checkout at `repoPath` and return its
- * path, or null to tell the caller to fall back to the plain checkout. Idempotent: reuses an existing
- * worktree for the branch, so a build and a terminal on the same ticket land in the same dir.
+ * Fetch `branch` from origin into `refs/remotes/origin/<branch>` and say whether origin has it.
+ * Best-effort: offline, or no origin, falls back to whatever remote-tracking ref is already here.
  */
-export async function ensureBranchWorktree(repoPath: string, defaultBranch: string, branch: string): Promise<string | null> {
-  if (!repoPath || !fs.existsSync(repoPath) || !(await isGitRepo(repoPath))) return null;
+async function originHas(repoPath: string, branch: string): Promise<boolean> {
+  try { await git(repoPath, ["fetch", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`], 20_000); } catch {}
+  try {
+    await git(repoPath, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Fast-forward a worktree's branch to origin's when it is simply behind (best-effort: diverged or dirty stays as is). */
+async function ffToOrigin(wtPath: string, branch: string): Promise<void> {
+  try { await git(wtPath, ["merge", "--ff-only", "--quiet", `origin/${branch}`], 30_000); } catch {}
+}
+
+/**
+ * Ensure (creating if needed) a worktree for `branch` of the checkout at `repoPath`: its path, or
+ * git's reason it could not. Idempotent: reuses an existing worktree for the branch, so a build and a
+ * terminal on the same ticket land in the same dir.
+ *
+ * Origin first: the branch may have been worked on — and pushed — from another computer (a terminal
+ * moved by host failover, a ticket built on a host). So origin's branch is fetched, a missing local
+ * branch is created TRACKING `origin/<branch>` when origin has it (off the default branch only when it
+ * does not), and an existing worktree or local branch is fast-forwarded to origin's when it is behind.
+ */
+export async function tryBranchWorktree(repoPath: string, defaultBranch: string, branch: string): Promise<{ path: string } | { error: string }> {
+  if (!repoPath || !fs.existsSync(repoPath)) return { error: `${repoPath || "(no path)"} does not exist` };
+  if (!(await isGitRepo(repoPath))) return { error: `${repoPath} is not a git repository` };
+  const onOrigin = await originHas(repoPath, branch);
 
   const existing = await existingWorktree(repoPath, branch);
-  if (existing && fs.existsSync(existing)) return existing;
+  if (existing && fs.existsSync(existing)) {
+    if (onOrigin) await ffToOrigin(existing, branch);
+    return { path: existing };
+  }
 
   const root = worktreeRootFor(repoPath);
   const wtPath = path.join(root, branch.replace(/\//g, "-"));
@@ -95,19 +134,35 @@ export async function ensureBranchWorktree(repoPath: string, defaultBranch: stri
     if (fs.existsSync(wtPath)) {
       // Stale dir git doesn't know about → let git reconcile, then reuse.
       try { await git(repoPath, ["worktree", "prune"]); } catch {}
-      if (fs.existsSync(wtPath)) return wtPath;
+      if (fs.existsSync(wtPath)) return { path: wtPath };
     }
     fs.mkdirSync(root, { recursive: true });
     const branchExists = (await git(repoPath, ["branch", "--list", branch])) !== "";
     const args = branchExists
       ? ["worktree", "add", wtPath, branch]
-      : ["worktree", "add", "-b", branch, wtPath, await baseRef(repoPath, defaultBranch)];
+      : onOrigin
+        ? ["worktree", "add", "--track", "-b", branch, wtPath, `origin/${branch}`]
+        : ["worktree", "add", "-b", branch, wtPath, await baseRef(repoPath, defaultBranch)];
     await git(repoPath, args, 30_000);
+    if (branchExists && onOrigin) await ffToOrigin(wtPath, branch);
     // Canonicalise (git reports worktrees by their realpath, so reuse returns the same string).
-    return fs.existsSync(wtPath) ? fs.realpathSync(wtPath) : null;
-  } catch {
-    return null; // e.g. branch already checked out in the main tree — fall back to repo path
+    return fs.existsSync(wtPath) ? { path: fs.realpathSync(wtPath) } : { error: `git did not create ${wtPath}` };
+  } catch (e) {
+    return { error: gitError(e) }; // e.g. branch already checked out in the main tree
   }
+}
+
+/**
+ * tryBranchWorktree, for callers that fall back to the plain checkout: the path, or null — with git's
+ * reason in the log rather than swallowed.
+ */
+export async function ensureBranchWorktree(repoPath: string, defaultBranch: string, branch: string): Promise<string | null> {
+  const r = await tryBranchWorktree(repoPath, defaultBranch, branch);
+  if ("error" in r) {
+    console.warn(`[worktree] ${branch} in ${repoPath}: ${r.error}`);
+    return null;
+  }
+  return r.path;
 }
 
 // Sandbox dir adjustments for a ticket that builds in an ISOLATED worktree (job.cwd) of `repoPath`.
@@ -132,8 +187,9 @@ export function worktreeSandboxDirs(
  *
  * For work that moves to this checkout from another computer (host failover, src/host-failover.ts):
  * the other Mac's worktree went down with it, and the only copy of its commits this machine can reach
- * is what was pushed. Unlike ensureBranchWorktree — which creates a missing branch off the default
- * branch — this never invents a branch: no pushed branch means null, and the caller decides.
+ * is what was pushed. Unlike ensureBranchWorktree — which, when origin has no such branch, creates
+ * it off the default branch — this never invents a branch: no pushed branch means null, and the
+ * caller decides.
  * Reuses a worktree this checkout already has for the branch; an existing local branch is
  * fast-forwarded to origin's when it can be (best-effort — a diverged local branch is left as is).
  */
@@ -167,7 +223,8 @@ export async function ensureOriginBranchWorktree(repoPath: string, branch: strin
       await git(repoPath, ["worktree", "add", "--track", "-b", branch, wtPath, `origin/${branch}`], 30_000);
     }
     return fs.existsSync(wtPath) ? fs.realpathSync(wtPath) : null;
-  } catch {
+  } catch (e) {
+    console.warn(`[worktree] ${branch} from origin in ${repoPath}: ${gitError(e)}`);
     return null;
   }
 }

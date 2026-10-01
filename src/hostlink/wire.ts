@@ -19,7 +19,7 @@
  * and accepts any minor (a newer minor only adds optional fields or frame kinds the other side
  * ignores). Bump major only when an existing frame changes meaning.
  */
-export const PROTOCOL_VERSION = "1.4";
+export const PROTOCOL_VERSION = "1.5";
 // 1.1 (phase 3): hello.live[] carries `exit`/`transcript_offset`; `transcript` carries `offset`/`reset`;
 // brain → host `attach` and `release`. All additive: a 1.0 peer ignores what it does not know.
 // 1.2 (phase 4): vitals carry `ncpu`/`load1`/`swapUsedMb`/`swapTotalMb` (the brain runs the governor's
@@ -29,6 +29,11 @@ export const PROTOCOL_VERSION = "1.4";
 // is answered, proc channels ride the same data/ack/attach/release frames a pty does, and the rpc ops
 // `exec` / `oneshot` / `worktree_ensure` exist. A host older than 1.4 is simply never sent a run
 // (placement reads `capabilities.procs`).
+// 1.5: the fence and salvage (HOSTS.md → Reconnect and restarts). `welcome` carries
+// `failover_grace_ms` (the brain's host-failover grace; null = it never moves terminals), and a host
+// freezes its work a little before it passes; hello.live[] marks frozen channels (`frozen`); the rpc
+// op `salvage` pushes a moved terminal's unsaved work to `wip/<id8>` and stops it. An older host
+// answers `salvage` "unknown op" and gets a plain kill, as before.
 
 /** Binary data frame header: magic(1) kind(1) ch(u32) seq(u64). */
 export const DATA_HEADER_BYTES = 14;
@@ -169,6 +174,8 @@ export type LiveInfo = {
   exit?: { code: number | null; signal: string | null } | null;
   /** Bytes of this session's CLI transcript the host has read so far (see `transcript`). */
   transcript_offset?: number;
+  /** Protocol 1.5: stopped by the host's fence; it runs again on `attach`, or is killed. */
+  frozen?: boolean;
 };
 export type HostVitals = {
   at: number;
@@ -236,7 +243,7 @@ export type HostToBrain =
   | ProcHostToBrain;
 
 export type BrainToHost =
-  | { t: "welcome"; proto: string; host_id: string; ping_ms: number; name?: string }
+  | { t: "welcome"; proto: string; host_id: string; ping_ms: number; name?: string; failover_grace_ms?: number | null }
   | { t: "joined"; host_id: string; token: string }
   | { t: "spawn_pty"; id: string; spec: unknown }
   | { t: "spawn_proc"; id: string; spec: unknown }

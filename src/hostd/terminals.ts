@@ -25,7 +25,7 @@ import pty, { type IPty } from "node-pty";
 import { Ring, chunk, type CheckoutInfo, type HostToBrain, type LiveInfo, type RingSpill } from "../hostlink/wire.js";
 import { expandHomeRelative, isSpawnSpec, type SpawnSpec } from "../hosts/spawn-spec.js";
 import type { SpawnReply } from "../hosts/remote.js";
-import { ensureBranchWorktree } from "../worktree-core.js";
+import { ensureBranchWorktree, tryBranchWorktree, worktreeRootFor } from "../worktree-core.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "../agent-prep.js";
 import { ensureBypassAccepted, ensureTrustedCwd } from "../claude-trust.js";
 import { ensureGrokTrustedCwd } from "../grok-trust.js";
@@ -40,6 +40,8 @@ import type { AgentBackend } from "../backends/types.js";
 import { ensureRoot, hostBaseEnv, hostSelfEnv, isDir, mainCheckouts, remoteKey, resolveRepos, safeRef, signalName, vetoReason, type HostSelf } from "./resolve.js";
 import { egressForSpawn, type HostEgress } from "./egress.js";
 import type { WorkSource } from "./status.js";
+import { signalGroup } from "./fence.js";
+import { salvageWorktree, type SalvageResult } from "./salvage.js";
 
 export { remoteKey };
 
@@ -108,6 +110,8 @@ type Chan = {
   backend: string;
   cwd: string;
   startedAt: number;
+  /** SIGSTOPped by the fence (fence.ts) since this time; null while running. */
+  frozen: number | null;
 };
 
 
@@ -210,7 +214,7 @@ export class HostTerminals {
   live(): LiveInfo[] {
     return [...this.chans.values()].map((c) => ({
       ch: c.ch, session_id: c.sessionId, kind: "pty" as const, pid: c.pty.pid ?? null, last_seq: c.ring.lastSeq,
-      exit: c.exit, transcript_offset: c.tail?.offset ?? 0,
+      exit: c.exit, transcript_offset: c.tail?.offset ?? 0, ...(c.frozen ? { frozen: true } : {}),
     }));
   }
 
@@ -220,8 +224,33 @@ export class HostTerminals {
    */
   work(): WorkSource[] {
     return [...this.chans.values()].filter((c) => !c.exit).map((c) => ({
-      kind: "terminal" as const, id: c.sessionId, cwd: c.cwd, backend: c.backend, startedAt: c.startedAt, lastOut: c.lastOut,
+      kind: "terminal" as const, id: c.sessionId, cwd: c.cwd, backend: c.backend, startedAt: c.startedAt, lastOut: c.lastOut, frozen: !!c.frozen,
     }));
+  }
+
+  /**
+   * The fence (fence.ts): stop every running terminal where it stands — the CLI and whatever it is
+   * running, by process group. Output and transcripts simply stop; nothing is lost. Returns how many
+   * were frozen now.
+   */
+  freezeAll(now = Date.now()): number {
+    let n = 0;
+    for (const c of this.chans.values()) {
+      if (c.exit || c.frozen) continue;
+      if (signalGroup(c.pty.pid, "SIGSTOP", true)) { c.frozen = now; n++; }
+    }
+    return n;
+  }
+
+  /** Terminals frozen right now. */
+  frozenCount(): number {
+    return [...this.chans.values()].filter((c) => c.frozen && !c.exit).length;
+  }
+
+  private thaw(c: Chan): void {
+    if (!c.frozen) return;
+    c.frozen = null;
+    signalGroup(c.pty.pid, "SIGCONT", true);
   }
 
   /** The link dropped: stop streaming. PTYs keep running and their output keeps landing in the ring. */
@@ -290,7 +319,7 @@ export class HostTerminals {
 
     const term = pty.spawn(cmd, cmdArgs, { name: "xterm-color", cols: spec.cols, rows: spec.rows, cwd, env });
     const ch = this.allocCh();
-    const c: Chan = { ch, sessionId: spec.session_id, pty: term, ring: new Ring(undefined, ch, this.o.spill?.(ch) ?? null), streaming: !!this.link?.online(), exit: null, exitSent: false, lastOut: Date.now(), modes: new ModeTracker(), tail: null, workspace: spec.workspace, backend: backend.name, cwd, startedAt: Date.now() };
+    const c: Chan = { ch, sessionId: spec.session_id, pty: term, ring: new Ring(undefined, ch, this.o.spill?.(ch) ?? null), streaming: !!this.link?.online(), exit: null, exitSent: false, lastOut: Date.now(), modes: new ModeTracker(), tail: null, workspace: spec.workspace, backend: backend.name, cwd, startedAt: Date.now(), frozen: null };
     this.chans.set(ch, c);
     term.onData((d) => {
       c.lastOut = Date.now();
@@ -373,6 +402,8 @@ export class HostTerminals {
     const c = this.chans.get(ch);
     if (!c || c.exit) return;
     try { c.pty.kill(signal); } catch {}
+    // A stopped process holds every signal but SIGKILL until it runs again: let it take this one.
+    if (c.frozen) this.thaw(c);
   }
 
   ack(ch: number, seq: number): void {
@@ -389,6 +420,11 @@ export class HostTerminals {
       // Not ours (any more): tell the brain it is gone rather than leave a card waiting on it.
       this.link?.send({ t: "exit", ch, code: null, signal: "SIGLOST" });
       return;
+    }
+    // Re-adopted = still this host's (the brain did not move it): a fenced terminal carries on.
+    if (c.frozen) {
+      console.log(`[host] terminal ${c.sessionId.slice(0, 8)} thawed — the brain took it back`);
+      this.thaw(c);
     }
     c.ring.ack(seq);
     const { frames } = c.ring.since(seq);
@@ -446,14 +482,45 @@ export class HostTerminals {
     const want = remoteKey(a.git_remote);
     const repoPath = want ? (await this.o.checkouts()).find((x) => remoteKey(x.remote_url) === want)?.path : undefined;
     if (!repoPath) throw new Error(`repo ${a.git_remote} is not checked out on this host`);
-    const p = await ensureBranchWorktree(repoPath, String(a.base || "main"), String(a.branch));
-    if (!p) throw new Error(`could not create a worktree for ${a.branch} (not a git repo, or the branch is checked out elsewhere)`);
-    return { path: p };
+    const r = await tryBranchWorktree(repoPath, String(a.base || "main"), String(a.branch));
+    if ("error" in r) throw new Error(`could not create a worktree for ${a.branch}: ${r.error}`);
+    return { path: r.path };
+  }
+
+  /**
+   * A terminal the brain moved to another computer while this host was away (host-failover.ts): save
+   * what only this disk has to origin (`wip/<id8>`, salvage.ts), then stop it for good. It is frozen
+   * first, so nothing changes under the commit. `dir` is the worktree the brain recorded for it (an
+   * `mc worktree` claimed after the spawn); it is used only when it lies under one of this host's own
+   * worktree roots, else the terminal's own cwd.
+   */
+  async salvage(a: { ch: number; session_id: string; dir?: string | null }): Promise<SalvageResult> {
+    const c = this.chans.get(Number(a?.ch));
+    if (!c || c.sessionId !== a.session_id) throw new Error("no such terminal on this host");
+    if (!c.exit && !c.frozen && signalGroup(c.pty.pid, "SIGSTOP", true)) c.frozen = Date.now();
+    let dir = c.cwd;
+    if (a.dir && typeof a.dir === "string" && path.isAbsolute(a.dir)) {
+      const roots = (await this.o.checkouts()).map((x) => worktreeRootFor(x.path));
+      const want = path.resolve(a.dir);
+      if (roots.some((r) => want.startsWith(r + path.sep))) dir = want;
+    }
+    let r: SalvageResult;
+    try {
+      r = await salvageWorktree(dir, c.sessionId);
+    } catch (e: any) {
+      r = { status: "failed", detail: String(e?.message ?? e), dir };
+    }
+    console.log(`[host] salvage ${c.sessionId.slice(0, 8)}: ${r.status}${r.branch && r.status === "saved" ? ` → ${r.branch}` : ""}${r.detail ? ` (${r.detail})` : ""}`);
+    if (!c.exit) {
+      try { c.pty.kill(); } catch {}
+      this.thaw(c);
+    }
+    return r;
   }
 
   /** Stop every terminal (host shutdown). */
   killAll(): void {
-    for (const c of this.chans.values()) if (!c.exit) { try { c.pty.kill(); } catch {} }
+    for (const c of this.chans.values()) if (!c.exit) { try { c.pty.kill(); } catch {} this.thaw(c); }
   }
 }
 

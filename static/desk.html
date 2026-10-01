@@ -7418,7 +7418,7 @@ setInterval(loadUsage, 30000);
 // "+ Terminal" has no picker. It all appears with the first joined computer.
 const hState = (h) =>
   h.status === "disabled" ? { dot: "dis", word: "paused" }
-  : !h.connected ? { dot: "off", word: "offline" }
+  : !h.connected ? { dot: "off", word: h.refused ? (h.refused.needs_update ? "needs update" : "refused") : "offline" }
   : h.status === "draining" ? { dot: "drain", word: "draining" }
   : { dot: "on", word: h.admission?.ok === false ? "busy" : "online" };
 const hLast = (h) => { const x = h.vitals?.history || []; return x[x.length - 1] || {}; };
@@ -7575,7 +7575,8 @@ function hUpdateSec(h) {
     body = `<div class="hupd">${u.available ? `<span>Update available → ${to}</span>` : ""}${hUpdStatus(u)}${u.available && !busy ? `<button class="btn" id="h-update">Update</button>` : ""}</div>`
       + (u.available && !busy ? `<div class="hint" style="margin-top:6px">${esc(H_UPD_NOTE)}</div>` : "");
   } else if (u.manual) {
-    body = `<div class="hint" style="margin-bottom:6px">This computer runs a Chronos from before self-update. Paste this once in Terminal on it; after that, updates are a button here.</div><pre class="hcmd">${esc(u.manual)}<button type="button" id="h-mcopy">Copy</button></pre>`;
+    const why = h.refused?.needs_update ? `This brain refuses its link: ${h.refused.reason}. Paste this in Terminal on it — it asks again every 10 minutes.` : "This computer runs a Chronos from before self-update. Paste this once in Terminal on it; after that, updates are a button here.";
+    body = `<div class="hint" style="margin-bottom:6px">${esc(why)}</div><pre class="hcmd">${esc(u.manual)}<button type="button" id="h-mcopy">Copy</button></pre>`;
   } else {
     body = `<div class="hupd"><span>Update available → ${to}</span><span class="st">${h.install === "dev" ? "it runs from a developer checkout — update it there" : h.connected ? "" : "when it is back online"}</span>${hUpdStatus(u)}</div>`;
   }

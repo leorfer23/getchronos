@@ -740,6 +740,8 @@ export function noteWorkerEnded(sessionId: string): void {
   const s = sessions.get(sessionId);
   const lead = resolveLead(s?.lead_id);
   if (!s || !lead) return;
+  // Moved off an offline computer: host-failover.ts files this end itself, as "moved → <new id8>".
+  if (s.end_reason === "host_failover") return;
   const words = lastWords(s.id, true);
   leadEvents.add({
     lead_id: lead.id,

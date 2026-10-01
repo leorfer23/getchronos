@@ -28,13 +28,14 @@ const status = (work: WorkSource[] = [src()], state: Parameters<typeof linkView>
 test("shape: exactly these keys, top level and per work item", () => {
   const s = status();
   assert.deepEqual(Object.keys(s).sort(), [
-    "active", "at", "commit", "host_id", "last_error", "link", "name", "reason", "since", "state", "url", "version", "work",
+    "active", "at", "commit", "fenced", "host_id", "last_error", "link", "name", "reason", "since", "state", "url", "version", "work",
   ]);
-  assert.deepEqual(Object.keys(s.work[0]).sort(), ["active", "backend", "id", "kind", "last_output_at", "repo", "started_at"]);
+  assert.deepEqual(Object.keys(s.work[0]).sort(), ["active", "backend", "frozen", "id", "kind", "last_output_at", "repo", "started_at"]);
   assert.deepEqual(s.work[0], {
     kind: "terminal", id: "4f3a9c21", repo: "app", backend: "claude-code",
-    started_at: NOW - 12 * 60_000, last_output_at: NOW - 1000, active: true,
+    started_at: NOW - 12 * 60_000, last_output_at: NOW - 1000, active: true, frozen: false,
   });
+  assert.equal(s.fenced, null);
   assert.equal(s.commit, "bbbbbbbbbbbb", "a short commit");
   assert.equal(s.link, "online");
   assert.equal(s.reason, null);
@@ -130,4 +131,17 @@ test("port discovery (mirrored in hostbar.swift): an explicit port is the only o
   assert.equal(isHostStatus({ ok: true }), false, "a Chronos daemon on 7777 answers without a host_id");
   assert.equal(isHostStatus({ host_id: "" }), false);
   assert.equal(isHostStatus({ host_id: "h_m2" }), true);
+});
+
+test("the fence shows: frozen items are not active, and `fenced` says since when and why", () => {
+  const s = buildStatus({
+    hostId: "h_m2", name: "m2",
+    link: { state: "offline", since: NOW - 60_000, url: null, lastError: "closed 1006" },
+    version: "0.1.0", commit: null, home: "/Users/op",
+    work: [src({ frozen: true, lastOut: NOW - 10 }), src({ id: "run-1", kind: "run" })],
+    fence: { since: NOW - 30_000, reason: "no word from the brain for 18 min" },
+  }, NOW);
+  assert.deepEqual(s.work.map((w) => [w.id, w.active, w.frozen]), [["run-1", true, false], ["4f3a9c21", false, true]]);
+  assert.deepEqual(s.fenced, { since: NOW - 30_000, reason: "no word from the brain for 18 min", frozen: 1 });
+  assert.equal(linkView("rejected"), "offline", "a refused host is not coming back on its own");
 });
