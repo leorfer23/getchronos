@@ -25,7 +25,7 @@ import { EventEmitter } from "node:events";
 import express from "express";
 import { WebSocketServer, type WebSocket, type RawData } from "ws";
 import {
-  MAX_CONTROL_BYTES, PROTOCOL_VERSION, checkCompat, decodeControl, decodeData, encodeControl, encodeData,
+  FORWARD_STRIP_HEADERS, MAX_CONTROL_BYTES, PROTOCOL_VERSION, checkCompat, decodeControl, decodeData, encodeControl, encodeData,
   type BrainToHost, type DataFrame, type Hello, type HostToBrain, type HostVitals,
 } from "./wire.js";
 import { JoinCodes, ensureBrainCert, mintHostCredential, hashToken, legacyHostsFile, type BrainCert } from "./join.js";
@@ -102,13 +102,8 @@ export type BrainLinkOptions = {
   publicUrls?: () => string[];
 };
 
-// Headers a host may never set on a forwarded request. The admin token is the dashboard's and never
-// crosses to a host; x-mc-host / x-mc-remote / x-mc-forwarded are the brain's own stamps.
-const STRIP_REQ = new Set([
-  "host", "connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "trailer",
-  "content-length", "x-mc-admin", "x-mc-host", "x-mc-session", "x-mc-remote", "x-mc-forwarded", "authorization", "cookie",
-  "cf-access-client-id", "cf-access-client-secret", "cf-access-jwt-assertion",
-]);
+// Headers a host may never set on a forwarded request (wire.ts).
+const STRIP_REQ = FORWARD_STRIP_HEADERS;
 const PASS_RES = new Set(["content-type", "cache-control", "retry-after", "content-disposition", "x-mc-ticket"]);
 
 /**

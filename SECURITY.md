@@ -31,7 +31,11 @@ this at a repo that matters.
 baseline of credential stores (`~/.ssh`, `~/.aws`, `~/.config/gcloud`, `~/.kube`, the admin token,
 the database, the CA private keys, browser profiles), plus whatever you add. It is macOS-only. On
 any other platform `buildProfile` returns null and **jobs run unsandboxed** — the daemon does not
-pretend otherwise, but it also does not refuse to start.
+pretend otherwise, but it also does not refuse to start. Chronos's own multi-computer state — the
+brain's `hostlink/` dir and a host's `~/.chronos-host` (its token, queued requests carrying workspace
+tokens, terminal output) — is sealed: denied after every re-grant, including a workspace's
+`sandbox_allow`, because agents run as the same user and file modes do not stop them
+([HOSTS.md → Security](./HOSTS.md#security)).
 
 **Project scoping** is a security boundary, not a UI filter. An endpoint that takes a run or ticket
 by id verifies it belongs to the caller's project. A missed check once let one project drain

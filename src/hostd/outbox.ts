@@ -8,12 +8,15 @@
  * online again. Anything that needs an answer (an ask, a heavy slot, a read) is never queued.
  *
  * One file per request under `~/.chronos-host/outbox/`, named by a monotonic sequence number, so the
- * order survives a host restart and dropping the oldest is one unlink. Files are 0600: they carry the
- * request's own headers (the workspace token, the session), which is how the brain still attributes a
- * late write to the terminal that made it.
+ * order survives a host restart and dropping the oldest is one unlink. An entry keeps the request's
+ * own headers minus the ones the brain would drop anyway (FORWARD_STRIP_HEADERS): what is left is the
+ * workspace or Lead token and the session, which is how the brain still attributes a late write to
+ * the terminal that made it. Files are 0600, and the whole host home is sealed from every agent's
+ * sandbox (config.ts → sandbox.sealed) — agents run as this same user, so the mode alone would not.
  */
 import fs from "node:fs";
 import path from "node:path";
+import { FORWARD_STRIP_HEADERS } from "../hostlink/wire.js";
 import type { ApiRequest, ApiResponse } from "./link.js";
 
 /**
@@ -82,7 +85,9 @@ export class Outbox {
 
   /** Keep one request for later. false = it alone is over the byte cap, or the disk refused (the caller answers as before). */
   put(req: ApiRequest): boolean {
-    const data = Buffer.from(JSON.stringify({ ...req, at: Date.now() } satisfies Queued));
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(req.headers ?? {})) if (!FORWARD_STRIP_HEADERS.has(k.toLowerCase())) headers[k] = v;
+    const data = Buffer.from(JSON.stringify({ ...req, headers, at: Date.now() } satisfies Queued));
     if (data.length > this.maxBytes) return false;
     const name = String(this.next++).padStart(16, "0") + ".json";
     const file = path.join(this.dir, name);
