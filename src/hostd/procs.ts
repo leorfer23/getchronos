@@ -38,7 +38,7 @@ import { niceWrap } from "../machine.js";
 import { withRuntimePath } from "../gates.js";
 import type { AgentBackend } from "../backends/types.js";
 import type { Job } from "../types.js";
-import { hostBaseEnv, insideCheckouts, isDir, resolveRepos, safeRef, type CloneOpts } from "./resolve.js";
+import { hostBaseEnv, hostSelfEnv, insideCheckouts, isDir, resolveRepos, safeRef, type CloneOpts, type HostSelf } from "./resolve.js";
 import { egressForSpawn, type HostEgress } from "./egress.js";
 import { VetoError, type TerminalsLink } from "./terminals.js";
 import type { WorkSource } from "./status.js";
@@ -70,6 +70,8 @@ export type HostProcsOptions = CloneOpts & {
   ringBytes?: number;
   /** Same as the terminals': evicted unacked stdout goes to disk instead of being lost (spill.ts). */
   spill?: (ch: number) => RingSpill;
+  /** Who this host is — stamped on every run as MC_HOST_ID / MC_HOST_NAME, like the terminals. */
+  self?: () => HostSelf;
 };
 
 type ProcChan = {
@@ -231,6 +233,7 @@ export class HostProcs {
       MC_API: `http://localhost:${this.o.mcPort()}/api`,
       PATH: `${this.home}/.mc/bin:${base.PATH ?? ""}`,
       MC_RUN: spec.run_id,
+      ...hostSelfEnv(this.o.self?.()),
     };
 
     const child = spawn(cmd, cmdArgs, { cwd, env, stdio: [spec.steer ? "pipe" : "ignore", "pipe", "pipe"] });

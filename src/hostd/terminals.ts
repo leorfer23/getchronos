@@ -37,7 +37,7 @@ import { ModeTracker } from "../term-modes.js";
 import { ttyCooked, typeSeed } from "../term-seed.js";
 import { locateTranscript, transcriptIsJsonl, type FocusCtx } from "../focus.js";
 import type { AgentBackend } from "../backends/types.js";
-import { ensureRoot, hostBaseEnv, isDir, mainCheckouts, remoteKey, resolveRepos, safeRef, signalName, vetoReason } from "./resolve.js";
+import { ensureRoot, hostBaseEnv, hostSelfEnv, isDir, mainCheckouts, remoteKey, resolveRepos, safeRef, signalName, vetoReason, type HostSelf } from "./resolve.js";
 import { egressForSpawn, type HostEgress } from "./egress.js";
 import { ensureLandingDir } from "./landing.js";
 import type { WorkSource } from "./status.js";
@@ -89,6 +89,8 @@ export type HostTerminalsOptions = {
   spill?: (ch: number) => RingSpill;
   /** Where repo-less terminals' landing dirs are built (landing.ts). Default `<home>/.chronos-landing`. */
   landingRoot?: string;
+  /** Who this host is — stamped on every agent as MC_HOST_ID / MC_HOST_NAME (read per spawn: the name can arrive late). */
+  self?: () => HostSelf;
 };
 
 type Chan = {
@@ -319,6 +321,7 @@ export class HostTerminals {
       MC_API: `http://localhost:${this.o.mcPort}/api`,
       PATH: `${this.home}/.mc/bin:${base.PATH ?? ""}`,
       MC_SESSION: spec.session_id,
+      ...hostSelfEnv(this.o.self?.()),
     };
 
     const term = pty.spawn(cmd, cmdArgs, { name: "xterm-color", cols: spec.cols, rows: spec.rows, cwd, env });

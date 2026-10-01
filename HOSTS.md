@@ -227,6 +227,28 @@ command that carries one either goes to the host or carries the content instead:
 | `mc job new` | the job is pinned to the forwarding host (`jobs.host_id`; its cwd stays the host's path) when the cwd is one of the workspace's checkouts that host reported, a folder in one, or a worktree under one (`src/hosts/job-cwd.ts`); otherwise refused with the checkouts it does have. Never the old silent fallback to the brain's `$HOME`. |
 | `mc ticket get` | the ticket's markdown lives on the brain, so a remote terminal's seed says `mc ticket get <key>` instead of a path; the brain's tickets dir is not granted on a host. |
 
+### Agents know where they are
+
+An agent on m2 that says "open http://localhost:5173" is pointing the operator at the brain's port
+5173. So every agent is told which computer it is on, and the board does not pretend otherwise:
+
+- **Env.** Every terminal and headless run gets `MC_HOST_ID`, `MC_HOST_NAME` (the operator's name for
+  the computer) and `MC_HOST_BRAIN` (`1` on the brain, whose id is `local`). The brain sets them in
+  `mcEnv`; a host re-stamps them from its own identity at spawn (`hostd/resolve.ts` `hostSelfEnv`),
+  so they are right even while the brain is away.
+- **Prompt.** A terminal on a host is opened with one short block (`agents/_blocks/on-host.md`):
+  localhost, files, the browser and logins are THIS machine's; show the operator a page with
+  `mc artifact put`; `mc clip` is the operator's clipboard. Nothing is added on the brain.
+- **`mc whoami`** prints computer, workspace, repo, session, cwd and api — from the env first, then
+  the brain's view of the session (bounded, so it still answers while the brain is away).
+- **`mc session list`** shows each terminal's computer (`host_name` on `GET /sessions`), and
+  **`mc repo list`** from a host shows that host's checkout (`host_path`, added to `GET /workspaces`
+  only for a forwarded request) or "not on this host".
+- **Loopback links on the board.** A remote terminal's Focus feed rewrites `http://localhost:5173/x`
+  to `localhost:5173/x (on m2)` (`focus.ts` `tagLoopbackLinks`): text, not a link that would open the
+  brain's port. Hosts are not reachable by address from the brain (they dial out), so nothing is
+  rewritten to a LAN URL.
+
 ### Placement
 
 `POST /sessions` and the dispatcher pick a host with one pure function (`place()`, unit-tested like
@@ -272,8 +294,9 @@ What survives what:
 
 - **Status writes are queued.** `mc state`, `mc progress`, card hook events, `mc step`, `mc learn`,
   `mc remember`, `mc pad add|append` — an explicit allowlist in `outbox.ts` — go to
-  `~/.chronos-host/outbox/` (one 0600 file each, with the request's own headers, so the brain still
-  attributes them to the right terminal). The forwarder answers `202 {queued:true}`; `mc` prints
+  `~/.chronos-host/outbox/` (one 0600 file each, with the request's own headers minus those the
+  brain drops anyway — admin token, `authorization`, cookies, Access headers — so the brain still
+  attributes them to the right terminal; sealed from agents, see *Security*). The forwarder answers `202 {queued:true}`; `mc` prints
   `mc: queued — …` and exits 0. After the welcome they are replayed in order, and while any are left
   new allowlisted writes queue behind them (a fresh `done` must not be overwritten by a stale
   `working`). 4xx drops an entry, 503 stops the replay until the next try (30 s), a 5xx five times
@@ -302,6 +325,37 @@ leave a runaway gate. `gh` runs where the worktree is, so the host needs `gh` lo
 workspace. The host capability report covers it and placement checks it. Merges by PR URL can stay
 on the brain.
 
+### Robert and the fleet
+
+Robert runs the computers the way he runs the terminals: he can see them, he is woken when one needs
+a call, and changes to them are the operator's (`agents/_blocks/hosts.md`, in both his surfaces).
+
+- **What he sees.** With more than one computer, his turn opens with a `HOSTS:` line ahead of FLEET
+  NOW (`src/fleet-line.ts`, from `hostsView()`): per computer cpu/ram, live terminals, and what is
+  wrong — `m5 OFFLINE 12m`, `draining`, `full (…)`, `claude logged out`, `behind brain (update)`. A
+  terminal on a host ends its FLEET NOW row with ` · @m2`, plus ` · ⚠ m2 offline` while that link is
+  down. A brain with no joined host builds none of it (one SELECT) and reads exactly as before.
+- **`mc hosts`.** `mc hosts` lists the computers (status, load, live, commit/behind, notes), `mc hosts
+  show <name>` prints one in full, `mc hosts drain|resume <name>` and `mc hosts update <name|all>`
+  call the admin routes. Without the admin token (a terminal, a Lead) it reads `GET /api/hosts/brief`
+  instead (`src/hosts/brief.ts`): per computer name, online, headroom, live count, and whether *the
+  caller's own* workspace may run there (`ineligible()`, the verdict placement acts on) — never another
+  workspace's policy, the inventory or a token. A workspace token answers for its own workspace only.
+- **Where a terminal went.** `POST /api/sessions` answers with `placement` (why) and `host_name`, and
+  `mc session new` prints them: `spawned session 1a2b3c4d (claude-code/·) → m2 (most headroom (…))`.
+- **What wakes him** (`src/robert-host-drive.ts`, same durable queue and Desk thread as terminal
+  wakes, all-workspaces scope): a host offline past the failover grace + 2 min *with terminals on it*
+  (an idle laptop closing is not news); terminals host failover could not move (`session.host_failover`
+  mode `stuck`, batched per host); a `host.policy_violation`; a CLI that an allowed workspace's default
+  backend needs reported logged out; a connected host behind the brain for
+  `CHRONOS_ROBERT_HOST_BEHIND_H` hours (default 24). Once per host per state (the offline episode, the
+  policy, the brain commit, the CLI and day). Off with ⚙ Settings → Robert → *Wake on computer
+  trouble* (`robert.hosts`, `CHRONOS_ROBERT_HOST_WAKES=0`) or the master `robert.enabled`; every new
+  host wake counts against `robert.per_hour` with the terminal wakes.
+- **What he may do.** Read anything. Pin a terminal (`--host`) only with a reason; placement is the
+  default. Draining, disabling, revoking, policy and updates are confirm-first (a UI ask on the Desk, a
+  ✅ card on Telegram); he never loosens a policy to make a refusal go away.
+
 ---
 
 ## Security
@@ -315,6 +369,14 @@ Mac today. So the design protects the **link** and the **boundaries between work
   trust-on-first-use.
 - **Host token:** 32 random bytes, stored hashed (`token_hash`), revocable from the Desk. The host
   keeps it in its own `.secrets` with mode 600.
+- **The host's state is sealed from its agents.** Agents run as the same user as `chronos host`, so
+  mode 600 does not keep them out. Every Seatbelt profile (Desk terminals, headless runs, the
+  verifier) denies read+write of the whole host home (`CHRONOS_HOST_HOME`, default `~/.chronos-host`:
+  `.secrets`, `outbox/`, `spill/`) and the brain's `hostlink/` dir (TLS key, host token hashes,
+  transcript mirrors) — `CONFIG.sandbox.sealed`, the last rules in the profile, after the agent's cwd
+  and any `sandbox_allow` re-grant, and not replaced by `CHRONOS_PROTECTED_SECRETS`. Without it, one
+  client's agent could read the host token or another client's queued workspace token. Sandbox
+  mode `off` has no profile and no seal.
 - **Least data per host.** A host receives its own sessions' spawns, input and API responses. It
   never gets the bus firehose, the DB, other hosts' vitals, or another workspace's secrets.
   `workspace_vars` and `secrets_file` values are sent inside the `spawn` frame, only for the

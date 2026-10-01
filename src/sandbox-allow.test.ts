@@ -77,29 +77,33 @@ describe("workspaceSandboxAllow", () => {
 
 describe("the profile the grant produces", { skip: noProfile }, () => {
   const gcloud = `${home}/.config/gcloud`;
+  // The last rule of this kind that names gcloud. Not the profile's last rule overall: the sealed
+  // host-link deny (config.ts → sandbox.sealed) comes after the re-grant on purpose.
+  const lastOn = (profile: string, head: string) =>
+    profile.split("\n").map((l, i) => (l.startsWith(head) && l.includes(`(subpath ${JSON.stringify(gcloud)})`) ? i : -1)).reduce((a, b) => Math.max(a, b), -1);
 
   test("guard: the allow comes AFTER the secrets deny, or it does nothing", () => {
     // SBPL takes the LAST matching rule. An allow emitted before the deny is not a weaker grant —
     // it is no grant at all, and the symptom is an agent that still cannot run bq with the feature
     // apparently switched on.
     const profile = buildProfile("guard", "/tmp/x", [], `${home}/.claude`, [], false, [], [gcloud])!;
-    const denyAt = profile.lastIndexOf(`(deny file-write*`);
-    const allowAt = profile.lastIndexOf(`(allow file-write*`);
+    const denyAt = lastOn(profile, "(deny file-write*");
+    const allowAt = lastOn(profile, "(allow file-write*");
     assert.ok(profile.includes(gcloud), "the granted path must appear in the profile");
-    assert.ok(allowAt > denyAt, "the re-grant must be the last word on that path");
+    assert.ok(denyAt >= 0 && allowAt > denyAt, "the re-grant must be the last word on that path");
   });
 
   test("strict: the same ordering holds", () => {
     const profile = buildProfile("strict", "/tmp/x", [], `${home}/.claude`, [], false, [], [gcloud])!;
-    const denyAt = profile.lastIndexOf(`(deny file-write*`);
-    const allowAt = profile.lastIndexOf(`(allow file-write*`);
-    assert.ok(allowAt > denyAt);
+    const denyAt = lastOn(profile, "(deny file-write*");
+    const allowAt = lastOn(profile, "(allow file-write*");
+    assert.ok(denyAt >= 0 && allowAt > denyAt);
   });
 
   test("granting nothing leaves the deny standing — the default for every workspace", () => {
     const profile = buildProfile("guard", "/tmp/x", [], `${home}/.claude`, [], false, [], [])!;
-    const denyAt = profile.lastIndexOf("(deny file-write*");
-    const allowAt = profile.lastIndexOf("(allow file-write*");
+    const denyAt = lastOn(profile, "(deny file-write*");
+    const allowAt = lastOn(profile, "(allow file-write*");
     assert.ok(denyAt > allowAt, "with no grant, a secrets deny must be the last word");
   });
 });

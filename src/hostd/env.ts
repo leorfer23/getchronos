@@ -6,12 +6,12 @@
  * A host keeps its own state in `~/.chronos-host/`, never in the checkout: the checkout is just code
  * the host runs, and its `.secrets` (if any) belong to a brain that may or may not live on this Mac.
  */
-import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { parseEnvFile } from "../env-file.js";
+import { hostHomeDir } from "./home.js";
 
-export const HOST_HOME = process.env.CHRONOS_HOST_HOME || path.join(os.homedir(), ".chronos-host");
+export const HOST_HOME = hostHomeDir();
 export const HOST_SECRETS = path.join(HOST_HOME, ".secrets");
 
 try {

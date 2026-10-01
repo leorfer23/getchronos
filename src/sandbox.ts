@@ -159,7 +159,10 @@ export function buildProfile(
     return null;
   }
 
-  const { secrets, projectDirs } = CONFIG.sandbox;
+  const { secrets, projectDirs, sealed } = CONFIG.sandbox;
+  // After everything, the re-grants included: no cwd, add-dir or sandbox_allow opens Chronos's own
+  // host-link state (config.ts → sandbox.sealed).
+  const seal = [rule("deny", "file-read*", sealed), rule("deny", "file-write*", sealed)];
   const own = [cwd, ...addDirs];
   // Static protected project dirs + dynamic per-workspace isolation deny (other workspaces' roots).
   // `own` is re-granted after, so a job scoped INTO its own repo still works.
@@ -183,6 +186,7 @@ export function buildProfile(
       // without ~/.config/gcloud — without opening that store to every other workspace on the Mac.
       rule("allow", "file-read*", allowSecrets),
       rule("allow", "file-write*", allowSecrets),
+      ...seal,
       ...(lockEgress ? EGRESS_LOCK : []),
     ].filter(Boolean).join("\n");
   }
@@ -217,6 +221,7 @@ export function buildProfile(
     // use a credential store at all, however explicitly it was trusted with one.
     rule("allow", "file-read*", allowSecrets),
     rule("allow", "file-write*", allowSecrets),
+    ...seal,
     ...(lockEgress ? EGRESS_LOCK : []),
   ].filter(Boolean).join("\n");
 }
