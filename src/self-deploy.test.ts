@@ -176,13 +176,19 @@ function seedTicket(repoPath: string) {
     name: "SD",
     config_dir: "/tmp/sd",
   } as any);
+  // createTicket writes `<repo.path>/.mc/tickets/<KEY>.md`; with repoPath = selfRoot() that was the
+  // checkout itself (SD*-N.md junk in the live repo). Create against a temp dir, then point the repo
+  // at repoPath — queueSelfDeploy reads repo.path at call time.
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "sd-repo-"));
   const repo = repos.create({
     workspace_id: ws.id,
     name: "r-" + randomUUID().slice(0, 6),
-    path: repoPath,
+    path: scratch,
     default_branch: "main",
   } as any);
-  return createTicket({ workspace_id: ws.id, repo_id: repo.id, title: "self-deploy fixture" });
+  const t = createTicket({ workspace_id: ws.id, repo_id: repo.id, title: "self-deploy fixture" });
+  repos.update(repo.id, { path: repoPath });
+  return t;
 }
 
 test("queueSelfDeploy fires for Chronos' own checkout and ignores every other repo", (t) => {
@@ -201,6 +207,7 @@ test("queueSelfDeploy fires for Chronos' own checkout and ignores every other re
   assert.equal(readPending(), null);
 
   const self = seedTicket(selfRoot());
+  assert.ok(!self.file_path.startsWith(selfRoot() + path.sep), `fixture wrote ${self.file_path} into the checkout`);
   assert.equal(queueSelfDeploy(self), true);
   const m = readPending()!;
   assert.equal(m.ticket_key, self.key);

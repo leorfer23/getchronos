@@ -6,6 +6,8 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { wsTicketsDir } from "./sandbox.js";
 import { db, jots, sessions, workspaces } from "./store.js";
 import {
   briefPath, collectContext, defaultPlanWorkspaces, nextDayBrief, nextWorkday, planNextDay,
@@ -182,7 +184,7 @@ test("an unknown workspace id is refused up front; no clients at all is an error
 
 test("the brief lives under the workspace's tickets dir — a path the sandbox already grants", () => {
   const ws = mkWs();
-  assert.match(briefPath(ws, "2026-09-04"), new RegExp(`/tickets/${ws.slug}/nextday/2026-09-04\\.md$`));
+  assert.equal(briefPath(ws, "2026-09-04"), path.join(wsTicketsDir(ws.slug), "nextday", "2026-09-04.md"));
 });
 
 // ── Robert ──

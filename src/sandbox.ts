@@ -2,7 +2,7 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { CONFIG } from "./config.js";
-import { inRepo } from "./repo-root.js";
+import { resolveTicketsDir } from "./repo-root.js";
 
 export type SandboxMode = "off" | "guard" | "strict";
 
@@ -10,7 +10,9 @@ const home = os.homedir();
 
 // A workspace's ticket markdown files (no-repo tickets) live here; agents in that workspace must be
 // able to read them even though ~/chronos itself is another workspace's denied root.
-export const wsTicketsDir = (wsSlug: string) => inRepo("tickets", wsSlug);
+// Under test (without CHRONOS_HOME) this is a per-process temp dir — see resolveStateDir.
+const TICKETS_ROOT = resolveTicketsDir();
+export const wsTicketsDir = (wsSlug: string) => path.join(TICKETS_ROOT, wsSlug);
 
 // Same path, created first — for every caller that hands it to a CLI as `--add-dir`. A workspace
 // that never wrote a no-repo ticket has no such dir, and cursor-agent exits at spawn on a missing

@@ -206,6 +206,7 @@ so the checkout can live anywhere.
 | `CHRONOS_DB` | `<root>/chronos.db` | the database (`:memory:` for tests) |
 | `CHRONOS_PORT` | `7777` | HTTP + WebSocket |
 | `CHRONOS_ATTACHMENTS` | `<root>/attachments` | uploaded files |
+| `CHRONOS_TICKETS_DIR` | `<root>/tickets` | no-repo ticket markdown (`<dir>/<ws-slug>/<KEY>.md`) |
 | `CHRONOS_LOG_DIR` | the checkout root | `chronos.out.log` / `chronos.err.log` |
 | `CHRONOS_BROKER_FILE` | `<root>/.broker.json` | broker credentials (sandbox-denied) |
 | `CHRONOS_EGRESS_CA_DIR` | `<root>/ca` | the local TLS CA (its keys are sandbox-denied) |
@@ -214,6 +215,10 @@ so the checkout can live anywhere.
 Moving `CHRONOS_BROKER_FILE` or `CHRONOS_EGRESS_CA_DIR` moves the deny-list entry with it — that
 resolution is deliberate, so an operator cannot accidentally relocate a credential *out* of the
 sandbox's protection.
+
+Under test (`CHRONOS_TEST=1` or the node test runner) with no `CHRONOS_HOME`, the notes mirror,
+tickets and attachments dirs default to per-process temp dirs (`$TMPDIR/chronos-test-<name>-<pid>`)
+instead of the checkout — see `resolveStateDir` in `src/repo-root.ts`. An explicit override still wins.
 
 ---
 
@@ -586,7 +591,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_ASK_ROBERT` | — | `src/ask-robert.ts` |
 | `CHRONOS_ASK_TRIAGE_MIN` | `3` | `src/ask-robert.ts` |
 | `CHRONOS_BRAIN_RESERVE` | `25` | `src/config.ts` |
-| `CHRONOS_ATTACHMENTS` | `inRepo` | `src/attachments.ts` |
+| `CHRONOS_ATTACHMENTS` | `inRepo` | `src/repo-root.ts` |
 | `CHRONOS_AUTOPLAN_MIN` | `5` | `src/config.ts` |
 | `CHRONOS_AUTO_CI_FIX` | — | `src/config.ts` |
 | `CHRONOS_AUTO_MEMORY` | `"1"` | `src/config.ts` |

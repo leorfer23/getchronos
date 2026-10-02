@@ -5,14 +5,14 @@ import { db, tickets } from "./store.js";
 import { bus } from "./bus.js";
 import { pdfText } from "./pdf-text.js";
 import type { TicketAttachment } from "./types.js";
-import { inRepo } from "./repo-root.js";
+import { resolveAttachmentsDir } from "./repo-root.js";
 
 // Operator screenshots / evidence files for ticket validation.
 // Files live under ~/chronos/attachments/<workspace_id>/<ticket_id>/<id>.<ext>
 // DB row is the index; path on disk is source of truth for agents (Read tool).
 
-export const ATTACH_ROOT =
-  process.env.CHRONOS_ATTACHMENTS ?? inRepo("attachments");
+// CHRONOS_ATTACHMENTS wins; a test run without CHRONOS_HOME gets a per-process temp dir.
+export const ATTACH_ROOT = resolveAttachmentsDir();
 
 const MAX_BYTES = 12 * 1024 * 1024; // 12MB per file
 const ALLOWED = new Set([
