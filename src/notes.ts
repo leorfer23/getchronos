@@ -7,7 +7,7 @@ import { bus } from "./bus.js";
 import { guard } from "./guard.js";
 import { similarity } from "./text-similarity.js";
 import type { NewNote, Note, NoteScope } from "./types.js";
-import { inRepo } from "./repo-root.js";
+import { CONFIG } from "./config.js";
 
 const home = os.homedir();
 
@@ -35,7 +35,7 @@ const kebab = (s: string) =>
   s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "note";
 
 function noteDir(wsSlug: string): string {
-  return inRepo("notes", wsSlug);
+  return path.join(CONFIG.notesDir, wsSlug);
 }
 function filePath(wsSlug: string, slug: string): string {
   return path.join(noteDir(wsSlug), `${slug}.md`);

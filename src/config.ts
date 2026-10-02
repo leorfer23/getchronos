@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 // Imports node builtins only — safe to pull in this early (no cycle back through config).
 import { caKeyFile, leafKeyFile } from "./egress-ca.js";
-import { inRepo } from "./repo-root.js";
+import { inRepo, resolveNotesDir } from "./repo-root.js";
 // Builtins + repo-root only, like egress-ca: no cycle back through config.
 import { hostlinkDir } from "./hostlink/join.js";
 import { mirrorRoot } from "./hosts/transcript-mirror.js";
@@ -150,6 +150,8 @@ export const CONFIG = {
   // URL advertised in join codes.
   hostListen: (process.env.CHRONOS_HOST_LISTEN ?? "").trim(),
   dbPath,
+  // The notes mirror (src/notes.ts). CHRONOS_NOTES_DIR overrides; tests default to a temp dir.
+  notesDir: resolveNotesDir(),
   adminToken: loadOrCreateAdminToken(),
   claudeBin: process.env.CHRONOS_CLAUDE_BIN ?? "claude",
   cursorBin: process.env.CHRONOS_CURSOR_BIN ?? "cursor-agent",
