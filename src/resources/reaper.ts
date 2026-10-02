@@ -149,7 +149,10 @@ export type Ctx = {
   selfPgid: number | null;
   uid: number | null;
   liveRootPids: Set<number>;
-  /** Refuse any target whose argv has not been read (the keep-list could not be checked). The driver's final pass sets it. */
+  /**
+   * Refuse any target whose argv — or any OWNED ANCESTOR's argv — has not been read: "nothing below a
+   * kept process" can only be checked once the whole chain above a target has been. The driver's final pass sets it.
+   */
   requireArgv?: boolean;
 };
 
@@ -206,7 +209,8 @@ export function decide(ledger: ProcLedger, cfg: ReaperConfig, ctx: Ctx): Action[
   const ok = (pid: number) => {
     const e = ledger.entries.get(pid);
     if (!e || claimed.has(pid) || keep.has(pid) || !touchable(e, ctx, cfg)) return false;
-    return !ctx.requireArgv || e.argv !== undefined;
+    if (!ctx.requireArgv) return true;
+    return e.argv !== undefined && ledger.ancestors(pid).every((a) => ledger.entries.get(a)!.argv !== undefined);
   };
 
   /** The group `pgid`, if one signal to it reaches only processes this owner owns and we may touch. */
@@ -362,14 +366,21 @@ export class Reaper {
       uid: this.deps.uid === undefined ? (process.getuid?.() ?? null) : this.deps.uid,
       liveRootPids: new Set(roots.map((r) => r.pid)),
     };
-    // The keep-list needs argv: read it for every candidate this tick would otherwise signal (once
-    // per process — it is cached on the entry), then decide again with an unread argv as a veto.
+    // The keep-list needs argv: read it for every candidate this tick would otherwise signal AND every
+    // owned ancestor of one (a vitest is spared because the `claude --bg-pty-host` session ABOVE it is
+    // kept — `classify` alone never reads a `claude`'s argv). Once per process, cached on the entry;
+    // then decide again with any unread argv in a target's chain as a veto.
     const pre = decide(this.ledger, this.cfg, ctx);
-    const unread = [...new Set(pre.flatMap((a) => a.pids))].filter((p) => this.ledger.entries.get(p)?.argv === undefined);
+    const chain = new Set<number>();
+    for (const p of pre.flatMap((a) => a.pids)) {
+      chain.add(p);
+      for (const a of this.ledger.ancestors(p)) chain.add(a);
+    }
+    const unread = [...chain].filter((p) => this.ledger.entries.get(p)?.argv === undefined);
     if (unread.length) {
       const argv = await this.deps.args(unread).catch(() => null);
       if (!argv) {
-        this.log(`could not read argv of ${unread.length} candidate(s) to check the keep-list — nothing signalled this tick`);
+        this.log(`could not read argv of ${unread.length} candidate(s)/ancestor(s) to check the keep-list — nothing signalled this tick`);
         return { sampled: true, actions: [], signalled: 0 };
       }
       for (const p of unread) this.setArgv(this.ledger.entries.get(p)!, argv.get(p) ?? null);

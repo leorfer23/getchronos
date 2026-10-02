@@ -286,6 +286,19 @@ export class ProcLedger {
     return out;
   }
 
+  /** `pid`'s owned ancestors, nearest first, up to the first parent the ledger does not own (the owner's root at most). */
+  ancestors(pid: number): number[] {
+    const out: number[] = [];
+    const seen = new Set<number>([pid]);
+    let p = this.entries.get(pid)?.proc.ppid;
+    while (p != null && p > 1 && !seen.has(p) && this.entries.has(p)) {
+      out.push(p);
+      seen.add(p);
+      p = this.entries.get(p)!.proc.ppid;
+    }
+    return out;
+  }
+
   /** The owned subtree under `pid` (itself first), from the last snapshot. */
   subtree(pid: number): number[] {
     const out: number[] = [];

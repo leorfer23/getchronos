@@ -79,8 +79,11 @@ instead of PID 1 changes nothing.
 **Keep-list** — never signalled under any rule, attached or not, nor anything below it: argv
 matching Claude Code's `claude daemon` / `bg-pty-host` / `bg-spare` (`--bg-pty-host`, `--bg-spare`),
 `limactl`, `colima`, `gpg-agent`, `ssh-agent`, `watchman`, `git fsmonitor--daemon`, `ollama`, plus
-`CHRONOS_REAPER_KEEP` (one regex over argv). argv is read only for candidate targets, once per
-process, batched in one `ps -o command -p`; a tick that cannot read it signals nothing.
+`CHRONOS_REAPER_KEEP` (one regex over argv). argv is read for every candidate target **and every
+owned ancestor of one** (a vitest inside a background Claude session is spared by the kept
+`claude --bg-pty-host` ABOVE it — and nothing else ever reads a `claude`'s argv), once per process,
+batched in one `ps -o command -p`. A target whose own or any ancestor's argv is unread is never
+signalled; a tick that cannot read them signals nothing.
 
 **Why rule 1 spares detached processes (review of #128).** Sticky lineage makes a terminal the owner
 of every shared per-user daemon its CLI happened to start on demand. Measured on the brain: `claude

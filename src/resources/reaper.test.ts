@@ -455,6 +455,109 @@ test("CHRONOS_REAPER_KEEP: an extra argv pattern is spared even attached", async
   assert.ok(!hit.has(270) && !hit.has(271), "kept, and so is what runs below it");
 });
 
+/**
+ * Review round 2: the kept process is an ANCESTOR of the target. A Desk terminal's claude started
+ * `claude daemon run`, which hosts a live background session (`claude --bg-pty-host … --resume`) that
+ * runs zsh → `npx vitest` → a headless Chrome. The terminal ends. `classify` never reads a `claude`'s
+ * argv, so only reading argv up every candidate's ancestor chain can find the keep.
+ */
+function bgSessionScene(argvOver: Record<number, string> = {}) {
+  const { w, r } = harness();
+  const procs = {
+    daemon: P({ pid: 300, ppid: 200, pgid: 300, startMs: T0 + 10_000, comm: CLAUDE_BIN }),
+    host: P({ pid: 301, ppid: 300, pgid: 300, startMs: T0 + 20_000, comm: "/Users/leo/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude" }),
+    zsh: P({ pid: 310, ppid: 301, pgid: 310, startMs: T0 + 30_000, comm: "/bin/zsh" }),
+    vitest: P({ pid: 311, ppid: 310, pgid: 310, startMs: T0 + 40_000, comm: "/opt/homebrew/bin/node" }),
+    chrome: P({ pid: 312, ppid: 311, pgid: 312, startMs: T0 + 50_000, comm: "/c/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" }),
+  };
+  const argv: Record<number, string> = {
+    300: ARGV[300],
+    301: "/Users/leo/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude --bg-pty-host /tmp/cc-daemon-501/x/pty/a.sock 87 36 -- /v --session-id abc --resume",
+    310: "/bin/zsh -c npx vitest run",
+    311: "node /r/node_modules/vitest/vitest.mjs run",
+    312: "/c/Google Chrome for Testing --headless --remote-debugging-port=0",
+    ...argvOver,
+  };
+  const reads: number[][] = [];
+  (r as any).deps.args = async (pids: number[]) => { reads.push(pids); return new Map(pids.map((p) => [p, argv[p] ?? "/bin/sleep 1"])); };
+  w.procs = [DAEMON, CLI, ...Object.values(procs)];
+  return {
+    w, r, procs, reads,
+    async end() {
+      await r.tick();
+      w.roots = [];
+      w.now += 1000;
+      // The CLI exits: only the daemon is reparented (detached); the session below it is intact.
+      w.procs = [DAEMON, { ...procs.daemon, ppid: 1 }, procs.host, procs.zsh, procs.vitest, procs.chrome];
+      await r.tick();
+      await r.tick();
+      return new Set(w.signals.map(([t]) => Math.abs(t)));
+    },
+  };
+}
+
+test("kept ANCESTOR: daemon → bg-pty-host session → zsh → vitest → chrome of an ended owner — nothing is signalled", async () => {
+  const s = bgSessionScene();
+  const hit = await s.end();
+  assert.deepEqual(s.w.signals, []);
+  assert.equal(hit.size, 0);
+  assert.equal(s.r.ledger.entries.get(300)?.kept, true, "the daemon's argv was read as an ancestor of a candidate");
+  assert.equal(s.r.ledger.entries.get(301)?.kept, true);
+  assert.deepEqual(s.w.events.map((e) => [e.reason, e.pid, e.count, e.signal]), [["left_running", 300, 5, null]]);
+});
+
+test("kept ANCESTOR: only the bg-pty-host matches the keep-list — vitest and chrome below it still survive", async () => {
+  const s = bgSessionScene({ 300: `${CLAUDE_BIN} --some-other-mode` });
+  const hit = await s.end();
+  assert.deepEqual(s.w.signals, []);
+  for (const p of [300, 301, 310, 311, 312]) assert.ok(!hit.has(p), `pid ${p} must not be signalled`);
+  assert.equal(s.r.ledger.entries.get(300)?.kept, false);
+  assert.equal(s.r.ledger.entries.get(301)?.kept, true);
+});
+
+test("control: an orphaned plain zsh → vitest → chrome of an ended owner — vitest and chrome die, zsh is left running", async () => {
+  const { w, r } = harness();
+  const zsh = P({ pid: 310, ppid: 200, pgid: 310, startMs: T0 + 30_000, comm: "/bin/zsh" });
+  const vitest = P({ pid: 311, ppid: 310, pgid: 311, startMs: T0 + 40_000, comm: "/opt/homebrew/bin/node" });
+  const chrome = P({ pid: 312, ppid: 311, pgid: 312, startMs: T0 + 50_000, comm: "/c/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" });
+  const argv: Record<number, string> = { 310: "/bin/zsh -c npx vitest run", 311: "node /r/node_modules/vitest/vitest.mjs run", 312: "/c/Google Chrome for Testing --headless" };
+  (r as any).deps.args = async (pids: number[]) => new Map(pids.map((p) => [p, argv[p] ?? "/bin/sleep 1"]));
+  w.procs = [DAEMON, CLI, zsh, vitest, chrome];
+  await r.tick();
+  w.roots = [];
+  w.now += 1000;
+  w.procs = [DAEMON, { ...zsh, ppid: 1 }, vitest, chrome];
+  await r.tick();
+  const hit = new Set(w.signals.map(([t]) => Math.abs(t)));
+  assert.ok(hit.has(311) && hit.has(312), "vitest and chrome die");
+  assert.ok(!hit.has(310), "the plain zsh is left running");
+  assert.deepEqual(w.events.filter((e) => e.reason === "left_running").map((e) => e.pid), [310]);
+});
+
+test("kept ANCESTOR: an ancestor's argv unreadable → nothing is signalled that tick", async () => {
+  const s = bgSessionScene();
+  const real = (s.r as any).deps.args;
+  // Any batch that includes the daemon fails (ps could not answer); the candidates' own reads succeed.
+  (s.r as any).deps.args = async (pids: number[]) => (pids.includes(300) ? null : real(pids));
+  const hit = await s.end();
+  assert.equal(hit.size, 0);
+  assert.ok(s.w.logs.some((l) => /could not read argv of \d+ candidate\(s\)\/ancestor\(s\)/.test(l)));
+  assert.equal(s.r.ledger.entries.get(300)?.argv, undefined);
+});
+
+test("decide: requireArgv vetoes a target whose ancestor's argv is unread", () => {
+  const procs = [DAEMON, CLI, P({ pid: 310, ppid: 200, pgid: 310 }), P({ pid: 311, ppid: 310, pgid: 310 })];
+  const l = ledgerWith([
+    { procs, roots: [root()], now: T0 },
+    { procs, roots: [], now: T0 + 1000 },
+  ]);
+  for (const p of [200, 311]) l.entries.get(p)!.argv = "/bin/sleep 1";
+  const acts = decide(l, CFG, ctx({ now: T0 + 1000, liveRootPids: new Set(), requireArgv: true }));
+  assert.ok(!acts.some((a) => a.pids.includes(311)), "311's parent 310 was never read");
+  l.entries.get(310)!.argv = "/bin/sleep 1";
+  assert.ok(decide(l, CFG, ctx({ now: T0 + 1000, liveRootPids: new Set(), requireArgv: true })).some((a) => a.pids.includes(311)));
+});
+
 test("argv unreadable → nothing is signalled that tick", async () => {
   const { w, r } = harness();
   await r.tick();
