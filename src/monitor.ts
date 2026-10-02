@@ -20,6 +20,7 @@ import { pollDeliveries } from "./delivery.js";
 import { harvestSessionPrs, pollSessionPrs } from "./terminal-automerge.js";
 import { reapDoneWorktrees } from "./worktrees.js";
 import { pruneMemoryUsage } from "./memory-usage.js";
+import { sweepColdTier } from "./cold-tier.js";
 import { sweepStalls } from "./recovery.js";
 import { sweepHolds } from "./holds.js";
 import { holdBucket } from "./hold-bucket.js";
@@ -362,6 +363,13 @@ function maybeRetentionSweep() {
     pruneMemoryUsage();
   } catch (e: any) {
     console.warn("[monitor] retention sweep", e?.message ?? e);
+  }
+  // Memos grow too: archives, the worklog ledger, dead Lead briefs. Own try — a note failure must not
+  // cost the table prunes above, nor they it.
+  try {
+    sweepColdTier();
+  } catch (e: any) {
+    console.warn("[monitor] cold-tier sweep", e?.message ?? e);
   }
   // Disk is the other thing that grows without a cap: finished tickets' worktrees. Fire-and-forget —
   // it shells out to git per repo and nothing downstream waits on the result.

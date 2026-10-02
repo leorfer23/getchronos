@@ -219,6 +219,22 @@ export const CONFIG = {
   // memory_usage (src/memory-usage.ts): which memory agents read. The dream pass ranks on recent use,
   // so older rows only cost space — dropped by age in the same sweep. 0 = keep forever.
   memoryUsageRetainDays: Number(process.env.CHRONOS_MEMORY_USAGE_RETAIN_DAYS ?? 60),
+  // The cold tier's ceiling (src/cold-tier.ts), run from the retention sweep above — no model call.
+  // memory-archive(-<agent>), worklog-archive, brief-archive and session-learnings-archive-* lose
+  // `## ` sections older than archiveDays, then the oldest until they fit archiveMaxChars (the newest
+  // section always stays — it is what `mc dream undo` removes). `worklog` keeps worklogDays of
+  // entries; older ones move to worklog-archive. A `brief-*` memo no live terminal / Lead / enabled
+  // job owns moves to brief-archive after briefDays untouched, or briefEndedDays once every terminal
+  // that used it has ended that long. Pinned and ★ memos are never touched. 0 = that rule off;
+  // CHRONOS_COLD_TIER=0 turns the whole sweep off.
+  coldTier: {
+    enabled: (process.env.CHRONOS_COLD_TIER ?? "1") !== "0",
+    archiveDays: Number(process.env.CHRONOS_ARCHIVE_DAYS ?? 90),
+    archiveMaxChars: Number(process.env.CHRONOS_ARCHIVE_MAX_CHARS ?? 60_000),
+    worklogDays: Number(process.env.CHRONOS_WORKLOG_DAYS ?? 30),
+    briefDays: Number(process.env.CHRONOS_BRIEF_DAYS ?? 14),
+    briefEndedDays: Number(process.env.CHRONOS_BRIEF_ENDED_DAYS ?? 3),
+  },
   // Connector sync history: keep at most this many rows.
   connectorSyncRetain: Number(process.env.CHRONOS_CONNECTOR_SYNC_RETAIN ?? 2000),
   dailyBudgetUsd: Number(process.env.CHRONOS_DAILY_BUDGET ?? 0), // 0 = no global cap; per-workspace daily_budget_usd (Spaces tab) is the control
