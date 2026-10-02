@@ -401,15 +401,15 @@ const HELP = `mc — Mission Control backlog CLI
                                      the reason shows on the Desk and the operator can reopen it
   mc inbox rank < ranking.json       this client's order, most important first:
                                      {"inbox":[{"id","priority":"high|normal|low","why"}],"notes":[…same…]}
-  mc ask "question" [--options "a,b,c"] [--wait <min>]   ask the operator a question, wait for an answer
+  mc ask "question" [--options "a,b,c"] [--wait <min>]   ask the operator a question (≤1000 chars), wait for an answer
                                      (min 5, 0 = fire-and-forget; on timeout, follow the printed parking
                                      instructions — you'll be resumed automatically once it's answered)
-  mc ask-robert "question" [--options "a,b"] [--wait <min>]   (in a Desk TERMINAL) ask Robert; he
+  mc ask-robert "question" [--options "a,b"] [--wait <min>]   (in a Desk TERMINAL; ≤1000 chars) ask Robert; he
                                      answers what is routine and puts the rest on the operator's phone with his
                                      recommendation. Blocks until answered (default --wait 15)
                                      Inside a Lead's worker this behaves as 'mc ask-lead' — pass
                                      --robert to go over your Lead's head anyway
-  mc ask-lead "question" [--options "a,b"] [--wait <min>]   (in a Lead's WORKER) ask your own Lead: it
+  mc ask-lead "question" [--options "a,b"] [--wait <min>]   (in a Lead's WORKER; ≤1000 chars) ask your own Lead: it
                                      knows the goal and answers in seconds, and passes up what only
                                      Robert or the operator can settle. Falls back to Robert if it
                                      does not answer, or ends. Default --wait 10
@@ -704,6 +704,19 @@ async function heavy(argv) {
   process.exit(code);
 }
 
+// Which computer a new terminal landed on, and why when there was a choice (HOSTS.md → Placement).
+// POST /sessions names a remote host in host_name; null is the brain itself. Always said, so whoever
+// opened it never has to go and look.
+const placedOn = (s) => ` → ${s.host_name || "the brain"}${s.placement ? ` (${s.placement})` : ""}`;
+
+// The asks API caps a question at ASK_MAX (NewAskSchema in src/validation.ts). Said here in one plain
+// line, before anything is filed, instead of the schema's error dump.
+const ASK_MAX = 1000;
+function askCap(question) {
+  if (question.length > ASK_MAX)
+    die(`question is ${question.length} chars; max ${ASK_MAX} — put the detail in a memo or your Focus feed and ask the short version`);
+}
+
 (async () => {
   // Before parse(): `mc heavy -- npm test -- --help` must reach npm, not print mc's usage.
   if (process.argv[2] === "heavy") return await heavy(process.argv.slice(3));
@@ -712,6 +725,8 @@ async function heavy(argv) {
   // in nineteen tables buys nothing. But most people have one of these per repo or per product, not
   // per client, so `mc project` is the same command under the word they would reach for first.
   if (pos[0] === "project" || pos[0] === "projects") pos[0] = "ws";
+  // `mc host list` is what agents type first; the computers live under `mc hosts`.
+  if (pos[0] === "host") pos[0] = "hosts";
   const cmd = pos[0];
   try {
     // ANY `--help` / `-h` must print usage and exit — never run the command. Agents (Robert) reach
@@ -1919,9 +1934,7 @@ async function heavy(argv) {
         // presented that Lead's credential — the daemon reads it from the header, not from here.
         slice: opt.slice ? Number(opt.slice) : undefined,
       }, LEAD_HEADERS);
-      // Where it landed and why (HOSTS.md → Placement) — only once there was a choice to make.
-      const where = s.host_name || s.placement ? ` → ${s.host_name || "this Mac"}${s.placement ? ` (${s.placement})` : ""}` : "";
-      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})${where}`);
+      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})${placedOn(s)}`);
     }
     // A Lead (LEADS.md): Robert's deputy for one goal, in one workspace. Opened the same way as any
     // other terminal (POST /sessions, role "lead") — the daemon does the rest (its own lead_token,
@@ -1946,7 +1959,7 @@ async function heavy(argv) {
         model: opt.model,
         created_by: opt.by || process.env.MC_AGENT_NAME || "operator",
       });
-      return console.log(`spawned lead ${s.id.slice(0, 8)} — ${goal}`);
+      return console.log(`spawned lead ${s.id.slice(0, 8)}${placedOn(s)} — ${goal}`);
     }
     // Every live Lead + how many workers it currently has open (rows whose `lead_id` is that Lead),
     // plus cost/tokens of the Lead and its workers (same numbers /desk/log uses).
@@ -2702,7 +2715,8 @@ async function heavy(argv) {
     if (cmd === "ask") {
       const runId = process.env.MC_RUN || die("mc ask only works inside a dispatched run");
       const question = pos.slice(1).join(" ");
-      if (!question) die('mc ask needs a question: mc ask "your question" [--options "a,b,c"] [--wait <min>]');
+      if (!question) die('mc ask needs a question: mc ask "your question" (≤1000 chars) [--options "a,b,c"] [--wait <min>]');
+      askCap(question);
       const options = opt.options ? opt.options.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
       const waitMin = opt.wait != null ? Number(opt.wait) : 5;
       const a = await req("POST", "/asks", { run_id: runId, question, options, wait_min: waitMin });
@@ -2736,7 +2750,8 @@ async function heavy(argv) {
         process.env.MC_SESSION ||
         die(`mc ${cmd} only works inside a Desk terminal (MC_SESSION is set by the daemon)`);
       const question = pos.slice(1).join(" ");
-      if (!question) die(`mc ${cmd} needs a question: mc ${cmd} "your question" [--options "a,b"] [--wait <min>]`);
+      if (!question) die(`mc ${cmd} needs a question: mc ${cmd} "your question" (≤1000 chars) [--options "a,b"] [--wait <min>]`);
+      askCap(question);
       const options = opt.options ? opt.options.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
       // A Lead answers from the brief it wrote, so it answers fast: 10m is plenty, and the daemon
       // hands the question to Robert by itself if it does not (CHRONOS_LEAD_ASK_FALLBACK_MIN).
