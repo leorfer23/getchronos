@@ -5,7 +5,12 @@
 > for true remote wake-ups.
 
 **Status:** Implemented — Node/TS daemon + `mc` CLI in `~/chronos`; sections below track the built system (some subsystems still evolving).
-**Host assumption:** one macOS machine, powered on 24/7.
+**Host assumption:** one macOS **brain** (daemon, DB, Desk) powered on 24/7, plus any number of other
+computers joined as **hosts** that run terminals and headless runs for it — see [HOSTS.md](HOSTS.md).
+
+> Sections 5–7 and 9–12 describe the job runner the system grew from and still hold. The Desk, Leads,
+> hosts, artifacts and memory came later; their docs are [MISSION-CONTROL.md](MISSION-CONTROL.md),
+> [LEADS.md](LEADS.md) and [HOSTS.md](HOSTS.md). For "where is X in the code", start at [CLAUDE.md](CLAUDE.md).
 
 ---
 
@@ -18,7 +23,8 @@
 - Control & observe from **anywhere** via a Cloud Relay + Telegram bot (no open inbound ports on the Mac).
 
 ### Non-goals (v1)
-- Multi-machine fleet / horizontal scaling. (Single host. Designed to *allow* it later, not solve it now.)
+- Horizontal scaling of the daemon itself: there is one brain. (A multi-machine fleet *is* built — one
+  brain, N hosts; see [HOSTS.md](HOSTS.md).)
 - Replacing CI. This drives *Claude Code*, not generic build pipelines.
 
 ---
@@ -43,10 +49,10 @@
 | Scheduler | **Croner** (in-process) | Zero-dep, DST-safe, timezone-aware, computes next-run times for the UI. **Source of truth = the DB**, not the OS crontab — avoids the "two sources of truth" problem. |
 | Process supervision | **launchd** (`KeepAlive` + `RunAtLoad`) | Native macOS. Its *only* job is keeping `chronosd` alive across crashes/reboots. It does **not** schedule Claude jobs — Croner does. Clean separation. |
 | Persistence | **better-sqlite3** | Synchronous, fast, zero-config, single-file. Perfect for a single-node local daemon; no Postgres/Redis to run. |
-| API/stream | **Express + `ws`** | REST for CRUD, WebSocket hub for live run streaming to dashboard. |
-| Dashboard | **React + Vite + TS** | Your stack. Served as static assets by the daemon. |
+| API/stream | **Express + `ws`** | REST under `/api` (`src/api.ts`); two WebSocket endpoints on one server — `/ws` (bus relay to the Desk) and `/term` (PTY I/O). Hosts link in on `/host` (`src/hostlink/brain-link.ts`). |
+| Desk (UI) | **Vanilla HTML/JS — `static/desk.html` + `static/*.js`, xterm.js in `static/vendor/`** | Served by `express.static` from the daemon; no build step. The React/Vite dashboard is gone — `/` redirects to `/desk`. `static/phone.html` is the phone PWA. |
 | Cloud relay | **Cloudflare Worker + Durable Object** | You already use Cloudflare heavily. DO gives a durable per-machine queue + hibernatable WebSocket = offline buffering + instant push. Pennies to run. |
-| Telegram | **`grammY`** (or raw Bot API) | Control + notify + trigger from your phone. |
+| Telegram | **Raw Bot API** (`src/telegram/`) | Control + notify + trigger from your phone. |
 | Secrets | **Per-workspace `secrets_file`** (0600 env file on disk) injected via the `childEnv` allowlist, plus **shared vars** (`workspace_vars`, optionally time-boxed) | Each workspace's keys reach only its own runs. Keychain not used (see §11). |
 
 **Why CLI-spawn over the Agent SDK:** the spawned `claude` binary inherits your `~/.claude`
@@ -79,7 +85,7 @@ need in-process tool interception.
    │                              │                   -format stream-json   │
    │                              │                   (inherits ~/.claude)  │
    │                              ├─ SQLite (jobs, runs, run_events…)        │
-   │                              ├─ REST + WS API  ◀──▶  React dashboard    │
+   │                              ├─ REST + WS API  ◀──▶  Desk (static/)     │
    │                              ├─ Relay client (WSS to CF DO)             │
    │                              └─ Telegram bot (control + notify)         │
    └──────────────────────────────────────────────────────────────────────┘
@@ -254,32 +260,37 @@ CREATE TABLE settings (k TEXT PRIMARY KEY, v TEXT);  -- daily budget cap, concur
 
 ---
 
-## 8. API spec (local, served by daemon)
+## 8. API (local, served by daemon)
 
+About 320 routes. Nearly all (~313) are registered in `src/api.ts` as `api.get/post/patch/put/delete("/…"`
+and mounted at `/api`; the `/hosts` family lives in `src/hostlink/brain-link.ts` (+ `bar.ts`,
+`src/hosts/brief.ts`). The source is the list — find a route with:
+
+```bash
+git grep -n 'api\.\(get\|post\|patch\|put\|delete\)("/<prefix>' src/api.ts
 ```
-# Jobs
-GET    /api/jobs                 list
-POST   /api/jobs                 create
-GET    /api/jobs/:id             detail (+ next run time)
-PATCH  /api/jobs/:id             update (reschedules)
-DELETE /api/jobs/:id
-POST   /api/jobs/:id/run         manual trigger  → {run_id}
-POST   /api/jobs/:id/enable      {enabled:bool}
 
-# Runs
-GET    /api/runs?job_id=&status= list / filter
-GET    /api/runs/:id             detail + rollup
-GET    /api/runs/:id/events      full transcript (paged)
-POST   /api/runs/:id/kill        SIGTERM→SIGKILL the child
+Route families by first path segment (counted from the source, not hand-kept — regenerate with
+`grep -ohE '\b(api|r)\.(get|post|patch|put|delete)\("/[a-zA-Z_-]*' src/api.ts src/hostlink/*.ts src/hosts/brief.ts | sed -E 's/.*\("\///' | sort | uniq -c | sort -rn`):
 
-# Ops
-GET    /api/health               daemon up, relay connected, concurrency, budget today
-GET    /api/stats                runs/cost over time
-WS     /ws                       live stream (subscribe by run_id / firehose)
+| Family | Routes | What |
+|---|---|---|
+| `/workspaces` | 55 | Projects (create/edit admin-gated) and what hangs off one: memory (learn, remember, recall, dream), prose, inbox, brief, worklog, vars, skills, jots, ideas, egress, repos |
+| `/sessions` | 26 | Desk terminals: open, input, status/progress, goals, kill, resume, focus, artifacts, wait |
+| `/tickets` | 20 | Tickets: dispatch, plan, grade, notes, links, attachments, merge-pr |
+| `/agents`, `/agent` | 20 | `/agents`: lifecycle state, rollup, memory; `/agent`: talk to Robert |
+| `/runs` | 13 | Headless runs: detail, `story`, `events`, tail, steps, kill, steer, continue, wait |
+| `/hosts` | 10 | Computers: join codes, links, update, refresh (admin) |
+| `/desk` | 10 | The Desk wall: cockpit, digest, watches, log, quick actions |
+| `/jobs`, `/triggers` | 16 | Scheduled/manual jobs; triggers (webhook ingress is `/api/triggers/hook/:token`) |
+| `/reviews`, `/leads`, `/artifacts` | 9 each | Review gate; Leads ([LEADS.md](LEADS.md)); HTML pages agents publish |
+| `/asks`, `/repos`, `/jots`, `/calendars` | 7 each | HITL questions; repos; jots; calendars |
+| `/skills`, `/inbox`, `/notes` | 6, 6, 5 | Skills; workspace inbox; memos |
+| everything else | ≤4 each | `/machine`, `/watches`, `/push`, `/lessons`, `/ideas`, `/backends`, `/settings`, `/recovery`, `/health`, `/stats`, `/fleet`, `/search`, … |
 
-# Local webhook ingress (LAN; for local scripts/apps)
-POST   /trigger/:jobId           Authorization: Bearer <token>
-```
+Non-`/api`: `/ws` and `/term` (WebSocket), `/host` (host links), `/desk` and the rest of `static/`.
+Mutations that cross workspaces need the admin token (`x-mc-admin`); an agent's calls carry its
+workspace token (`x-mc-workspace-token`) and are scoped by `checkScope` (`src/authz.ts`).
 
 ---
 
@@ -311,7 +322,8 @@ in `trigger_log.nonce UNIQUE`), optional allowlist of job IDs reachable remotely
 
 Three ways to drive the same daemon API — all funnel through the Dispatcher:
 
-1. **Web dashboard** (React/Vite) — primary System Manager.
+1. **The Desk** (`static/desk.html`, `localhost:7777/desk`; `/phone` on the phone) — primary surface; the
+   page list below is the original dashboard plan, which the Desk replaced.
    - Pages: **Jobs** (table + next-run + enable toggle), **Job editor** (goal, **profile** (any discovered config dir), cwd, model, tools, schedule, guardrails), **Runs** (history, status, cost), **Run detail** (live + replayed transcript, kill button), **Triggers** (tokens, relay status), **Settings** (budgets, concurrency, notifiers).
    - Live logs via WS.
 
@@ -326,6 +338,9 @@ Three ways to drive the same daemon API — all funnel through the Dispatcher:
    - Push **notifications** on run success/failure (so the bot is notifier *and* controller *and* a trigger source — one integration, three roles).
 
 3. **HTTP** — REST (local/LAN) + relay webhook (remote). For scripts and other apps.
+
+4. **Artifacts** — HTML pages an agent publishes for the operator (`mc artifact put|ask`, `src/artifacts.ts`),
+   shown on the Desk in a sandboxed iframe; a page that asks is an ordinary ask. See MISSION-CONTROL.md §5e.
 
 ---
 
@@ -405,37 +420,45 @@ Payload: job name, status, duration, cost, one-line result summary, deep link to
 
 ```
 chronos/
-  packages/
-    daemon/                     # chronosd
-      src/
-        index.ts                # entry (launchd target); caffeinate; boot scheduler+relay+api
-        scheduler.ts            # Croner ← jobs table
-        dispatcher.ts           # single trigger choke point + guardrails gate
-        runner.ts               # spawn claude -p, parse stream-json, watchdog
-        verifier.ts             # optional LLM-judge pass
-        store.ts                # better-sqlite3 + migrations
-        guardrails.ts           # budgets, concurrency, tool/dir policy
-        api.ts                  # express REST
-        ws.ts                   # websocket hub
-        relay-client.ts         # outbound WSS to CF DO
-        telegram.ts             # grammY bot (control + notify)
-        notify.ts               # notifier fan-out
-        secrets.ts              # keychain access
-      migrations/
-    dashboard/                  # React + Vite + TS  (built → served by daemon)
-      src/ pages/ components/ lib/{api,ws}.ts
-    relay/                      # Cloudflare Worker + Durable Object
-      src/{worker.ts, machine-do.ts}
-      wrangler.jsonc
-    shared/                     # TS types shared daemon↔dashboard↔relay
-  launchd/sh.chronos.daemon.plist
-  ARCHITECTURE.md
-  README.md
+  src/                 the daemon (TypeScript, one package; `npm run build` → dist/, which launchd runs)
+    index.ts           entry: boots store, scheduler, API, relay client, Telegram, terminals
+    api.ts             express REST (/api) + /ws + /term; static Desk
+    store.ts           re-export barrel → store/*
+    store/             SQLite aggregates (better-sqlite3); db.ts opens it, migrate.ts = numbered migrations
+    dispatcher.ts runner.ts scheduler.ts   headless job path (dispatch → spawn → watchdog)
+    terminal.ts        Desk terminals (node-pty)
+    backends/          one file per agent CLI: argv + env (claude, codex, cursor, grok, opencode, mock, …)
+    hosts/             the Host seam + placement (HOSTS.md)
+    hostlink/          brain side of the host link (join, registry, /hosts routes)
+    hostd/             the host process (`chronos host`): forwarder, outbox, spill, procs, terminals, update
+    telegram/          Telegram bot (raw Bot API) + Robert's process wiring
+    connectors/        Jira / ClickUp sync
+    accel/             per-repo accelerators (graphify)
+    widgets/           Desk widget data
+  scripts/mc           the `mc` agent CLI (single file; copied to ~/.mc/bin/mc)
+  scripts/             build/deploy/install helpers (install-launchd.mjs, brainbar, …)
+  static/              the Desk: desk.html, phone.html, artifact viewer + SDK, vendor/ (xterm, marked)
+  agents/              named executives: agents/<id>/AGENT.md + shared prompt prose in agents/_blocks/
+  skills/              skills installed into agent profiles (mission-control → AGENTS.md, agent-coordination)
+  skill/chronos/       the `chronos` skill: drive the daemon's job API from any Claude session
+  skills-vault/        your per-project skills (examples tracked)
+  evals/               dispatch evals — replay real tickets, assert what the agent is told
+  relay/               Cloudflare Worker + Durable Object (remote triggers)
+  desktop/             native shells: app.swift (Desk window), hostbar.swift (menu bar), Tauri, wapp
+  site/                the public landing page
+  bin/                 getchronos.mjs (`npx getchronos`), host-core.mjs
+  launchd/             plist templates (daemon, host, brainbar, hostbar, cloudflared, whisper, …)
+  notes/               one-way mirror of memos (gitignored except example/)
+  local/               your machine's scripts (gitignored except README)
+  ARCHITECTURE.md MISSION-CONTROL.md HOSTS.md LEADS.md CONFIGURATION.md CLAUDE.md
 ```
 
 ---
 
-## 14. Build roadmap
+## 14. Build roadmap (historical)
+
+> The original plan. All five phases shipped; what came after (Desk, Leads, hosts, artifacts) is
+> tracked in the docs linked at the top, not here.
 
 - **Phase 1 — Core loop:** store + scheduler + dispatcher + runner (stream-json parse) + guardrails (budget/timeout/concurrency) + REST `/api/jobs`,`/run`,`/runs`. Prove: cron fires → claude runs → result captured. CLI-only.
 - **Phase 2 — System Manager UI:** React dashboard, WS live logs, run history, kill, job editor.
@@ -445,7 +468,11 @@ chronos/
 
 ---
 
-## 15. Open decisions
+## 15. Open decisions (historical)
+
+> As recorded at design time. 1 is answered: profiles are discovered (`~/.claude-*` → `discoverProfiles`
+> in `src/config.ts`), not hand-registered. 2 and 5 became
+> configuration — `CHRONOS_VERIFY_MODE`, `CHRONOS_DAILY_BUDGET`, `CHRONOS_MAX_CONCURRENT` (CONFIGURATION.md).
 
 1. **Profiles** — resolved: per-job `profile` field → `CLAUDE_CONFIG_DIR`, overridden by `workspaces.config_dir`. Open sub-question: register profiles in a `settings` table (label → dir) so the dropdown is data-driven and new accounts are easy to add, instead of the hardcoded `CONFIG.profiles` map? (Recommended — a dir missing from that map is silently unreachable, which is how `claude-work` rotted.)
 2. **Verifier default** — on or off by default? (Adds cost + latency but catches "looked done but wasn't.")

@@ -421,11 +421,21 @@ being silent between "started" and "done".
 ## 5e. Artifacts — HTML pages agents publish (`src/artifacts.ts`, `static/artifact-view.js`)
 
 An agent writes an HTML page (report, comparison, picker, form) and publishes it with `mc artifact
-put|ask`. The Desk (and the phone) show a `::artifact <id>::` chat line as the page's card; Open, or
-`/desk#artifact=<id>`, shows it in a sandboxed iframe. Inside, `window.chronos`
+put|ask`. `--notify` (and every `ask` routed to the operator) posts a `::artifact <id>::` line into
+**Robert's chat for that workspace** (`postRobertToDesk`), which the Desk and the phone render as the
+page's card; Open, or `/desk#artifact=<id>`, shows it in a sandboxed iframe. Every page a terminal
+publishes is also pinned on that terminal's rail (`src/session-artifacts.ts`, `GET /sessions/:id/artifacts`)
+next to its PRs and docs. Inside, `window.chronos`
 (`static/artifact-sdk.js`) sends back `submit` (the answer, once) and `send` (anything before it),
 and keeps `state`.
 
+- **The link**: `mc artifact put|ask` prints the page's public `url` — `deskBase()`: `CHRONOS_DESK_URL`,
+  else the tunnel host from `CHRONOS_HOST_PUBLIC_URL`, else `http://localhost:<port>` — so a link printed
+  by an agent on another host opens from the operator's machine.
+- **Two kinds of artifact**: claude terminals and headless claude jobs also have the claude.ai Artifact
+  tool (`CLAUDE_CODE_ARTIFACT=1`, set by `src/backends/claude.ts`; `CLAUDE_CODE_DISABLE_ARTIFACT=1` in a
+  workspace's env turns it off). A claude Desk terminal is told to ask the operator which kind before its
+  first page (`agents/_blocks/artifact-choice.md`).
 - **Storage**: `artifacts/<workspace>/<id>/v<n>.html` under the state dir (`CHRONOS_ARTIFACTS`
   overrides), every version kept; `artifacts` + `artifact_events` rows are the index (migration 142).
 - **A page that asks is an ask**: `mc artifact ask` files an ordinary asks row (route `operator` by
@@ -440,8 +450,9 @@ and keeps `state`.
   served as a page from the daemon's origin.
 - **Workspace wall**: every `:id` route runs `checkScope`; a workspace token (an agent) may `send`
   to a page but may not `submit` to one that is a question for the operator.
-- **Not yet**: a gallery of a workspace's pages, pages addressed agent→agent, Robert publishing pages
-  from his own turns (he can already POST /api/artifacts and write `::artifact <id>::`).
+- **Not yet**: a gallery of a workspace's pages (today: each terminal's rail, and `mc artifact list`),
+  pages addressed agent→agent, Robert publishing pages from his own turns (he can already POST
+  /api/artifacts and write `::artifact <id>::`).
 
 ---
 

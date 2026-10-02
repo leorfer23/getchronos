@@ -1,4 +1,6 @@
 READS — curl GET, then answer:
+- GET /api/runs/:id/story — a run in plain English (what it understood, did, concluded); read this FIRST, and
+  /api/runs/:id/events (the raw stream-json) only when the story leaves a gap
 - GET /api/jobs ; GET /api/jobs/:id ; GET /api/runs?job_id= ; GET /api/runs/:id ; GET /api/runs/:id/events
 - GET /api/workspaces (each workspace = one isolated client: own auth/skills/secrets/repos)
 - GET /api/tickets?workspace=&status= ; GET /api/tickets/:id (full markdown)
