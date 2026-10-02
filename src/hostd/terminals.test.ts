@@ -83,6 +83,17 @@ test("remoteKey: the same repo matches whatever form its remote was written in",
 // ───────────── the fence (fence.ts) and salvage (salvage.ts) on a real pty ─────────────
 
 const stat = (pid: number) => { try { return execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).trim(); } catch { return ""; } };
+// A signal is delivered asynchronously: on a loaded runner `ps` can still show the old state for a
+// moment after kill(2) returns. Poll until it matches (or 2s pass) instead of reading once.
+const statUntil = async (pid: number, ok: (st: string) => boolean, timeoutMs = 2000) => {
+  const t0 = Date.now();
+  let st = stat(pid);
+  while (!ok(st) && Date.now() - t0 < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 20));
+    st = stat(pid);
+  }
+  return st;
+};
 const exited = (t: HostTerminals, timeoutMs = 5000) => new Promise<void>((resolve, reject) => {
   const t0 = Date.now();
   const tick = () => (t.live()[0]?.exit ? resolve() : Date.now() - t0 > timeoutMs ? reject(new Error("never exited")) : setTimeout(tick, 50));
@@ -105,12 +116,12 @@ test("fence: freezeAll stops the pty's process group; an attach (still ours) tha
   const r = await t.spawn(spec({ session_id: "sess-fence", workspace: null }));
   assert.equal(t.freezeAll(), 1);
   assert.equal(t.freezeAll(), 0, "already frozen");
-  assert.match(stat(r.pid), /T/, "stopped");
+  assert.match(await statUntil(r.pid, (st) => /T/.test(st)), /T/, "stopped");
   assert.equal(t.live()[0].frozen, true, "hello.live[] says so");
   assert.equal(t.work()[0].frozen, true);
   assert.equal(t.frozenCount(), 1);
   t.attach(r.ch, 0, 0, "sess-fence");
-  assert.doesNotMatch(stat(r.pid), /T/, "running again");
+  assert.doesNotMatch(await statUntil(r.pid, (st) => !/T/.test(st)), /T/, "running again");
   assert.equal(t.live()[0].frozen, undefined);
   t.freezeAll();
   t.kill(r.ch);

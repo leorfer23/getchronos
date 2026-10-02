@@ -114,14 +114,17 @@ test("stdin frames steer the run; `end` closes it — how a steer-mode run finis
 
 test("a kill frame ends it with the signal; the host's own watchdog ends a run past its timeout", async () => {
   const { p, link } = procs();
-  const a = await p.spawn(spec("sleep 30"));
+  // `exec`: the run's process must BE the long-running command, as a real CLI is. bash (macOS /bin/sh)
+  // execs the last command of `-c` by itself; dash (Ubuntu's /bin/sh) forks it, so the signal ends sh
+  // while `sleep` holds stdout open for 30s and the close never comes in time.
+  const a = await p.spawn(spec("exec sleep 30"));
   p.kill(a.ch, "SIGTERM");
   await until(() => !!link.exitOf(a.ch), "the killed run's exit");
   assert.equal(link.exitOf(a.ch)!.signal, "SIGTERM");
   assert.equal(link.exitOf(a.ch)!.timed_out, undefined);
 
   // No brain in sight: the host stops it itself (timeout + grace; the grace is 0 here) and says so.
-  const b = await p.spawn(spec("sleep 30", { timeout_ms: 300 }));
+  const b = await p.spawn(spec("exec sleep 30", { timeout_ms: 300 }));
   await until(() => !!link.exitOf(b.ch), "the host watchdog", 5000);
   assert.equal(link.exitOf(b.ch)!.timed_out, true);
   assert.equal(link.exitOf(b.ch)!.signal, "SIGTERM");
