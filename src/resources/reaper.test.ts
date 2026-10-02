@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { ownerKey, ProcLedger, type Proc, type Root } from "./ledger.js";
 import {
-  classify, decide, DEFAULT_LEAK_FAMILY, fixtureProc as P, parseArgs, parseStarts, Reaper, reaperConfigFromEnv, systemReaperDeps,
+  classify, decide, DEFAULT_KEEP, DEFAULT_LEAK_FAMILY, isKept, fixtureProc as P, parseArgs, parseStarts, Reaper, reaperConfigFromEnv, systemReaperDeps,
   type Ctx, type ReapEvent, type ReaperConfig, type ReaperDeps,
 } from "./reaper.js";
 import { procsView } from "./brain.js";
@@ -26,6 +26,9 @@ const tree = (): Proc[] => [
   P({ pid: 221, ppid: 220, pgid: 220, startMs: T0 + 3000, comm: "/c/Google Chrome for Testing Helper (Renderer)", rssKb: 100 * 1024 }),
   P({ pid: 222, ppid: 220, pgid: 220, startMs: T0 + 3000, comm: "/c/Google Chrome for Testing Helper (Renderer)", rssKb: 100 * 1024 }),
 ];
+
+/** What the driver's classify pass would have concluded: these detached processes are leak-family. */
+const leak = (l: ProcLedger, ...pids: number[]) => { for (const p of pids) l.entries.get(p)!.cls = "leak"; return l; };
 
 function ledgerWith(snaps: Array<{ procs: Proc[]; roots: Root[]; now: number }>): ProcLedger {
   const l = new ProcLedger();
@@ -51,6 +54,8 @@ test("config: defaults, and every knob parses (a bad regex keeps the default)", 
   assert.ok(c.leakFamily.test("sleep"));
   assert.deepEqual(c.protect, ["/Applications/Google Chrome.app/", "/opt/keep/", "/x/"]);
   assert.equal(reaperConfigFromEnv({ CHRONOS_REAPER: "off" }).mode, "off");
+  assert.equal(reaperConfigFromEnv({}).keep.length, DEFAULT_KEEP.length);
+  assert.equal(reaperConfigFromEnv({ CHRONOS_REAPER_KEEP: "pg_ctl|postgres" }).keep.length, DEFAULT_KEEP.length + 1);
   assert.equal(reaperConfigFromEnv({ CHRONOS_REAPER: "0" }).mode, "off");
   assert.equal(reaperConfigFromEnv({ CHRONOS_REAPER_ORPHAN_FAMILY: "(" }).leakFamily, DEFAULT_LEAK_FAMILY);
   assert.equal(reaperConfigFromEnv({ CHRONOS_REAPER_TICK_MS: "5" }).tickMs, 1000, "clamped: a 5 ms tick would melt the Mac it guards");
@@ -84,6 +89,7 @@ test("ended terminal: its Chrome group goes in ONE group signal, the rest pid by
     // The terminal closed: the CLI and vitest are gone, Chrome is reparented to launchd.
     { procs: [DAEMON, ...tree().slice(3).map((p) => (p.pid === 220 ? { ...p, ppid: 1 } : p))], roots: [], now: T0 + 10_000 },
   ]);
+  leak(l, 220);
   const acts = decide(l, CFG, ctx({ now: T0 + 10_000, liveRootPids: new Set() }));
   assert.deepEqual(acts, [{ signal: "SIGTERM", reason: "session_ended", owner: ownerKey(root()), group: 220, pids: [220, 221, 222] }]);
 });
@@ -94,6 +100,7 @@ test("ended terminal: a group with a member the owner does not own is signalled 
     { procs, roots: [root()], now: T0 },
     { procs: [DAEMON, ...procs.slice(3), P({ pid: 230, ppid: 1, pgid: 220, comm: "/x/stranger" })], roots: [], now: T0 + 1000 },
   ]);
+  leak(l, 220);
   const acts = decide(l, CFG, ctx({ now: T0 + 1000, liveRootPids: new Set() }));
   assert.deepEqual(acts.map((a) => [a.group, a.pids]), [[null, [220]], [null, [221]], [null, [222]]]);
   assert.ok(!acts.some((a) => a.pids.includes(230)), "never a process the ledger does not own");
@@ -106,6 +113,7 @@ test("a headless run shares the daemon's process group: that group is never sign
     { procs, roots: [run], now: T0 },
     { procs: [DAEMON, P({ pid: 501, ppid: 1, pgid: SELF })], roots: [], now: T0 + 1000 },
   ]);
+  leak(l, 501);
   const acts = decide(l, CFG, ctx({ now: T0 + 1000, liveRootPids: new Set() }));
   assert.deepEqual(acts.map((a) => [a.group, a.pids, a.reason]), [[null, [501], "session_ended"]]);
 });
@@ -133,6 +141,7 @@ test("SIGTERM ignored past the grace → SIGKILL, aimed the same way", () => {
     { procs: tree(), roots: [root()], now: T0 },
     { procs: [DAEMON, ...tree().slice(3)], roots: [], now: T0 + 1000 },
   ]);
+  leak(l, 220);
   for (const p of [220, 221, 222]) Object.assign(l.entries.get(p)!, { termAt: T0 + 1000, termGroup: 220 });
   assert.deepEqual(decide(l, CFG, ctx({ now: T0 + 5000, liveRootPids: new Set() })), [], "inside the grace: wait");
   const acts = decide(l, CFG, ctx({ now: T0 + 1000 + CFG.killGraceMs, liveRootPids: new Set() }));
@@ -146,6 +155,7 @@ test("per-tick cap: at most maxSignals kill(2) calls, the rest wait for the next
     { procs, roots: [root()], now: T0 },
     { procs: [DAEMON, ...procs.slice(2).map((p) => ({ ...p, ppid: 1 }))], roots: [], now: T0 + 1000 },
   ]);
+  leak(l, ...procs.slice(2).map((p) => p.pid));
   const acts = decide(l, { ...CFG, maxSignals: 7 }, ctx({ now: T0 + 1000, liveRootPids: new Set() }));
   assert.equal(acts.length, 7);
 });
@@ -313,6 +323,147 @@ test("driver: idle (no roots, nothing owned) costs no ps at all; off mode never 
   const off = harness({ mode: "off" });
   await off.r.tick();
   assert.equal(off.w.psCalls, 0);
+});
+
+// ───────────────────────────── shared daemons: left running, keep-list ─────────────────────────────
+
+const CLAUDE_BIN = "/Users/leo/.local/bin/claude";
+const ARGV: Record<number, string> = {
+  300: `${CLAUDE_BIN} daemon run --json-path /Users/leo/.claude/daemon.json --log-file /Users/leo/.claude/daemon.log --origin transient`,
+  301: "claude bg-pty-host --bg-pty-host /tmp/cc-daemon-501/023e356f/pty/a2e80b7e.sock 87 36 -- /Users/leo/.local/share/claude/versions/2.1.287 --resume",
+  302: "claude bg-spare --bg-spare /tmp/cc-daemon-501/023e356f/spare/286947f7.claim.sock",
+  240: "/bin/zsh -c npx vitest run",
+  241: "node /r/node_modules/vitest/vitest.mjs run",
+  250: "node /r/node_modules/.bin/vite --port 5173",
+};
+
+test("keep-list: Claude Code's daemon and its bg hosts, colima, agents, watchman, fsmonitor, ollama", () => {
+  const cfg = reaperConfigFromEnv({});
+  for (const a of [ARGV[300], ARGV[301], ARGV[302],
+    "/Users/leo/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude --bg-pty-host /tmp/cc-daemon-501/x.sock 87 36 -- v --session-id abc --resume",
+    "/opt/homebrew/bin/limactl hostagent --pidfile /x", "/opt/homebrew/bin/colima daemon start default", "gpg-agent --homedir /x --daemon",
+    "/usr/bin/ssh-agent -l", "/opt/homebrew/bin/watchman --foreground", "git fsmonitor--daemon run --detach", "/usr/local/bin/ollama serve"])
+    assert.ok(isKept(a, cfg), a);
+  for (const a of ["/opt/homebrew/bin/claude --dangerously-skip-permissions", "node /r/node_modules/vitest/vitest.mjs", "/x/Google Chrome for Testing --headless", ARGV[250]])
+    assert.ok(!isKept(a, cfg), a);
+});
+
+/**
+ * The review's case: a Desk terminal whose claude started Claude Code's shared daemon on demand. The
+ * terminal ends while: the daemon (detached, PPID 1) hosts a bg-pty-host + bg-spare; the shell tool
+ * is still running vitest (attached); vitest's headless Chrome is orphaned; a vite dev server was
+ * backgrounded (detached).
+ */
+function daemonScene() {
+  const { w, r } = harness();
+  const daemon = P({ pid: 300, ppid: 200, pgid: 300, startMs: T0 + 1000_000, comm: CLAUDE_BIN });
+  const ptyHost = P({ pid: 301, ppid: 300, pgid: 300, startMs: T0 + 2000_000, comm: "/Users/leo/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude" });
+  const spare = P({ pid: 302, ppid: 301, pgid: 300, startMs: T0 + 3000_000, comm: CLAUDE_BIN });
+  const shell = P({ pid: 240, ppid: 200, pgid: 240, startMs: T0 + 4000_000, comm: "/bin/zsh" });
+  const vitest = P({ pid: 241, ppid: 240, pgid: 240, startMs: T0 + 5000_000, comm: "/opt/homebrew/bin/node" });
+  const chrome = P({ pid: 242, ppid: 241, pgid: 242, startMs: T0 + 6000_000, comm: "/c/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" });
+  const vite = P({ pid: 250, ppid: 200, pgid: 250, startMs: T0 + 7000_000, comm: "/opt/homebrew/bin/node" });
+  w.procs = [DAEMON, CLI, daemon, ptyHost, spare, shell, vitest, chrome, vite];
+  (r as any).deps.args = async (pids: number[]) => new Map(pids.filter((p) => ARGV[p]).map((p) => [p, ARGV[p]]));
+  return { w, r, daemon, ptyHost, spare, shell, vitest, chrome, vite };
+}
+
+test("ended owner: its detached `claude daemon run` (and the sessions it hosts) survive; attached vitest and the orphaned Chrome die", async () => {
+  const s = daemonScene();
+  await s.r.tick();
+  // The terminal closes: the CLI is gone, everything it had detached is PPID 1.
+  s.w.roots = [];
+  s.w.now += 1000;
+  s.w.procs = [DAEMON, { ...s.daemon, ppid: 1 }, s.ptyHost, s.spare, { ...s.shell, ppid: 1 }, s.vitest, { ...s.chrome, ppid: 1 }, { ...s.vite, ppid: 1 }];
+  await s.r.tick();
+  const hit = new Set(s.w.signals.map(([t]) => Math.abs(t)));
+  for (const p of [300, 301, 302, 250]) assert.ok(!hit.has(p), `pid ${p} must not be signalled`);
+  assert.ok(!s.w.signals.some(([t]) => t === -300), "never the daemon's group");
+  assert.ok(hit.has(242), "orphaned Chrome (leak family) dies");
+  assert.ok(hit.has(241) || hit.has(240), "attached vitest dies (by its shell's group or by pid)");
+  // The shell tool was detached but is a plain shell — left running. Its group still holds vitest, so
+  // no group signal reaches the shell itself.
+  assert.ok(!s.w.signals.some(([t]) => t === -240 || t === 240));
+  const left = s.w.events.filter((e) => e.reason === "left_running");
+  assert.deepEqual(left.map((e) => [e.pid, e.count, e.signal, e.dry]).sort(), [[240, 1, null, true], [250, 1, null, true], [300, 3, null, true]]);
+  assert.match(s.w.logs.find((l) => l.startsWith("left running pid 300"))!, /3 procs.*ended, but it detached on purpose — claude$/);
+  // Announced once.
+  await s.r.tick();
+  assert.equal(s.w.events.filter((e) => e.reason === "left_running").length, 3);
+  // …and counted in the rollup.
+  assert.equal(procsView(null, s.r).workspaces[0].left_running, 5);
+});
+
+/**
+ * An attached leftover: the owner has ended (its root left the spawner's list) but the CLI process is
+ * still exiting, so what it started is still under a living owned parent — rule 1's "kill attached".
+ */
+function attachedScene(cfg: Partial<ReaperConfig>, kids: Proc[], argv: Record<number, string>) {
+  const h = harness(cfg);
+  h.w.procs = [DAEMON, CLI, ...kids];
+  (h.r as any).deps.args = async (pids: number[]) => new Map(pids.map((p) => [p, argv[p] ?? "/bin/sleep 300"]));
+  return {
+    ...h,
+    async end() {
+      await h.r.tick();
+      h.w.roots = [];
+      h.w.now += 1000;
+      await h.r.tick();
+      return new Set(h.w.signals.map(([t]) => Math.abs(t)));
+    },
+  };
+}
+
+test("an ATTACHED `claude --bg-pty-host` survives rule 1 (keep-list), with the session it hosts; an ordinary attached leftover dies", async () => {
+  const s = attachedScene({}, [
+    P({ pid: 301, ppid: 200, pgid: 301, startMs: T0 + 1000_000, comm: "/Users/leo/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude" }),
+    P({ pid: 303, ppid: 301, pgid: 301, startMs: T0 + 2000_000, comm: "/bin/zsh" }),
+    P({ pid: 304, ppid: 200, pgid: 304, startMs: T0 + 3000_000, comm: "/bin/sleep" }),
+  ], { 301: ARGV[301] });
+  const hit = await s.end();
+  assert.ok(!hit.has(301) && !hit.has(303), "kept bg-pty-host and its child are never signalled");
+  assert.equal(s.r.ledger.entries.get(301)?.kept, true);
+  assert.ok(hit.has(304), "an ordinary attached leftover still dies");
+  assert.deepEqual(s.w.events.filter((e) => e.reason === "left_running").map((e) => [e.pid, e.count]), [[301, 2]]);
+});
+
+test("an orphaned `node vite` of an ended owner is reported left_running, never signalled", async () => {
+  const s = daemonScene();
+  s.w.procs = [DAEMON, CLI, s.vite];
+  await s.r.tick();
+  s.w.roots = [];
+  s.w.now += 1000;
+  s.w.procs = [DAEMON, { ...s.vite, ppid: 1 }];
+  await s.r.tick();
+  await s.r.tick();
+  assert.deepEqual(s.w.signals, []);
+  assert.equal(s.r.ledger.entries.get(250)?.cls, "keep");
+  assert.deepEqual(s.w.events.map((e) => [e.reason, e.pid, e.signal]), [["left_running", 250, null]]);
+});
+
+test("CHRONOS_REAPER_KEEP: an extra argv pattern is spared even attached", async () => {
+  const kids = () => [
+    P({ pid: 270, ppid: 200, pgid: 270, startMs: T0 + 1000_000, comm: "/opt/homebrew/bin/postgres" }),
+    P({ pid: 271, ppid: 270, pgid: 270, startMs: T0 + 2000_000, comm: "/opt/homebrew/bin/postgres" }),
+  ];
+  const argv = { 270: "/opt/homebrew/bin/postgres -D /usr/local/var/postgres", 271: "postgres: checkpointer" };
+  const plain = await attachedScene({}, kids(), argv).end();
+  assert.ok(plain.has(270), "without the knob an attached postgres is an ordinary leftover");
+  const knob = reaperConfigFromEnv({ CHRONOS_REAPER_KEEP: "postgres -D" });
+  const s = attachedScene({ keep: knob.keep }, kids(), argv);
+  const hit = await s.end();
+  assert.ok(!hit.has(270) && !hit.has(271), "kept, and so is what runs below it");
+});
+
+test("argv unreadable → nothing is signalled that tick", async () => {
+  const { w, r } = harness();
+  await r.tick();
+  (r as any).deps.args = async () => null;
+  w.roots = [];
+  w.procs = [DAEMON, ...tree().slice(3).map((p) => (p.pid === 220 ? { ...p, ppid: 1 } : p))];
+  await r.tick();
+  assert.deepEqual(w.signals, []);
+  assert.ok(w.logs.some((l) => /could not read argv/.test(l)));
 });
 
 // ───────────────────────────── GET /machine's view ─────────────────────────────

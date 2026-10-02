@@ -123,10 +123,18 @@ export type Entry = {
   firstSeen: number;
   /** The latest snapshot row for this process. */
   proc: Proc;
-  /** First tick it was seen with PPID 1 while owned; null while it has a living parent. */
+  /** First tick it was seen DETACHED (see `isDetached`) while owned; null while it has a living owned parent. */
   orphanSince: number | null;
-  /** The orphan rule's verdict on it (reaper.ts classify): unset until it is first orphaned. */
+  /** The orphan rule's verdict on it (reaper.ts classify): unset until it is first detached. */
   cls?: "leak" | "keep";
+  /** Its argv, read once (`ps -o command`) when it first became a candidate. undefined = not read yet; null = gone before it could be. */
+  argv?: string | null;
+  /** argv matches the keep-list (reaper.ts): never signalled, nor anything below it. */
+  kept?: boolean;
+  /** Its owner ended and the reaper deliberately spared it (a daemon it detached, or the keep-list). */
+  left?: boolean;
+  /** `left_running` already announced for the subtree this entry tops. */
+  leftNoted?: boolean;
   /** SIGTERM sent at; the reaper escalates to SIGKILL after its grace. */
   termAt?: number;
   /** The group the SIGTERM went to (null = the pid alone), so SIGKILL follows the same way. */
@@ -149,6 +157,8 @@ export type Rollup = {
   rssKb: number;
   cpu: number;
   orphans: number;
+  /** Spared leftovers of an ended owner (reaper.ts `left_running`). */
+  left: number;
 };
 
 export class ProcLedger {
@@ -232,7 +242,7 @@ export class ProcLedger {
 
     // 5. Orphan clocks.
     for (const e of this.entries.values()) {
-      if (e.proc.ppid === 1) e.orphanSince ??= now;
+      if (this.isDetached(e)) e.orphanSince ??= now;
       else e.orphanSince = null;
     }
 
@@ -240,6 +250,16 @@ export class ProcLedger {
     const owning = new Set<string>();
     for (const e of this.entries.values()) owning.add(e.owner);
     for (const [k, o] of this.owners) if (o.ended && !owning.has(k)) this.owners.delete(k);
+  }
+
+  /**
+   * No longer under a living OWNED parent: adopted by launchd (PPID 1) or, on linux, by a subreaper.
+   * A root is never detached — its parent is the spawner, which nobody owns.
+   */
+  isDetached(e: Entry): boolean {
+    if (e.proc.ppid === 1) return true;
+    if (this.entries.has(e.proc.ppid)) return false;
+    return e.pid !== this.owners.get(e.owner)?.rootPid;
   }
 
   private adopt(p: Proc, owner: string, now: number): boolean {
@@ -255,11 +275,12 @@ export class ProcLedger {
   rollup(): Map<string, Rollup> {
     const out = new Map<string, Rollup>();
     for (const e of this.entries.values()) {
-      const r = out.get(e.owner) ?? { pids: 0, rssKb: 0, cpu: 0, orphans: 0 };
+      const r = out.get(e.owner) ?? { pids: 0, rssKb: 0, cpu: 0, orphans: 0, left: 0 };
       r.pids++;
       r.rssKb += e.proc.rssKb;
       r.cpu += e.proc.cpu;
-      if (e.proc.ppid === 1) r.orphans++;
+      if (this.isDetached(e)) r.orphans++;
+      if (e.left) r.left++;
       out.set(e.owner, r);
     }
     return out;

@@ -133,10 +133,12 @@ export type BusEvent = (
   // left behind: `reason` session_ended (its owner is gone), orphan (a leak-family process whose
   // launcher died) or escalate (SIGKILL after an ignored SIGTERM). `dry` = CHRONOS_REAPER=dry: it
   // would have. One event per kill(2) — `count` processes reached, `pid` the group or the process.
+  // `left_running` (signal null, dry true) = an ended owner's process that daemonized on purpose or
+  // is on the keep-list: deliberately NOT signalled, announced once with everything below it.
   | {
       topic: "proc.reaped";
-      signal: "SIGTERM" | "SIGKILL";
-      reason: "session_ended" | "orphan" | "escalate";
+      signal: "SIGTERM" | "SIGKILL" | null;
+      reason: "session_ended" | "orphan" | "escalate" | "left_running";
       dry: boolean;
       pid: number;
       group: number | null;

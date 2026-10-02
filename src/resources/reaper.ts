@@ -2,15 +2,25 @@
  * The leak reaper: kills what an agent left running, by the ownership ledger (ledger.ts). RESOURCES.md
  * has the design and the incident; this is the rule set, in the order the reaper applies it.
  *
- *  1. ENDED owner → every process it still owns gets SIGTERM, then SIGKILL after `killGraceMs`. No
- *     warning: the terminal or run that could have used them is gone. This is what would have caught
- *     2026-10-02 — 188 headless Chromes outliving the terminal whose subagents started them.
- *  2. ORPHAN of a LIVE owner (PPID 1: its launcher died) → the same, after `orphanGraceMs` orphaned,
- *     but ONLY for the leak family: headless browsers / workerd by executable, and node/bun/deno whose
- *     argv names a test runner (vitest, jest, playwright, puppeteer…). An agent's `npm run dev &` is
- *     also PPID 1 once its shell exits, and the agent may still be using it — so every other orphan
- *     is left alone and dies with its owner under rule 1.
+ *  1. ENDED owner → what it still holds ATTACHED (under a living owned parent) and its leak-family
+ *     DETACHED processes get SIGTERM, then SIGKILL after `killGraceMs`. No warning: the terminal or
+ *     run that could have used them is gone. This is what would have caught 2026-10-02 — 188
+ *     headless Chromes outliving the terminal whose subagents started them. Any OTHER detached
+ *     process is something that daemonized on purpose and may serve more than this owner — Claude
+ *     Code's own `claude daemon run` (with every background session its `bg-pty-host`s carry),
+ *     colima, `pg_ctl start`, an MCP server: it is LEFT RUNNING, with everything below it, and
+ *     reported once as `left_running`.
+ *  2. ORPHAN of a LIVE owner (detached: its launcher died) → SIGTERM after `orphanGraceMs`, ONLY for
+ *     the leak family: headless browsers / workerd by executable, and node/bun/deno whose argv names
+ *     a test runner (vitest, jest, playwright, puppeteer…). An agent's `npm run dev &` is also PPID 1
+ *     once its shell exits, and the agent may still be using it.
  *  3. A SIGTERM that has not worked after `killGraceMs` → SIGKILL, the same way (group or pid).
+ *
+ * The KEEP-LIST (`keep`, regex over argv; `CHRONOS_REAPER_KEEP` adds one) is never signalled under
+ * any rule, attached or not, and neither is anything below it: shared per-user daemons an agent CLI
+ * may have started on demand (Claude Code's daemon / bg-pty-host / bg-spare, limactl, colima,
+ * gpg-agent, ssh-agent, watchman, git fsmonitor, ollama). argv is read once per candidate target,
+ * batched; a tick that cannot read it signals nothing.
  *
  * How a signal is aimed: at the process GROUP when the group's leader is owned by the same owner and
  * every member of the group is too (so Chrome's renderers go with their browser), otherwise at each
@@ -50,12 +60,25 @@ export type ReaperConfig = {
   testRunnerArgs: RegExp;
   /** Executable path prefixes never signalled, owned or not. */
   protect: string[];
+  /** argv patterns never signalled, nor anything below them (the keep-list). */
+  keep: RegExp[];
 };
 
 export const DEFAULT_LEAK_FAMILY = /chrom(e|ium)|headless[_-]?shell|firefox|webkit|msedge|workerd/i;
 export const DEFAULT_RUNTIMES = /^(node|bun|deno)$/i;
 export const DEFAULT_TEST_RUNNER_ARGS = /\b(vitest|jest|mocha|playwright|puppeteer|tinypool|karma|wdio|cypress)\b/i;
 export const DEFAULT_PROTECT = ["/Applications/Google Chrome.app/"];
+/**
+ * Shared per-user daemons an agent CLI may start on demand and that serve far more than the terminal
+ * that happened to start them. Measured here: `claude daemon run --json-path ~/.claude/daemon.json`
+ * (PPID 1) hosting `claude bg-pty-host` / `bg-spare` children — one of them a 5-hour-old background
+ * Claude session (`--bg-pty-host … --resume`) the operator was still using.
+ */
+export const DEFAULT_KEEP = [
+  /(^|\/)claude\s+(daemon|bg-pty-host|bg-spare)\b|--bg-pty-host\b|--bg-spare\b/,
+  /(^|[\/\s])(limactl|colima|gpg-agent|ssh-agent|watchman|ollama)(\s|$)/,
+  /fsmonitor--daemon/,
+];
 
 const num = (v: string | undefined, dflt: number, min: number): number => {
   const n = Number(v);
@@ -72,6 +95,12 @@ export function reaperConfigFromEnv(env: Record<string, string | undefined>): Re
     try { leakFamily = new RegExp(fam, "i"); } catch { /* a bad regex keeps the default rather than reaping by accident */ }
   }
   const extra = (env.CHRONOS_REAPER_PROTECT ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const keep = [...DEFAULT_KEEP];
+  const k = env.CHRONOS_REAPER_KEEP?.trim();
+  if (k) {
+    // An invalid regex is a loud log line, never "keep nothing extra" silently turning into a kill.
+    try { keep.push(new RegExp(k)); } catch { console.warn(`[reaper] CHRONOS_REAPER_KEEP is not a valid regex — ignored: ${k}`); }
+  }
   return {
     mode,
     tickMs: num(env.CHRONOS_REAPER_TICK_MS, 10_000, 1000),
@@ -82,6 +111,7 @@ export function reaperConfigFromEnv(env: Record<string, string | undefined>): Re
     runtimes: DEFAULT_RUNTIMES,
     testRunnerArgs: DEFAULT_TEST_RUNNER_ARGS,
     protect: [...DEFAULT_PROTECT, ...extra],
+    keep,
   };
 }
 
@@ -99,6 +129,10 @@ export function classify(comm: string, cfg: Pick<ReaperConfig, "leakFamily" | "r
 
 export type Reason = "session_ended" | "orphan" | "escalate";
 
+/** argv on the keep-list? */
+export const isKept = (argv: string | null | undefined, cfg: Pick<ReaperConfig, "keep">): boolean =>
+  !!argv && cfg.keep.some((r) => r.test(argv));
+
 /** One kill(2): a whole group (`group` = pgid) or one pid. `pids` are the ledger entries it reaches. */
 export type Action = {
   signal: "SIGTERM" | "SIGKILL";
@@ -115,7 +149,40 @@ export type Ctx = {
   selfPgid: number | null;
   uid: number | null;
   liveRootPids: Set<number>;
+  /** Refuse any target whose argv has not been read (the keep-list could not be checked). The driver's final pass sets it. */
+  requireArgv?: boolean;
 };
+
+/**
+ * Pure: what the reaper deliberately spares.
+ *  - A KEPT process (keep-list) and everything below it — a background Claude session's own tools are
+ *    live work.
+ *  - A DETACHED process of an ENDED owner that is not leak-family (it daemonized on purpose: a dev
+ *    server, `pg_ctl start`, an MCP server) and what runs below it — EXCEPT leak-family descendants
+ *    (a vitest, a headless Chrome), which are not spared and die with their own subtrees. That is
+ *    how a Bash tool's orphaned `zsh -c "npx vitest"` loses its vitest but `vite` keeps its esbuild.
+ * Not yet classified counts as not leak: spared until the verdict is in.
+ */
+export function spared(ledger: ProcLedger): Set<number> {
+  const out = new Set<number>();
+  const walk = (top: number, all: boolean) => {
+    const stack = [top];
+    while (stack.length) {
+      const p = stack.pop()!;
+      const e = ledger.entries.get(p);
+      if (!e || out.has(p)) continue;
+      if (!all && p !== top && e.cls === "leak" && !e.kept) continue;
+      out.add(p);
+      for (const c of ledger.children.get(p) ?? []) stack.push(c);
+    }
+  };
+  for (const e of ledger.entries.values()) if (e.kept) walk(e.pid, true);
+  for (const e of ledger.entries.values()) {
+    if (out.has(e.pid) || !ledger.owners.get(e.owner)?.ended) continue;
+    if (ledger.isDetached(e) && e.cls !== "leak") walk(e.pid, false);
+  }
+  return out;
+}
 
 export function touchable(e: Entry, ctx: Ctx, cfg: Pick<ReaperConfig, "protect">): boolean {
   const p = e.proc;
@@ -133,11 +200,13 @@ export function touchable(e: Entry, ctx: Ctx, cfg: Pick<ReaperConfig, "protect">
 export function decide(ledger: ProcLedger, cfg: ReaperConfig, ctx: Ctx): Action[] {
   const out: Action[] = [];
   const claimed = new Set<number>();
+  const keep = spared(ledger);
   const full = () => out.length >= cfg.maxSignals;
   const owner = (e: Entry): Owner | undefined => ledger.owners.get(e.owner);
   const ok = (pid: number) => {
     const e = ledger.entries.get(pid);
-    return !!e && !claimed.has(pid) && touchable(e, ctx, cfg);
+    if (!e || claimed.has(pid) || keep.has(pid) || !touchable(e, ctx, cfg)) return false;
+    return !ctx.requireArgv || e.argv !== undefined;
   };
 
   /** The group `pgid`, if one signal to it reaches only processes this owner owns and we may touch. */
@@ -180,7 +249,8 @@ export function decide(ledger: ProcLedger, cfg: ReaperConfig, ctx: Ctx): Action[
     push({ signal: "SIGKILL", reason: "escalate", owner: e.owner, group: null, pids: [e.pid] });
   }
 
-  // 1: everything an ended owner still holds. Oldest first, so a browser goes before the renderers its group kill already covers.
+  // 1: what an ended owner still holds, minus what `spared` keeps. Oldest first, so a browser goes
+  // before the renderers its group kill already covers.
   const ended = [...ledger.entries.values()]
     .filter((e) => e.termAt == null && owner(e)?.ended)
     .sort((a, b) => a.startMs - b.startMs || a.pid - b.pid);
@@ -204,8 +274,9 @@ export function decide(ledger: ProcLedger, cfg: ReaperConfig, ctx: Ctx): Action[
 }
 
 export type ReapEvent = {
-  signal: Action["signal"];
-  reason: Reason;
+  /** null = nothing was sent (`left_running`). */
+  signal: Action["signal"] | null;
+  reason: Reason | "left_running";
   dry: boolean;
   pid: number;
   group: number | null;
@@ -223,7 +294,7 @@ export type ReaperDeps = {
   ps(): Promise<string | null>;
   /** Start times of these pids right now (pid → startMs); null = could not check (nothing is signalled). */
   starts(pids: number[]): Promise<Map<number, number> | null>;
-  /** argv of these pids (pid → command line), for runtime orphans. */
+  /** argv of these pids (pid → command line): runtime orphans' verdict, and the keep-list. */
   args(pids: number[]): Promise<Map<number, string> | null>;
   /** kill(2). `target` < 0 is a process group. false = it was already gone. */
   signal(target: number, sig: NodeJS.Signals): boolean;
@@ -291,8 +362,21 @@ export class Reaper {
       uid: this.deps.uid === undefined ? (process.getuid?.() ?? null) : this.deps.uid,
       liveRootPids: new Set(roots.map((r) => r.pid)),
     };
+    // The keep-list needs argv: read it for every candidate this tick would otherwise signal (once
+    // per process — it is cached on the entry), then decide again with an unread argv as a veto.
+    const pre = decide(this.ledger, this.cfg, ctx);
+    const unread = [...new Set(pre.flatMap((a) => a.pids))].filter((p) => this.ledger.entries.get(p)?.argv === undefined);
+    if (unread.length) {
+      const argv = await this.deps.args(unread).catch(() => null);
+      if (!argv) {
+        this.log(`could not read argv of ${unread.length} candidate(s) to check the keep-list — nothing signalled this tick`);
+        return { sampled: true, actions: [], signalled: 0 };
+      }
+      for (const p of unread) this.setArgv(this.ledger.entries.get(p)!, argv.get(p) ?? null);
+    }
     // Without our own row the group guard is blind — fall back to pid-by-pid aiming only.
-    const actions = decide(this.ledger, this.cfg, ctx).filter((a) => a.group == null || ctx.selfPgid != null);
+    const actions = decide(this.ledger, this.cfg, { ...ctx, requireArgv: true }).filter((a) => a.group == null || ctx.selfPgid != null);
+    this.reportLeftRunning();
     if (!actions.length) return { sampled: true, actions, signalled: 0 };
     if (this.cfg.mode === "dry") {
       for (const a of actions) {
@@ -306,11 +390,40 @@ export class Reaper {
     return { sampled: true, actions, signalled: await this.execute(actions, now) };
   }
 
-  /** Rule 2 needs each new orphan's verdict; runtimes need their argv, fetched once for the batch. */
+  private setArgv(e: Entry, argv: string | null): void {
+    e.argv = argv;
+    e.kept = isKept(argv, this.cfg);
+  }
+
+  /**
+   * An ended owner's spared subtrees, announced once each (top process, how many below it, RSS):
+   * the daemon it detached is not ours to kill, but the operator should see it outlived its terminal.
+   */
+  private reportLeftRunning(): void {
+    const keep = spared(this.ledger);
+    for (const pid of keep) {
+      const e = this.ledger.entries.get(pid)!;
+      const o = this.ledger.owners.get(e.owner);
+      if (!o?.ended) continue;
+      e.left = true;
+      // Only the top of each spared subtree speaks, and only once it is classified (or kept).
+      if (keep.has(e.proc.ppid) || e.leftNoted || (!e.kept && !e.cls)) continue;
+      e.leftNoted = true;
+      const pids = this.ledger.subtree(pid).filter((p) => keep.has(p));
+      this.report({ signal: null, reason: "left_running", owner: e.owner, group: null, pids }, true);
+    }
+  }
+
+  /**
+   * The leak-family verdict, for every detached process (rules 1 and 2) and everything an ended owner
+   * still holds (rule 1 kills leak-family descendants of what it spares). Runtimes need their argv,
+   * fetched once for the batch and cached on the entry.
+   */
   private async classifyOrphans(): Promise<void> {
     const ask: Entry[] = [];
     for (const e of this.ledger.entries.values()) {
-      if (e.orphanSince == null || e.cls) continue;
+      if (e.cls || (e.orphanSince == null && !this.ledger.owners.get(e.owner)?.ended)) continue;
+      if (e.argv !== undefined) { e.cls = classify(e.proc.comm, this.cfg, e.argv) === "leak" ? "leak" : "keep"; continue; }
       const c = classify(e.proc.comm, this.cfg);
       if (c === "args") ask.push(e);
       else e.cls = c;
@@ -320,6 +433,7 @@ export class Reaper {
     if (!argv) return; // ask again next tick
     for (const e of ask) {
       const a = argv.get(e.pid);
+      this.setArgv(e, a ?? null);
       e.cls = a == null ? "keep" : (classify(e.proc.comm, this.cfg, a) as "leak" | "keep");
     }
   }
@@ -347,7 +461,7 @@ export class Reaper {
     return n;
   }
 
-  private report(a: Action, dry: boolean): void {
+  private report(a: Omit<Action, "signal" | "reason"> & { signal: Action["signal"] | null; reason: Reason | "left_running" }, dry: boolean): void {
     const lead = this.ledger.entries.get(a.group ?? a.pids[0]);
     const o = this.ledger.owners.get(a.owner);
     const rssKb = a.pids.reduce((s, p) => s + (this.ledger.entries.get(p)?.proc.rssKb ?? 0), 0);
@@ -368,10 +482,13 @@ export class Reaper {
       this.reapedByWs.set(ws, (this.reapedByWs.get(ws) ?? 0) + a.pids.length);
     }
     const who = o ? `${o.kind} ${o.id.slice(0, 8)}${o.workspaceId ? ` (ws ${o.workspaceId.slice(0, 8)})` : ""}` : "?";
-    const why = a.reason === "session_ended" ? `${o?.kind ?? "owner"} ended` : a.reason === "orphan" ? "orphaned leak-family process" : "SIGTERM ignored";
-    this.log(
-      `${dry ? "(dry) would send " : ""}${a.signal} ${a.group != null ? `group ${a.group}` : `pid ${a.pids[0]}`} — ${ev.count} proc${ev.count === 1 ? "" : "s"}, ${ev.rssMb} MB — ${who}: ${why} — ${exeName(ev.cmd)}`,
-    );
+    const size = `${ev.count} proc${ev.count === 1 ? "" : "s"}, ${ev.rssMb} MB`;
+    if (a.reason === "left_running") {
+      this.log(`left running pid ${ev.pid} — ${size} — ${who} ended, but it detached on purpose${lead?.kept ? " (keep-list)" : ""} — ${exeName(ev.cmd)}`);
+    } else {
+      const why = a.reason === "session_ended" ? `${o?.kind ?? "owner"} ended` : a.reason === "orphan" ? "orphaned leak-family process" : "SIGTERM ignored";
+      this.log(`${dry ? "(dry) would send " : ""}${a.signal} ${a.group != null ? `group ${a.group}` : `pid ${a.pids[0]}`} — ${size} — ${who}: ${why} — ${exeName(ev.cmd)}`);
+    }
     try { this.deps.onReap?.(ev); } catch { /* a listener never stops the reaper */ }
   }
 }

@@ -184,7 +184,7 @@ export const CONFIG = {
   },
   // The leak reaper (RESOURCES.md, src/resources/): a process ledger sampled every tick, and the rules
   // that kill what an ended terminal/run left running. CHRONOS_REAPER=on|dry|off (default on),
-  // CHRONOS_REAPER_TICK_MS, _KILL_GRACE_MS, _ORPHAN_GRACE_MS, _MAX_SIGNALS, _ORPHAN_FAMILY, _PROTECT.
+  // CHRONOS_REAPER_TICK_MS, _KILL_GRACE_MS, _ORPHAN_GRACE_MS, _MAX_SIGNALS, _ORPHAN_FAMILY, _PROTECT, _KEEP.
   reaper: reaperConfigFromEnv(process.env),
   // Placement (HOSTS.md phase 4, src/hosts/placement.ts): which computer a new terminal lands on.
   //   auto   — sticky, then pinned, else the eligible computer with the most headroom (default);

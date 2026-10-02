@@ -3246,8 +3246,8 @@ function askCap(question) {
       );
       // What terminals and runs hold (RESOURCES.md) — the caller's workspace only, unless admin.
       if (m.procs && m.procs.mode !== "off") {
-        const t = m.procs.workspaces.reduce((a, w) => ({ pids: a.pids + w.pids, rss: a.rss + w.rss_mb, orphans: a.orphans + w.orphans, reaped: a.reaped + w.reaped }), { pids: 0, rss: 0, orphans: 0, reaped: 0 });
-        console.log(`agent processes ${t.pids} · ${t.rss} MB · orphans ${t.orphans} · reaped ${t.reaped}${m.procs.mode === "dry" ? " (dry run: would have)" : ""}`);
+        const t = m.procs.workspaces.reduce((a, w) => ({ pids: a.pids + w.pids, rss: a.rss + w.rss_mb, orphans: a.orphans + w.orphans, reaped: a.reaped + w.reaped, left: a.left + (w.left_running ?? 0) }), { pids: 0, rss: 0, orphans: 0, reaped: 0, left: 0 });
+        console.log(`agent processes ${t.pids} · ${t.rss} MB · orphans ${t.orphans} · reaped ${t.reaped}${m.procs.mode === "dry" ? " (dry run: would have)" : ""}${t.left ? ` · left running ${t.left}` : ""}`);
       }
       return;
     }

@@ -132,5 +132,5 @@ test("rollup: count, RSS, CPU and orphans per incarnation", () => {
     [root()],
     { selfPid: SELF, now: T0 + 1 },
   );
-  assert.deepEqual(l.rollup().get(ownerKey(root())), { pids: 2, rssKb: 3072, cpu: 15, orphans: 1 });
+  assert.deepEqual(l.rollup().get(ownerKey(root())), { pids: 2, rssKb: 3072, cpu: 15, orphans: 1, left: 0 });
 });

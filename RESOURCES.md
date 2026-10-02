@@ -55,17 +55,20 @@ Attribution is **lineage observed while the parent is alive** (`src/resources/le
 
 Known gaps, accepted: a grandchild born *and* orphaned inside one tick (≤ 10 s) is never seen with
 its parent and stays unowned (the incident's Chromes lived for hours). A daemon restart forgets the
-ledger — survivors from before it are unowned and untouched (the safe direction). On Linux,
-a subreaper (systemd --user) may adopt orphans instead of PID 1: rule 2 then does not fire there,
-rule 1 still does.
+ledger — survivors from before it are unowned and untouched (the safe direction). "Detached" means
+no longer under a living *owned* parent, so a Linux subreaper (systemd --user) adopting an orphan
+instead of PID 1 changes nothing.
 
 ## PR 1 — the leak reaper
 
 `src/resources/reaper.ts`, same tick. Three rules (a tick serves rule 3 first — finish what was started):
 
-1. **Ended owner** → every process it still owns: SIGTERM now, SIGKILL after the grace. No warning,
-   whatever it is (a dev server too — it dies with its terminal).
-2. **Orphan of a live owner** (owned, PPID 1) → the same, after `CHRONOS_REAPER_ORPHAN_GRACE_MS` (2 min)
+1. **Ended owner** → SIGTERM now, SIGKILL after the grace, no warning, for what it still holds
+   **attached** (under a living owned parent) and its **leak-family** processes wherever they are. Its
+   other **detached** processes (PPID 1 — they daemonized on purpose) are **left running**, together
+   with what runs below them except leak-family descendants: never signalled, announced once as
+   `left_running` (log line, `proc.reaped` event with `signal: null`, `left_running` in the rollup).
+2. **Orphan of a live owner** (owned, detached) → SIGTERM, after `CHRONOS_REAPER_ORPHAN_GRACE_MS` (2 min)
    orphaned — **only for the leak family**: an executable matching `chrom(e|ium)|headless_shell|firefox|
    webkit|msedge|workerd` (`CHRONOS_REAPER_ORPHAN_FAMILY` overrides), or `node`/`bun`/`deno` whose argv
    names a test runner (`vitest|jest|mocha|playwright|puppeteer|tinypool|karma|wdio|cypress`; argv is
@@ -73,11 +76,34 @@ rule 1 still does.
 3. **Escalate:** a SIGTERM still alive after `CHRONOS_REAPER_KILL_GRACE_MS` (10 s) → SIGKILL, aimed
    the same way.
 
+**Keep-list** — never signalled under any rule, attached or not, nor anything below it: argv
+matching Claude Code's `claude daemon` / `bg-pty-host` / `bg-spare` (`--bg-pty-host`, `--bg-spare`),
+`limactl`, `colima`, `gpg-agent`, `ssh-agent`, `watchman`, `git fsmonitor--daemon`, `ollama`, plus
+`CHRONOS_REAPER_KEEP` (one regex over argv). argv is read only for candidate targets, once per
+process, batched in one `ps -o command -p`; a tick that cannot read it signals nothing.
+
+**Why rule 1 spares detached processes (review of #128).** Sticky lineage makes a terminal the owner
+of every shared per-user daemon its CLI happened to start on demand. Measured on the brain: `claude
+daemon run --json-path ~/.claude/daemon.json` (PPID 1) with `claude bg-pty-host` / `bg-spare` children
+under `/tmp/cc-daemon-501/`, one of them a 5-hour-old background Claude session (`--resume`) that other
+sessions — the operator's own — were using. "Kill everything the ended owner holds" would have
+SIGTERMed that daemon and every session it hosts when one Desk terminal closed. Same class: `colima
+start` / limactl hostagent (Docker dies), `pg_ctl start`, gpg-agent, ssh-agent, watchman, git fsmonitor,
+gradle/kotlin daemons, `ollama serve`, `redis-server`, an MCP server (`dart mcp-server`, found orphaned
+here). Detaching is the signal that a process meant to outlive its launcher; leak-family processes
+(a headless Chrome, an orphaned vitest) never mean that. Leak-family descendants of a spared process
+still die, which is how a Bash tool's orphaned `zsh -c "npx vitest"` loses its vitest while `vite`
+keeps its esbuild. The keep-list covers what is attached at the moment its owner ends.
+
+**Dev servers.** A dev server in a Desk terminal dies with the terminal **only while it is attached**
+(running under the CLI / its shell). One that detached (`npm run dev &` whose shell has exited, a
+`nohup`, `pg_ctl start`) is **left running** and reported, not killed.
+
 **Why the orphan rule is a family, not "every orphan":** an agent's `npm run dev &` is *also* PPID 1
 the moment its shell tool exits, and the agent may be curling it a minute later. A LISTEN-socket
 exemption was rejected: wrangler/puppeteer browsers may listen on a debugging port, so it would exempt
 exactly the leak. An orphaned browser engine or test runner is never something a live agent is still
-driving through its (dead) parent; anything else waits for rule 1. The cost: a browser an agent
+driving through its (dead) parent; anything else waits for rule 1, which leaves it running too. The cost: a browser an agent
 deliberately backgrounds with `&` dies 2 minutes after its launcher does — run it in the foreground
 of a tool call, or under a process that stays alive.
 
@@ -103,12 +129,13 @@ first look on a new machine.
 
 **Trail.** Every signal is logged (`[reaper] SIGTERM group 52749 — 12 procs, 340 MB — session ae29a268
 (ws …): session ended — Google Chrome for Testing`) and published as `proc.reaped` (signal, reason
-`session_ended|orphan|escalate`, dry, pid/group, count, rss_mb, cmd, session_id|run_id, workspace_id).
+`session_ended|orphan|escalate|left_running`, dry, pid/group, count, rss_mb, cmd, session_id|run_id,
+workspace_id; `left_running` has `signal: null`).
 `activity.ts` records it — the raw material of PR 3's efficiency ledger.
 
 **Surface.** `GET /api/machine` (and so `mc machine`) gains `procs`: `{ mode, every_ms, sampled_at,
-workspaces: [{workspace_id, pids, rss_mb, cpu, orphans, reaped}], owners: [{kind, id, workspace_id,
-ended, pids, rss_mb, cpu, orphans, reaped}] }`. Admin sees every workspace; a workspace token sees
+workspaces: [{workspace_id, pids, rss_mb, cpu, orphans, reaped, left_running}], owners: [{kind, id,
+workspace_id, ended, pids, rss_mb, cpu, orphans, reaped, left_running}] }`. Admin sees every workspace; a workspace token sees
 only its own rows. Brain only: a request forwarded from a host gets no `procs`.
 
 **Hosts.** hostd runs the same `Reaper` over its own live channels (`src/hostd/index.ts`), on its own
@@ -126,6 +153,7 @@ link (so `GET /machine` can show a host's rollup) is PR 2, which needs it for bu
 | `CHRONOS_REAPER_MAX_SIGNALS` | `20` | kill(2) calls per tick, all rules together. |
 | `CHRONOS_REAPER_ORPHAN_FAMILY` | browsers + workerd | Regex over the executable name for rule 2 (an invalid one keeps the default). |
 | `CHRONOS_REAPER_PROTECT` | — | Extra comma-separated executable path prefixes never signalled. |
+| `CHRONOS_REAPER_KEEP` | — | Extra keep-list regex over argv: never signalled, nor anything below it (an invalid one is logged and ignored). |
 
 ## PR 2 — per-workspace budgets + the ladder (design)
 

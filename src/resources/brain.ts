@@ -102,8 +102,10 @@ export type OwnerRollup = {
   cpu: number;
   orphans: number;
   reaped: number;
+  /** Processes an ended owner left that the reaper deliberately spared (daemonized on purpose / keep-list). */
+  left_running: number;
 };
-export type WorkspaceRollup = { workspace_id: string | null; pids: number; rss_mb: number; cpu: number; orphans: number; reaped: number };
+export type WorkspaceRollup = { workspace_id: string | null; pids: number; rss_mb: number; cpu: number; orphans: number; reaped: number; left_running: number };
 export type ProcsView = {
   mode: ReaperMode;
   every_ms: number;
@@ -126,19 +128,19 @@ export function procsView(ws: string | null, r: Reaper | null = reaper): ProcsVi
   const wsRow = (id: string | null) => {
     const k = id ?? "";
     let w = byWs.get(k);
-    if (!w) { w = { workspace_id: id, pids: 0, rss_mb: 0, cpu: 0, orphans: 0, reaped: r.reapedByWs.get(k) ?? 0 }; byWs.set(k, w); }
+    if (!w) { w = { workspace_id: id, pids: 0, rss_mb: 0, cpu: 0, orphans: 0, reaped: r.reapedByWs.get(k) ?? 0, left_running: 0 }; byWs.set(k, w); }
     return w;
   };
   for (const o of r.ledger.owners.values()) {
     if (ws != null && o.workspaceId !== ws) continue;
-    const x = roll.get(o.key) ?? { pids: 0, rssKb: 0, cpu: 0, orphans: 0 };
+    const x = roll.get(o.key) ?? { pids: 0, rssKb: 0, cpu: 0, orphans: 0, left: 0 };
     const row: OwnerRollup = {
       kind: o.kind, id: o.id, workspace_id: o.workspaceId, ended: o.ended,
-      pids: x.pids, rss_mb: Math.round(x.rssKb / 1024), cpu: Math.round(x.cpu * 10) / 10, orphans: x.orphans, reaped: o.reaped,
+      pids: x.pids, rss_mb: Math.round(x.rssKb / 1024), cpu: Math.round(x.cpu * 10) / 10, orphans: x.orphans, reaped: o.reaped, left_running: x.left,
     };
     base.owners.push(row);
     const w = wsRow(o.workspaceId);
-    w.pids += row.pids; w.rss_mb += row.rss_mb; w.cpu = Math.round((w.cpu + row.cpu) * 10) / 10; w.orphans += row.orphans;
+    w.pids += row.pids; w.rss_mb += row.rss_mb; w.cpu = Math.round((w.cpu + row.cpu) * 10) / 10; w.orphans += row.orphans; w.left_running += row.left_running;
   }
   // A workspace whose reaped work is all gone still shows what was reaped.
   for (const k of r.reapedByWs.keys()) {

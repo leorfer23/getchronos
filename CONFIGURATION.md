@@ -726,6 +726,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_QUOTA_HORIZON_SEC` | `1800` | `src/config.ts` |
 | `CHRONOS_QUOTA_TOKENS_5H` | `0` | `src/config.ts` |
 | `CHRONOS_REAPER` | `on` (`dry` = log only, `off` = no ledger; RESOURCES.md) | `src/resources/reaper.ts` |
+| `CHRONOS_REAPER_KEEP` | — (extra keep-list regex over argv) | `src/resources/reaper.ts` |
 | `CHRONOS_REAPER_KILL_GRACE_MS` | `10000` | `src/resources/reaper.ts` |
 | `CHRONOS_REAPER_MAX_SIGNALS` | `20` | `src/resources/reaper.ts` |
 | `CHRONOS_REAPER_ORPHAN_FAMILY` | browsers + workerd regex | `src/resources/reaper.ts` |
