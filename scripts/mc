@@ -3240,10 +3240,16 @@ function askCap(question) {
       const verdict = m.admission.ok ? "ok for agents" : "SATURATED — " + m.admission.reason;
       const busy = m.heavy.holders.map((h) => `${h.label.slice(0, 24)} ${heldFor(h.held_ms)}`).join(", ");
       const waiting = m.heavy.waiting ? ` +${m.heavy.waiting} waiting` : "";
-      return console.log(
+      console.log(
         `load ${m.load1.toFixed(1)} on ${m.ncpu} cores (${m.loadPerCore.toFixed(2)}/core) · memory ${m.pressure} · ${swap} · ` +
         `heavy ${m.heavy.holders.length}/${m.heavy.slots}${busy ? ` (${busy})` : ""}${waiting} · ${verdict}`,
       );
+      // What terminals and runs hold (RESOURCES.md) — the caller's workspace only, unless admin.
+      if (m.procs && m.procs.mode !== "off") {
+        const t = m.procs.workspaces.reduce((a, w) => ({ pids: a.pids + w.pids, rss: a.rss + w.rss_mb, orphans: a.orphans + w.orphans, reaped: a.reaped + w.reaped }), { pids: 0, rss: 0, orphans: 0, reaped: 0 });
+        console.log(`agent processes ${t.pids} · ${t.rss} MB · orphans ${t.orphans} · reaped ${t.reaped}${m.procs.mode === "dry" ? " (dry run: would have)" : ""}`);
+      }
+      return;
     }
     if (cmd === "status") {
       const h = await req("GET", "/health");

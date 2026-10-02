@@ -395,8 +395,9 @@ the oldest one to the back. An entry is granted only while a poll is actually at
 hung up is skipped, never handed a permit it cannot use), and an entry nobody re-polls for within 90s
 is swept.
 
-`GET /api/machine` (and `mc machine`) reports load, memory pressure, swap, slots in use and the
-current admission verdict.
+`GET /api/machine` (and `mc machine`) reports load, memory pressure, swap, slots in use, the
+current admission verdict and — from the process ledger (RESOURCES.md) — what each workspace's
+terminals and runs hold right now.
 
 | Env | Default | Meaning |
 |---|---|---|
@@ -405,6 +406,7 @@ current admission verdict.
 | `CHRONOS_MAX_LOAD_PER_CORE` | `2.5` | 1-minute load average per core an agent may be admitted at. |
 | `CHRONOS_MAX_SWAP_USED_PCT` | `90` | Swap-in-use %, applied only as a second opinion under *warning* memory pressure (darwin only). |
 | `CHRONOS_HEAVY_SLOTS` | `max(1, ncpu / 6)` | Concurrent heavy commands machine-wide. |
+| `CHRONOS_REAPER` | `on` | The leak reaper: kills what ended terminals/runs left running (`dry` = log only). See RESOURCES.md. |
 
 ---
 

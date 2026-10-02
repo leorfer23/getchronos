@@ -172,6 +172,7 @@ import {
   BuildGraphifySchema, QueryGraphifySchema,
   NewArtifactSchema, UpdateArtifactSchema, ArtifactEventSchema, ArtifactStateSchema } from "./validation.js";
 import { pressureWord, swapPctOf } from "./machine.js";
+import { procsView } from "./resources/brain.js";
 import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
 import { hostName, reposOnHost } from "./hosts/workdir.js";
 import { HOST_PATH, brainLink, forwardedHost, hostRoutes } from "./hostlink/brain-link.js";
@@ -1964,6 +1965,10 @@ export function startServer() {
       admission,
       heavy: { slots: host.slots.size(), holders: host.slots.holders(), waiting: host.slots.waiting() },
       vitals: samples,
+      // Who holds what on this Mac (RESOURCES.md): per terminal/run and per workspace, from the
+      // reaper's ledger. Brain only — a host's ledger lives on that host. A workspace token sees its
+      // own workspace's rows and nothing else (CLAUDE.md gotcha #4).
+      ...(host.id === LOCAL_HOST_ID ? { procs: procsView(callerScope(req)?.ws ?? null) } : {}),
       ...(host.id !== LOCAL_HOST_ID ? { host_id: host.id } : {}),
     });
   });

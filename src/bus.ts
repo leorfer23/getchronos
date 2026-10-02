@@ -129,6 +129,25 @@ export type BusEvent = (
   | { topic: "artifact.created"; artifact_id: string; workspace_id: string | null; session_id: string | null; title: string; ask_id: string | null }
   | { topic: "artifact.updated"; artifact_id: string; workspace_id: string | null; session_id: string | null; version: number }
   | { topic: "artifact.event"; artifact_id: string; event_id: number; kind: string; workspace_id: string | null; session_id: string | null }
+  // The leak reaper (src/resources/reaper.ts, RESOURCES.md) signalled processes a terminal or run
+  // left behind: `reason` session_ended (its owner is gone), orphan (a leak-family process whose
+  // launcher died) or escalate (SIGKILL after an ignored SIGTERM). `dry` = CHRONOS_REAPER=dry: it
+  // would have. One event per kill(2) — `count` processes reached, `pid` the group or the process.
+  | {
+      topic: "proc.reaped";
+      signal: "SIGTERM" | "SIGKILL";
+      reason: "session_ended" | "orphan" | "escalate";
+      dry: boolean;
+      pid: number;
+      group: number | null;
+      count: number;
+      rss_mb: number;
+      cmd: string;
+      owner_kind: "session" | "run" | null;
+      session_id?: string | null;
+      run_id?: string;
+      workspace_id: string | null;
+    }
   | { topic: "clipboard.read"; by: string; describe: string; chars: number }
   | { topic: "clipboard.write"; by: string; describe: string; chars: number }
   | {
