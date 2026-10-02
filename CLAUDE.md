@@ -30,6 +30,7 @@ comes from a real shipped bug or a destroyed checkout. Read before writing code.
 - **Backends:** `src/backends/<name>.ts` builds each CLI's argv and env. `claude.ts`'s `env()` sets `CLAUDE_CODE_ARTIFACT=1` on
   every claude spawn (that is what gives headless `claude -p` jobs the claude.ai Artifact tool).
 - **Modules nothing else points you to:** `src/machine.ts` (governor: nice, admission, `mc heavy` slots) ·
+  `src/resources/` (process ownership ledger + leak reaper, RESOURCES.md) ·
   `src/host-failover.ts` (offline host → its terminals reopen elsewhere) · `src/hostd/forwarder.ts` / `outbox.ts` / `spill.ts`
   (a host's loopback `mc` API, queued writes, evicted output) · `src/remote-runs.ts` + `src/hostd/procs.ts` (headless runs on
   hosts) · `src/memory-tree.ts` · `src/dream-pass.ts`. Three different "artifacts": `src/artifacts.ts` (`mc artifact` HTML
@@ -97,7 +98,8 @@ comes from a real shipped bug or a destroyed checkout. Read before writing code.
 ## Architecture entry points
 
 - `ARCHITECTURE.md` — system overview. `LEADS.md` — Leads: role=lead terminals that drive their own workers. `HOSTS.md` — multi-computer design (brain + hosts; the seam in `src/hosts/`, link + host process in `src/hostlink/` + `src/hostd/`, remote terminals in `src/remote-terminals.ts`; placement in `src/hosts/placement.ts` + `candidates.ts`; headless runs on hosts in `src/remote-runs.ts` + `src/hostd/procs.ts`). `MISSION-CONTROL.md` §5b — worker visibility/HITL layer
-  (steps, asks, mailbox, stall detection).
+  (steps, asks, mailbox, stall detection). `RESOURCES.md` — who owns every process (ledger), the leak reaper, and the
+  per-workspace share-of-machine budgets/ladder (`src/resources/`).
 - Dispatch chain: `src/tickets.ts` (goal templates) → `src/dispatcher.ts` → `src/runner.ts`
   (spawn, watchdog, park) → `src/asks.ts` (HITL park & resume).
 - Store modules in `src/store/*`; schema changes are numbered migrations in `src/store/migrate.ts`
