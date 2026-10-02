@@ -8,7 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { db, sessions, workspaces } from "./store.js";
 import { applyHook, declare, resolve, sessionGoalReached, signalsOf, HOOK_WORKING_SILENCE_MS, REACHED_GRACE_MS, type ResolveInput, type Signals } from "./term-status.js";
-import { claudeStyleHooks, grokHooksToml, installClaudeHooks, installCursorHooks, installGrokHooks, mergeHooks } from "./term-hooks.js";
+import { claudeStyleHooks, grokHooksToml, installClaudeHooks, installCursorHooks, installGrokHooks, mergeHooks, rtkCmd } from "./term-hooks.js";
+import { execFileSync, spawnSync } from "node:child_process";
 
 const NOW = 1_800_000_000_000;
 const base = (over: Partial<ResolveInput> = {}, signals: Signals = {}): ResolveInput => ({
@@ -184,11 +185,47 @@ test("claude: merged beside the operator's own hooks, reinstall does not stack c
   assert.equal(cfg.hooks.PreToolUse[0].hooks[0].command, "guard.sh");
   assert.match(cfg.hooks.PreToolUse[1].hooks[0].command, /MC_SESSION.*mc" hook claude/);
   assert.match(cfg.hooks.PreToolUse[2].hooks[0].command, /rtk-rewrite\.sh/);
+  assert.doesNotMatch(cfg.hooks.PreToolUse[2].hooks[0].command, /MC_SESSION/, "rtk runs in the operator's own sessions too");
   assert.match(cfg.hooks.Stop[0].hooks[0].command, /MC_SESSION.*mc" hook claude/);
   // A settings file someone is halfway through editing is left alone.
   fs.writeFileSync(path.join(dir, "settings.json"), "{ nope");
   assert.equal(installClaudeHooks(dir), "skipped");
   assert.equal(fs.readFileSync(path.join(dir, "settings.json"), "utf8"), "{ nope");
+});
+
+test("claude: the old MC_SESSION-gated rtk entry is replaced, never kept beside the new one", () => {
+  const dir = tmp();
+  const oldRtk = { matcher: "Bash|bash|Shell|shell", hooks: [{ type: "command", command: '[ -z "$MC_SESSION" ] || "$HOME/.mc/bin/rtk-rewrite.sh" 2>/dev/null || true', timeout: 10 }] };
+  fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ hooks: { PreToolUse: [oldRtk] } }));
+  assert.equal(installClaudeHooks(dir), "written");
+  const cmds = JSON.parse(fs.readFileSync(path.join(dir, "settings.json"), "utf8")).hooks.PreToolUse.flatMap((e: any) => e.hooks.map((h: any) => h.command));
+  const rtk = cmds.filter((c: string) => /rtk-rewrite\.sh/.test(c));
+  assert.deepEqual(rtk, [rtkCmd], "exactly one rtk entry, the ungated one");
+  assert.match(rtkCmd, /\[ "\$CHRONOS_RTK" = "0" \] \|\|/, "CHRONOS_RTK=0 in a shell still turns it off");
+});
+
+// The rewrite script itself, against a stand-in rtk that always rewrites. Needs jq (CI runners and
+// a Mac with rtk have it); skipped otherwise, like the script itself no-ops.
+const hasJq = (() => { try { execFileSync("jq", ["--version"], { stdio: "ignore" }); return true; } catch { return false; } })();
+test("rtk-rewrite.sh: auto-approves only inside a Desk terminal; the operator's own session keeps its permission flow", { skip: !hasJq && "jq not installed" }, () => {
+  const bin = tmp();
+  fs.writeFileSync(path.join(bin, "rtk"), '#!/bin/sh\n[ "$1" = "--version" ] && { echo "rtk 0.30.0"; exit 0; }\necho "rtk $2"\n', { mode: 0o755 });
+  const cache = tmp();
+  const run = (extra: Record<string, string>) => {
+    const r = spawnSync("/bin/bash", [path.join(process.cwd(), "scripts", "rtk-rewrite.sh")], {
+      input: JSON.stringify({ tool_input: { command: "git status" } }),
+      encoding: "utf8",
+      env: { PATH: `${bin}:${process.env.PATH ?? ""}`, HOME: cache, XDG_CACHE_HOME: cache, ...extra },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout).hookSpecificOutput;
+  };
+  const desk = run({ MC_SESSION: "sess-1" });
+  assert.equal(desk.updatedInput.command, "rtk git status");
+  assert.equal(desk.permissionDecision, "allow");
+  const operator = run({});
+  assert.equal(operator.updatedInput.command, "rtk git status", "still compressed");
+  assert.equal(operator.permissionDecision, undefined, "but never auto-approved");
 });
 
 test("mergeHooks drops only our old entries", () => {

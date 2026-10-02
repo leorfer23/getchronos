@@ -4,6 +4,10 @@
  * Both are default-on when the binary is on PATH; CHRONOS_RTK=0 / CHRONOS_FFF=0 disable install.
  * Missing binaries are soft no-ops so a fresh machine still boots — install with brew/curl, then
  * restart the daemon (or open a Desk terminal) to pick them up.
+ *
+ * fff is registered through a launcher, `~/.mc/bin/fff-mcp.sh <fff-mcp>` (scripts/fff-mcp.sh), never
+ * as the bare binary: fff indexes the session's cwd, and refuses to start in $HOME and finds nothing
+ * in a landing dir of symlinked repos. The launcher picks the repo to index, or says why it can't.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -63,17 +67,64 @@ function writeJson(file: string, obj: any) {
   } catch {}
 }
 
+const MC_BIN = () => path.join(os.homedir(), ".mc", "bin");
+const FFF_WRAPPER = "fff-mcp.sh";
+
+/** Where the launcher lives once installed, or null when it is not there (then the bare binary is used). */
+export function fffWrapperPath(dir = MC_BIN()): string | null {
+  const p = path.join(dir, FFF_WRAPPER);
+  try {
+    return fs.statSync(p).isFile() ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The `{command, args}` every CLI gets for fff: the launcher with the binary as its first arg. */
+export function fffCommand(bin: string, wrapper: string | null = fffWrapperPath()): { command: string; args: string[] } {
+  return wrapper ? { command: wrapper, args: [bin] } : { command: bin, args: [] };
+}
+
+const sameCommand = (prev: any, next: { command: string; args: string[] }) =>
+  !!prev && prev.command === next.command && JSON.stringify(prev.args ?? []) === JSON.stringify(next.args);
+
+/** Copy scripts/fff-mcp.sh → ~/.mc/bin, like rtk-rewrite.sh: callable from any sandboxed CLI. */
+export function installFffWrapperScript(dir = MC_BIN(), root = process.cwd()): "written" | "noop" | "skipped" {
+  if (!CONFIG.fffEnabled) return "skipped";
+  return copyScript(path.join(root, "scripts", FFF_WRAPPER), dir, FFF_WRAPPER, "fff launcher");
+}
+
+function copyScript(src: string, dir: string, name: string, what: string): "written" | "noop" | "skipped" {
+  try {
+    if (!fs.existsSync(src)) return "skipped";
+    fs.mkdirSync(dir, { recursive: true });
+    const dst = path.join(dir, name);
+    const body = fs.readFileSync(src);
+    if (fs.existsSync(dst) && fs.readFileSync(dst).equals(body)) return "noop";
+    fs.writeFileSync(dst, body, { mode: 0o755 });
+    fs.chmodSync(dst, 0o755);
+    return "written";
+  } catch (e: any) {
+    console.warn(`[efficiency] ${what} install failed:`, e?.message ?? e);
+    return "skipped";
+  }
+}
+
 /**
  * Register (or remove) the fff MCP server in a Claude profile's `.claude.json`.
  * Mirrors Slack's installer: one entry per config_dir, inherited by Desk + headless Claude.
+ * An entry still pointing at the bare binary is rewritten to the launcher.
  */
-export function installFffMcp(configDir: string): "written" | "noop" | "removed" | "skipped" {
+export function installFffMcp(
+  configDir: string,
+  bin: string | null = resolveFffMcp(),
+  wrapper: string | null = fffWrapperPath(),
+): "written" | "noop" | "removed" | "skipped" {
   if (!CONFIG.fffEnabled) return "skipped";
   if (!configDir) return "skipped";
   const file = configFile(configDir);
   const cfg = readJson(file);
   cfg.mcpServers = cfg.mcpServers || {};
-  const bin = resolveFffMcp();
   if (!bin) {
     if (cfg.mcpServers[FFF_NAME]) {
       delete cfg.mcpServers[FFF_NAME];
@@ -82,9 +133,8 @@ export function installFffMcp(configDir: string): "written" | "noop" | "removed"
     }
     return "skipped";
   }
-  const next = { type: "stdio", command: bin, args: [] as string[] };
-  const prev = cfg.mcpServers[FFF_NAME];
-  if (prev && prev.command === next.command && JSON.stringify(prev.args ?? []) === "[]") return "noop";
+  const next = { type: "stdio", ...fffCommand(bin, wrapper) };
+  if (sameCommand(cfg.mcpServers[FFF_NAME], next)) return "noop";
   cfg.mcpServers[FFF_NAME] = next;
   writeJson(file, cfg);
   return "written";
@@ -98,6 +148,7 @@ export function installFffMcp(configDir: string): "written" | "noop" | "removed"
 export function installCursorFffMcp(
   dir: string,
   bin: string | null = resolveFffMcp(),
+  wrapper: string | null = fffWrapperPath(),
 ): "written" | "noop" | "removed" | "skipped" {
   if (!CONFIG.fffEnabled) return "skipped";
   if (!dir) return "skipped";
@@ -126,9 +177,8 @@ export function installCursorFffMcp(
     }
     return "skipped";
   }
-  const next = { command: bin, args: [] as string[] };
-  const prev = body.mcpServers[FFF_NAME];
-  if (prev && prev.command === next.command && JSON.stringify(prev.args ?? []) === "[]") return "noop";
+  const next = fffCommand(bin, wrapper);
+  if (sameCommand(body.mcpServers[FFF_NAME], next)) return "noop";
   body.mcpServers[FFF_NAME] = next;
   writeJson(file, body);
   return "written";
@@ -138,12 +188,13 @@ const GROK_FFF_BEGIN = "# BEGIN chronos fff mcp (managed by Chronos — do not e
 const GROK_FFF_END = "# END chronos fff mcp";
 
 /** TOML block Grok loads as `[mcp_servers.fff]`. Absolute path: grok's PATH may not see Homebrew. */
-export function grokFffToml(bin: string): string {
+export function grokFffToml(bin: string, wrapper: string | null = fffWrapperPath()): string {
+  const { command, args } = fffCommand(bin, wrapper);
   return [
     GROK_FFF_BEGIN,
     "[mcp_servers.fff]",
-    `command = ${JSON.stringify(bin)}`,
-    "args = []",
+    `command = ${JSON.stringify(command)}`,
+    `args = [${args.map((a) => JSON.stringify(a)).join(", ")}]`,
     "enabled = true",
     GROK_FFF_END,
   ].join("\n");
@@ -157,6 +208,7 @@ export function grokFffToml(bin: string): string {
 export function installGrokFffMcp(
   home = process.env.GROK_HOME || path.join(os.homedir(), ".grok"),
   bin: string | null = resolveFffMcp(),
+  wrapper: string | null = fffWrapperPath(),
 ): "written" | "noop" | "removed" | "skipped" {
   if (!CONFIG.fffEnabled) return "skipped";
   if (!home) return "skipped";
@@ -174,7 +226,7 @@ export function installGrokFffMcp(
   }
   if (/^\s*\[mcp_servers\.fff\]/m.test(bare)) return "skipped";
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  const next = `${bare.trimEnd()}${bare.trim() ? "\n\n" : ""}${grokFffToml(bin)}\n`;
+  const next = `${bare.trimEnd()}${bare.trim() ? "\n\n" : ""}${grokFffToml(bin, wrapper)}\n`;
   if (prev === next) return "noop";
   fs.writeFileSync(file, next);
   return "written";
@@ -199,6 +251,7 @@ export function installAllFffMcp(): void {
     console.log("[efficiency] fff MCP disabled (CHRONOS_FFF=0)");
     return;
   }
+  installFffWrapperScript();
   const dirs = new Set<string>();
   for (const ws of workspaces.list()) if (ws.config_dir) dirs.add(ws.config_dir);
   for (const d of Object.values(CONFIG.profiles)) if (d) dirs.add(d);
@@ -217,7 +270,7 @@ export function installAllFffMcp(): void {
   if (!bin) console.log("[efficiency] fff-mcp not on PATH — skip MCP install (brew install dmtrKovalenko/fff/fff-mcp)");
   else {
     console.log(
-      `[efficiency] fff MCP → ${bin} (claude ${written} written, cursor ${cursor} written, grok ${grok})`,
+      `[efficiency] fff MCP → ${fffWrapperPath() ?? "(no launcher)"} ${bin} (claude ${written} written, cursor ${cursor} written, grok ${grok})`,
     );
   }
 }
@@ -225,21 +278,7 @@ export function installAllFffMcp(): void {
 /** Copy scripts/rtk-rewrite.sh → ~/.mc/bin so hooks can call it from any sandbox. */
 export function installRtkRewriteScript(): "written" | "noop" | "skipped" {
   if (!CONFIG.rtkEnabled) return "skipped";
-  try {
-    const src = path.join(process.cwd(), "scripts", "rtk-rewrite.sh");
-    if (!fs.existsSync(src)) return "skipped";
-    const dir = path.join(os.homedir(), ".mc", "bin");
-    fs.mkdirSync(dir, { recursive: true });
-    const dst = path.join(dir, "rtk-rewrite.sh");
-    const body = fs.readFileSync(src);
-    if (fs.existsSync(dst) && fs.readFileSync(dst).equals(body)) return "noop";
-    fs.writeFileSync(dst, body, { mode: 0o755 });
-    fs.chmodSync(dst, 0o755);
-    return "written";
-  } catch (e: any) {
-    console.warn("[efficiency] rtk-rewrite install failed:", e?.message ?? e);
-    return "skipped";
-  }
+  return copyScript(path.join(process.cwd(), "scripts", "rtk-rewrite.sh"), MC_BIN(), "rtk-rewrite.sh", "rtk-rewrite");
 }
 
 /** Snapshot for /api/stats — are the binaries present and is install enabled? */
