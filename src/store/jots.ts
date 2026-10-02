@@ -52,6 +52,10 @@ export type Jot = {
   rank: number | null;
   priority: "high" | "normal" | "low" | null;
   rank_why: string | null;
+  /** The headless note-work run on this note right now (src/note-workers.ts); NULL once it ends. */
+  worker_run_id?: string | null;
+  /** When a worker last started on, or reported back on, this note. */
+  worker_at?: string | null;
 };
 
 export type JotSource = "operator" | "nextday" | "agent";
@@ -272,6 +276,41 @@ export const jots = {
       order.forEach((o, i) => { n += set.run({ id: o.id, rank: i, priority: o.priority, why: o.why ?? null, ws: workspace_id }).changes; });
     })();
     return n;
+  },
+
+  /**
+   * A note-work run took this note. updated_at is left alone on purpose: starting a worker is not an
+   * edit, and the stale sweep and the "edited since the last attempt" test both read updated_at.
+   */
+  workerStarted(id: string, run_id: string, at = now()): Jot | undefined {
+    db.prepare("UPDATE jots SET worker_run_id=@run_id, worker_at=@at WHERE id=@id").run({ id, run_id, at });
+    return this.get(id);
+  },
+
+  /**
+   * A worker reported back without finishing the note (blocked, failed, no verdict): its line is
+   * appended and worker_at is stamped with the SAME time as updated_at, so the daemon's own append
+   * does not read as the operator having edited the note since the attempt.
+   */
+  workerReported(id: string, line: string, at = now()): Jot | undefined {
+    db.prepare(
+      `UPDATE jots SET body = CASE WHEN body IS NULL OR trim(body) = '' THEN @line ELSE rtrim(body, ' ' || char(9, 10, 13)) || char(10) || @line END,
+       worker_run_id=NULL, worker_at=@at, updated_at=@at WHERE id=@id`,
+    ).run({ id, line, at });
+    return this.get(id);
+  },
+
+  /**
+   * Close a note with its reason, the way `POST /jots/:id/resolve` does (the "✓ Resolved" line is
+   * what the ↩ reopen leaves behind as the record of why), in one statement. Only an open row moves.
+   */
+  resolveWith(id: string, why: string, at = now()): boolean {
+    const line = `✓ Resolved ${at.slice(0, 10)} — ${why}`;
+    return db.prepare(
+      `UPDATE jots SET body = CASE WHEN body IS NULL OR trim(body) = '' THEN @line ELSE rtrim(body, ' ' || char(9, 10, 13)) || char(10) || @line END,
+       status='done', done_at=COALESCE(done_at, @at), follow_up_at=NULL, worker_run_id=NULL, worker_at=@at, updated_at=@at
+       WHERE id=@id AND status='open'`,
+    ).run({ id, line, at }).changes > 0;
   },
 
   /** Open-row counts per workspace, for the Desk's per-client badge. */

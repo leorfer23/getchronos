@@ -164,6 +164,27 @@ export function reopenRoute(req: Req, res: Res): void {
   res.json(row);
 }
 
+// A why that would fit any row tells him nothing about this one. The vereda cleanup ranked 25 notes
+// "Routine follow-up" (2026-10-01): the ranking existed, the reasons did not.
+const GENERIC_WHY = /^(routine( follow[- ]?ups?)?|follow[- ]?ups?( needed)?|needs? follow[- ]?up|someday\b.*|nice[- ]to[- ]have|fyi|todo|pending|on hold|(low|normal|high) priority|important|not urgent)$/i;
+const SAME_WHY_MAX = 3;
+const normWhy = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.!…]+$/, "");
+
+/** Why a ranking's reasons are refused (generic, or one reason pasted over >3 rows), or null. */
+export function genericWhyError(list: string, entries: Array<{ why?: string | null }>): string | null {
+  const counts = new Map<string, { text: string; n: number }>();
+  for (const e of entries) {
+    if (!e.why?.trim()) continue;
+    const k = normWhy(e.why);
+    if (GENERIC_WHY.test(k)) return `${list}: "${e.why.trim()}" is a generic why — say what THIS row blocks, who waits, the deadline, or what evidence is missing`;
+    const c = counts.get(k) ?? { text: e.why.trim(), n: 0 };
+    c.n++;
+    counts.set(k, c);
+  }
+  const dup = [...counts.values()].find((c) => c.n > SAME_WHY_MAX);
+  return dup ? `${list}: the same why "${dup.text}" on ${dup.n} rows — give each row its own reason` : null;
+}
+
 /**
  * POST /workspaces/:id/rank {inbox?, notes?} — one client's order, most important first. Each list
  * replaces that list's previous ranking; ids from another client are ignored by the store.
@@ -181,6 +202,8 @@ export function rankRoute(req: Req, res: Res): void {
     res.status(400).json({ error: "invalid request body — " + p.error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ") });
     return;
   }
+  const generic = (p.data.inbox && genericWhyError("inbox", p.data.inbox)) || (p.data.notes && genericWhyError("notes", p.data.notes));
+  if (generic) { res.status(400).json({ error: `ranking not saved — ${generic}` }); return; }
   const why = (s?: string) => (s ? guard(s, "rank", wsId).slice(0, 300) : null);
   const out: { inbox?: number; notes?: number } = {};
   if (p.data.inbox) {

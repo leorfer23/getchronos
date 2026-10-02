@@ -2040,6 +2040,18 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       ALTER TABLE jots ADD COLUMN rank_why TEXT;`),
   },
 
+  {
+    version: 144,
+    name: "jots.worker_run_id + worker_at — a headless worker taking an open note after the cleanup",
+    // worker_run_id: the note-work run on it right now (src/note-workers.ts), cleared when it ends —
+    // the Desk's "worker on it" mark. worker_at: when a worker last started or reported on it; a note
+    // not edited since then (updated_at <= worker_at) is not handed to another worker until it is, or
+    // until CHRONOS_NOTE_WORKER_RETRY_DAYS pass.
+    up: (db) => db.exec(`
+      ALTER TABLE jots ADD COLUMN worker_run_id TEXT;
+      ALTER TABLE jots ADD COLUMN worker_at TEXT;`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -265,6 +265,17 @@ export const CONFIG = {
   inboxCleanup: process.env.CHRONOS_INBOX_CLEANUP !== "0",
   inboxCleanupCron: process.env.CHRONOS_INBOX_CLEANUP_CRON ?? "0 10,18 * * *",
   inboxCleanupModel: process.env.CHRONOS_INBOX_CLEANUP_MODEL ?? "sonnet",
+  // Stale notes (src/note-workers.ts): right before a cleanup fire the daemon itself (no model) closes
+  // agent/nextday notes nobody touched in this many days, unless ranked high, followed up or being
+  // worked. Reason "stale: untouched N days"; ↩ reopens. The operator's own notes never expire. 0 = off.
+  noteStaleDays: Number(process.env.CHRONOS_NOTE_STALE_DAYS ?? 10),
+  // Note workers (src/note-workers.ts): after a cleanup run succeeds, the daemon starts a headless
+  // worker on each of the client's top-N open notes (priority, then the cleanup's rank) — it checks
+  // whether the note is still needed, does it (PR, never merge/deploy) or reports blocked. Also the
+  // per-workspace cap on note workers in flight. Cost ≈ clients with open notes × N × 2 fires/day. 0 = off.
+  noteWorkers: Number(process.env.CHRONOS_NOTE_WORKERS ?? 3),
+  // A note a worker already tried is not handed to another until it is edited, or this many days pass.
+  noteWorkerRetryDays: Number(process.env.CHRONOS_NOTE_WORKER_RETRY_DAYS ?? 7),
   // Observability sweep cadence + thresholds.
   monitorEveryMin: Number(process.env.CHRONOS_MONITOR_MIN ?? 5),
   stuckRunHours: Number(process.env.CHRONOS_STUCK_RUN_HRS ?? 2),   // a 'running' run older than this = stuck
