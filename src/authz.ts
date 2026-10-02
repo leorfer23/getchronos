@@ -6,6 +6,9 @@ import type { Session } from "./types.js";
 import { forwardedHost } from "./hostlink/brain-link.js";
 import { hostPolicy, workspaceDenied } from "./hosts/policy.js";
 
+/** Every admin-gated route's 403 — reads included, so it never claims a GET is a "mutation". */
+export const ADMIN_REQUIRED = "admin token required (x-mc-admin)";
+
 // Constant-time token compare (mirrors relay/src/worker.ts) — avoids leaking a secret one byte at
 // a time via response-time side channel.
 export function tokenOk(got: string | undefined | null, expected: string): boolean {
@@ -13,6 +16,12 @@ export function tokenOk(got: string | undefined | null, expected: string): boole
   const a = Buffer.from(got);
   const b = Buffer.from(expected);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** The admin-token gate for every admin-only route (api.ts mounts it; hostRoutes/barRoutes take it). */
+export function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return next();
+  res.status(403).json({ error: ADMIN_REQUIRED });
 }
 
 /**

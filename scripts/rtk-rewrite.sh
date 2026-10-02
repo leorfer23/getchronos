@@ -8,6 +8,10 @@
 # 1           No RTK equivalent → pass through
 # 2           Deny rule → pass through (native deny)
 # 3 + stdout  Ask rule → rewrite but let the CLI prompt
+#
+# Runs in every session of a Chronos-managed profile (src/term-hooks.ts). Inside a Desk terminal
+# (MC_SESSION set) a rewrite is auto-approved, as upstream does. In the operator's own sessions it is
+# only a rewrite: no permissionDecision, so that session's permission rules still decide.
 
 if ! command -v jq &>/dev/null; then
   exit 0
@@ -47,7 +51,7 @@ case $EXIT_CODE in
   *) exit 0 ;;
 esac
 
-if [ "$EXIT_CODE" -eq 3 ]; then
+if [ "$EXIT_CODE" -eq 3 ] || [ -z "${MC_SESSION:-}" ]; then
   jq -c --arg cmd "$REWRITTEN" \
     '.tool_input.command = $cmd | {
       "hookSpecificOutput": {

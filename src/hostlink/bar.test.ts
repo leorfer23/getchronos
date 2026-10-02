@@ -9,7 +9,7 @@ import http from "node:http";
 import express from "express";
 import { db, jobs, runs, sessions, workspaces, LOCAL_HOST_ID } from "../store.js";
 import { CONFIG } from "../config.js";
-import { tokenOk } from "../authz.js";
+import { requireAdmin } from "../authz.js";
 import { barRoutes, fleetBar, type ActivityFn } from "./bar.js";
 
 beforeEach(() => {
@@ -101,15 +101,15 @@ test("GET /api/hosts/bar: admin only (the real gate's rule), and nothing secret 
   const s = addSession({ host: "h_m2", goal: "ship it", cwd: "/Users/m2/work/app" });
   db.prepare("UPDATE sessions SET lead_token = 'LEAD-SECRET' WHERE id = ?").run(s);
   const app = express();
-  // Exactly api.ts's requireAdmin.
-  const requireAdmin: express.RequestHandler = (req, res, next) =>
-    tokenOk(req.get("x-mc-admin"), CONFIG.adminToken) ? next() : void res.status(403).json({ error: "admin token required" });
+  // The real gate api.ts mounts.
   app.use("/api", barRoutes(requireAdmin, { link: () => linkOf(["h_m2"]), activity: activityOf([s]) }));
   const srv = http.createServer(app);
   await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
   const url = `http://127.0.0.1:${(srv.address() as any).port}/api/hosts/bar`;
   try {
-    assert.equal((await fetch(url)).status, 403, "no token");
+    const refused = await fetch(url);
+    assert.equal(refused.status, 403, "no token");
+    assert.deepEqual(await refused.json(), { error: "admin token required (x-mc-admin)" }, "a read is not called a mutation");
     assert.equal((await fetch(url, { headers: { "x-mc-workspace-token": w.token } })).status, 403, "a workspace token is not the admin token");
     assert.equal((await fetch(url, { headers: { "x-mc-admin": w.token } })).status, 403, "nor is it one when sent as the admin header");
     const ok = await fetch(url, { headers: { "x-mc-admin": CONFIG.adminToken } });

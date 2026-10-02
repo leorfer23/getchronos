@@ -137,7 +137,8 @@ import { ensureIntakeJob } from "./intake.js";
 import { RepoGitError, resolveRepoGitFields } from "./repo-git.js";
 import type { GoalKind, LessonState, Session } from "./types.js";
 import { redactConnectorConfig, publicTrigger } from "./redact.js";
-import { tokenOk, callerScope, checkScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
+import { requireAdmin, tokenOk, callerScope, checkScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
+import { wsByIdOrSlug, wsRefs } from "./ws-ref.js";
 import { findHost, hostOnline } from "./hosts/index.js";
 import { RemoteHost } from "./hosts/remote.js";
 import { resolveHostRef, sessionHostOffline } from "./remote-terminals.js";
@@ -483,6 +484,9 @@ export function startServer() {
   // Requests an agent on another computer made through its host (HOSTS.md): remote, never loopback-
   // trusted, and bound to their own session and host. A no-op for everything else.
   api.use(forwardedGate);
+  // A workspace may be named by id or slug in a path, ?workspace= or a body's workspace_id; resolved
+  // to the id here, before any route's scope check runs (src/ws-ref.ts — never widens access).
+  api.use(wsRefs);
 
   api.get("/backends", (_req, res) => {
     res.json(listBackends());
@@ -1613,6 +1617,7 @@ export function startServer() {
     if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
     const ws = scope.ws ?? (req.query.workspace as string | undefined);
     if (!ws) return res.status(400).json({ error: "workspace query required" });
+    if (!workspaces.get(ws)) return res.status(404).json({ error: `unknown workspace ${ws}` });
     res.json(noteSvc.listNotes(ws).map(publicNote));
   });
   api.get("/notes/:id", (req, res) => {
@@ -2636,15 +2641,13 @@ export function startServer() {
     }
   });
 
-  // Gate workspace/repo/trigger mutations: only the native overlay (which reads the admin token
-  // from ~/chronos/.admin-token itself — it runs unsandboxed, see desktop/app.swift) may
-  // create/edit/delete them. Sandboxed agents are denied that file and the daemon never hands the
-  // token out over HTTP, so they can't spin up junk workspaces or mint cross-workspace hooks. Read
-  // routes stay open; ticket/memo/job routes stay open (agents need those).
-  const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return next();
-    res.status(403).json({ error: "workspace mutations are dashboard-only (admin token required)" });
-  };
+  // Admin-gated routes (workspace/repo/trigger mutations, the hosts surface, …) need the admin token
+  // in x-mc-admin. It lives in ~/chronos/.admin-token and only unsandboxed operator-side processes
+  // hold it: the Desk (the native wrapper injects it, or it is pasted into the page once), the
+  // operator's own `mc`, and the executives (Robert, via CHRONOS_ADMIN). Sandboxed agents are denied
+  // that file and the daemon never hands the token out over HTTP, so they can't spin up junk
+  // workspaces or mint cross-workspace hooks. Ticket/memo/job routes stay open (agents need those).
+  // The gate itself is authz.ts's requireAdmin.
 
   // The wall's text cards: one request for every terminal you are NOT reading live, returning only the
   // frames that changed since the seq each card last saw (term-screen.ts). Same gate as /term — a
@@ -4386,7 +4389,7 @@ export function startServer() {
   // ⚙ Settings (src/settings.ts): every operator knob, per workspace or global. No workspace_id = the
   // global level. Values apply on the next decision — nothing here needs a restart.
   // `workspace` takes an id or a slug, so Robert can say "medialab" without looking the id up first.
-  const settingsWs = (v: unknown) => (typeof v === "string" && v ? workspaces.get(v) ?? workspaces.getBySlug(v) ?? null : null);
+  const settingsWs = (v: unknown) => wsByIdOrSlug(v) ?? null;
   api.get("/settings", requireAdmin, (req, res) => {
     const wsId = req.query.workspace_id || req.query.workspace;
     const ws = settingsWs(wsId);

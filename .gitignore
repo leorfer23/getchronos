@@ -69,3 +69,10 @@ __pycache__/
 
 # Artifacts (src/artifacts.ts): HTML pages agents publish — operator content, never tracked.
 /artifacts/
+
+# ── Agent tooling scratch ──────────────────────────────────────────────────
+# Claude Code's isolated subagent worktrees (Agent isolation: "worktree") and graphify's code graph.
+# Here, not only in .git/info/exclude: search tools (fff) honor .gitignore but not the exclude file,
+# so a stale worktree copy would otherwise be every grep's top hit.
+.claude/worktrees/
+graphify-out/

@@ -8,13 +8,17 @@
  * question tool opened.
  *
  * Installed into the CLI's USER config (claude: each profile's settings.json; cursor: hooks.json;
- * grok: config.toml), merged beside whatever is already there, never replacing it. Every command is
- * gated on MC_SESSION, which only a Chronos terminal has — the operator's own sessions in the same
- * profile run a shell test and nothing else.
+ * grok: config.toml), merged beside whatever is already there, never replacing it. Every `mc hook`
+ * command is gated on MC_SESSION, which only a Chronos terminal has — the operator's own sessions in
+ * the same profile run a shell test and nothing else for card events.
  *
  * RTK (shell-output compression): a second PreToolUse matcher on Bash for Claude/Grok, pointing at
- * ~/.mc/bin/rtk-rewrite.sh. Soft no-op when rtk is missing. Separate from `mc hook` so card logic
- * stays fast and never has to parse rewrite JSON.
+ * ~/.mc/bin/rtk-rewrite.sh. NOT gated on MC_SESSION: the operator's own sessions in these profiles
+ * (where most Chronos coding happens) compress shell output too. Off switches: CHRONOS_RTK=0 for the
+ * daemon (the entry is not installed, and a reinstall removes it) or in a shell (the hook skips).
+ * Soft no-op when rtk or jq is missing. Outside a Desk terminal the rewrite never auto-approves the
+ * command — the session's own permission rules still decide (scripts/rtk-rewrite.sh). Separate from
+ * `mc hook` so card logic stays fast and never has to parse rewrite JSON.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -29,8 +33,8 @@ const grokCmd = `[ -z "$MC_SESSION" ] || ${MC} hook grok 2>/dev/null || true`;
 /** Cursor wants a JSON verdict on some hooks even when we have nothing to say. */
 const cursorCmd = (fallback: string) => `if [ -n "$MC_SESSION" ]; then ${MC} hook cursor 2>/dev/null || echo '${fallback}'; else echo '${fallback}'; fi`;
 
-/** Bash PreToolUse → RTK rewrite. Gated on MC_SESSION and CHRONOS_RTK (daemon already skipped install when off). */
-const rtkCmd = `[ -z "$MC_SESSION" ] || ${RTK} 2>/dev/null || true`;
+/** Bash PreToolUse → RTK rewrite, in every session of the profile. CHRONOS_RTK=0 in the env skips it. */
+export const rtkCmd = `[ "$CHRONOS_RTK" = "0" ] || ${RTK} 2>/dev/null || true`;
 
 const ASK_TOOLS = "AskUserQuestion|ExitPlanMode|ask_user_question|ask_user";
 const BASH_TOOLS = "Bash|bash|Shell|shell";
