@@ -94,6 +94,14 @@ const statUntil = async (pid: number, ok: (st: string) => boolean, timeoutMs = 2
   }
   return st;
 };
+// Until the pty child has exec'd its program it is still node-pty's spawn-helper (macOS) or a forked
+// node (Linux); a SIGSTOP sent in that window can be lost on a loaded runner (seen on macOS CI:
+// still `S<s+` 2s later). Freeze only once the child is the program the terminal runs.
+const comm = (pid: number) => { try { return execFileSync("ps", ["-o", "comm=", "-p", String(pid)], { encoding: "utf8" }).trim(); } catch { return ""; } };
+const execd = async (pid: number, timeoutMs = 3000) => {
+  const t0 = Date.now();
+  while (!/(^|\/)(sh|sleep)$/.test(comm(pid)) && Date.now() - t0 < timeoutMs) await new Promise((r) => setTimeout(r, 20));
+};
 const exited = (t: HostTerminals, timeoutMs = 5000) => new Promise<void>((resolve, reject) => {
   const t0 = Date.now();
   const tick = () => (t.live()[0]?.exit ? resolve() : Date.now() - t0 > timeoutMs ? reject(new Error("never exited")) : setTimeout(tick, 50));
@@ -114,6 +122,7 @@ function sleeper(cwd: string | null = null) {
 test("fence: freezeAll stops the pty's process group; an attach (still ours) thaws it; a kill while frozen still lands", async () => {
   const t = sleeper();
   const r = await t.spawn(spec({ session_id: "sess-fence", workspace: null }));
+  await execd(r.pid);
   assert.equal(t.freezeAll(), 1);
   assert.equal(t.freezeAll(), 0, "already frozen");
   assert.match(await statUntil(r.pid, (st) => /T/.test(st)), /T/, "stopped");
