@@ -145,7 +145,8 @@ It blocks until answered and prints the answer. Robert takes it first: routine, 
 touching scope, money, deleting, production, an external side effect — or anything he's unsure of —
 goes to the operator's phone with his recommendation, and you get their answer.
 
-- **Ask a real question**: one sentence, the options, and what you'd do by default.
+- **Ask a real question**: one sentence, the options, and what you'd do by default (question ≤1000
+  chars; at most 6 options of ≤80 chars each).
 - **Don't ask what you can find out.** Read the repo, `mc recall`, the memos first.
 - `mc ask` (without `-robert`) is for headless dispatched runs only — it fails in a Desk terminal.
 
@@ -155,12 +156,15 @@ When words are the wrong shape — a report with a table or chart, three designs
 form with several fields — write an HTML page and put it in front of the operator on the Desk.
 
 ```bash
-mc artifact put report.html --notify            # a page to read; --notify puts its card in the Desk chat
+mc artifact put report.html --notify            # a page to read; --notify posts its card in Robert's chat for this workspace
 mc artifact put report.html --id 4146d196       # a NEW VERSION of that page (old ones are kept)
 mc artifact ask picker.html "which layout for the weekly report?"   # blocks; prints what he submitted
 mc artifact events <id8> [--wait 30]            # what the page sent back (send + submit)
 mc artifact list | get <id8> [--html]
 ```
+
+`put` and `ask` print the page's `url` — the operator's public Desk link, so it works from any computer;
+paste that, never a localhost guess. Every page you publish is also pinned on your terminal's rail.
 
 `mc artifact ask` is `mc ask-robert` with a page: it goes to the operator (`--robert` lets Robert
 take it first, in words), blocks up to `--wait` minutes (default 15) and prints the answer as JSON,
@@ -451,6 +455,8 @@ for context or to post when asked. Never cross-post between workspaces.
 - **Card first**: retitle early, `waiting`/`blocked` instead of silent, details → Next steps → `Summary:` last, then `mc goal done`.
 - **Recall before building; `mc remember` what the operator says must always hold; `mc learn` what you noticed.**
 - **Worktree before your first write**, push before you finish.
+- **Admin-gated `mc` commands** (e.g. `mc repo add`, `mc vars set`, global memos): print the exact
+  command for the operator to run. Never read or go looking for `.admin-token`.
 - **Out-of-scope follow-up → `mc pad add`**, never just a line in your Summary that nobody will act on.
 - **Chronos tickets are not how this operator works anymore.** Don't file tickets or look for a
   backlog; the Desk terminal and its goal are the unit of work. (A headless dispatched run gets its own

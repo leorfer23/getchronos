@@ -56,7 +56,7 @@ Returns the created job (with `id`). Only `name` and `goal` are required.
 | `retry_max` / `retry_backoff_sec` | auto-retry failed/timed-out runs | `0` / `60` |
 | `verify` | run an LLM-judge after success to confirm the goal was met (flips to failed if not) | `false` |
 | `on_success` / `on_failure` | id or exact name of a follow-up job to trigger when this run ends (fires after retries are exhausted) | — |
-| `enabled` | whether cron triggers fire | `true` |
+| `enabled` | `false` = the job refuses every dispatch — cron, webhook and manual `POST /api/jobs/:id/run` (400 `job disabled`) | `true` |
 | `append_system` | extra system prompt for the job | — |
 
 ## Other operations
