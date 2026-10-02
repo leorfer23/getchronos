@@ -22,6 +22,8 @@
  *  - `dream:` — the memory pass has no repo at all: it runs in the workspace's brain landing dir (or the
  *    chronos checkout) and its input is the brain's own state.
  *  - `handoff:` — a cloud hand-off has no local process anywhere.
+ *  - `note-work:` — a note worker (src/note-workers.ts) checks and moves the note's ticket through the
+ *    tracker MCP logged in to the BRAIN's profile, same as intake.
  *  - Anything whose task prose (goal) still names a brain file after the repo paths in it are
  *    translated — a ticket with attachments (they live in the brain's attachments dir), a no-repo
  *    ticket (its markdown is in the brain's tickets dir), a goal quoting a path under the chronos
@@ -56,6 +58,7 @@ export const BRAIN_ONLY_KINDS: Record<string, string> = {
   "prose:": "the voice pass reads the operator's Slack through the brain's own profile login",
   "dream:": "the memory pass works from the brain's own state in a brain directory, not a repo",
   "handoff:": "a cloud hand-off runs on its provider, not on a computer of ours",
+  "note-work:": "a note worker reads and updates the client's tracker through the brain's own profile login",
 };
 
 /** Kinds that work in a ticket worktree and ship through GitHub from wherever it is. */

@@ -1520,7 +1520,7 @@ function askCap(question) {
         if (opt.json) return console.log(JSON.stringify(rows, null, 2));
         if (!rows.length) return console.log("(nothing parked)");
         return console.log(rows.map((j) => {
-          const mark = j.status === "done" ? "✓" : j.follow_up_at ? "⏰" : j.session_id ? "▶" : "·";
+          const mark = j.status === "done" ? "✓" : j.worker_run_id ? "⚙" : j.follow_up_at ? "⏰" : j.session_id ? "▶" : "·";
           const detail = (j.body || "").replace(/\s+/g, " ").trim();
           const due = j.status !== "done" && j.follow_up_at ? ` [follow-up ${padWhen(j.follow_up_at)}]` : "";
           return `${mark} ${j.id.slice(0, 8)}\t${j.title}${due}${detail ? "\t— " + detail.slice(0, 70) : ""}`;

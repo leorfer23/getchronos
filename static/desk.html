@@ -4083,6 +4083,8 @@ function paintJot(el, j) {
   // Notes already carry the client's colour stripe, so "high" is said in words, not another bar.
   const meta = [j.priority === "high" ? "▲ high priority" : "", j.source === "agent" ? "agent" : j.source === "nextday" ? "planned" : "", age(j.created_at)];
   if (j.follow_up_count) meta.push(j.follow_up_count === 1 ? "followed up once" : "followed up " + j.follow_up_count + "×");
+  // A headless note worker (src/note-workers.ts) has it; the mark clears when its run reports back.
+  if (j.worker_run_id) meta.unshift("⚙ worker on it");
   qs(".meta", el).textContent = meta.filter(Boolean).join(" · ");
   qs('.jot-bar [data-a="follow"]', el).textContent = st === "due" ? "⏰ Due — reschedule…" : j.follow_up_at ? "⏰ " + fuWhen(j.follow_up_at) + "…" : "⏰ Follow up…";
   if (el.classList.contains("editing")) return; // never repaint under the operator's typing
