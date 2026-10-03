@@ -70,6 +70,9 @@ __pycache__/
 # Artifacts (src/artifacts.ts): HTML pages agents publish — operator content, never tracked.
 /artifacts/
 
+# The shared headless browser's throwaway profile (src/resources/browser-pool.ts).
+/.browser-pool/
+
 # ── Agent tooling scratch ──────────────────────────────────────────────────
 # Claude Code's isolated subagent worktrees (Agent isolation: "worktree") and graphify's code graph.
 # Here, not only in .git/info/exclude: search tools (fff) honor .gitignore but not the exclude file,

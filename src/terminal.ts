@@ -113,6 +113,19 @@ export function artifactChoiceBlock(backendName: string): string {
   }
 }
 
+/**
+ * The browser rules every Desk terminal is opened with (agents/_blocks/browser.md): avoid a browser,
+ * else `mc browser run`, never your own Chrome. Never throws into a spawn, like leadWorkerBlock.
+ */
+export function browserBlock(): string {
+  try {
+    return agentBlock("browser");
+  } catch (e) {
+    console.error("[terminal] browser block", e);
+    return "";
+  }
+}
+
 /** The real main checkouts among these repo paths (realpath'd, since the sandbox matches resolved paths). */
 export function mainCheckouts(paths: Array<string | null | undefined>): string[] {
   const out = new Set<string>();
@@ -705,7 +718,7 @@ export async function openSession(
   // and dev servers all mean THAT machine (agents/_blocks/on-host.md). Nothing on the brain.
   const hostBlock = onHostBlock(targetHost);
   const sysArg = backend.appendsSystem
-    ? ([row.role === "lead" ? agentPrompt("lead") : null, leadBlock, FOCUS_CONTRACT, hostBlock, artifactChoiceBlock(backend.name), ctx, rel].filter(Boolean).join("\n\n") || null)
+    ? ([row.role === "lead" ? agentPrompt("lead") : null, leadBlock, FOCUS_CONTRACT, hostBlock, browserBlock(), artifactChoiceBlock(backend.name), ctx, rel].filter(Boolean).join("\n\n") || null)
     : null;
   // Seed the conversation: the ticket context (or a passed seed) is typed in once the CLI has booted.
   // Defined here (a remote spec carries it) but, for a local terminal, still EVALUATED after the spawn
@@ -730,7 +743,7 @@ export async function openSession(
     // contract alone into a bare exploratory chat).
     // A resumed chat already carries them from its first prompt: pasting them again would be a new turn.
     if (!backend.appendsSystem && !opts.resumeId && (seed || ctx)) {
-      const pre = [leadBlock, FOCUS_CONTRACT, hostBlock, ctx].filter(Boolean).join("\n\n");
+      const pre = [leadBlock, FOCUS_CONTRACT, hostBlock, browserBlock(), ctx].filter(Boolean).join("\n\n");
       seed = pre + (seed ? `\n\n--- Your task ---\n${seed}` : "");
     }
     return seed;

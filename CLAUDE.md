@@ -31,7 +31,8 @@ comes from a real shipped bug or a destroyed checkout. Read before writing code.
   every claude spawn (that is what gives headless `claude -p` jobs the claude.ai Artifact tool).
 - **Modules nothing else points you to:** `src/machine.ts` (governor: nice, admission, `mc heavy` slots + per-workspace slot fairness) ·
   `src/resources/` (process ownership ledger + leak reaper; per-workspace budgets + the warn → slow → pause ladder in
-  `budget.ts` / `ladder.ts`, sharing the reaper's guards via `guards.ts`; RESOURCES.md) ·
+  `budget.ts` / `ladder.ts`, sharing the reaper's guards via `guards.ts`; `browser-*.ts` = the shared headless browser behind
+  `mc browser` — engine + CDP proxy, leases, `/api/browser/*`; RESOURCES.md) ·
   `src/host-failover.ts` (offline host → its terminals reopen elsewhere) · `src/hostd/forwarder.ts` / `outbox.ts` / `spill.ts`
   (a host's loopback `mc` API, queued writes, evicted output) · `src/remote-runs.ts` + `src/hostd/procs.ts` (headless runs on
   hosts) · `src/memory-tree.ts` · `src/dream-pass.ts`. Three different "artifacts": `src/artifacts.ts` (`mc artifact` HTML

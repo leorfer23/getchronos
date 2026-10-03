@@ -50,6 +50,8 @@ import type { HostSelf } from "./resolve.js";
 import { startCaffeinate } from "../caffeinate.js";
 import { FENCE_TICK_MS, fenceReason } from "./fence.js";
 import { Reaper, reaperConfigFromEnv, systemReaperDeps } from "../resources/reaper.js";
+import { ChromeEngine, browserConfigFromEnv, handleBrowserRpc } from "../resources/browser-engine.js";
+import { LEASE_STALE_MS } from "../resources/browser-pool.js";
 
 // Same backstop as the brain's (src/index.ts): a stray rejection must not take down the process
 // that every PTY on this Mac is a child of.
@@ -139,6 +141,23 @@ async function cmdRun(): Promise<number> {
   const spillFor = (ch: number) => spill.forChannel(ch);
   const outbox = new Outbox(path.join(HOST_HOME, "outbox"));
   const heavy = new HeavyPool("this-host", () => heavySlotsForCpus(os.cpus().length));
+  // This Mac's shared headless browser (RESOURCES.md → Shared headless browser pool). The brain keeps
+  // the leases (caps, fairness, heartbeats) and drives it over the `browser` rpc; the process, its
+  // CDP proxy and the TTL that cleans up after a brain that went away for good live here. Sized by
+  // THIS machine's RAM and CHRONOS_BROWSER_* in ~/.chronos-host/.secrets. Nothing starts until a lease.
+  const browser = new ChromeEngine({
+    cfg: browserConfigFromEnv(process.env),
+    dataDir: path.join(HOST_HOME, "browser-pool"),
+    ttlMs: 2 * LEASE_STALE_MS,
+    log: (l) => console.log(`[host] browser: ${l}`),
+    // The workspace's egress proxy on THIS host (the brain sends its policy with every open), as for
+    // its agents: an egress-locked workspace does not get the open internet through the browser.
+    proxyFor: async (o) => {
+      if (!o.workspace_id || !o.egress) return null;
+      const port = await egress.ensure(o.workspace_id, o.egress as Parameters<HostEgress["ensure"]>[1]);
+      return port ? `http://127.0.0.1:${port}` : null;
+    },
+  });
   // Who this host is, for MC_HOST_* on every agent and for the menu bar. Read when called: the link
   // (and the brain's name for this computer) is created below and only answers once it is online.
   const self = (): HostSelf => ({ id, name: link.brainName ?? knownName ?? os.hostname().replace(/\.local$/, "") });
@@ -216,6 +235,8 @@ async function cmdRun(): Promise<number> {
       salvage: (a) => terminals.salvage(a as Parameters<HostTerminals["salvage"]>[0]),
       worktree_list: (a) => listHostWorktrees(worktreeDeps, a),
       worktree_remove: (a) => removeHostWorktree(worktreeDeps, a),
+      // `mc browser` on this host: open / close / touch / status on this Mac's own browser.
+      browser: (a) => handleBrowserRpc(browser, a),
     },
   });
   sendInventory = (f) => link.sendControl(f);
@@ -343,6 +364,7 @@ async function cmdRun(): Promise<number> {
     terminals.killAll();
     procs.killAll();
     egress.closeAll();
+    await browser.stop("host stopping");
     await link.stop();
     fwd?.close();
     process.exit(0);

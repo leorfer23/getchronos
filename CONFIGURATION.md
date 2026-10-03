@@ -556,6 +556,19 @@ from npm: `npx getchronos host <cmd>`.
 | `CHRONOS_HOST_PACKAGE_SPEC` | `getchronos@<version>` | what an npm-installed host installs on join and update — a mirror, or a local `.tgz` to test a package before it is published |
 | `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` | — | Cloudflare Access service token, sent only to tunnel (CA-verified) URLs, never to a LAN IP |
 
+### Shared headless browser — `mc browser`
+
+One headless browser per machine (brain and each host), started on the first `mc browser` lease and
+stopped `CHRONOS_BROWSER_IDLE_MS` (10 min) after the last; agents get a fresh browser context each,
+never their own Chrome ([RESOURCES.md → Shared headless browser pool](./RESOURCES.md)). It uses the
+newest `chrome-headless-shell` in `~/.cache/puppeteer`, else Chrome for Testing — never
+`/Applications/Google Chrome.app`. Nothing is downloaded at runtime; install it once with
+`npx @puppeteer/browsers install chrome-headless-shell@stable --path ~/.cache/puppeteer` (or set
+`CHRONOS_BROWSER_AUTO_INSTALL=1`). Caps: `CHRONOS_BROWSER_MAX_CONTEXTS` per machine (1 per 2 GB of RAM,
+at most 8) and `CHRONOS_BROWSER_MAX_PER_WS`, a workspace's fair share (half of it) — past it a workspace
+is granted only while no other workspace waits. A host reads the same knobs from its own
+`~/.chronos-host/.secrets`.
+
 ### Retention
 
 | Variable | Default | Meaning |
@@ -600,6 +613,13 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_BACKUP_RETAIN` | `7` | `src/config.ts` |
 | `CHRONOS_BRIEF_RECENTLY_MAX` | `12` | `src/config.ts` |
 | `CHRONOS_BROKER_FILE` | — | `src/broker.ts` |
+| `CHRONOS_BROWSER` | `on` (`off` = no `mc browser` leases on this machine) | `src/resources/browser-engine.ts` |
+| `CHRONOS_BROWSER_AUTO_INSTALL` | off (`1` = install chrome-headless-shell once when none is found) | `src/resources/browser-engine.ts` |
+| `CHRONOS_BROWSER_DATA_DIR` | `<state>/.browser-pool` | `src/resources/browser-pool.ts` |
+| `CHRONOS_BROWSER_IDLE_MS` | `600000` | `src/resources/browser-engine.ts` |
+| `CHRONOS_BROWSER_MAX_CONTEXTS` | 1 per 2 GB RAM, 1..8 | `src/resources/browser-engine.ts` |
+| `CHRONOS_BROWSER_MAX_PER_WS` | `ceil(max contexts / 2)` | `src/resources/browser-engine.ts` |
+| `CHRONOS_BROWSER_PATH` | — (discovered; never `/Applications/Google Chrome.app`) | `src/resources/browser-engine.ts` |
 | `CHRONOS_BUILD_CONCURRENCY` | `1` | `src/config.ts` |
 | `CHRONOS_BURN_ALERT_RUNS` | `60` | `src/config.ts` |
 | `CHRONOS_BURN_ALERT_USD` | `40` | `src/config.ts` |

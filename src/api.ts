@@ -172,6 +172,7 @@ import {
   BuildGraphifySchema, QueryGraphifySchema,
   NewArtifactSchema, UpdateArtifactSchema, ArtifactEventSchema, ArtifactStateSchema } from "./validation.js";
 import { pressureWord, swapPctOf } from "./machine.js";
+import { machineBrowserBlock, mountBrowserRoutes } from "./resources/browser-routes.js";
 import { procsView } from "./resources/brain.js";
 import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
 import { hostName, reposOnHost } from "./hosts/workdir.js";
@@ -1970,6 +1971,8 @@ export function startServer() {
       // own workspace's rows and nothing else (CLAUDE.md gotcha #4).
       ...(host.id === LOCAL_HOST_ID ? { procs: procsView(callerScope(req)?.ws ?? null) } : {}),
       ...(host.id !== LOCAL_HOST_ID ? { host_id: host.id } : {}),
+      // This machine's shared headless browser (RESOURCES.md → Shared headless browser pool).
+      browser: machineBrowserBlock(req),
     });
   });
   // Heavy slots: `mc heavy -- <cmd>` long-polls here for one of N permits on ITS OWN machine, so five
@@ -2017,6 +2020,9 @@ export function startServer() {
     if (!heavySlots) return;
     res.json({ released: heavySlots.release(req.params.id) });
   });
+
+  // `mc browser`: leases on the caller's machine's shared headless browser (src/resources/browser-routes.ts).
+  mountBrowserRoutes(api);
 
   api.get("/stats", (_req, res) => {
     const days = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
