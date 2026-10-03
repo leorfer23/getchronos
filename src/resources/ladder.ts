@@ -14,14 +14,15 @@
  *
  * The rungs, per workspace, while strained AND over budget:
  *  1. WARN at once: one message to each of its live terminals (typed in, as host failover tells a
- *     terminal — sessions) and to each headless run (the `mc tell` mailbox), naming the heaviest
- *     processes with their RSS and CPU. At most once per `warnEveryMs` (10 min) per workspace.
- *  2. SLOW after `slowAfterMs` (2 min) still over: renice the heaviest owned subtrees to `slowNice`
- *     (20; agents start at CHRONOS_AGENT_NICE 10), up to `maxActions` subtrees per tick. Restored when
- *     the workspace is back under budget or the machine is calm — where the OS allows it: macOS lets
- *     only root LOWER a nice value (measured: `renice 10` on our own nice-20 process → EACCES), so an
- *     unprivileged daemon's restore fails and the process stays at 20 until it exits. That is logged
- *     with the count, never hidden.
+ *     terminal — the only channel that reaches a busy terminal agent; deferred while someone is typing
+ *     into that pane) and to each headless run (the `mc tell` mailbox), naming the heaviest processes
+ *     with their RSS and CPU. At most once per `warnEveryMs` (10 min) per workspace.
+ *  2. SLOW after `slowAfterMs` (2 min) still over: renice the workspace's HEAVY processes (leak family,
+ *     test runners, build tools) with their own descendants to `slowNice` (20; agents start at
+ *     CHRONOS_AGENT_NICE 10), heaviest first, up to `maxActions` per tick. ONE-WAY: macOS lets only root
+ *     LOWER a nice value (measured: `renice 10` on our own nice-20 process → EACCES), so nothing is ever
+ *     put back — which is why only short-lived heavy processes are reniced, never an agent's MCP
+ *     servers, tool shells or dev servers. Over budget with nothing heavy → the warning only.
  *  3. PAUSE when also memory pressure is CRITICAL: SIGSTOP the workspace's NEWEST heavy process — a
  *     leak-family process, a test runner or a build tool — one per workspace per tick. Never a CLI
  *     root, a shell or a pty, an agent CLI, a keep-listed process or anything below one. SIGCONT,
@@ -78,6 +79,12 @@ export type LadderConfig = {
 export const DEFAULT_BUILD_TOOLS =
   /^(tsc|tsgo|esbuild|webpack|rollup|rolldown|swc|turbo|cargo|rustc|go|gradle|gradlew|swift|swiftc|swift-frontend|swift-build|xcodebuild|clang|clang\+\+|cc1|cc1plus|ld|ld64|javac|kotlinc|bazel|ninja)$/i;
 export const DEFAULT_BUILD_ARGS = /\b(tsc|esbuild|webpack|rollup|rolldown|vite\s+build|next\s+build|turbo\s+run|gradle)\b/i;
+/**
+ * A runtime whose argv runs the `mc` CLI is never heavy, whatever it wraps: `mc heavy -- npx vitest`
+ * names a test runner in its argv but is a thin long-poll + heartbeat — paused, its slot would be
+ * reclaimed as stale; reniced, it would stay slow for nothing.
+ */
+export const NEVER_ARGS = /(^|[\s/])mc(\s|$)/;
 export const DEFAULT_NEVER =
   /^-?(zsh|bash|sh|fish|dash|ksh|tcsh|csh|login|tmux|screen|script|spawn-helper|sudo|claude|codex|grok|gemini|opencode|cursor-agent|agent|ssh|sshd|mc)$/i;
 
@@ -115,7 +122,8 @@ export function ladderConfigFromEnv(env: Record<string, string | undefined>): La
 
 /** A process the ladder stopped. Persisted (brain.ts) so a restart can SIGCONT what a crash left stopped. */
 export type PausedRec = { pid: number; startMs: number; ws: string; owner: string; comm: string; rssMb: number; at: number };
-type SlowedRec = { pid: number; startMs: number; prev: number; ws: string };
+/** A process rung 2 reniced. There is no restore (see the header): the record only counts it and keeps it from being picked twice. */
+type SlowedRec = { pid: number; startMs: number; ws: string };
 
 type WsState = {
   overSince: number | null;
@@ -125,6 +133,8 @@ type WsState = {
   cpu: number[];
   /** "(would renice)" already said this episode (dry rungs speak once, not every tick). */
   slowNoted: boolean;
+  /** "(over budget, nothing heavy to slow)" already said this episode. */
+  idleNoted: boolean;
   pauseNoted: Set<number>;
 };
 
@@ -143,6 +153,8 @@ export type LadderEvent =
       heaviest: Array<{ cmd: string; count: number; rss_mb: number; cpu: number; pid: number }>;
       told: number;
       failed: number;
+      /** Terminals someone was typing into: retried on the next ticks rather than typed over. */
+      deferred: number;
     }
   | { topic: "budget.slow"; workspace_id: string | null; dry: boolean; nice: number; pids: number[]; count: number; rss_mb: number; cpu: number; over_ms: number }
   | {
@@ -160,13 +172,11 @@ export type LadderEvent =
   | {
       topic: "budget.resume";
       workspace_id: string | null;
-      /** cont = SIGCONT of a paused process; nice = a slowed subtree's nice put back. */
-      action: "cont" | "nice";
+      /** Always a SIGCONT of a paused process: renice is never undone (see the header). */
+      action: "cont";
       reason: "under_budget" | "calm" | "owner_ended" | "reaped" | "disabled" | "shutdown" | "boot";
       pids: number[];
       count: number;
-      /** nice: how many the OS refused to lower again (EACCES — macOS lets only root lower nice). */
-      denied?: number;
       paused_ms?: number;
     };
 
@@ -249,7 +259,8 @@ export class Ladder {
   private last: Measured | null = null;
   private lastAt: number | null = null;
   private lastMode: LadderMode;
-  private deniedNoted = false;
+  /** Owners whose warning was deferred (someone was typing into that terminal): ownerKey → workspace key. */
+  private readonly pendingTell = new Map<string, string>();
 
   constructor(readonly cfg: LadderConfig, private readonly deps: LadderDeps) {
     this.lastMode = cfg.mode;
@@ -264,7 +275,7 @@ export class Ladder {
   private name(ws: string | null): string { return this.deps.wsName?.(ws) ?? (ws ? ws.slice(0, 8) : "(no workspace)"); }
   private state(k: string): WsState {
     let s = this.ws.get(k);
-    if (!s) { s = { overSince: null, warnedAt: null, rung: "ok", cpu: [], slowNoted: false, pauseNoted: new Set() }; this.ws.set(k, s); }
+    if (!s) { s = { overSince: null, warnedAt: null, rung: "ok", cpu: [], slowNoted: false, idleNoted: false, pauseNoted: new Set() }; this.ws.set(k, s); }
     return s;
   }
 
@@ -340,7 +351,8 @@ export class Ladder {
     this.lastAt = now;
     if (mode === "off") {
       await this.releaseAllNow("disabled");
-      for (const st of this.ws.values()) { st.overSince = null; st.rung = "ok"; st.slowNoted = false; st.pauseNoted.clear(); }
+      for (const st of this.ws.values()) { st.overSince = null; st.rung = "ok"; st.slowNoted = false; st.idleNoted = false; st.pauseNoted.clear(); }
+      this.pendingTell.clear();
       return;
     }
 
@@ -355,10 +367,12 @@ export class Ladder {
         st.overSince = null;
         st.rung = "ok";
         st.slowNoted = false;
+        st.idleNoted = false;
         st.pauseNoted.clear();
       }
     }
     for (const [k, st] of this.ws) if (!m.active.has(k)) { st.overSince = null; st.rung = "ok"; }
+    for (const [ok, k] of this.pendingTell) if (!climbing.has(k)) this.pendingTell.delete(ok);
 
     await this.comeDown(climbing, m);
 
@@ -369,7 +383,7 @@ export class Ladder {
       if (st.warnedAt == null || now - st.warnedAt >= this.cfg.warnEveryMs) {
         st.warnedAt = now;
         await this.warn(k, m);
-      }
+      } else await this.warn(k, m, true);
       if (overMs < this.cfg.slowAfterMs) continue;
       st.rung = "slow";
       await this.slow(k, m, overMs, mode === "slow" || mode === "on");
@@ -419,9 +433,7 @@ export class Ladder {
 
   private async releaseAllNow(reason: "disabled" | "shutdown"): Promise<void> {
     this.resumeNow(this.paused.slice().sort((a, b) => a.at - b.at), reason);
-    const byWs = new Map<string, SlowedRec[]>();
-    for (const s of this.slowed.values()) (byWs.get(s.ws) ?? byWs.set(s.ws, []).get(s.ws)!).push(s);
-    for (const recs of byWs.values()) await this.restore(recs, reason);
+    for (const k of new Set([...this.slowed.values()].map((x) => x.ws))) this.forgetSlowed(k, reason);
   }
 
   /**
@@ -453,14 +465,14 @@ export class Ladder {
 
   // ───────────────────────── coming down ─────────────────────────
 
-  /** Workspaces no longer climbing: SIGCONT oldest pause first (capped), put slowed nice values back. */
+  /** Workspaces no longer climbing: SIGCONT oldest pause first (capped); forget what was reniced (it stays at 20 until it exits). */
   private async comeDown(climbing: Set<string>, m: Measured): Promise<void> {
     const why = (_k: string): "calm" | "under_budget" => (m.strained ? "under_budget" : "calm");
     const cont = this.paused.filter((p) => !climbing.has(p.ws)).sort((a, b) => a.at - b.at).slice(0, this.cfg.maxActions);
-    const nice = [...this.slowed.values()].filter((s) => !climbing.has(s.ws));
-    if (!cont.length && !nice.length) return;
-    const starts = await this.deps.starts([...cont.map((p) => p.pid), ...nice.map((s) => s.pid)]).catch(() => null);
-    if (!starts) { this.log(`could not re-check ${cont.length + nice.length} process(es) before releasing them — next tick`); return; }
+    for (const k of new Set([...this.slowed.values()].map((x) => x.ws))) if (!climbing.has(k)) this.forgetSlowed(k, why(k));
+    if (!cont.length) return;
+    const starts = await this.deps.starts(cont.map((p) => p.pid)).catch(() => null);
+    if (!starts) { this.log(`could not re-check ${cont.length} process(es) before resuming them — next tick`); return; }
     const same = (pid: number, startMs: number) => starts.get(pid) === startMs;
     const now = this.now();
     for (const p of cont) {
@@ -471,44 +483,33 @@ export class Ladder {
       this.log(`SIGCONT pid ${p.pid} — ${exeName(p.comm)}, ${p.rssMb} MB, paused ${Math.round((now - p.at) / 1000)}s — ws ${this.name(unkey(p.ws))}: ${reason === "calm" ? `machine calm (load ${r1(m.reading.loadPerCore)}/core, pressure ${pressureName(m.reading.pressureLevel)})` : `back under budget (${usageLine(m, p.ws)})`}`);
       this.publish({ topic: "budget.resume", workspace_id: unkey(p.ws), action: "cont", reason, pids: [p.pid], count: 1, paused_ms: now - p.at });
     }
-    if (cont.length) this.save();
-    const byWs = new Map<string, SlowedRec[]>();
-    for (const s of nice) {
-      if (!same(s.pid, s.startMs)) { this.slowed.delete(s.pid); continue; }
-      (byWs.get(s.ws) ?? byWs.set(s.ws, []).get(s.ws)!).push(s);
-    }
-    for (const [k, recs] of byWs) await this.restore(recs, why(k), m);
+    this.save();
   }
 
-  /** Put slowed nice values back. The OS may refuse (macOS: only root lowers nice) — counted, said once. */
-  private async restore(recs: SlowedRec[], reason: Extract<LadderEvent, { topic: "budget.resume" }>["reason"], m?: Measured): Promise<void> {
-    if (!recs.length) return;
-    const byPrev = new Map<number, SlowedRec[]>();
-    for (const s of recs) (byPrev.get(s.prev) ?? byPrev.set(s.prev, []).get(s.prev)!).push(s);
-    let ok = 0;
-    let denied = 0;
-    for (const [prev, group] of byPrev) {
-      const done = await this.deps.setNice(group.map((s) => s.pid), prev).catch(() => new Set<number>());
-      for (const s of group) {
-        this.slowed.delete(s.pid);
-        if (done.has(s.pid)) ok++;
-        else denied++;
-      }
-    }
-    const k = recs[0].ws;
-    const ws = unkey(k);
-    this.log(
-      `nice restored on ${ok} of ${recs.length} process(es) — ws ${this.name(ws)}: ${reason.replace("_", " ")}${m && reason === "under_budget" ? ` (${usageLine(m, k)})` : ""}` +
-        (denied ? ` — ${denied} stay at ${this.cfg.slowNice} until they exit${this.deniedNoted ? "" : " (macOS lets only root lower a nice value)"}` : ""),
-    );
-    if (denied) this.deniedNoted = true;
-    this.publish({ topic: "budget.resume", workspace_id: ws, action: "nice", reason, pids: recs.map((s) => s.pid), count: recs.length, denied });
+  /**
+   * The episode is over for workspace `k`: forget what rung 2 reniced. Nothing is put back — renice is
+   * one-way for an unprivileged process on macOS (only root may LOWER a nice value; measured: `renice
+   * 10` on our own nice-20 `sleep` → Permission denied). That is acceptable only because rung 2 renices
+   * nothing but heavy processes (a suite, a build, a headless browser), which exit on their own. Said
+   * once per episode, with the count.
+   */
+  private forgetSlowed(k: string, reason: string): void {
+    let n = 0;
+    for (const [pid, x] of this.slowed) if (x.ws === k) { this.slowed.delete(pid); n++; }
+    if (n) this.log(`ws ${this.name(unkey(k))}: ${reason.replace("_", " ")} — ${n} heavy process(es) reniced to ${this.cfg.slowNice} stay there until they exit (renice is one-way without root)`);
   }
 
   // ───────────────────────── rung 1: warn ─────────────────────────
 
-  private async warn(k: string, m: Measured): Promise<void> {
+  /**
+   * Rung 1. Delivery is TYPED into a terminal (no other channel reaches a busy terminal agent — see
+   * RESOURCES.md → Warn delivery), so `tell` defers a terminal someone typed into in the last moments
+   * (its error starts with "defer"): that owner is retried on the next ticks (`retry`), never typed
+   * into the middle of the operator's own line, and the workspace's 10-minute clock is not reset for it.
+   */
+  private async warn(k: string, m: Measured, retry = false): Promise<void> {
     const ws = unkey(k);
+    if (retry && ![...this.pendingTell.values()].includes(k)) return;
     // A runtime's argv turns `node` into `node (vitest)` — read once per process, cached on the entry.
     const runtimes = [...this.ledger.entries.values()]
       .filter((e) => e.argv === undefined && this.deps.reaper.runtimes.test(exeName(e.proc.comm)) && key(this.ledger.owners.get(e.owner)?.workspaceId) === k)
@@ -518,7 +519,7 @@ export class Ladder {
     const b = m.budgets.get(k)!;
     const s = m.shares.get(k)!;
     const heavy = heaviest(this.ledger, k, this.deps.reaper, 3);
-    const owners = [...this.ledger.owners.values()].filter((o) => !o.ended && key(o.workspaceId) === k);
+    const owners = [...this.ledger.owners.values()].filter((o) => !o.ended && key(o.workspaceId) === k && (!retry || this.pendingTell.has(o.key)));
     const mode = this.mode();
     const next =
       mode === "warn" ? "This Mac only warns for now." :
@@ -526,6 +527,7 @@ export class Ladder {
       `Still over in ${Math.round(this.cfg.slowAfterMs / 60_000)} min: the heaviest are reniced to ${this.cfg.slowNice}; if memory pressure turns critical, the newest heavy process is paused (SIGSTOP) until there is room.`;
     let told = 0;
     let failed = 0;
+    let deferred = 0;
     for (const o of owners) {
       const list = heavy.map((h) => `${h.cmd}${h.count > 1 ? ` ×${h.count}` : ""} ${gb(h.rssMb)} ${Math.round(h.cpu)}% CPU (${h.owner === o.key ? "this terminal" : `${h.ownerKind} ${h.ownerId.slice(0, 8)}`})`).join(", ");
       const text =
@@ -535,12 +537,18 @@ export class Ladder {
         `(share ${Math.round(s.share * 100)}%, weight ${s.weight}, ${m.active.size} workspace${m.active.size === 1 ? "" : "s"} active). ` +
         `Heaviest: ${list || "nothing identifiable"}. Stop what you no longer need, and run suites and builds through \`mc heavy\`. ${next}`;
       const err = this.deps.tell(o, text);
+      if (err?.startsWith("defer")) { deferred++; this.pendingTell.set(o.key, k); continue; }
+      this.pendingTell.delete(o.key);
       if (err) { failed++; this.log(`warn → ${o.kind} ${o.id.slice(0, 8)} not delivered: ${err}`); }
       else told++;
     }
+    if (retry) {
+      if (told) this.log(`WARN ws ${this.name(ws)} — delivered late to ${told} terminal(s) that were being typed into`);
+      return;
+    }
     this.log(
       `WARN ws ${this.name(ws)} — RAM ${gb(u.rssMb)} / ${gb(b.rssMb)}, CPU ${Math.round(u.cpu)}% / ${Math.round(b.cpu)}% (share ${Math.round(s.share * 100)}%) — ` +
-        `pressure ${pressureName(m.reading.pressureLevel)}, load ${r1(m.reading.loadPerCore)}/core — told ${told} of ${owners.length} — heaviest ${heavy.map((h) => `${h.cmd} ${gb(h.rssMb)}`).join(", ") || "-"}`,
+        `pressure ${pressureName(m.reading.pressureLevel)}, load ${r1(m.reading.loadPerCore)}/core — told ${told} of ${owners.length}${deferred ? ` (${deferred} deferred: being typed into)` : ""} — heaviest ${heavy.map((h) => `${h.cmd} ${gb(h.rssMb)}`).join(", ") || "-"}`,
     );
     this.publish({
       topic: "budget.warn",
@@ -556,34 +564,53 @@ export class Ladder {
       heaviest: heavy.map((h) => ({ cmd: h.cmd, count: h.count, rss_mb: Math.round(h.rssMb), cpu: Math.round(h.cpu), pid: h.pid })),
       told,
       failed,
+      deferred,
     });
   }
 
   // ───────────────────────── rung 2: slow ─────────────────────────
 
+  /**
+   * Rung 2: renice the workspace's HEAVY processes (`isHeavy`: leak family, test runners, build tools)
+   * with their own descendants — a Chrome's renderers, a vitest's workers — heaviest first. Never a
+   * non-heavy process at the top of a subtree: an agent's MCP servers, tool shells, `mc` long-polls and
+   * dev servers live for the whole terminal, and since a renice cannot be undone without root, slowing
+   * them would make a temporary measure permanent. Nothing in `never` either (shells, CLIs, `mc`), even
+   * below a heavy process. A workspace over budget with nothing heavy gets only the warning.
+   */
   private async slow(k: string, m: Measured, overMs: number, act: boolean): Promise<void> {
     const st = this.state(k);
     if (!act && st.slowNoted) return;
+    const ws = unkey(k);
+    // Heaviness of a runtime is in its argv; the keep-list needs every owned ancestor's. Read both.
+    const owned = [...this.ledger.entries.values()].filter((e) => {
+      const o = this.ledger.owners.get(e.owner);
+      return o && !o.ended && key(o.workspaceId) === k && maybeHeavy(e, this.cfg, this.deps.reaper);
+    });
+    let read = await readChains(this.ledger, owned.map((e) => e.pid), this.deps.args, this.deps.reaper);
+    if (!read.ok) { this.log(`could not read argv of ${read.unread} process(es) to check the keep-list — nothing reniced this tick`); return; }
     const byCpu = (m.usage.get(k)?.cpu ?? 0) > (m.budgets.get(k)?.cpu ?? Infinity) && (m.usage.get(k)?.rssMb ?? 0) <= (m.budgets.get(k)?.rssMb ?? 0);
-    const candidates = slowTops(this.ledger, k, byCpu).filter((t) => t.pids.some((p) => !this.slowed.has(p)));
-    if (!candidates.length) return;
-    const read = await readChains(this.ledger, candidates.flatMap((t) => t.pids), this.deps.args, this.deps.reaper);
+    const tops = heavyTops(this.ledger, k, this.cfg, this.deps.reaper, byCpu);
+    if (!tops.length) {
+      if (!st.idleNoted) { st.idleNoted = true; this.log(`(over budget, nothing heavy to slow) ws ${this.name(ws)} — over ${Math.round(overMs / 1000)}s (${usageLine(m, k)}) — warned only`); }
+      return;
+    }
+    read = await readChains(this.ledger, tops.flatMap((t) => t.pids), this.deps.args, this.deps.reaper);
     if (!read.ok) { this.log(`could not read argv of ${read.unread} process(es) to check the keep-list — nothing reniced this tick`); return; }
     const ctx = this.ctx();
     const kept = keptBelow(this.ledger);
-    // Already at (or past) the slow value — reniced earlier, or forked by a slowed parent and so born
-    // there — is done: it must not take one of this tick's few subtree turns from a heavier one.
+    // Already at (or past) the slow value — reniced earlier, or forked by a reniced parent and so born
+    // there — counts as slowed: it must not take one of this tick's few turns from a heavier subtree.
     const ok = (pid: number) => {
       const e = this.ledger.entries.get(pid);
       return !!e && !this.slowed.has(pid) && !kept.has(pid) && touchable(e, ctx, this.deps.reaper) && chainRead(this.ledger, pid) &&
-        (this.deps.getNice(pid) ?? this.cfg.slowNice) < this.cfg.slowNice;
+        !this.cfg.never.test(exeName(e.proc.comm)) && (this.deps.getNice(pid) ?? this.cfg.slowNice) < this.cfg.slowNice;
     };
-    const picked = candidates.map((t) => ({ ...t, pids: t.pids.filter(ok) })).filter((t) => t.pids.length).slice(0, this.cfg.maxActions);
+    const picked = tops.map((t) => ({ ...t, pids: t.pids.filter(ok) })).filter((t) => t.pids.length).slice(0, this.cfg.maxActions);
     if (!picked.length) return;
     const pids = picked.flatMap((t) => t.pids);
     const rssMb = picked.reduce((s, t) => s + t.rssMb, 0);
     const cpu = picked.reduce((s, t) => s + t.cpu, 0);
-    const ws = unkey(k);
     const what = picked.map((t) => `${t.cmd} (pid ${t.top}, ${t.pids.length} proc${t.pids.length === 1 ? "" : "s"}, ${gb(t.rssMb)}, ${Math.round(t.cpu)}%)`).join(", ");
     if (!act) {
       st.slowNoted = true;
@@ -593,18 +620,11 @@ export class Ladder {
     }
     const starts = await this.deps.starts(pids).catch(() => null);
     if (!starts) { this.log(`could not re-check ${pids.length} target(s) before renicing — skipped this tick`); return; }
-    const targets: SlowedRec[] = [];
-    for (const pid of pids) {
-      const e = this.ledger.entries.get(pid)!;
-      if (starts.get(pid) !== e.startMs) continue;
-      const prev = this.deps.getNice(pid);
-      if (prev == null || prev >= this.cfg.slowNice) continue;
-      targets.push({ pid, startMs: e.startMs, prev, ws: k });
-    }
+    const targets = pids.filter((pid) => starts.get(pid) === this.ledger.entries.get(pid)!.startMs);
     if (!targets.length) return;
-    const done = await this.deps.setNice(targets.map((t) => t.pid), this.cfg.slowNice).catch(() => new Set<number>());
-    for (const t of targets) if (done.has(t.pid)) this.slowed.set(t.pid, t);
-    this.log(`renice ${done.size} of ${targets.length} process(es) to ${this.cfg.slowNice} — ws ${this.name(ws)}: over ${Math.round(overMs / 1000)}s (${usageLine(m, k)}) — ${what}`);
+    const done = await this.deps.setNice(targets, this.cfg.slowNice).catch(() => new Set<number>());
+    for (const pid of done) this.slowed.set(pid, { pid, startMs: this.ledger.entries.get(pid)!.startMs, ws: k });
+    this.log(`renice ${done.size} of ${targets.length} heavy process(es) to ${this.cfg.slowNice} (one-way: they keep it until they exit) — ws ${this.name(ws)}: over ${Math.round(overMs / 1000)}s (${usageLine(m, k)}) — ${what}`);
     this.publish({ topic: "budget.slow", workspace_id: ws, dry: false, nice: this.cfg.slowNice, pids: [...done], count: done.size, rss_mb: Math.round(rssMb), cpu: Math.round(cpu), over_ms: overMs });
   }
 
@@ -724,7 +744,7 @@ export function isHeavy(e: Entry, cfg: Pick<LadderConfig, "buildTools" | "buildA
   const name = exeName(e.proc.comm);
   if (cfg.never.test(name)) return false;
   if (rc.leakFamily.test(name) || cfg.buildTools.test(name)) return true;
-  if (!rc.runtimes.test(name) || !e.argv) return false;
+  if (!rc.runtimes.test(name) || !e.argv || NEVER_ARGS.test(e.argv)) return false;
   return rc.testRunnerArgs.test(e.argv) || cfg.buildArgs.test(e.argv);
 }
 
@@ -750,21 +770,32 @@ export function pausable(
 export type SlowTop = { top: number; cmd: string; pids: number[]; rssMb: number; cpu: number };
 
 /**
- * The tops of a workspace's owned subtrees — the processes directly under a live CLI root, and any
- * detached owned process — heaviest first (by RSS, or by CPU when only CPU is over).
+ * Rung 2's candidates: the workspace's top-most HEAVY processes (no heavy owned ancestor — a vitest,
+ * not each of its workers) of live owners, each with its owned subtree, heaviest first (by RSS, or by
+ * CPU when only CPU is over). Argv must already be read for runtimes to count as heavy.
  */
-export function slowTops(ledger: ProcLedger, k: string, byCpu: boolean): SlowTop[] {
-  const out: SlowTop[] = [];
+export function heavyTops(
+  ledger: ProcLedger,
+  k: string,
+  cfg: Pick<LadderConfig, "buildTools" | "buildArgs" | "never">,
+  rc: Pick<ReaperConfig, "leakFamily" | "runtimes" | "testRunnerArgs">,
+  byCpu: boolean,
+): SlowTop[] {
+  const heavy = new Set<number>();
   for (const e of ledger.entries.values()) {
     const o = ledger.owners.get(e.owner);
     if (!o || o.ended || key(o.workspaceId) !== k || e.pid === o.rootPid) continue;
-    const parent = ledger.entries.get(e.proc.ppid);
-    if (parent && parent.pid !== o.rootPid) continue;
-    const pids = ledger.subtree(e.pid);
+    if (isHeavy(e, cfg, rc)) heavy.add(e.pid);
+  }
+  const out: SlowTop[] = [];
+  for (const pid of heavy) {
+    if (ledger.ancestors(pid).some((a) => heavy.has(a))) continue;
+    const e = ledger.entries.get(pid)!;
+    const pids = ledger.subtree(pid);
     let rssKb = 0;
     let cpu = 0;
     for (const p of pids) { const x = ledger.entries.get(p)!; rssKb += x.proc.rssKb; cpu += x.proc.cpu; }
-    out.push({ top: e.pid, cmd: exeName(e.proc.comm), pids, rssMb: rssKb / 1024, cpu });
+    out.push({ top: pid, cmd: labelOf(e, rc), pids, rssMb: rssKb / 1024, cpu });
   }
   return out.sort((a, b) => (byCpu ? b.cpu - a.cpu : b.rssMb - a.rssMb) || b.rssMb - a.rssMb || a.top - b.top);
 }

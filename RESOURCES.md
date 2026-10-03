@@ -205,25 +205,33 @@ It runs only while the machine is **strained**: memory pressure ≥ warning, or 
 `CHRONOS_MAX_LOAD_PER_CORE` (admission's own inputs, `currentLoad()`). Over budget on a calm Mac costs
 nobody anything. Per workspace, while strained **and** over:
 
-1. **Warn** at once: one line to each of the workspace's live owners on this Mac, by the channels that
-   already reach an agent — a Desk terminal is **typed into** (`sendInput`, as host failover tells a
-   terminal it moved; rate-limited and recorded as `session.input`), a headless run gets the **`mc tell`
-   mailbox** (`sendMessage`: steered live when it can be, else at its next checkpoint). It names the
-   share, budget, usage, pressure and load, and the three heaviest process groups with RSS and CPU
+1. **Warn** at once: one line to each of the workspace's live owners on this Mac. A headless run gets
+   the **`mc tell` mailbox** (`sendMessage`: steered live when it can be, else at its next checkpoint).
+   A Desk terminal is **typed into** (`sendInput`, as host failover tells a terminal it moved;
+   rate-limited and recorded as `session.input`) — see *Warn delivery* below for why. It names the share,
+   budget, usage, pressure and load, and the three heaviest process groups with RSS and CPU
    (`node (vitest) ×4 2.1 GB 310% CPU (this terminal)`). At most once per `CHRONOS_LADDER_WARN_EVERY_MS`
    (10 min) per workspace.
-2. **Slow** — still over after `CHRONOS_LADDER_SLOW_AFTER_MS` (2 min): renice the workspace's heaviest owned
-   subtrees (the processes directly under a live CLI root, and detached owned processes, each with
-   everything below it; heaviest by RSS, or by CPU when only CPU is over) to `CHRONOS_LADDER_NICE` (20),
-   up to `CHRONOS_LADDER_MAX_ACTIONS` (3) subtrees per workspace per tick. The CLI root itself never.
-   Undone when the workspace is back under budget or the machine is calm — **as far as the OS allows**:
-   macOS lets only root *lower* a nice value (measured here: `renice 10` on our own nice-20 `sleep` →
-   `Permission denied`), so an unprivileged daemon's restore fails and those processes stay at 20 until
-   they exit. The restore is still attempted (it works under root, and on Linux with `RLIMIT_NICE`);
-   the refusal is counted in the log line and in `budget.resume` (`denied`). Considered and NOT done:
+2. **Slow** — still over after `CHRONOS_LADDER_SLOW_AFTER_MS` (2 min): renice the workspace's **heavy
+   processes only** (the same `isHeavy` as rung 3: leak family, test runners, build tools) together with
+   their own descendants — a Chrome's renderers, a vitest's workers — to `CHRONOS_LADDER_NICE` (20),
+   heaviest first (subtree RSS, or CPU when only CPU is over), up to `CHRONOS_LADDER_MAX_ACTIONS` (3) per
+   workspace per tick. Never a non-heavy process at the top of a subtree, and nothing in the never-list
+   (shells, ptys, agent CLIs, `mc`) even below a heavy one; a runtime running the `mc` CLI (`mc heavy --
+   npx vitest`) is never heavy. A process already at 20 — e.g. a worker forked by a reniced vitest after
+   the fact, born there — counts as already slowed.
+   **Renice is one-way on macOS without root**: only root may *lower* a nice value (measured here:
+   `renice 10` on our own nice-20 `sleep` → `Permission denied`). So nothing is ever put back, and that
+   is exactly why rung 2 renices only short-lived heavy processes: a suite, a build, a headless browser
+   exit on their own and take the nice value with them. An agent's MCP servers (chrome-devtools-mcp, fff,
+   graphify, `dart mcp-server`…), persistent tool shells, `mc` long-polls and dev servers live for the
+   whole terminal; reniced, they would stay slow long after the episode — they are never touched. When
+   the episode ends the ladder forgets its records with ONE log line per workspace ("N heavy process(es)
+   reniced to 20 stay there until they exit"). A workspace over budget with nothing heavy gets only the
+   warning, plus `(over budget, nothing heavy to slow)` logged once per episode. Considered and NOT done:
    `taskpolicy -b` / `-B` (PRIO_DARWIN_BG) *is* reversible unprivileged (measured: pri 4 → 31), but it
    clamps to the E-cores and throttles I/O — `machine.ts` rejected it for agents for that reason, and
-   Leo's decision was renice. Worth revisiting if stuck-at-20 processes turn out to matter.
+   Leo's decision was renice.
 3. **Pause** — still over (past the 2 min) **and** memory pressure critical: SIGSTOP the workspace's
    **newest heavy process**, one per workspace per tick. Heavy = leak family (the reaper's), a node/bun/deno
    running a test runner, or a build tool (`tsc`, `esbuild`, `webpack`, `rollup`, `cargo`, `rustc`, `go`,
@@ -273,8 +281,20 @@ run's own test runner can still be paused by pid like a terminal's.
 300% CPU — session ab12cd34 (ws acme): memory pressure critical, RAM 9.1 GB / 7.2 GB, CPU 640% / 600%`) and
 a bus event — `budget.warn` (usage, budget, share, weight, pressure, load, heaviest, told/failed),
 `budget.slow` (pids, nice, rss, cpu, over_ms, dry), `budget.pause` (pid, cmd, rss, cpu, owner, dry),
-`budget.resume` (action `cont|nice`, reason `under_budget|calm|owner_ended|reaped|disabled|shutdown|boot`,
-`paused_ms`, `denied`) — which `activity.ts` records like `proc.reaped`.
+`budget.resume` (action `cont`, reason `under_budget|calm|owner_ended|reaped|disabled|shutdown|boot`,
+`paused_ms`) — which `activity.ts` records like `proc.reaped`. `budget.warn` also carries `deferred`.
+
+**Warn delivery — why typing.** Looked for a channel that reaches a terminal's agent without typing:
+the `mc tell` mailbox and its `mc step`/`mc note` piggyback are run-scoped (`resolveMessageTarget` refuses
+a session: "type into the terminal for sessions"); the CLI hooks hand context back only on
+`UserPromptSubmit` (`memory_notice`) — i.e. on the operator's NEXT prompt, which an agent mid-task never
+sees — and `PostToolUse` is installed only for the ask tools; a Desk toast/card is the operator's, not the
+agent's. So a terminal is typed into, as host failover does. To keep it out of the operator's own line,
+`tellOwner` (brain.ts) DEFERS a terminal anyone typed into in the last 30 s (`sessionActivity().last_in`);
+the ladder retries it on the following ticks (still within the episode, without resetting the 10-minute
+clock) and logs "delivered late". The line always starts with `[chronos budget]` and is one line
+(`sendInput` folds newlines). Residual risk: a half-typed draft the operator left untouched for >30 s
+still gets the warning appended to it.
 
 **Surface.** `GET /api/machine` → `procs.ladder: {mode, strained, critical, capacity:{rss_mb, cpu, slots},
 measured_at}` and each `procs.workspaces[]` row gains `weight, share, active, budget:{rss_mb, cpu, slots},
@@ -305,9 +325,8 @@ prints one line per row it gets — the caller's own, or every workspace for the
 - **Warn delivery** reuses the two existing channels (terminal: typed input like host failover's `tell`;
   run: the `mc tell` mailbox) — no new channel, no Desk card yet (PR 3's Desk work can render the
   `budget.*` events, which are already in activity).
-- **Release rule is symmetric**: slow and pause are both undone when the workspace is back under budget
-  OR the machine is calm (the design said "under budget" for slow; once the machine is calm the ladder
-  has no reason to keep anything slowed).
+- **Renice is never undone** (one-way without root, see Slow), so rung 2 is restricted to heavy
+  processes. Pause is undone when the workspace is back under budget OR the machine is calm.
 - **"Never the daemon or its group"** = never a group signal at all (pid-only), never the daemon pid —
   the same meaning PR 1 gives it. Excluding every pid in the daemon's group would have made headless
   runs' test runners immune.

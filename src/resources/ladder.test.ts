@@ -209,12 +209,13 @@ test("rungs: warn → 2 min → slow → critical → pause (newest first, one p
   await tick(60_000);
   assert.equal(w.setNiceCalls.length, 0, "still inside the 2 minutes");
   await tick(60_000);
-  // Slow: the heaviest subtrees, heaviest first (zsh → vitest → Chrome is 3 GB; tsc 500 MB) — never a CLI root.
-  assert.deepEqual(w.setNiceCalls, [[[210, 220, 230, 310], 20]]);
+  // Slow: the heavy processes with their descendants, heaviest first (vitest + its Chrome 3 GB; tsc
+  // 500 MB) — never the tool shell above vitest, never a CLI root.
+  assert.deepEqual(w.setNiceCalls, [[[220, 230, 310], 20]]);
   assert.equal(ladder.wsView("ws-a")!.rung, "slow");
-  assert.equal(ladder.wsView("ws-a")!.slowed, 4);
-  assert.match(w.logs.find((l) => l.startsWith("renice 4 of 4"))!, /to 20 — ws ws-a: over 120s \(RAM 3\.5 GB \/ 2\.5 GB, CPU 400% \/ 200%\) — zsh \(pid 210, 3 procs, 3\.0 GB, 300%\), tsc \(pid 310, 1 proc, 500 MB, 100%\)/);
-  for (const p of [200, 300, 400, 410]) assert.notEqual(w.nice.get(p), 20, `pid ${p} untouched`);
+  assert.equal(ladder.wsView("ws-a")!.slowed, 3);
+  assert.match(w.logs.find((l) => l.startsWith("renice 3 of 3"))!, /heavy process\(es\) to 20 \(one-way: they keep it until they exit\) — ws ws-a: over 120s \(RAM 3\.5 GB \/ 2\.5 GB, CPU 400% \/ 200%\) — node \(vitest\) \(pid 220, 2 procs, 3\.0 GB, 300%\), tsc \(pid 310, 1 proc, 500 MB, 100%\)/);
+  for (const p of [200, 210, 300, 400, 410]) assert.notEqual(w.nice.get(p), 20, `pid ${p} untouched`);
   assert.deepEqual(sigs(w, "SIGSTOP"), [], "no pause while pressure is only warning");
 
   w.load = CRITICAL;
@@ -235,8 +236,9 @@ test("rungs: warn → 2 min → slow → critical → pause (newest first, one p
   assert.deepEqual(sigs(w, "SIGCONT"), [310, 230, 220]);
   assert.deepEqual(w.saved, []);
   assert.deepEqual(topics(w, "budget.resume").filter((e) => e.action === "cont").map((e) => [e.pids[0], e.reason]), [[310, "calm"], [230, "calm"], [220, "calm"]]);
-  // The nice values went back to where they were.
-  assert.deepEqual(w.setNiceCalls.at(-1), [[210, 220, 230, 310], 10]);
+  // Renice is one-way: nothing is put back, the episode's records are forgotten with one line.
+  assert.equal(w.setNiceCalls.length, 1, "never a second setNice — no restore");
+  assert.equal(w.logs.filter((l) => /3 heavy process\(es\) reniced to 20 stay there until they exit/.test(l)).length, 1);
   assert.equal(ladder.wsView("ws-a")!.slowed, 0);
   assert.equal(ladder.wsView("ws-a")!.rung, "ok");
 });
@@ -256,17 +258,99 @@ test("back under budget (machine still strained) resumes too — and an idle wor
   assert.equal(topics(w, "budget.resume").find((e) => e.action === "cont").reason, "under_budget");
 });
 
-test("restore: macOS refuses to LOWER nice for an unprivileged daemon — counted and said, never hidden", async () => {
+test("slow is one-way: no restore is attempted, and the count is said once per episode, not every tick", async () => {
   const { w, tick } = harness({ cfg: { slowAfterMs: 0 } });
-  w.denyLower = true;
   w.load = WARNING;
   await tick();
   assert.equal(w.nice.get(220), 20);
   w.load = CALM;
   await tick(10_000);
-  const line = w.logs.find((l) => l.startsWith("nice restored"))!;
-  assert.match(line, /nice restored on 0 of 4 process\(es\) — ws ws-a: calm — 4 stay at 20 until they exit \(macOS lets only root lower a nice value\)/);
-  assert.equal(topics(w, "budget.resume").find((e) => e.action === "nice").denied, 4);
+  await tick(10_000);
+  await tick(10_000);
+  assert.ok(w.setNiceCalls.every(([, n]) => n === 20), "never asked to lower a nice value");
+  assert.equal(w.logs.filter((l) => l.includes("stay there until they exit (renice is one-way without root)")).length, 1);
+  assert.ok(topics(w, "budget.resume").every((e) => e.action === "cont"));
+});
+
+test("slow: an MCP server and a tool shell under the CLI are NOT reniced; the vitest + Chrome subtree is", async () => {
+  const procs: Proc[] = [
+    DAEMON,
+    P({ pid: 200, ppid: SELF, pgid: 200, startMs: T0, comm: CLAUDE }),
+    // Long-lived agent tools, heavy on RAM but not "heavy" processes: never touched.
+    P({ pid: 205, ppid: 200, pgid: 205, startMs: T0 + 500, comm: "/opt/homebrew/bin/node", rssKb: 3000 * MB, cpu: 150 }),
+    P({ pid: 206, ppid: 205, pgid: 205, startMs: T0 + 600, comm: "/opt/homebrew/bin/node", rssKb: 100 * MB }),
+    P({ pid: 207, ppid: 200, pgid: 207, startMs: T0 + 700, comm: "/opt/homebrew/bin/node", rssKb: 50 * MB }),
+    P({ pid: 210, ppid: 200, pgid: 210, startMs: T0 + 1000, comm: "/bin/zsh", rssKb: 20 * MB }),
+    P({ pid: 220, ppid: 210, pgid: 210, startMs: T0 + 2000, comm: "/opt/homebrew/bin/node", rssKb: 1024 * MB, cpu: 300 }),
+    P({ pid: 230, ppid: 220, pgid: 230, startMs: T0 + 3000, comm: CHROME, rssKb: 512 * MB }),
+    P({ pid: 231, ppid: 230, pgid: 230, startMs: T0 + 3100, comm: "/c/Google Chrome for Testing Helper (Renderer)", rssKb: 256 * MB }),
+    // A shell the test runner itself spawned: in `never`, so not reniced even below a heavy process.
+    P({ pid: 240, ppid: 220, pgid: 210, startMs: T0 + 3200, comm: "/bin/sh", rssKb: 5 * MB }),
+  ];
+  const roots: Root[] = [{ kind: "session", id: "sa1-0000", pid: 200, startedAt: T0, workspaceId: "ws-a" }];
+  const { w, tick } = harness({
+    procs, roots, cfg: { slowAfterMs: 0 },
+    argv: { 205: "node /x/chrome-devtools-mcp/build/index.js --browserUrl http://127.0.0.1:9222", 206: "node /x/fff-mcp/server.js", 207: "node /Users/x/.mc/bin/mc heavy -- npx vitest run", 240: "/bin/sh -c git status" },
+  });
+  w.load = WARNING;
+  await tick();
+  assert.deepEqual(w.setNiceCalls, [[[220, 230, 231], 20]]);
+  for (const p of [200, 205, 206, 207, 210, 240]) assert.notEqual(w.nice.get(p), 20, `pid ${p} never reniced`);
+  // …and the pause rung never stops the `mc heavy` wrapper (its heartbeat would lapse and the slot be reclaimed).
+  w.load = CRITICAL;
+  for (let i = 0; i < 5; i++) await tick(10_000);
+  assert.ok(!sigs(w, "SIGSTOP").includes(207));
+  assert.ok(!sigs(w, "SIGSTOP").includes(205));
+});
+
+test("slow: a child forked later by a reniced vitest is born at 20 and counts as already slowed", async () => {
+  const { w, ladder, tick } = harness({ cfg: { slowAfterMs: 0 } });
+  w.load = WARNING;
+  await tick();
+  assert.deepEqual(w.setNiceCalls, [[[220, 230, 310], 20]]);
+  // vitest forks a worker; it inherits nice 20 from its parent.
+  w.procs = [...scene(), P({ pid: 225, ppid: 220, pgid: 210, startMs: T0 + 20_000, comm: "/opt/homebrew/bin/node", rssKb: 400 * MB, cpu: 90 })];
+  w.argv[225] = "node /r/node_modules/vitest/dist/workers/forks.js";
+  w.nice.set(225, 20);
+  await tick(10_000);
+  await tick(10_000);
+  assert.equal(w.setNiceCalls.length, 1, "nothing to do: the new worker is already at 20");
+  assert.equal(ladder.wsView("ws-a")!.slowed, 3);
+});
+
+test("slow: over budget with nothing heavy → warned, never reniced, '(over budget, nothing heavy to slow)' said once", async () => {
+  const procs: Proc[] = [
+    DAEMON,
+    P({ pid: 200, ppid: SELF, pgid: 200, startMs: T0, comm: CLAUDE }),
+    P({ pid: 205, ppid: 200, pgid: 205, startMs: T0 + 500, comm: "/opt/homebrew/bin/node", rssKb: 6000 * MB, cpu: 50 }),
+  ];
+  const roots: Root[] = [{ kind: "session", id: "sa1-0000", pid: 200, startedAt: T0, workspaceId: "ws-a" }];
+  const { w, tick } = harness({ procs, roots, cfg: { slowAfterMs: 0 }, argv: { 205: "node /x/some-mcp-server/index.js" } });
+  w.load = CRITICAL;
+  for (let i = 0; i < 4; i++) await tick(10_000);
+  assert.equal(topics(w, "budget.warn").length, 1);
+  assert.deepEqual(w.setNiceCalls, []);
+  assert.deepEqual(w.signals, []);
+  assert.equal(w.logs.filter((l) => l.startsWith("(over budget, nothing heavy to slow) ws ws-a")).length, 1);
+});
+
+test("warn: a terminal someone is typing into is deferred, then told on a later tick — not typed over", async () => {
+  const { w, ladder, tick } = harness();
+  const d = (ladder as any).deps as LadderDeps;
+  let typing = true;
+  d.tell = (o, text) => (o.id === "sa1-0000" && typing ? "defer: typed into 3s ago" : (w.told.push({ to: o.id, text }), null));
+  w.load = WARNING;
+  await tick();
+  assert.deepEqual(w.told.map((t) => t.to), ["sa2-0000"]);
+  assert.equal(topics(w, "budget.warn")[0].deferred, 1);
+  await tick(10_000);
+  assert.equal(w.told.length, 1, "still typing: still deferred");
+  typing = false;
+  await tick(10_000);
+  assert.deepEqual(w.told.map((t) => t.to), ["sa2-0000", "sa1-0000"], "delivered late, once");
+  await tick(10_000);
+  assert.equal(w.told.length, 2);
+  assert.match(w.told[1].text, /^\[chronos budget\] /);
 });
 
 // ───────────────────────────── never pause ─────────────────────────────
@@ -397,7 +481,7 @@ test("switching the ladder off releases everything on the next tick", async () =
   await tick(10_000);
   assert.deepEqual(sigs(w, "SIGCONT"), [310, 230]);
   assert.equal(ladder.paused.length, 0);
-  assert.deepEqual(w.setNiceCalls.at(-1)?.[1], 10, "nice restored");
+  assert.ok(w.setNiceCalls.every(([, n]) => n === 20), "no restore: renice is one-way");
   assert.ok(topics(w, "budget.resume").every((e) => e.reason === "disabled"));
   assert.equal(ladder.view().mode, "off");
   await tick(10_000);

@@ -20,7 +20,7 @@ import { localHost } from "../hosts/local.js";
 import { jobs, runs, sessions, workspaces } from "../store.js";
 import { currentLoad, localHeavyPool, setSlotBudget } from "../machine.js";
 import { setting } from "../settings.js";
-import { sendInput } from "../terminal.js";
+import { sendInput, sessionActivity } from "../terminal.js";
 import { sendMessage } from "../messages.js";
 import type { Owner, Root } from "./ledger.js";
 import { parseStarts, Reaper, systemReaperDeps, type ReaperMode } from "./reaper.js";
@@ -88,12 +88,21 @@ function activeWorkspaces(): string[] {
 }
 
 /**
- * The warning, by the channels that already reach an agent: a Desk terminal is TYPED into (as host
- * failover tells a terminal it moved — `sendInput`, rate-limited, recorded as session.input); a
- * headless run gets the `mc tell` mailbox (steered live when it can be, else at its next checkpoint).
+ * The warning, by the channels that already reach an agent. A headless run gets the `mc tell` mailbox
+ * (steered live when it can be, else at its next checkpoint). A Desk terminal has no non-typing channel
+ * its agent reads while busy: the mailbox refuses sessions, and the hooks only hand context back on the
+ * operator's NEXT prompt (`memory_notice`, UserPromptSubmit) — an autonomous agent mid-task never sees
+ * that. So it is TYPED in (as host failover tells a terminal it moved — `sendInput`, rate-limited,
+ * recorded as session.input), prefixed `[chronos budget]`, and DEFERRED while anyone typed into that
+ * pane in the last TYPING_QUIET_MS, so it never lands in the middle of the operator's own line.
  */
+const TYPING_QUIET_MS = 30_000;
 function tellOwner(o: Owner, text: string): string | null {
-  if (o.kind === "session") return sendInput(o.id, { text }, "budget");
+  if (o.kind === "session") {
+    const lastIn = sessionActivity(o.id).last_in;
+    if (lastIn != null && Date.now() - lastIn < TYPING_QUIET_MS) return `defer: typed into ${Math.round((Date.now() - lastIn) / 1000)}s ago`;
+    return sendInput(o.id, { text }, "budget");
+  }
   const r = sendMessage(o.id, text, "budget");
   return r.ok ? null : r.error;
 }
