@@ -70,10 +70,10 @@ test("agentBlock reads agents/_blocks, fills what the closed var list cannot, an
 test("terminal.ts folds it in ahead of the reporting contract, and exports the Lead's id to the worker", () => {
   const src = fs.readFileSync(path.join(process.cwd(), "src/terminal.ts"), "utf8");
   // Persona (a Lead) → the Lead block (a worker) → FOCUS_CONTRACT: who you are before how you report.
-  assert.match(src, /\[row\.role === "lead" \? agentPrompt\("lead"\) : null, leadBlock, FOCUS_CONTRACT, hostBlock, artifactChoiceBlock\(backend\.name\), ctx, rel\]/);
+  assert.match(src, /\[row\.role === "lead" \? agentPrompt\("lead"\) : null, leadBlock, FOCUS_CONTRACT, hostBlock, browserBlock\(\), artifactChoiceBlock\(backend\.name\), ctx, rel\]/);
   // Backends with no system-prompt channel (cursor) get it in the seed, or their workers would be
   // the only ones never told they have a Lead.
-  assert.match(src, /const pre = \[leadBlock, FOCUS_CONTRACT, hostBlock, ctx\]\.filter\(Boolean\)\.join\("\\n\\n"\);/);
+  assert.match(src, /const pre = \[leadBlock, FOCUS_CONTRACT, hostBlock, browserBlock\(\), ctx\]\.filter\(Boolean\)\.join\("\\n\\n"\);/);
   // An id, not a credential: `mc` reads it only to know it has a Lead to ask.
   assert.match(src, /MC_LEAD_ID: row\.lead_id/);
 });

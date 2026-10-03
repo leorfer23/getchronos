@@ -560,6 +560,15 @@ export class RemoteHost implements Host {
     return (await this.link.request(this.id, "worktree_ensure", args, PROC_SPAWN_TIMEOUT_MS)) as { path: string };
   }
 
+  /**
+   * This host's shared headless browser (RESOURCES.md → Shared headless browser pool): the `browser`
+   * rpc hostd answers from its own engine. 60 s covers a cold start of the browser.
+   */
+  async browserRpc(args: unknown): Promise<unknown> {
+    if (!this.online) throw new Error(`host ${this.hello?.name ?? this.id} is offline`);
+    return this.link.request(this.id, "browser", args, 60_000);
+  }
+
   /** Does this host run headless jobs (protocol 1.3)? */
   get runsProcs(): boolean { return !!this.hello?.capabilities?.procs; }
 

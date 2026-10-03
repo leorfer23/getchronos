@@ -329,6 +329,11 @@ operator never gets a surprise cloud bill.
 host's pool (`ncpu/6` of *that* machine). Two suites on two machines don't wait for each other.
 While the brain is away the host grants from its own pool of the same size.
 
+**The shared browser is per host too.** `mc browser` asks through the forwarder; the brain keeps the
+lease in that host's pool and drives the host's OWN headless browser over the `browser` rpc, so the
+CDP endpoint an agent gets is on its own loopback. Caps come from the host's RAM and its own
+`CHRONOS_BROWSER_*`. No leases while the brain is away (RESOURCES.md → Shared headless browser pool).
+
 ### Reconnect and restarts
 
 What survives what:

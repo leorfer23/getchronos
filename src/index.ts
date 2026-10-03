@@ -29,6 +29,7 @@ import { startEgress } from "./egress.js";
 import { startActivity } from "./activity.js";
 import { startMachineGovernor } from "./machine.js";
 import { startProcReaper } from "./resources/brain.js";
+import { startBrowserPool } from "./resources/browser-pool.js";
 import { startAwake } from "./awake.js";
 import { startWatches } from "./watches.js";
 import { startDayHeartbeat, startStandup } from "./heartbeat.js";
@@ -83,6 +84,7 @@ installSessionSearchHooks();
 startActivity();
 startMachineGovernor();
 startProcReaper();
+startBrowserPool();
 reloadSchedules();
 startServer();
 // Hosts (HOSTS.md): the LAN listener for `chronos host` links — a no-op unless CHRONOS_HOST_LISTEN is set.

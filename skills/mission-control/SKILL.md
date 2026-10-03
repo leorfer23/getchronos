@@ -235,6 +235,38 @@ It's a real git worktree sharing the repo's object store — cheap, and idempote
 - **On another computer** (a host chip on your card) all of this works the same: the tree is made,
   listed and removed on that computer, and `mc worktree list` marks such rows `on <host>`.
 
+## Heavy commands and browsers — `mc heavy`, `mc browser`
+
+The Mac is shared with every other agent. A full test suite, typecheck or build runs under
+`mc heavy -- <cmd>` (a few machine-wide slots; a single targeted test file does not need it).
+
+Browsers leak: on 2026-10-02 test runs that each launched their own Chrome left 188 headless Chrome
+processes behind. In order:
+
+1. **Avoid one.** Fetch the page (curl / fetch) and parse it with happy-dom, jsdom or linkedom; in
+   tests, mock `env.BROWSER` (Cloudflare Browser Rendering) instead of running it locally.
+2. **Need real rendering or screenshots?** Borrow this machine's shared headless browser:
+
+   ```bash
+   mc browser run -- npm run test:e2e     # leases a fresh context, releases it when the command exits
+   mc browser status                      # engine, contexts in use / cap, your leases
+   ```
+
+   The command gets `CHRONOS_BROWSER_WS` and `CHRONOS_BROWSER_CONTEXT`:
+
+   ```js
+   const browser = await puppeteer.connect({ browserWSEndpoint: process.env.CHRONOS_BROWSER_WS });
+   const ctx = browser.browserContexts().find((c) => c.id === process.env.CHRONOS_BROWSER_CONTEXT);
+   const page = await ctx.newPage();
+   // … then browser.disconnect() (a close() only disconnects you too)
+   // Playwright: chromium.connectOverCDP(ws) then browser.newContext() — it is tied to your lease.
+   ```
+
+   Pages you open in the default context (`browser.newPage()`) are closed by the pool; contexts die
+   with your lease. Waiting means every context on this Mac is busy — it queues like `mc heavy`.
+3. **Never launch your own** Chrome, Chromium or Puppeteer/Playwright browser (`puppeteer.launch`,
+   `chromium.launch`, wrangler's local Browser Rendering).
+
 ## The operator's clipboard — `mc clip`
 
 When the operator says "use the token I just copied" / "paste that error" — they mean their Mac

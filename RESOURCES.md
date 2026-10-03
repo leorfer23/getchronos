@@ -1,10 +1,11 @@
 # Resources — who holds what on this Mac, and what happens when it is too much
 
 Workspace resource governance, in three PRs. This file is the design for all three; PR 1 (the
-ownership ledger + leak reaper) and PR 2 (per-workspace budgets + the ladder, brain only) are built.
-Code: `src/resources/` (`ledger.ts`, `reaper.ts`, `guards.ts`, `budget.ts`, `ladder.ts`, `brain.ts`),
-the heavy-slot fairness rule in `src/machine.ts` (`HeavyPool`), wired from `src/index.ts`,
-`src/hostd/index.ts` and `GET /api/machine`.
+ownership ledger + leak reaper), PR 2 (per-workspace budgets + the ladder, brain only) and PR 3's
+shared headless browser pool (`mc browser`) are built.
+Code: `src/resources/` (`ledger.ts`, `reaper.ts`, `guards.ts`, `budget.ts`, `ladder.ts`, `brain.ts`;
+`browser-engine.ts`, `browser-pool.ts`, `browser-routes.ts`), the heavy-slot fairness rule in
+`src/machine.ts` (`HeavyPool`), wired from `src/index.ts`, `src/hostd/index.ts` and `GET /api/machine`.
 
 It extends the machine governor (`src/machine.ts`: `nice`, admission, `mc heavy` slots), which
 defends against the fleet being *too big*. This defends against processes that *should not exist
@@ -361,23 +362,133 @@ does not see them, so the brain's ladder never touches a remote terminal. What P
   slot-minutes, processes reaped (from `proc.reaped` in the activity table) and ladder actions, next to
   what the work shipped. "Which workspace leaks" becomes a number.
 
-### Shared headless browser pool
+### Shared headless browser pool — built (`mc browser`)
 
-The incident's root cause was every test run launching its own Chrome. PR 3 removes the reason to:
+The incident's root cause was every test run launching its own Chrome. This removes the reason to.
+Code: `src/resources/browser-engine.ts` (the process, discovery, the CDP proxy, the host rpc),
+`browser-pool.ts` (leases, caps, fairness, heartbeats), `browser-routes.ts` (`/api/browser/*`).
 
-- **One lightweight headless browser per machine** (brain and each host) — `chrome-headless-shell`
-  preferred over full Chrome for Testing — started on demand, stopped when idle. Owned by the daemon
-  (or hostd), so the ledger attributes it to nobody's terminal and the reaper never touches it.
-- **`mc browser` (lease)** hands an agent a CDP endpoint plus a **fresh browser context**, never its
-  own Chrome. Chronos owns the lifetime: the context closes on release, when the lease's heartbeat
-  expires, or when the session ends. Usage counts against the workspace's share (PR 2).
-- **Prompt rules, in order:** don't start a browser if you can avoid it (fetch the page directly;
-  happy-dom / jsdom / linkedom in tests; mock `env.BROWSER`). Need real rendering → `mc browser`.
-  Never launch your own Chrome or Puppeteer instance.
+**How an agent uses it.** `mc browser run -- <cmd>` — like `mc heavy`: long-polls for a lease, runs
+the command with `CHRONOS_BROWSER_WS` (a CDP endpoint), `CHRONOS_BROWSER_CONTEXT` (its browser
+context id) and `CHRONOS_BROWSER_LEASE` in its env, heartbeats every 30 s, releases on exit (ctrl-C and
+`kill` included). Verified with puppeteer-core 25.12 and playwright-core 1.63:
+
+```js
+const browser = await puppeteer.connect({ browserWSEndpoint: process.env.CHRONOS_BROWSER_WS });
+const ctx = browser.browserContexts().find((c) => c.id === process.env.CHRONOS_BROWSER_CONTEXT);
+// Playwright: const b = await chromium.connectOverCDP(ws); const ctx = await b.newContext();
+```
+
+Also `mc browser status` (engine, running, contexts in use / cap, your leases), `mc browser lease
+[--label x]` / `beat <id>` / `release <id>` by hand. The rules agents are given (in order: avoid a
+browser — fetch + happy-dom/jsdom/linkedom, mock `env.BROWSER`; need rendering → `mc browser run`; never
+launch your own Chrome or Puppeteer) are `agents/_blocks/browser.md`, folded into every Desk terminal's
+prompt by `terminal.ts`, and the mission-control skill.
+
+**The browser.** One per machine (brain and each host), started on the first lease, stopped
+`CHRONOS_BROWSER_IDLE_MS` (10 min) after the last one ends.
+
+- **Engine**: the newest `chrome-headless-shell` in the puppeteer cache (`$PUPPETEER_CACHE_DIR`,
+  `~/.cache/puppeteer`), else Chrome for Testing (`/Applications/Google Chrome for Testing.app`, then the
+  cache), or `CHRONOS_BROWSER_PATH`. **Never** `/Applications/Google Chrome.app` or the operator's real
+  Chrome profile — refused even when a knob names it. Nothing is downloaded unless
+  `CHRONOS_BROWSER_AUTO_INSTALL=1`; the install is one line:
+  `npx @puppeteer/browsers install chrome-headless-shell@stable --path ~/.cache/puppeteer`. On the brain
+  (2026-10-03): chrome-headless-shell 153.0.8010.36 from the cache, ~0.3 s warm start.
+- `--remote-debugging-port=0 --remote-debugging-address=127.0.0.1`, the port read back from
+  `DevToolsActivePort`; a throwaway `--user-data-dir` under `<state>/.browser-pool/profile-*` (hostd:
+  `~/.chronos-host/browser-pool/`), deleted on stop, and any left by a crash deleted on the next start;
+  `--use-mock-keychain`, no sync/extensions/background networking.
+- **The daemon's own child** (hostd's on a host), in its process group: the ledger adopts only
+  below `localHost.listLive()` roots, so it is nobody's leftover, and the reaper never signals the
+  spawner's group. SIGKILLed on the daemon's `exit`; launchd takes the group down otherwise.
+
+**The CDP proxy.** Agents never get Chrome's own endpoint: each lease gets
+`ws://127.0.0.1:<proxy>/devtools/browser/<handle>` on a loopback proxy in the daemon (hostd), which
+passes CDP through untouched except:
+
+- `Browser.close` / `Browser.crash` — puppeteer's `browser.close()` on a *connected* browser sends
+  `Browser.close`, which would kill every workspace's pages. Answered `{}` and only that client is
+  disconnected.
+- `Target.disposeBrowserContext` works only on the lease's own contexts.
+- `Target.createBrowserContext` (Playwright's `browser.newContext()`) is created by the daemon and
+  adopted by the lease (≤ 9 contexts per lease); it dies with the lease.
+- Releasing a lease closes its proxy connections and disposes its contexts.
+
+A sweep every 30 s disposes contexts no lease holds (created around the proxy), closes pages opened
+in the default context (`browser.newPage()` on a connected browser — nobody's lease), and disposes a
+handle untouched for 3 min (the engine-side TTL: on a host, what cleans up after a brain that went
+away for good).
+
+**Leases.** Pools live on the brain, one per machine, like the heavy slots; in memory on purpose.
+
+- `POST /api/browser/leases {label, ticket?, session_id?, run_id?}` long-polls 55 s →
+  `{granted, lease_id, ws_endpoint, context_id, expires_at, host_id}`, or `{granted:false, ticket,
+  in_use, cap, waiting}` (pass `ticket` back to keep the place in line), or 503 `{error}` when no
+  engine is installed / `CHRONOS_BROWSER=off` (waiting would not help). `PUT /api/browser/leases/:id`
+  heartbeats → `{expires_at}`; `DELETE` releases; `GET /api/browser` = this machine's block + the leases
+  the caller may see.
+- A lease ends — and `Target.disposeBrowserContext` closes all its pages — on release; when its
+  heartbeat lapses (90 s, the heavy-slot window); on `session.ended` / `run.ended` of the session or
+  run it named; or when the browser itself goes (crash, idle stop): the pool drops it and the next
+  heartbeat 404s.
+- **Scoping** (CLAUDE.md gotcha #4): the lease's workspace is the caller's token's. A workspace token
+  sees, beats and releases only its own workspace's leases (404 otherwise); a `session_id` / `run_id`
+  it names must be its own workspace's (404). Admin sees and releases all. `ws_endpoint` is only ever
+  in the grant, never in a listing.
+- `GET /api/machine` gains `browser: {enabled, engine, version, pid, running, in_use, cap, per_ws,
+  waiting, idle_stops_at, error}` for the caller's machine.
+
+**Caps and fairness** (decisions):
+
+- At most `CHRONOS_BROWSER_MAX_CONTEXTS` leases per machine; default one per 2 GB of RAM, 1..8
+  (18 GB brain → 8).
+- Fair share `CHRONOS_BROWSER_MAX_PER_WS`, default half the cap (rounded up). Below it a workspace is
+  granted whenever there is room; at or past it, only while **no other workspace is waiting** — an idle
+  machine lends the whole browser, and the next free context goes to the workspace under its share
+  even if the one over it asked first. Nothing is ever taken back from a holder.
+- **PR 2 hook**: every lease records `workspace_id`, `session_id`, `run_id`;
+  `browserUsage()` (browser-pool.ts) returns per machine and workspace the live leases and the
+  lease-milliseconds since boot. Budgets can count browser use against a workspace's share from it;
+  nothing here depends on PR 2.
+
+**Hosts** (built, mirrors the heavy slots). An `mc browser` on a host reaches the brain through the
+host's forwarder; the brain keys the lease to the forwarding host's pool (`forwardedHost`, gated by
+`forwardedGate` as every forwarded call). That pool drives the HOST's own `ChromeEngine` over the
+`browser` rpc (`open` / `close` / `touch` / `status`, `RemoteHost.browserRpc`); the browser, its proxy
+and its TTL live in hostd, so the endpoint an agent gets is on its own machine's loopback. The host's
+caps come from its own RAM and `CHRONOS_BROWSER_*` in `~/.chronos-host/.secrets`, reported with every
+reply (2 / 1 until the first one). Not built: leasing while the brain is away (the forwarder answers
+503, as for every non-queued call; `mc browser run` exits with that error) — the host would need its
+own pool and a local auth story first. A host older than this PR answers "unknown rpc op browser".
+
+**Known limits.**
+
+- Isolation between leases is accident-proof, not adversary-proof: Chrome's own debugging port is on
+  the same loopback, and through its proxy handle a client can still attach to another lease's
+  targets (`Target.attachToTarget`). Workspaces sharing a machine already share its loopback (the
+  reaper's model makes the same call). A per-target filter in the proxy is the next step if that
+  matters.
+- `Target.getTargets` / `setDiscoverTargets` through the proxy show every lease's pages (titles,
+  URLs).
+- A browser crash ends every lease on that machine; the next `mc browser run` starts a fresh one.
+- **Later, not a dependency:** evaluate Lightpanda as the pool's engine (its claims are unverified).
 - **Out of scope:** the per-client logged-in agent Chromes (ports 9222-9225 via chrome-lazy-mcp — they
   hold Google Workspace logins per client and stay as they are). Cloudflare remote Browser Rendering
   bindings are dropped (Leo's decision).
-- **Later, not a dependency:** evaluate Lightpanda as the pool's engine (its claims are unverified).
+
+### Browser knobs
+
+| Env | Default | Meaning |
+|---|---|---|
+| `CHRONOS_BROWSER` | `on` | `off` = no leases on this machine (503). Nothing starts until a lease either way. |
+| `CHRONOS_BROWSER_PATH` | — | Explicit engine executable. Refused under `/Applications/Google Chrome.app/` or the real Chrome profile. |
+| `CHRONOS_BROWSER_IDLE_MS` | `600000` | Stop the browser this long after its last lease ended (min 1000). |
+| `CHRONOS_BROWSER_MAX_CONTEXTS` | 1 per 2 GB RAM, 1..8 | Concurrent leases on this machine. |
+| `CHRONOS_BROWSER_MAX_PER_WS` | `ceil(cap / 2)` | A workspace's fair share; past it, granted only while no other workspace waits. |
+| `CHRONOS_BROWSER_AUTO_INSTALL` | off | `1` = with no engine found, run the install line once (`npx`, 5 min cap). |
+| `CHRONOS_BROWSER_DATA_DIR` | `<state>/.browser-pool` | Where the throwaway profile lives (brain; hostd uses `~/.chronos-host/browser-pool`). |
+| `PUPPETEER_CACHE_DIR` | `~/.cache/puppeteer` | Also searched for engines. |
 
 ## Out of scope
 
