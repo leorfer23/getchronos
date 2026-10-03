@@ -349,6 +349,23 @@ defineSetting({
   default: () => CONFIG.maxSessionsPerWorkspace,
 });
 
+// Resources (RESOURCES.md → PR 2): each workspace's share of a machine, and what happens when one
+// takes more than it while the Mac is strained. The weight lives in kv like every other per-workspace
+// override (no migration, resolved on every read, and the Settings page shows it with the rest).
+defineSetting({
+  key: "resources.weight", group: "Limits", level: "ws", type: "number", min: 0.1, max: 100,
+  label: "Share of the machine (weight)",
+  help: "This workspace's weight when RAM, CPU and heavy slots are split among the workspaces active on a Mac. 2 = twice a weight-1 workspace's share; an idle workspace lends its share.",
+  default: () => 1,
+});
+defineSetting({
+  key: "resources.ladder", group: "Limits", level: "global", type: "enum", env: "CHRONOS_LADDER",
+  options: () => ["off", "warn", "slow", "on"],
+  label: "Over-budget ladder",
+  help: "While the Mac is strained, a workspace over its share is warned (warn), then reniced (slow), then its newest heavy process paused when memory is critical (on). off releases anything slowed or paused.",
+  default: () => CONFIG.ladder.mode,
+});
+
 // The workspace row's own columns.
 const col = (d: Omit<SettingDef, "level" | "default"> & { column: keyof Workspace & string; default?: SettingDef["default"] }) =>
   defineSetting({ level: "ws", default: () => null, ...d });

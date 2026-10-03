@@ -1,5 +1,6 @@
 /**
- * The brain's reaper: the ledger + reaper (ledger.ts, reaper.ts) driven by what THIS daemon runs.
+ * The brain's reaper and budget ladder: the ledger + reaper (ledger.ts, reaper.ts) driven by what THIS
+ * daemon runs, and the ladder (ladder.ts) on the same snapshot right after each reaper pass.
  *
  * Roots are `localHost.listLive()` — the Desk terminals and headless runs this daemon spawned and is
  * still holding — never `sessions.pid` from the DB, which survives a restart and can then name any
@@ -10,14 +11,27 @@
  * terminal's leftovers get their SIGTERM within a second instead of up to a tick later. Every signal
  * is published as `proc.reaped` (activity.ts records it — the trail PR 3's efficiency ledger reads).
  */
+import fs from "node:fs";
+import os from "node:os";
+import { execFile, execFileSync } from "node:child_process";
 import { CONFIG } from "../config.js";
 import { bus } from "../bus.js";
 import { localHost } from "../hosts/local.js";
-import { jobs, runs, sessions } from "../store.js";
-import type { Root } from "./ledger.js";
-import { Reaper, systemReaperDeps, type ReaperMode } from "./reaper.js";
+import { jobs, runs, sessions, workspaces } from "../store.js";
+import { currentLoad, localHeavyPool, setSlotBudget } from "../machine.js";
+import { setting } from "../settings.js";
+import { sendInput, sessionActivity } from "../terminal.js";
+import { sendMessage } from "../messages.js";
+import type { Owner, Root } from "./ledger.js";
+import { parseStarts, Reaper, systemReaperDeps, type ReaperMode } from "./reaper.js";
+import { cleanWeight, slotBudgetOf } from "./budget.js";
+import {
+  Ladder, parseLadderMode, parseStatStarts, stillStopped, systemGetNice, systemSetNice,
+  type LadderView, type PausedRec, type WsView,
+} from "./ladder.js";
 
 let reaper: Reaper | null = null;
+let ladder: Ladder | null = null;
 /** Owner id → workspace, for the life of the owner (a session/run never changes workspace). */
 const wsCache = new Map<string, string | null>();
 
@@ -56,16 +70,117 @@ async function brainRoots(): Promise<Root[]> {
   return roots;
 }
 
+// ───────────────────────── the ladder's hands on this Mac ─────────────────────────
+
+const weightOf = (ws: string | null): number => {
+  if (!ws) return 1;
+  try { return cleanWeight(setting("resources.weight", ws)); } catch { return 1; }
+};
+const ladderMode = () => {
+  try { return parseLadderMode(String(setting("resources.ladder") ?? ""), CONFIG.ladder.mode); } catch { return CONFIG.ladder.mode; }
+};
+
+/** Workspaces with a live owner on this Mac, per the ledger (empty while the reaper is off). */
+function activeWorkspaces(): string[] {
+  const out = new Set<string>();
+  for (const o of reaper?.ledger.owners.values() ?? []) if (!o.ended && o.workspaceId) out.add(o.workspaceId);
+  return [...out];
+}
+
+/**
+ * The warning, by the channels that already reach an agent. A headless run gets the `mc tell` mailbox
+ * (steered live when it can be, else at its next checkpoint). A Desk terminal has no non-typing channel
+ * its agent reads while busy: the mailbox refuses sessions, and the hooks only hand context back on the
+ * operator's NEXT prompt (`memory_notice`, UserPromptSubmit) — an autonomous agent mid-task never sees
+ * that. So it is TYPED in (as host failover tells a terminal it moved — `sendInput`, rate-limited,
+ * recorded as session.input), prefixed `[chronos budget]`, and DEFERRED while anyone typed into that
+ * pane in the last TYPING_QUIET_MS, so it never lands in the middle of the operator's own line.
+ */
+const TYPING_QUIET_MS = 30_000;
+function tellOwner(o: Owner, text: string): string | null {
+  if (o.kind === "session") {
+    const lastIn = sessionActivity(o.id).last_in;
+    if (lastIn != null && Date.now() - lastIn < TYPING_QUIET_MS) return `defer: typed into ${Math.round((Date.now() - lastIn) / 1000)}s ago`;
+    return sendInput(o.id, { text }, "budget");
+  }
+  const r = sendMessage(o.id, text, "budget");
+  return r.ok ? null : r.error;
+}
+
+/** Mirror of what the ladder has stopped: written on every change, removed when empty. */
+function saveLadderState(paused: PausedRec[]): void {
+  const file = CONFIG.ladderStateFile;
+  if (!file) return;
+  if (!paused.length) { try { fs.unlinkSync(file); } catch { /* already gone */ } return; }
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ pid: process.pid, paused }) + "\n", { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * Boot: a previous daemon that crashed (or was SIGKILLed) with processes paused left them stopped —
+ * its exit handler never ran. Its state file names them: SIGCONT every one that is STILL stopped
+ * (`ps` state T) and still the same process (start time). Nothing else is touched, and the file goes.
+ */
+async function recoverPaused(): Promise<void> {
+  const file = CONFIG.ladderStateFile;
+  if (!file || !fs.existsSync(file)) return;
+  let recs: PausedRec[] = [];
+  try { recs = JSON.parse(fs.readFileSync(file, "utf8")).paused ?? []; } catch { recs = []; }
+  recs = recs.filter((r) => Number.isInteger(r?.pid) && r.pid > 1 && Number.isFinite(r?.startMs));
+  if (recs.length) {
+    const out = await new Promise<string | null>((resolve) =>
+      execFile("/bin/ps", ["-o", "pid=,stat=,lstart=", "-p", recs.map((r) => r.pid).join(",")], { encoding: "utf8", timeout: 5000, env: { ...process.env, LC_ALL: "C" } },
+        (err, o) => resolve(err && (err as any).code !== 1 ? null : o)),
+    );
+    if (out == null) {
+      console.warn(`[ladder] boot: could not check ${recs.length} process(es) the previous daemon paused — state file kept for the next start: ${file}`);
+      return;
+    }
+    const cont = stillStopped(recs, parseStatStarts(out));
+    for (const pid of cont) {
+      try { process.kill(pid, "SIGCONT"); } catch { /* gone */ }
+      const r = recs.find((x) => x.pid === pid)!;
+      console.log(`[ladder] boot: SIGCONT pid ${pid} — ${r.comm.split("/").pop()} — left stopped by the previous daemon`);
+      bus.publish({ topic: "budget.resume", workspace_id: r.ws || null, action: "cont", reason: "boot", pids: [pid], count: 1, paused_ms: Date.now() - r.at });
+    }
+    console.log(`[ladder] boot: ${recs.length} process(es) recorded as paused by the previous daemon, ${cont.length} still stopped → SIGCONT`);
+  }
+  try { fs.unlinkSync(file); } catch { /* fine */ }
+}
+
+/** One blocking `ps` for the exit handler's start-time re-check; null = no answer (SIGCONT anyway). */
+function startsSync(pids: number[]): Map<number, number> | null {
+  try {
+    return parseStarts(execFileSync("/bin/ps", ["-o", "pid=,lstart=", "-p", pids.join(",")], { encoding: "utf8", timeout: 2000, env: { ...process.env, LC_ALL: "C" } }));
+  } catch (e: any) {
+    return typeof e?.stdout === "string" && e.status === 1 ? parseStarts(e.stdout) : null;
+  }
+}
+
+/**
+ * Heavy-slot fairness (machine.ts HeavyPool): a workspace's slot budget is its weighted share among
+ * every workspace active on that machine plus every contender in the pool. Only the brain's own
+ * ledger is known here, so a host's pool weighs its contenders alone.
+ */
+function installSlotBudget(): void {
+  setSlotBudget((ws, contenders, slots, hostId) => slotBudgetOf(ws, contenders, slots, hostId === "local" ? activeWorkspaces() : [], weightOf));
+}
+
 export function startProcReaper(): void {
   if (reaper) return;
+  installSlotBudget();
+  void recoverPaused().catch((e) => console.warn(`[ladder] boot recovery failed: ${e?.message ?? e}`));
   const cfg = CONFIG.reaper;
   if (cfg.mode === "off") {
-    console.log("[reaper] off (CHRONOS_REAPER=off) — no process ledger, nothing is reaped");
+    console.log("[reaper] off (CHRONOS_REAPER=off) — no process ledger, nothing is reaped, and no budget ladder (it reads the ledger)");
     return;
   }
   reaper = new Reaper(cfg, {
     ...systemReaperDeps(),
     roots: brainRoots,
+    beforeSignal: (pids) => ladder?.beforeReap(pids),
+    afterTick: () => ladder?.tick(),
     onReap: (e) =>
       bus.publish({
         topic: "proc.reaped",
@@ -82,6 +197,36 @@ export function startProcReaper(): void {
         workspace_id: e.owner?.workspaceId ?? null,
       }),
   });
+  const sys = systemReaperDeps();
+  ladder = new Ladder(CONFIG.ladder, {
+    ledger: reaper.ledger,
+    reaper: cfg,
+    mode: ladderMode,
+    load: currentLoad,
+    maxLoadPerCore: () => CONFIG.machine.maxLoadPerCore,
+    totalMb: () => os.totalmem() / 1048576,
+    slots: () => {
+      const pool = localHeavyPool();
+      const held = new Map<string, number>();
+      for (const h of pool.holders()) if (h.workspace_id) held.set(h.workspace_id, (held.get(h.workspace_id) ?? 0) + 1);
+      return { size: pool.size(), held };
+    },
+    weightOf,
+    args: sys.args,
+    starts: sys.starts,
+    signal: (pid, sig) => (pid > 1 ? sys.signal(pid, sig) : false),
+    getNice: systemGetNice,
+    setNice: systemSetNice,
+    tell: tellOwner,
+    publish: (e) => bus.publish(e),
+    save: saveLadderState,
+    wsName: (ws) => (ws ? workspaces.get(ws)?.name ?? ws.slice(0, 8) : "(no workspace)"),
+  });
+  // Every paused process goes on when the daemon exits (index.ts turns SIGTERM/SIGINT into exit).
+  process.on("exit", () => {
+    const n = ladder?.resumeAllSync("shutdown", startsSync) ?? 0;
+    if (n) console.log(`[ladder] exit: SIGCONT ${n} paused process(es)`);
+  });
   setInterval(() => void reaper?.tick(), cfg.tickMs).unref?.();
   bus.on("event", (e: any) => {
     if (e?.topic === "session.ended" || e?.topic === "run.ended") reaper?.kick();
@@ -89,6 +234,12 @@ export function startProcReaper(): void {
   console.log(
     `[reaper] ${cfg.mode === "dry" ? "DRY RUN (logs, never signals)" : "on"} — every ${Math.round(cfg.tickMs / 1000)}s; ` +
       `ended owners' leftovers SIGTERM→SIGKILL after ${Math.round(cfg.killGraceMs / 1000)}s; leak-family orphans after ${Math.round(cfg.orphanGraceMs / 1000)}s`,
+  );
+  const lc = CONFIG.ladder;
+  console.log(
+    `[ladder] ${ladderMode()} — over-budget workspaces on a strained Mac: warn every ${Math.round(lc.warnEveryMs / 60_000)} min` +
+      `, renice to ${lc.slowNice} after ${Math.round(lc.slowAfterMs / 1000)}s${ladderMode() === "warn" ? " (would)" : ""}` +
+      `, pause on critical pressure${ladderMode() === "on" ? "" : " (would)"}; reserve max(${Math.round(lc.reserveMinMb / 1024)} GB, ${lc.reservePct}%) RAM`,
   );
 }
 
@@ -105,11 +256,21 @@ export type OwnerRollup = {
   /** Processes an ended owner left that the reaper deliberately spared (daemonized on purpose / keep-list). */
   left_running: number;
 };
-export type WorkspaceRollup = { workspace_id: string | null; pids: number; rss_mb: number; cpu: number; orphans: number; reaped: number; left_running: number };
+export type WorkspaceRollup = {
+  workspace_id: string | null;
+  pids: number;
+  rss_mb: number;
+  cpu: number;
+  orphans: number;
+  reaped: number;
+  left_running: number;
+} & Partial<Omit<WsView, "workspace_id">>;
 export type ProcsView = {
   mode: ReaperMode;
   every_ms: number;
   sampled_at: number | null;
+  /** The budget ladder on this Mac (RESOURCES.md → PR 2); null while it has not measured yet or the reaper is off. */
+  ladder: LadderView | null;
   workspaces: WorkspaceRollup[];
   owners: OwnerRollup[];
 };
@@ -119,9 +280,10 @@ export type ProcsView = {
  * much was reaped since the daemon started. `ws` = the caller's workspace (null = admin, sees all):
  * a workspace token sees only its own rows — never another workspace's ids or counts.
  */
-export function procsView(ws: string | null, r: Reaper | null = reaper): ProcsView {
+export function procsView(ws: string | null, r: Reaper | null = reaper, l: Ladder | null = r === reaper ? ladder : null): ProcsView {
   const cfg = r?.cfg ?? CONFIG.reaper;
-  const base: ProcsView = { mode: r ? cfg.mode : "off", every_ms: cfg.tickMs, sampled_at: r?.ledger.sampledAt ?? null, workspaces: [], owners: [] };
+  const lv = l?.view() ?? null;
+  const base: ProcsView = { mode: r ? cfg.mode : "off", every_ms: cfg.tickMs, sampled_at: r?.ledger.sampledAt ?? null, ladder: lv?.measured_at != null ? lv : null, workspaces: [], owners: [] };
   if (!r) return base;
   const roll = r.ledger.rollup();
   const byWs = new Map<string, WorkspaceRollup>();
@@ -147,6 +309,14 @@ export function procsView(ws: string | null, r: Reaper | null = reaper): ProcsVi
     const id = k || null;
     if (ws != null && id !== ws) continue;
     wsRow(id);
+  }
+  // Each workspace's share, budget, usage and rung — a workspace token sees only its own line.
+  if (l && lv?.measured_at != null) {
+    for (const id of l.workspaces()) if (ws == null || id === ws) wsRow(id);
+    for (const row of byWs.values()) {
+      const v = l.wsView(row.workspace_id);
+      if (v) { const { workspace_id: _w, ...rest } = v; Object.assign(row, rest); }
+    }
   }
   base.owners.sort((a, b) => b.rss_mb - a.rss_mb);
   base.workspaces = [...byWs.values()].sort((a, b) => b.rss_mb - a.rss_mb);

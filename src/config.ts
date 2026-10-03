@@ -10,6 +10,7 @@ import { hostlinkDir } from "./hostlink/join.js";
 import { mirrorRoot } from "./hosts/transcript-mirror.js";
 import { hostHomeDir } from "./hostd/home.js";
 import { reaperConfigFromEnv } from "./resources/reaper.js";
+import { ladderConfigFromEnv } from "./resources/ladder.js";
 
 const home = os.homedir();
 
@@ -186,6 +187,14 @@ export const CONFIG = {
   // that kill what an ended terminal/run left running. CHRONOS_REAPER=on|dry|off (default on),
   // CHRONOS_REAPER_TICK_MS, _KILL_GRACE_MS, _ORPHAN_GRACE_MS, _MAX_SIGNALS, _ORPHAN_FAMILY, _PROTECT, _KEEP.
   reaper: reaperConfigFromEnv(process.env),
+  // The budget ladder (RESOURCES.md → PR 2, src/resources/ladder.ts): a workspace over its share of a
+  // strained Mac is warned → reniced → paused. CHRONOS_LADDER=off|warn|slow|on (default warn: only the
+  // warning acts, the other rungs log "would"); the Desk's global setting `resources.ladder` overrides
+  // it live. _SLOW_AFTER_MS, _WARN_EVERY_MS, _NICE, _MAX_ACTIONS, _RESERVE_MB, _RESERVE_PCT, _HEAVY.
+  ladder: ladderConfigFromEnv(process.env),
+  // Where the ladder mirrors what it has paused, so the next daemon can SIGCONT what a crash left
+  // stopped. Next to the DB (`chronos.db.*` is gitignored); none for an in-memory DB (tests).
+  ladderStateFile: process.env.CHRONOS_LADDER_STATE ?? (dbPath === ":memory:" ? null : `${dbPath}.ladder-paused.json`),
   // Placement (HOSTS.md phase 4, src/hosts/placement.ts): which computer a new terminal lands on.
   //   auto   — sticky, then pinned, else the eligible computer with the most headroom (default);
   //   pinned — phase 3's behavior: only a pinned or sticky terminal leaves the brain;

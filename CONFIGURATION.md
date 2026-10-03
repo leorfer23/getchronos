@@ -685,6 +685,15 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_LEAD_DRIVE_GRACE_SEC` | `15` | `src/config.ts` |
 | `CHRONOS_LEAD_DRIVE_PER_LEAD_HOUR` | `120` | `src/config.ts` |
 | `CHRONOS_LEAD_DRIVE_PER_WORKER_HOUR` | `20` | `src/config.ts` |
+| `CHRONOS_LADDER` | `warn` (`off` · `warn` · `slow` · `on`; the Desk's global setting `resources.ladder` overrides it live — RESOURCES.md → PR 2) | `src/resources/ladder.ts` |
+| `CHRONOS_LADDER_HEAVY` | — (extra regex over the executable name: build tools the pause rung may stop) | `src/resources/ladder.ts` |
+| `CHRONOS_LADDER_MAX_ACTIONS` | `3` (subtrees reniced per workspace, and SIGCONTs, per tick) | `src/resources/ladder.ts` |
+| `CHRONOS_LADDER_NICE` | `20` | `src/resources/ladder.ts` |
+| `CHRONOS_LADDER_RESERVE_MB` | `3072` (RAM kept for the OS, daemon and Desk: max of this and `_RESERVE_PCT`) | `src/resources/ladder.ts` |
+| `CHRONOS_LADDER_RESERVE_PCT` | `20` | `src/resources/ladder.ts` |
+| `CHRONOS_LADDER_SLOW_AFTER_MS` | `120000` | `src/resources/ladder.ts` |
+| `CHRONOS_LADDER_STATE` | `<CHRONOS_DB>.ladder-paused.json` (none for `:memory:`) | `src/config.ts` |
+| `CHRONOS_LADDER_WARN_EVERY_MS` | `600000` (min 60000) | `src/resources/ladder.ts` |
 | `CHRONOS_LESSON_PROPOSED_TTL_DAYS` | `60` | `src/config.ts` |
 | `CHRONOS_LOG_DIR` | `path.join` | `scripts/install-launchd.mjs`, `scripts/brainbar.mjs` (the brain menu bar item's plist) |
 | `CHRONOS_LOG_ROTATE_MAX_MB` | `20` | `src/config.ts` |

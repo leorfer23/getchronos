@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { DeskPrompt as DeskPromptShape } from "./desk-prompt.js";
+import type { LadderEvent } from "./resources/ladder.js";
 
 // Central event bus: runner -> ws hub. Topics broadcast as JSON envelopes.
 // `actor` is optional on every event: publishers that know who acted set it (e.g. reviews set
@@ -150,6 +151,11 @@ export type BusEvent = (
       run_id?: string;
       workspace_id: string | null;
     }
+  // The budget ladder (src/resources/ladder.ts, RESOURCES.md → PR 2): a workspace over its share of a
+  // strained Mac was warned (budget.warn), had its heaviest subtrees reniced (budget.slow) or its
+  // newest heavy process SIGSTOPped (budget.pause), or got them back (budget.resume, action cont|nice).
+  // `dry: true` = the rung was reached but CHRONOS_LADDER does not let it act ("would renice/pause").
+  | LadderEvent
   | { topic: "clipboard.read"; by: string; describe: string; chars: number }
   | { topic: "clipboard.write"; by: string; describe: string; chars: number }
   | {
