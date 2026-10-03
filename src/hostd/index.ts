@@ -150,6 +150,13 @@ async function cmdRun(): Promise<number> {
     dataDir: path.join(HOST_HOME, "browser-pool"),
     ttlMs: 2 * LEASE_STALE_MS,
     log: (l) => console.log(`[host] browser: ${l}`),
+    // The workspace's egress proxy on THIS host (the brain sends its policy with every open), as for
+    // its agents: an egress-locked workspace does not get the open internet through the browser.
+    proxyFor: async (o) => {
+      if (!o.workspace_id || !o.egress) return null;
+      const port = await egress.ensure(o.workspace_id, o.egress as Parameters<HostEgress["ensure"]>[1]);
+      return port ? `http://127.0.0.1:${port}` : null;
+    },
   });
   // Who this host is, for MC_HOST_* on every agent and for the menu bar. Read when called: the link
   // (and the brain's name for this computer) is created below and only answers once it is online.

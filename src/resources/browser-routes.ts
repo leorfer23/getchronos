@@ -20,6 +20,7 @@ import { callerScope } from "../authz.js";
 import { forwardedHost } from "../hostlink/brain-link.js";
 import { findHost, LOCAL_HOST_ID } from "../hosts/index.js";
 import { jobs, runs, sessions } from "../store.js";
+import { egressPolicy, egressPort } from "../egress.js";
 import { allBrowserPools, browserConfig, findLease, localBrowserPool, remoteBrowserPool, type BrowserPool } from "./browser-pool.js";
 import type { BrowserRpc } from "./browser-engine.js";
 
@@ -39,16 +40,31 @@ const LeaseSchema = z.object({
 type RpcHost = { id: string; browserRpc(args: BrowserRpc): Promise<unknown> };
 const isRpcHost = (h: unknown): h is RpcHost => typeof (h as RpcHost)?.browserRpc === "function";
 
+/**
+ * The brain's pool. A lease's contexts go through its workspace's egress proxy when that workspace
+ * has one running (the same proxy its agents get in HTTP(S)_PROXY): borrowing the daemon's browser
+ * must not be a way around an egress lock.
+ */
+const brainPool = () =>
+  localBrowserPool((o) => {
+    const port = egressPort(o.workspace_id ?? null);
+    return port ? `http://127.0.0.1:${port}` : null;
+  });
+
+/** A host's pool; its `open` carries the workspace's egress policy, which the host's own proxy enforces. */
+const hostPool = (h: RpcHost) =>
+  remoteBrowserPool(h.id, (args) => h.browserRpc(args.op === "open" ? { ...args, egress: egressPolicy(args.workspace_id ?? null) } : args));
+
 /** The pool of the machine the caller runs on, or null after answering the error. */
 export function poolForCaller(req: Req, res: Res): BrowserPool | null {
   const fh = forwardedHost(req);
-  if (!fh || fh === LOCAL_HOST_ID) return localBrowserPool();
+  if (!fh || fh === LOCAL_HOST_ID) return brainPool();
   const h = findHost(fh);
   if (!isRpcHost(h)) {
     res.status(409).json({ error: "the forwarding host is not registered on this brain" });
     return null;
   }
-  return remoteBrowserPool(h.id, (args) => h.browserRpc(args));
+  return hostPool(h);
 }
 
 /** The caller's workspace, `null` for admin; undefined after answering 401. */
@@ -174,9 +190,9 @@ export function browserBlock(pool: BrowserPool) {
 /** `GET /machine`'s block for the caller's machine (null when it cannot be resolved). */
 export function machineBrowserBlock(req: Req): ReturnType<typeof browserBlock> | null {
   const fh = forwardedHost(req);
-  if (!fh || fh === LOCAL_HOST_ID) return browserBlock(localBrowserPool());
+  if (!fh || fh === LOCAL_HOST_ID) return browserBlock(brainPool());
   const h = findHost(fh);
-  return isRpcHost(h) ? browserBlock(remoteBrowserPool(h.id, (args) => h.browserRpc(args))) : null;
+  return isRpcHost(h) ? browserBlock(hostPool(h)) : null;
 }
 
 export function mountBrowserRoutes(api: express.Router): void {

@@ -395,30 +395,72 @@ prompt by `terminal.ts`, and the mission-control skill.
   `CHRONOS_BROWSER_AUTO_INSTALL=1`; the install is one line:
   `npx @puppeteer/browsers install chrome-headless-shell@stable --path ~/.cache/puppeteer`. On the brain
   (2026-10-03): chrome-headless-shell 153.0.8010.36 from the cache, ~0.3 s warm start.
-- `--remote-debugging-port=0 --remote-debugging-address=127.0.0.1`, the port read back from
-  `DevToolsActivePort`; a throwaway `--user-data-dir` under `<state>/.browser-pool/profile-*` (hostd:
+- **No debugging port.** `--remote-debugging-pipe`: CDP is fds 3/4 of the daemon's own child. Nothing
+  listens (the real-browser test checks `lsof -iTCP -sTCP:LISTEN` on the browser and its helpers) and
+  no `DevToolsActivePort` is written. The lease proxy is the only way in.
+- A throwaway `--user-data-dir`, mode 0700, under `<state>/.browser-pool/profile-*` (also 0700; hostd:
   `~/.chronos-host/browser-pool/`), deleted on stop, and any left by a crash deleted on the next start;
   `--use-mock-keychain`, no sync/extensions/background networking.
 - **The daemon's own child** (hostd's on a host), in its process group: the ledger adopts only
   below `localHost.listLive()` roots, so it is nobody's leftover, and the reaper never signals the
   spawner's group. SIGKILLed on the daemon's `exit`; launchd takes the group down otherwise.
 
-**The CDP proxy.** Agents never get Chrome's own endpoint: each lease gets
-`ws://127.0.0.1:<proxy>/devtools/browser/<handle>` on a loopback proxy in the daemon (hostd), which
-passes CDP through untouched except:
+**The lease proxy — the only door.** Each lease gets `ws://127.0.0.1:<proxy>/devtools/browser/<secret>`
+on a loopback-only proxy in the daemon (hostd): a 256-bit random secret per lease, matched in constant
+time against every live lease (an unknown, wrong-length or released secret is a 404; the pool's lease
+and handle ids are never credentials). Each client connection gets its own browser session
+(`Target.attachToBrowserTarget` over the pipe), so its discovery and auto-attach state is its own, and
+every message is checked against the lease (`policy()` in browser-engine.ts — an allow-list, default
+deny):
 
-- `Browser.close` / `Browser.crash` — puppeteer's `browser.close()` on a *connected* browser sends
-  `Browser.close`, which would kill every workspace's pages. Answered `{}` and only that client is
-  disconnected.
-- `Target.disposeBrowserContext` works only on the lease's own contexts.
+- **Targets**: a lease sees and touches only targets whose `browserContextId` is one of its contexts.
+  `Target.getTargets`, `getBrowserContexts` (only its own ids), `getTargetInfo` and the
+  `targetCreated` / `targetInfoChanged` / `targetDestroyed` / `attachedToTarget` / `detachedFromTarget`
+  events (including those `setDiscoverTargets` produces) are filtered; `attachToTarget`,
+  `activateTarget`, `closeTarget`, `autoAttachRelated` on a foreign target are refused;
+  `createTarget` needs one of the lease's `browserContextId`s (no default-context pages);
+  `disposeBrowserContext` only on its own. One browser means a lease's `setAutoAttach` also reaches
+  other leases' new pages: the proxy resumes those (`Runtime.runIfWaitingForDebugger`) and detaches
+  at once, so nobody's page stalls and nothing reaches the client.
+- **Flat sessions**: a message with a `sessionId` passes only for a session the proxy saw attached to
+  one of the lease's targets; anything else is refused before it reaches Chrome.
+- **Browser-wide**: `Browser.getVersion` only, plus `Browser.close` / `crash` (puppeteer's
+  `browser.close()` on a connected browser — answered `{}`, only that client is disconnected),
+  `grantPermissions` / `resetPermissions` / `setPermission` and `Storage.get/set/clearCookies` for the
+  lease's own contexts, and `Browser.setDownloadBehavior` (Playwright sends it per context) forced to
+  `deny`. Everything else — `SystemInfo`, `Tracing`, `Memory`, `Target.exposeDevToolsProtocol`,
+  `attachToBrowserTarget`, `sendMessageToTarget`, other `Browser.*`, `Storage.*` without the lease's
+  context — is refused. On a page's own session a fixed set of page-scoped domains passes (Page,
+  Runtime, Network, DOM, Input, Emulation, Fetch, …; `TARGET_DOMAINS`).
+- **No reach into the daemon's disk** (the browser runs unsandboxed as the daemon's user): only
+  `http(s):`, `about:`, `data:`, `blob:` for `Page.navigate` / `Target.createTarget` (Chrome itself
+  blocks a page's own `file:` loads — the real-browser test checks `fetch('file:///etc/hosts')`);
+  `DOM.setFileInputFiles`, `Network.loadNetworkResource`, `Page.setDownloadBehavior`, file drags and
+  `Security.setIgnoreCertificateErrors` are refused.
+- **Egress**: a lease's contexts (given and adopted) are created with `proxyServer` = its workspace's
+  egress proxy when it has one — the brain's own, or on a host the host's, started from the policy the
+  brain sends with the `open` rpc — so an egress-locked workspace does not get the open internet by
+  borrowing the browser. Loopback stays direct (Chrome's implicit bypass), so dev servers work. A
+  credential-brokering workspace's intercepted hosts fail TLS in the browser (it does not trust the
+  interception CA).
 - `Target.createBrowserContext` (Playwright's `browser.newContext()`) is created by the daemon and
-  adopted by the lease (≤ 9 contexts per lease); it dies with the lease.
-- Releasing a lease closes its proxy connections and disposes its contexts.
+  adopted by the lease (≤ 9 contexts per lease; a `proxyServer` of the client's own is refused); it
+  dies with the lease. Releasing a lease closes its connections and disposes its contexts.
 
-A sweep every 30 s disposes contexts no lease holds (created around the proxy), closes pages opened
-in the default context (`browser.newPage()` on a connected browser — nobody's lease), and disposes a
-handle untouched for 3 min (the engine-side TTL: on a host, what cleans up after a brain that went
-away for good).
+A sweep every 30 s disposes contexts no lease holds, closes pages in the default context, and
+disposes a handle untouched for 3 min (the engine-side TTL: on a host, what cleans up after a brain
+that went away for good).
+
+**Threat model.** Workspaces are client boundaries (different employers), and on one machine they
+share this browser. A lease holder — an agent of one workspace, possibly confused or compromised — must
+not read, drive or end another workspace's pages, cookies or storage, must not read the daemon's
+disk through the browser, and must not leave its workspace's egress policy through it. The defences
+are: no port (the pipe is the daemon's alone), one door with an unguessable per-lease secret, a
+per-method allow-list scoped to the lease's contexts, separate per-context cookie jars (Chrome
+browser contexts share nothing), and the egress proxy per context. Not defended against: a local
+process running as the operator's own user that reads the daemon's memory or ptraces the browser
+(same user — outside what any of this can stop), and Chrome renderer exploits crossing contexts
+(contexts are not separate OS sandboxes per workspace; separate browsers per workspace would be).
 
 **Leases.** Pools live on the brain, one per machine, like the heavy slots; in memory on purpose.
 
@@ -464,14 +506,9 @@ own pool and a local auth story first. A host older than this PR answers "unknow
 
 **Known limits.**
 
-- Isolation between leases is accident-proof, not adversary-proof: Chrome's own debugging port is on
-  the same loopback, and through its proxy handle a client can still attach to another lease's
-  targets (`Target.attachToTarget`). Workspaces sharing a machine already share its loopback (the
-  reaper's model makes the same call). A per-target filter in the proxy is the next step if that
-  matters.
-- `Target.getTargets` / `setDiscoverTargets` through the proxy show every lease's pages (titles,
-  URLs).
-- A browser crash ends every lease on that machine; the next `mc browser run` starts a fresh one.
+- **A browser crash ends every lease on that machine** (one process for all of them); their next
+  heartbeat 404s and the next `mc browser run` starts a fresh browser.
+- Downloads never work through a lease (always denied — they would write to the daemon's disk).
 - **Later, not a dependency:** evaluate Lightpanda as the pool's engine (its claims are unverified).
 - **Out of scope:** the per-client logged-in agent Chromes (ports 9222-9225 via chrome-lazy-mcp — they
   hold Google Workspace logins per client and stay as they are). Cloudflare remote Browser Rendering

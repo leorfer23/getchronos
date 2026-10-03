@@ -22,7 +22,7 @@
 import { randomUUID } from "node:crypto";
 import { bus } from "../bus.js";
 import { resolveStateDir } from "../repo-root.js";
-import { ChromeEngine, RemoteBrowserEngine, browserConfigFromEnv, type BrowserConfig, type BrowserEngine, type BrowserRpc, type EngineStatus } from "./browser-engine.js";
+import { ChromeEngine, RemoteBrowserEngine, browserConfigFromEnv, type BrowserConfig, type BrowserEngine, type BrowserRpc, type EngineStatus, type OpenOpts } from "./browser-engine.js";
 
 /** Same window as a heavy slot (machine.ts SLOT_STALE_MS): `mc browser run` beats every 30 s. */
 export const LEASE_STALE_MS = 90_000;
@@ -155,7 +155,7 @@ export class BrowserPool {
     };
     // Reserved now, so the cap counts it while the context is being opened.
     this.leases.set(lease.id, lease);
-    this.engine.open().then(
+    this.engine.open({ workspace_id: w.workspace_id }).then(
       (o) => {
         if (this.leases.get(lease.id) !== lease) {
           // Released while opening (its session ended): nobody will ever use this context.
@@ -324,12 +324,15 @@ export function browserConfig(): BrowserConfig {
 /** Where the brain's browser keeps its throwaway profile (`<state>/.browser-pool/profile-*`). */
 export const browserDataDir = (): string => resolveStateDir(".browser-pool", "CHRONOS_BROWSER_DATA_DIR");
 
-/** The brain's own pool: a ChromeEngine in this daemon. Created on first use — nothing launches until a lease. */
-export function localBrowserPool(): BrowserPool {
+/**
+ * The brain's own pool: a ChromeEngine in this daemon. Created on first use — nothing launches until
+ * a lease. `proxyFor` (browser-routes.ts) names a workspace's egress proxy, read at every lease.
+ */
+export function localBrowserPool(proxyFor?: (o: OpenOpts) => string | null): BrowserPool {
   let p = pools.get("local");
   if (!p) {
     const cfg = browserConfig();
-    p = new BrowserPool("local", new ChromeEngine({ cfg, dataDir: browserDataDir(), ttlMs: 2 * LEASE_STALE_MS }), () => ({ cap: cfg.maxContexts, perWs: cfg.maxPerWorkspace }));
+    p = new BrowserPool("local", new ChromeEngine({ cfg, dataDir: browserDataDir(), ttlMs: 2 * LEASE_STALE_MS, proxyFor }), () => ({ cap: cfg.maxContexts, perWs: cfg.maxPerWorkspace }));
     pools.set("local", p);
   }
   return p;
