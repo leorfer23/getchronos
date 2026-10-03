@@ -109,7 +109,7 @@ export interface HostVitals {
 /** The per-host `mc heavy` permits (HOSTS.md: two suites on two machines don't wait for each other). */
 export interface HeavySlotPool {
   size(): number;
-  acquire(opts: { session_id?: string | null; label: string; ticket?: string | null }, waitMs: number): Promise<SlotGrant>;
+  acquire(opts: { session_id?: string | null; workspace_id?: string | null; label: string; ticket?: string | null }, waitMs: number): Promise<SlotGrant>;
   abandon(ticket: string): void;
   beat(slotId: string): boolean;
   release(slotId: string): boolean;

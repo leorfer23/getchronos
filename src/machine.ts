@@ -216,14 +216,16 @@ export function admissionNow(): Admission { return admission(loadProbe()); }
 
 // ───────────────────────────── 3. heavy slots: one test suite at a time ─────────────────────────────
 
-export type SlotHolder = { slot_id: string; session_id: string | null; label: string; since: number; held_ms: number };
-type Slot = { id: string; session_id: string | null; label: string; since: number; beat: number };
+export type SlotHolder = { slot_id: string; session_id: string | null; workspace_id: string | null; label: string; since: number; held_ms: number };
+type Slot = { id: string; session_id: string | null; workspace_id: string | null; label: string; since: number; beat: number };
 /** The in-flight long poll attached to a queue entry. Absent between one poll and the next. */
 type Poll = { settle: (r: SlotGrant) => void; timer?: NodeJS.Timeout; tick?: NodeJS.Timeout };
 type Waiter = {
   /** The caller's place in line. Survives poll round-trips — that is the whole point. */
   ticket: string;
   session_id: string | null;
+  /** Whose share of the slots this entry counts against (RESOURCES.md → PR 2). null = nobody's: never held back, never holds anyone back. */
+  workspace_id: string | null;
   label: string;
   /** When this entry first joined the queue: what FIFO actually orders by. */
   since: number;
@@ -242,6 +244,24 @@ export const SLOT_STALE_MS = 90_000;
 /** Test seam: the clock the stale sweep reads, so reclaim is testable without waiting 90 seconds. */
 let nowMs: () => number = () => Date.now();
 export function setSlotClock(fn: (() => number) | null): void { nowMs = fn ?? (() => Date.now()); }
+
+/**
+ * Heavy-slot fairness (RESOURCES.md → PR 2): how many of a pool's `slots` workspace `ws` may hold
+ * while `contenders` (every workspace holding or waiting in that pool) want them. The brain installs
+ * one that weighs by the per-workspace `resources.weight` setting and counts every workspace active
+ * on that machine (resources/brain.ts); until then, equal weights over the contenders.
+ */
+export type SlotBudget = (ws: string, contenders: string[], slots: number, hostId: string) => number;
+export const equalSlotBudget: SlotBudget = (_ws, contenders, slots) => Math.max(1, Math.floor(slots / Math.max(1, contenders.length)));
+let slotBudget: SlotBudget = equalSlotBudget;
+export function setSlotBudget(fn: SlotBudget | null): void { slotBudget = fn ?? equalSlotBudget; }
+
+/**
+ * A waiter counts as "waiting" for fairness while its poll is parked or it polled this recently. `mc
+ * heavy` is back within milliseconds between two 55 s polls; a ctrl-C'd one keeps its queue entry for
+ * SLOT_STALE_MS, and holding a free slot back for a ghost that long would waste it.
+ */
+export const FAIR_WAITING_MS = 5_000;
 
 export function heavySlotCount(): number {
   return Math.max(1, Math.round(CONFIG.machine.heavySlots));
@@ -291,7 +311,7 @@ export class HeavyPool {
     const now = nowMs();
     return [...this.slots.values()]
       .sort((a, b) => a.since - b.since)
-      .map((s) => ({ slot_id: s.id, session_id: s.session_id, label: s.label, since: s.since, held_ms: now - s.since }));
+      .map((s) => ({ slot_id: s.id, session_id: s.session_id, workspace_id: s.workspace_id, label: s.label, since: s.since, held_ms: now - s.since }));
   }
 
   private sweep(): void {
@@ -322,14 +342,36 @@ export class HeavyPool {
     const n = this.size();
     for (let i = 0; i < this.queue.length && this.slots.size < n; ) {
       const w = this.queue[i];
-      if (!w.poll) { i++; continue; }
+      if (!w.poll || this.heldBack(w, n)) { i++; continue; }
       this.queue.splice(i, 1);
       const settle = detach(w)!.settle;
       const now = nowMs();
-      const slot: Slot = { id: randomUUID(), session_id: w.session_id, label: w.label, since: now, beat: now };
+      const slot: Slot = { id: randomUUID(), session_id: w.session_id, workspace_id: w.workspace_id, label: w.label, since: now, beat: now };
       this.slots.set(slot.id, slot);
       settle({ granted: true, slot_id: slot.id });
     }
+  }
+
+  /**
+   * Fairness (RESOURCES.md → PR 2). Measured 2026-10-02: one Desk terminal's subagents held BOTH of
+   * the brain's slots while every other workspace's suite waited behind them. A workspace already at
+   * its slot budget is not granted another slot while a DIFFERENT workspace that is under its own
+   * budget is waiting — that waiter goes first, whatever the arrival order. With nobody else waiting
+   * the slot is lent, so a lone workspace still gets every slot (`mc heavy` unchanged). Two
+   * workspaces both at budget hold nobody back: plain FIFO between them, never a deadlock.
+   */
+  private heldBack(w: Waiter, n: number): boolean {
+    if (!w.workspace_id) return false;
+    const now = nowMs();
+    const held = new Map<string, number>();
+    const contenders = new Set<string>();
+    for (const s of this.slots.values()) if (s.workspace_id) { held.set(s.workspace_id, (held.get(s.workspace_id) ?? 0) + 1); contenders.add(s.workspace_id); }
+    const waiting = this.queue.filter((x) => x.workspace_id && (x.poll || now - x.lastPoll < FAIR_WAITING_MS));
+    for (const x of waiting) contenders.add(x.workspace_id!);
+    const all = [...contenders];
+    const atBudget = (ws: string) => (held.get(ws) ?? 0) >= slotBudget(ws, all, n, this.hostId);
+    if (!atBudget(w.workspace_id)) return false;
+    return waiting.some((x) => x.workspace_id !== w.workspace_id && !atBudget(x.workspace_id!));
   }
 
   /**
@@ -342,7 +384,7 @@ export class HeavyPool {
    *
    * `waitMs <= 0` is a single attempt (what the tests use); the API parks a caller for up to 55s.
    */
-  acquire(opts: { session_id?: string | null; label: string; ticket?: string | null }, waitMs: number): Promise<SlotGrant> {
+  acquire(opts: { session_id?: string | null; workspace_id?: string | null; label: string; ticket?: string | null }, waitMs: number): Promise<SlotGrant> {
     return new Promise<SlotGrant>((resolve) => {
       const now = nowMs();
       // Resume the existing entry when the ticket is still in line; a ticket we have forgotten
@@ -355,8 +397,9 @@ export class HeavyPool {
         detach(w);
         w.lastPoll = now;
         w.label = opts.label;
+        w.workspace_id ??= opts.workspace_id ?? null;
       } else {
-        w = { ticket: opts.ticket || randomUUID(), session_id: opts.session_id ?? null, label: opts.label, since: now, lastPoll: now, poll: null };
+        w = { ticket: opts.ticket || randomUUID(), session_id: opts.session_id ?? null, workspace_id: opts.workspace_id ?? null, label: opts.label, since: now, lastPoll: now, poll: null };
         this.queue.push(w);
       }
       const entry = w;
@@ -448,7 +491,7 @@ export function heavyPoolFor(hostId: string, sizeOf: () => number): HeavyPool {
 
 // The brain's own pool, under the names every caller (and machine.test.ts) has always used.
 export const slotHolders = (): SlotHolder[] => localPool.holders();
-export const acquireSlot = (opts: { session_id?: string | null; label: string; ticket?: string | null }, waitMs: number): Promise<SlotGrant> =>
+export const acquireSlot = (opts: { session_id?: string | null; workspace_id?: string | null; label: string; ticket?: string | null }, waitMs: number): Promise<SlotGrant> =>
   localPool.acquire(opts, waitMs);
 export const abandonPoll = (ticket: string): void => localPool.abandon(ticket);
 export const beatSlot = (id: string): boolean => localPool.beat(id);
@@ -465,6 +508,9 @@ export function releaseForSession(sessionId: string): number {
   for (const p of pools.values()) freed += p.releaseForSession(sessionId);
   return freed;
 }
+
+/** The brain's own pool — the ladder (resources/) reads who holds its slots. */
+export const localHeavyPool = (): HeavyPool => localPool;
 
 /** Test-only: forget every slot and waiter, on every host. */
 export function resetSlots(): void {

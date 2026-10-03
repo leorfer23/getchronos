@@ -39,6 +39,10 @@
 import fs from "node:fs";
 import { execFile } from "node:child_process";
 import { exeName, parsePs, PS_ARGS, ProcLedger, type Entry, type Owner, type Proc, type Root } from "./ledger.js";
+import { chainRead, isKept, keptBelow, readChains, setArgv, touchable, type GuardCtx } from "./guards.js";
+
+// The guards moved to guards.ts (the ladder uses them too); re-exported for existing callers.
+export { isKept, touchable };
 
 export type ReaperMode = "off" | "dry" | "on";
 
@@ -129,10 +133,6 @@ export function classify(comm: string, cfg: Pick<ReaperConfig, "leakFamily" | "r
 
 export type Reason = "session_ended" | "orphan" | "escalate";
 
-/** argv on the keep-list? */
-export const isKept = (argv: string | null | undefined, cfg: Pick<ReaperConfig, "keep">): boolean =>
-  !!argv && cfg.keep.some((r) => r.test(argv));
-
 /** One kill(2): a whole group (`group` = pgid) or one pid. `pids` are the ledger entries it reaches. */
 export type Action = {
   signal: "SIGTERM" | "SIGKILL";
@@ -142,13 +142,10 @@ export type Action = {
   pids: number[];
 };
 
-export type Ctx = {
+export type Ctx = GuardCtx & {
   now: number;
-  selfPid: number;
   /** The spawner's own process group: never signalled (a headless run lives in it). */
   selfPgid: number | null;
-  uid: number | null;
-  liveRootPids: Set<number>;
   /**
    * Refuse any target whose argv — or any OWNED ANCESTOR's argv — has not been read: "nothing below a
    * kept process" can only be checked once the whole chain above a target has been. The driver's final pass sets it.
@@ -167,32 +164,23 @@ export type Ctx = {
  * Not yet classified counts as not leak: spared until the verdict is in.
  */
 export function spared(ledger: ProcLedger): Set<number> {
-  const out = new Set<number>();
-  const walk = (top: number, all: boolean) => {
+  const out = keptBelow(ledger);
+  const walk = (top: number) => {
     const stack = [top];
     while (stack.length) {
       const p = stack.pop()!;
       const e = ledger.entries.get(p);
       if (!e || out.has(p)) continue;
-      if (!all && p !== top && e.cls === "leak" && !e.kept) continue;
+      if (p !== top && e.cls === "leak" && !e.kept) continue;
       out.add(p);
       for (const c of ledger.children.get(p) ?? []) stack.push(c);
     }
   };
-  for (const e of ledger.entries.values()) if (e.kept) walk(e.pid, true);
   for (const e of ledger.entries.values()) {
     if (out.has(e.pid) || !ledger.owners.get(e.owner)?.ended) continue;
-    if (ledger.isDetached(e) && e.cls !== "leak") walk(e.pid, false);
+    if (ledger.isDetached(e) && e.cls !== "leak") walk(e.pid);
   }
   return out;
-}
-
-export function touchable(e: Entry, ctx: Ctx, cfg: Pick<ReaperConfig, "protect">): boolean {
-  const p = e.proc;
-  if (p.pid <= 1 || p.pid === ctx.selfPid || ctx.liveRootPids.has(p.pid)) return false;
-  if (ctx.uid != null && p.uid !== ctx.uid) return false;
-  if (cfg.protect.some((pre) => p.comm.startsWith(pre))) return false;
-  return true;
 }
 
 /**
@@ -209,8 +197,7 @@ export function decide(ledger: ProcLedger, cfg: ReaperConfig, ctx: Ctx): Action[
   const ok = (pid: number) => {
     const e = ledger.entries.get(pid);
     if (!e || claimed.has(pid) || keep.has(pid) || !touchable(e, ctx, cfg)) return false;
-    if (!ctx.requireArgv) return true;
-    return e.argv !== undefined && ledger.ancestors(pid).every((a) => ledger.entries.get(a)!.argv !== undefined);
+    return !ctx.requireArgv || chainRead(ledger, pid);
   };
 
   /** The group `pgid`, if one signal to it reaches only processes this owner owns and we may touch. */
@@ -303,6 +290,14 @@ export type ReaperDeps = {
   /** kill(2). `target` < 0 is a process group. false = it was already gone. */
   signal(target: number, sig: NodeJS.Signals): boolean;
   onReap?(e: ReapEvent): void;
+  /**
+   * Right before a kill(2), with the pids it reaches. The ladder SIGCONTs any it paused here: a
+   * SIGSTOPped process never handles a SIGTERM (it stays pending until a SIGCONT), so without this the
+   * reaper would wait out its grace and SIGKILL something that could have exited cleanly.
+   */
+  beforeSignal?(pids: number[], signal: NodeJS.Signals): void;
+  /** After every pass that sampled — the budget ladder's turn on the same snapshot. */
+  afterTick?(): Promise<void> | void;
   log?(line: string): void;
   now?(): number;
   selfPid?: number;
@@ -337,7 +332,13 @@ export class Reaper {
     if (this.cfg.mode === "off" || this.running) return none;
     this.running = true;
     try {
-      return await this.pass();
+      const r = await this.pass();
+      // The budget ladder (ladder.ts) rides the same snapshot, inside the same re-entry guard: one
+      // `ps` per tick for both, and never a ladder pass interleaved with a reaper pass.
+      if (r.sampled && this.deps.afterTick) {
+        try { await this.deps.afterTick(); } catch (e: any) { this.log(`after-tick hook failed: ${e?.message ?? e}`); }
+      }
+      return r;
     } catch (e: any) {
       this.log(`tick failed: ${e?.message ?? e}`);
       return none;
@@ -371,19 +372,10 @@ export class Reaper {
     // kept — `classify` alone never reads a `claude`'s argv). Once per process, cached on the entry;
     // then decide again with any unread argv in a target's chain as a veto.
     const pre = decide(this.ledger, this.cfg, ctx);
-    const chain = new Set<number>();
-    for (const p of pre.flatMap((a) => a.pids)) {
-      chain.add(p);
-      for (const a of this.ledger.ancestors(p)) chain.add(a);
-    }
-    const unread = [...chain].filter((p) => this.ledger.entries.get(p)?.argv === undefined);
-    if (unread.length) {
-      const argv = await this.deps.args(unread).catch(() => null);
-      if (!argv) {
-        this.log(`could not read argv of ${unread.length} candidate(s)/ancestor(s) to check the keep-list — nothing signalled this tick`);
-        return { sampled: true, actions: [], signalled: 0 };
-      }
-      for (const p of unread) this.setArgv(this.ledger.entries.get(p)!, argv.get(p) ?? null);
+    const read = await readChains(this.ledger, pre.flatMap((a) => a.pids), this.deps.args, this.cfg);
+    if (!read.ok) {
+      this.log(`could not read argv of ${read.unread} candidate(s)/ancestor(s) to check the keep-list — nothing signalled this tick`);
+      return { sampled: true, actions: [], signalled: 0 };
     }
     // Without our own row the group guard is blind — fall back to pid-by-pid aiming only.
     const actions = decide(this.ledger, this.cfg, { ...ctx, requireArgv: true }).filter((a) => a.group == null || ctx.selfPgid != null);
@@ -399,11 +391,6 @@ export class Reaper {
       return { sampled: true, actions, signalled: 0 };
     }
     return { sampled: true, actions, signalled: await this.execute(actions, now) };
-  }
-
-  private setArgv(e: Entry, argv: string | null): void {
-    e.argv = argv;
-    e.kept = isKept(argv, this.cfg);
   }
 
   /**
@@ -444,7 +431,7 @@ export class Reaper {
     if (!argv) return; // ask again next tick
     for (const e of ask) {
       const a = argv.get(e.pid);
-      this.setArgv(e, a ?? null);
+      setArgv(e, a ?? null, this.cfg);
       e.cls = a == null ? "keep" : (classify(e.proc.comm, this.cfg, a) as "leak" | "keep");
     }
   }
@@ -459,6 +446,7 @@ export class Reaper {
       const same = (p: number) => starts.get(p) === this.ledger.entries.get(p)?.startMs;
       if (a.group != null ? !same(a.group) : !same(a.pids[0])) continue;
       const pids = a.pids.filter(same);
+      try { this.deps.beforeSignal?.(pids, a.signal); } catch (e: any) { this.log(`before-signal hook failed: ${e?.message ?? e}`); }
       const sent = this.deps.signal(a.group != null ? -a.group : a.pids[0], a.signal);
       n++;
       if (!sent) continue;

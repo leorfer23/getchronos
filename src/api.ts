@@ -1994,7 +1994,11 @@ export function startServer() {
     // is immediately — wiring the hang-up handler there abandoned every poll on arrival and turned
     // the long poll into a busy loop. `res` closes early only when the client really went away.
     res.on("close", () => { if (!res.writableEnded) heavySlots.abandon(ticket); });
-    const grant = await heavySlots.acquire({ session_id: req.body.session_id ?? null, label: req.body.label, ticket }, 55_000);
+    // Whose share of the slots this counts against (fairness, RESOURCES.md → PR 2): the caller's own
+    // workspace token first — a session id in the body is only believed for a tokenless/admin caller.
+    const sid = req.body.session_id ?? null;
+    const workspace_id = callerScope(req)?.ws ?? (sid ? sessions.get(sid)?.workspace_id ?? null : null);
+    const grant = await heavySlots.acquire({ session_id: sid, workspace_id, label: req.body.label, ticket }, 55_000);
     // The caller may have hung up while we were parked (that is what woke us) — nothing to answer.
     if (res.writableEnded || !res.writable) return;
     // The count rides along so a refused caller can print "2/2 busy" without a second round trip.

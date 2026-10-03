@@ -472,7 +472,9 @@ const HELP = `mc — Mission Control backlog CLI
                                      Waits its turn, then runs the command normally (its output, its
                                      exit code). A single targeted test file does not need it.
   mc machine                         how loaded this Mac is: load per core, swap, free memory, heavy
-                                     slots in use, and whether an agent may open a terminal right now
+                                     slots in use, and whether an agent may open a terminal right now;
+                                     plus your workspace's share of the Mac, its budget and usage, and
+                                     the ladder rung it is on (warn → slow → pause) when it is over
   mc hosts [list]                    every computer (HOSTS.md): status, load, live terminals, version,
                                      what is wrong. Without the admin token: names, room, and whether
                                      your workspace may run there. Placement is automatic; --host pins
@@ -3248,6 +3250,19 @@ function askCap(question) {
       if (m.procs && m.procs.mode !== "off") {
         const t = m.procs.workspaces.reduce((a, w) => ({ pids: a.pids + w.pids, rss: a.rss + w.rss_mb, orphans: a.orphans + w.orphans, reaped: a.reaped + w.reaped, left: a.left + (w.left_running ?? 0) }), { pids: 0, rss: 0, orphans: 0, reaped: 0, left: 0 });
         console.log(`agent processes ${t.pids} · ${t.rss} MB · orphans ${t.orphans} · reaped ${t.reaped}${m.procs.mode === "dry" ? " (dry run: would have)" : ""}${t.left ? ` · left running ${t.left}` : ""}`);
+        // Each workspace's share of this Mac (RESOURCES.md → PR 2): the caller's own line, or every line for the operator.
+        if (m.procs.ladder) {
+          const gb = (mb) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)}G` : `${mb}M`);
+          for (const w of m.procs.workspaces.filter((x) => x.budget && (x.active || x.over || (x.paused || []).length))) {
+            const rung = w.rung && w.rung !== "ok" ? ` · ${w.rung.toUpperCase()}${m.procs.ladder.mode === "on" || (m.procs.ladder.mode === "slow" && w.rung !== "pause") || w.rung === "warn" ? "" : " (would)"}` : "";
+            console.log(
+              `  ${(w.workspace_id || "-").slice(0, 8)} share ${Math.round(w.share * 100)}% (w ${w.weight}) · RAM ${gb(w.usage.rss_mb)}/${gb(w.budget.rss_mb)} · ` +
+              `CPU ${w.usage.cpu}/${w.budget.cpu}% · slots ${w.usage.slots}/${w.budget.slots}${w.over ? " · OVER" : ""}${rung}` +
+              `${(w.paused || []).length ? ` · paused ${w.paused.join(",")}` : ""}${w.slowed ? ` · slowed ${w.slowed}` : ""}`,
+            );
+          }
+          if (m.procs.ladder.strained) console.log(`  ladder ${m.procs.ladder.mode} · machine strained${m.procs.ladder.critical ? " (memory critical)" : ""}`);
+        }
       }
       return;
     }

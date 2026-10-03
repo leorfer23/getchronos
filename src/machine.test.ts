@@ -4,7 +4,7 @@ import { CONFIG } from "./config.js";
 import {
   abandonPoll, acquireSlot, admission, beatSlot, cpuBusyPct, heavyPoolFor, heavySlotsForCpus, loadFromVitals, machineLoad, niceCommand,
   parseGpuUtil, parseMemorySysctl, parseVmStat,
-  releaseForSession, releaseSlot, resetSlots, setSlotClock, slotHolders, slotQueue,
+  releaseForSession, releaseSlot, resetSlots, setSlotBudget, setSlotClock, slotHolders, slotQueue, FAIR_WAITING_MS,
   type MachineLoad,
 } from "./machine.js";
 
@@ -121,6 +121,7 @@ beforeEach(() => {
   resetSlots();
   clock = 1_000_000;
   setSlotClock(() => clock);
+  setSlotBudget(null);
   CONFIG.machine.heavySlots = 2;
 });
 
@@ -267,6 +268,87 @@ test("a slot is never granted to a waiter whose client went away", async () => {
 test("abandoning a ticket nobody is waiting on is a no-op", () => {
   abandonPoll("nothing-here");
   assert.deepEqual(slotQueue(), []);
+});
+
+// ───────────────────────────── fairness between workspaces (RESOURCES.md → PR 2) ─────────────────────────────
+
+const tick = () => new Promise((r) => setImmediate(r));
+
+test("fairness: a lone workspace still gets every slot — `mc heavy` unchanged", async () => {
+  assert.equal((await acquireSlot({ label: "a1", workspace_id: "ws-a" }, 0)).granted, true);
+  assert.equal((await acquireSlot({ label: "a2", workspace_id: "ws-a" }, 0)).granted, true);
+  assert.equal((await acquireSlot({ label: "a3", workspace_id: "ws-a" }, 0)).granted, false, "the pool is simply full");
+});
+
+// The incident: one terminal's subagents held both slots while another workspace's suite waited.
+test("fairness: a workspace at its slot budget is passed over for a DIFFERENT workspace that is waiting", async () => {
+  const a1 = await acquireSlot({ label: "a1", workspace_id: "ws-a" }, 0);
+  const a2 = await acquireSlot({ label: "a2", workspace_id: "ws-a" }, 0);
+  assert.equal(a1.granted && a2.granted, true, "lent: nobody else was waiting");
+  const a3 = acquireSlot({ label: "a3", workspace_id: "ws-a" }, 5000); // arrives FIRST
+  const b1 = acquireSlot({ label: "b1", workspace_id: "ws-b" }, 5000);
+  await tick();
+  releaseSlot((a1 as any).slot_id);
+  assert.equal((await b1).granted, true, "b goes first: a still holds its 1-of-2 budget");
+  assert.deepEqual(slotHolders().map((h) => [h.label, h.workspace_id]), [["a2", "ws-a"], ["b1", "ws-b"]]);
+  releaseSlot((a2 as any).slot_id);
+  assert.equal((await a3).granted, true, "a is under budget again: its waiter is served");
+});
+
+test("fairness: two workspaces both at budget hold nobody back — plain FIFO, never a deadlock", async () => {
+  CONFIG.machine.heavySlots = 2;
+  const a1 = await acquireSlot({ label: "a1", workspace_id: "ws-a" }, 0);
+  const b1 = await acquireSlot({ label: "b1", workspace_id: "ws-b" }, 0);
+  const a2 = acquireSlot({ label: "a2", workspace_id: "ws-a" }, 5000);
+  const b2 = acquireSlot({ label: "b2", workspace_id: "ws-b" }, 5000);
+  await tick();
+  releaseSlot((b1 as any).slot_id);
+  // b is now at 0 (under budget) and waiting, a is at 1 (= its budget): b2 first.
+  assert.equal((await b2).granted, true);
+  releaseSlot((a1 as any).slot_id);
+  assert.equal((await a2).granted, true);
+});
+
+test("fairness: a waiter that stopped polling (ctrl-C'd `mc heavy`) does not hold a free slot back", async () => {
+  const a1 = await acquireSlot({ label: "a1", workspace_id: "ws-a" }, 0);
+  await acquireSlot({ label: "a2", workspace_id: "ws-a" }, 0);
+  assert.equal((await acquireSlot({ label: "ghost", workspace_id: "ws-b" }, 0)).granted, false); // refused, not re-polling
+  releaseSlot((a1 as any).slot_id); // frees one: the ghost is not polling, so nobody is granted it on release
+  assert.equal((await acquireSlot({ label: "a3", workspace_id: "ws-a", ticket: "t-a3" }, 0)).granted, false, "b polled a moment ago: its turn");
+  clock += FAIR_WAITING_MS + 1;
+  assert.equal((await acquireSlot({ label: "a3", workspace_id: "ws-a", ticket: "t-a3" }, 0)).granted, true, "the ghost's turn lapsed: lent to a");
+});
+
+test("fairness: an unattributed caller (no workspace) is never held back and never holds anyone back", async () => {
+  await acquireSlot({ label: "a1", workspace_id: "ws-a" }, 0);
+  await acquireSlot({ label: "a2", workspace_id: "ws-a" }, 0);
+  const anon = acquireSlot({ label: "operator shell" }, 5000);
+  const a3 = acquireSlot({ label: "a3", workspace_id: "ws-a" }, 5000);
+  await tick();
+  releaseSlot(slotHolders()[0].slot_id);
+  assert.equal((await anon).granted, true, "FIFO: the anonymous waiter was first");
+  releaseSlot(slotHolders()[0].slot_id);
+  assert.equal((await a3).granted, true);
+});
+
+test("fairness: the installed budget decides (weights), and a host pool asks with its own id", async () => {
+  CONFIG.machine.heavySlots = 3;
+  const asked: string[] = [];
+  // ws-a has weight 2 of 3: 2 slots of 3; ws-b gets 1.
+  setSlotBudget((ws, _c, slots, host) => { asked.push(host); return ws === "ws-a" ? Math.floor((slots * 2) / 3) : 1; });
+  await acquireSlot({ label: "a1", workspace_id: "ws-a" }, 0);
+  await acquireSlot({ label: "a2", workspace_id: "ws-a" }, 0);
+  const b0 = await acquireSlot({ label: "b0", workspace_id: "ws-b" }, 0); // third slot free: granted
+  assert.equal(b0.granted, true);
+  const a3 = acquireSlot({ label: "a3", workspace_id: "ws-a" }, 5000);
+  const b1 = acquireSlot({ label: "b1", workspace_id: "ws-b" }, 5000);
+  await tick();
+  releaseSlot((b0 as any).slot_id);
+  // a holds 2 = its weighted budget, b holds 0 < 1 → b1 first despite arriving second.
+  assert.equal((await b1).granted, true);
+  assert.ok(asked.every((h) => h === "local"));
+  releaseSlot(slotHolders().find((h) => h.label === "a1")!.slot_id);
+  assert.equal((await a3).granted, true);
 });
 
 // ───────────────────────────── vitals parsers ─────────────────────────────
