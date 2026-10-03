@@ -9,6 +9,7 @@ import { inRepo, resolveNotesDir } from "./repo-root.js";
 import { hostlinkDir } from "./hostlink/join.js";
 import { mirrorRoot } from "./hosts/transcript-mirror.js";
 import { hostHomeDir } from "./hostd/home.js";
+import { reaperConfigFromEnv } from "./resources/reaper.js";
 
 const home = os.homedir();
 
@@ -181,6 +182,10 @@ export const CONFIG = {
     // Machine-wide heavy slots. One suite per ~6 cores: a vitest pool alone forks that many workers.
     heavySlots: Number(process.env.CHRONOS_HEAVY_SLOTS ?? Math.max(1, Math.floor((os.cpus().length || 1) / 6))),
   },
+  // The leak reaper (RESOURCES.md, src/resources/): a process ledger sampled every tick, and the rules
+  // that kill what an ended terminal/run left running. CHRONOS_REAPER=on|dry|off (default on),
+  // CHRONOS_REAPER_TICK_MS, _KILL_GRACE_MS, _ORPHAN_GRACE_MS, _MAX_SIGNALS, _ORPHAN_FAMILY, _PROTECT, _KEEP.
+  reaper: reaperConfigFromEnv(process.env),
   // Placement (HOSTS.md phase 4, src/hosts/placement.ts): which computer a new terminal lands on.
   //   auto   — sticky, then pinned, else the eligible computer with the most headroom (default);
   //   pinned — phase 3's behavior: only a pinned or sticky terminal leaves the brain;

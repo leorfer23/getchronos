@@ -49,6 +49,7 @@ import type { UpdateFrame, UpdateStatus, UpdateTarget } from "../hostlink/wire.j
 import type { HostSelf } from "./resolve.js";
 import { startCaffeinate } from "../caffeinate.js";
 import { FENCE_TICK_MS, fenceReason } from "./fence.js";
+import { Reaper, reaperConfigFromEnv, systemReaperDeps } from "../resources/reaper.js";
 
 // Same backstop as the brain's (src/index.ts): a stray rejection must not take down the process
 // that every PTY on this Mac is a child of.
@@ -250,6 +251,22 @@ async function cmdRun(): Promise<number> {
   };
   setInterval(fenceTick, FENCE_TICK_MS).unref();
   link.on("rejected", () => fenceTick());
+  // The leak reaper (RESOURCES.md): the brain's ledger + rules over THIS host's own terminals and
+  // runs, judged on this machine. Roots are the channels still running here (not exited); a channel
+  // that exits — or is stopped because the brain moved it — leaves its leftovers to rule 1. Logged
+  // here only: the brain's `GET /machine` rollup is the brain's own processes (a wire frame is PR 2).
+  const reaperCfg = reaperConfigFromEnv(process.env);
+  if (reaperCfg.mode !== "off") {
+    const reaper = new Reaper(reaperCfg, {
+      ...systemReaperDeps(),
+      roots: () =>
+        [...terminals.live(), ...procs.live()]
+          .filter((l) => !l.exit && l.pid)
+          .map((l) => ({ kind: l.kind === "pty" ? ("session" as const) : ("run" as const), id: l.session_id, pid: l.pid!, startedAt: null, workspaceId: null })),
+      log: (l) => console.warn(`[host] reaper: ${l}`),
+    });
+    setInterval(() => void reaper.tick(), reaperCfg.tickMs).unref();
+  }
   const replay = () => { if (link.state === "online" && outbox.size) void outbox.drain((q) => link.api(q)); };
   // A drain stops at the first 5xx; try again on a slow tick rather than hammer a struggling brain.
   setInterval(replay, 30_000).unref();
