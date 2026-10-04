@@ -6,7 +6,7 @@ import { CONFIG } from "./config.js";
 import { detectPrompt, renderScreen, type DeskPrompt } from "./desk-prompt.js";
 import { FLUSH_MS, clampRate, fanOut, type TermClient } from "./term-fanout.js";
 import { ScreenMirror, type Screen } from "./term-screen.js";
-import { ModeTracker } from "./term-modes.js";
+import { ModeTracker, isTerminalReply } from "./term-modes.js";
 import { pasteOf, seedEnterMsFor, ttyCooked, typeSeed } from "./term-seed.js";
 import { sessions, sessionGoals, workspaces, repos, tickets, runs, jobs, notes as notesStore, kv, hosts } from "./store.js";
 import { backendAllowed, getBackend, workspaceBackends } from "./backends/index.js";
@@ -288,6 +288,7 @@ interface Live {
   // state via `mc state` overrides this (agent-lifecycle overlays) — this is the backstop that is
   // always right about one thing: nothing is being produced right now.
   lastOut: number;
+  /** When someone last typed into it; 0 = not known (re-adopted after a brain restart). */
   lastIn: number;
   /** When the pty was spawned, and whether killSession (operator/Robert/close-done) ended it on purpose. */
   startedAt: number;
@@ -982,7 +983,7 @@ function installLive(
   row: Session,
   term: PtyHandle,
   focusCtx: FocusCtx,
-  w: { titleDone: boolean; backendName: string; configDir: string; workspaceId: string | null; remote: boolean; startedAt?: number },
+  w: { titleDone: boolean; backendName: string; configDir: string; workspaceId: string | null; remote: boolean; startedAt?: number; adopted?: boolean },
 ): Live {
   const cwd = focusCtx.cwd;
   const configDir = w.configDir;
@@ -991,7 +992,7 @@ function installLive(
     pty: term, buffer: "", pending: "", clients: new Set(), focusCtx,
     screen: new ScreenMirror(term.cols, term.rows), modes: new ModeTracker(),
     inbuf: "", titleDone: w.titleDone,
-    lastOut: Date.now(), lastIn: Date.now(), startedAt: w.startedAt ?? Date.now(), quiet: false,
+    lastOut: Date.now(), lastIn: w.adopted ? 0 : Date.now(), startedAt: w.startedAt ?? Date.now(), quiet: false,
     remote: w.remote,
   };
   live.set(row.id, entry);
@@ -1236,7 +1237,7 @@ export function sessionPrompt(id: string): DeskPrompt | null {
 export function sessionActivity(id: string): { live: boolean; quiet: boolean; last_out: number | null; last_in: number | null; started_at: number | null } {
   const e = live.get(id);
   if (!e) return { live: false, quiet: true, last_out: null, last_in: null, started_at: null };
-  return { live: true, quiet: e.quiet, last_out: e.lastOut, last_in: e.lastIn, started_at: e.startedAt };
+  return { live: true, quiet: e.quiet, last_out: e.lastOut, last_in: e.lastIn || null, started_at: e.startedAt };
 }
 
 // Exit path: ONE haiku call → both the search summary and the durable learnings (was two cold boots).
@@ -1391,7 +1392,7 @@ export function refreshClient(id: string, ws: WebSocket) {
 export function writeTo(id: string, data: string) {
   const e = live.get(id);
   if (!e) return;
-  e.lastIn = Date.now();
+  if (!isTerminalReply(data)) e.lastIn = Date.now();
   try { e.pty.write(data); } catch {}
   captureFirstPrompt(e, id, data);
 }
@@ -1544,7 +1545,9 @@ export function adoptRemoteSession(row: Session, term: PtyHandle): boolean {
   };
   // Its scrollback was in the dead brain's memory; the host resends what it still holds, and the
   // attach jiggle repaints a full-screen TUI. The title and first prompt are already on the row.
-  installLive(row, term, focusCtx, { titleDone: true, backendName: backend.name, configDir, workspaceId: row.workspace_id ?? null, remote: true });
+  // Nobody typed into it just because this brain came back: an input time of "now" would read as
+  // "one more thing" and un-tick every done goal on the host at each deploy (goalReachedStands).
+  installLive(row, term, focusCtx, { titleDone: true, backendName: backend.name, configDir, workspaceId: row.workspace_id ?? null, remote: true, adopted: true });
   bus.publish({ topic: "session.updated", session_id: row.id });
   return true;
 }

@@ -15,7 +15,8 @@ const { registerHost } = await import("./hosts/index.js");
 const { RemoteHost } = await import("./hosts/remote.js");
 const { mirrorFile } = await import("./hosts/transcript-mirror.js");
 const { reconcileHost, resolveHostRef, sessionHostOffline } = await import("./remote-terminals.js");
-const { isLive, focusEvents, sessionActivity } = await import("./terminal.js");
+const { isLive, focusEvents, sessionActivity, writeTo } = await import("./terminal.js");
+const { sessionGoalReached } = await import("./term-status.js");
 const { PROTOCOL_VERSION } = await import("./hostlink/wire.js");
 
 const sent: any[] = [];
@@ -99,6 +100,36 @@ test("reconcile: adopt after a brain restart, re-attach after a blip, end + stic
   assert.deepEqual(sent, [{ t: "ack", ch: 7, seq: 2 }, { t: "release", ch: 7 }], "last ack, then release");
   // The story of a remote terminal survives it: read back from the mirror.
   assert.deepEqual(focusEvents(kept.id).map((e) => e.kind), ["understanding", "result"]);
+});
+
+test("a done goal survives the brain re-adopting its terminal and a glance at its card — only typing un-ticks it", async () => {
+  // Leo, 2026-10-04: `mc session done` went ✅, then the card was back on "your turn" and Robert was
+  // told nobody had said what's next. The tick stands only while last_in <= goal_done_at, and two
+  // things bumped last_in with nobody typing.
+  const s = row("/Users/a.smith/done");
+  sessions.setGoal(s.id, { goal: "ship it" });
+  sessions.setGoal(s.id, { goal_done_at: new Date(Date.now() - 60_000).toISOString() });
+  host.setOnline(hello([{ ch: 21, session_id: s.id, kind: "pty", pid: 4321, last_seq: 0 }]));
+  const r = await reconcileHost(host);
+  assert.deepEqual(r.adopted, [s.id]);
+  const reached = () => sessionGoalReached(sessions.get(s.id)!, { ...sessionActivity(s.id), quiet: true });
+
+  // 1. The restart itself: nobody typed into it just because this brain came back.
+  assert.equal(sessionActivity(s.id).last_in, null);
+  assert.equal(reached(), true, "a deploy does not un-tick every done terminal on the host");
+
+  // 2. The Desk pane answering for itself — focus in/out (1004), a cursor report, a wheel over the pane.
+  writeTo(s.id, "\x1b[I");
+  writeTo(s.id, "\x1b[O\x1b[12;40R");
+  writeTo(s.id, "\x1b[<65;10;5M");
+  assert.equal(sessionActivity(s.id).last_in, null);
+  assert.equal(reached(), true, "looking at the card is not asking for one more thing");
+
+  // Real input still reopens the goal.
+  writeTo(s.id, "one more thing");
+  assert.ok(sessionActivity(s.id).last_in);
+  assert.equal(reached(), false);
+  host.control({ t: "exit", ch: 21, code: 0, signal: null });
 });
 
 test("RemoteHost: a frame that beats its spawn reply is held for the channel, and a resend is dropped once", async () => {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ModeTracker } from "./term-modes.js";
+import { ModeTracker, isTerminalReply } from "./term-modes.js";
 
 test("mouse tracking set at boot survives any amount of later output", () => {
   const t = new ModeTracker();
@@ -41,4 +41,12 @@ test("nothing seen, nothing sent", () => {
   const t = new ModeTracker();
   t.feed("plain \x1b[31mred\x1b[0m");
   assert.equal(t.preamble(), "");
+});
+
+test("the terminal answering for itself is not input; anything typed is", () => {
+  for (const d of ["\x1b[I", "\x1b[O", "\x1b[I\x1b[O", "\x1b[24;80R", "\x1b[0n", "\x1b[?1;2c", "\x1b[>0;276;0c",
+    "\x1b[?2004;1$y", "\x1b]11;rgb:0000/0000/0000\x07", "\x1b]10;rgb:ffff/ffff/ffff\x1b\\", "\x1b[<64;10;5M", "\x1b[<0;3;4m"])
+    assert.equal(isTerminalReply(d), true, JSON.stringify(d));
+  for (const d of ["", "a", "\r", "\x1b", "\x1b[A", "\x03", "\x1b[200~hi\x1b[201~", "\x1b[Ix", "y\x1b[O"])
+    assert.equal(isTerminalReply(d), false, JSON.stringify(d));
 });
