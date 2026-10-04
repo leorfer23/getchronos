@@ -49,6 +49,13 @@ const DRIVE_KINDS: ReadonlySet<string> = new Set<DriveKind>(["review", "turn", "
 /** Robert may be woken for this workspace's terminals (⚙ Settings → Robert). Read per wake, never at boot. */
 export const driveEnabled = (wsId?: string | null): boolean => settingOn("robert.enabled", wsId) && settingOn("robert.drive", wsId);
 
+/**
+ * Robert watches this terminal's stops: every terminal by default (⚙ robert.watch_all), else only the
+ * ones handed to him (🤖) and Lead workers. `waiting --on robert` reaches him either way — that is asking.
+ */
+export const watched = (s: Pick<Session, "robert" | "lead_id" | "workspace_id">): boolean =>
+  !!s.robert || !!s.lead_id || settingOn("robert.watch_all", s.workspace_id);
+
 /** Seconds a phase must hold before Robert hears about it. */
 export function graceMs(kind: DriveKind): number {
   const turn = Math.max(0, CONFIG.robertDrive.graceSec) * 1000;
@@ -796,11 +803,9 @@ export function fireIfStill(sessionId: string, key: string, nowMs = Date.now()):
     const out = fireToLead(s, lead, kind, st, key, nowMs);
     if (out !== ESCALATE) return out;
   }
-  // Opt-in for ROBERT only (after Lead routing): he auto-drives terminals the operator handed him
-  // (or ones he opened). An agent that explicitly waited on him (`waiting --on robert`) still reaches
-  // him — that IS asking. Anything with a lead_id (live Lead, escalation, or orphan after the Lead
-  // ended) is fleet work under a Lead and reaches him without a separate opt-in.
-  if (!s.robert && kind !== "robert" && !s.lead_id) return null;
+  // Which terminals are his (after Lead routing): every one by default, or with robert.watch_all off
+  // only those handed to him / under a Lead (watched). `waiting --on robert` always reaches him.
+  if (!watched(s) && kind !== "robert") return null;
   // Switched off in ⚙ Settings: the stop is the operator's, like any terminal he never handed over.
   if (!driveEnabled(s.workspace_id)) return null;
   // Same stop re-armed (a second status event): the queue absorbs it as a repeat, and it is not a new
@@ -854,9 +859,9 @@ export function onStatus(sessionId: string, st: TermStatus | null | undefined): 
 function armTimer(sessionId: string, st: TermStatus, s: Session | undefined): void {
   const prev = timers.get(sessionId);
   const kind = s && s.status === "live" ? driveKind(st, context(s)) : null;
-  // Opt-in for Robert's own queue — Lead-owned workers still arm (Lead inbox / orphan / escalate).
-  // waiting-on-robert always arms: that is the agent asking.
-  if (!kind || (s && !s.robert && kind !== "robert" && !s.lead_id)) {
+  // Not his to watch (see watched) → no timer. Lead-owned workers still arm (Lead inbox / orphan /
+  // escalate); waiting-on-robert always arms: that is the agent asking.
+  if (!kind || (s && !watched(s) && kind !== "robert")) {
     if (prev) { clearTimeout(prev.t); timers.delete(sessionId); }
     return;
   }

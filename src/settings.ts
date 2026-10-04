@@ -253,8 +253,20 @@ defineSetting({
 defineSetting({
   key: "robert.drive", group: "Robert", level: "both", type: "bool", env: "CHRONOS_ROBERT_DRIVE",
   label: "Wake when a terminal stops",
-  help: "Robert looks at terminals you handed him (🤖) when they finish, block or need a decision.",
+  help: "Robert looks at terminals when they finish, block or need a decision (all of them, or only 🤖 ones — see Watch every terminal).",
   default: () => CONFIG.robertDrive.enabled,
+});
+defineSetting({
+  key: "robert.watch_all", group: "Robert", level: "both", type: "bool", env: "CHRONOS_ROBERT_WATCH_ALL",
+  label: "Watch every terminal",
+  help: "Off: Robert only wakes for terminals you handed him (🤖), Lead workers, and ones waiting on him.",
+  default: () => process.env.CHRONOS_ROBERT_WATCH_ALL !== "0",
+});
+defineSetting({
+  key: "robert.sweep", group: "Robert", level: "both", type: "bool", env: "CHRONOS_ROBERT_SWEEP",
+  label: "Check in while terminals work",
+  help: "Every few minutes, while a terminal here is working, Robert looks over this workspace's fleet and pushes what is stuck.",
+  default: () => process.env.CHRONOS_ROBERT_SWEEP !== "0",
 });
 defineSetting({
   key: "robert.prompts", group: "Robert", level: "both", type: "bool", env: "CHRONOS_TERMINAL_PROMPTS",

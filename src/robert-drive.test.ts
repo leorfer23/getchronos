@@ -35,6 +35,7 @@ import {
 } from "./robert-drive.js";
 import { fileReport } from "./lead-report.js";
 import { CONFIG } from "./config.js";
+import { writeSetting } from "./settings.js";
 
 setWakeAsker(async () => "noted");
 setWakePoster(() => {});
@@ -94,9 +95,18 @@ test("driveKind: finished, review, decide, declared blocked and waiting-on-rober
   assert.equal(driveKind(st("waiting", { on: "robert" }), ctx()), "robert");
 });
 
-test("fireIfStill: a terminal the operator did not hand to Robert stays quiet (unless it waited on him)", () => {
+test("fireIfStill: by default Robert watches every terminal, handed to him or not", () => {
+  reset();
+  const s = term({ robert: false });
+  screens.set(s.id, st("your_turn"));
+  assert.ok(fireIfStill(s.id, driveKey(s.id, "your_turn", st("your_turn").since), NOW));
+  assert.equal(rows()[0].workspace_id, s.workspace_id, "the wake runs on that workspace's Robert (and its account)");
+});
+
+test("fireIfStill: with watch-all off, a terminal not handed to Robert stays quiet (unless it waited on him)", () => {
   reset();
   const off = term({ robert: false });
+  writeSetting("robert.watch_all", false, off.workspace_id);
   screens.set(off.id, st("your_turn"));
   assert.equal(fireIfStill(off.id, driveKey(off.id, "your_turn", st("your_turn").since), NOW), null);
   screens.set(off.id, st("waiting", { on: "robert" }));
