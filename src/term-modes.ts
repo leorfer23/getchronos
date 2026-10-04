@@ -42,3 +42,14 @@ export class ModeTracker {
     return out;
   }
 }
+
+// What xterm sends on its own, with nobody at the keys: focus in/out (mode 1004, which preamble()
+// hands every reattaching pane), cursor and status reports, DA / DECRQM / OSC / DCS replies, and
+// mouse reports from a wheel over the pane. Writing them to the pty is right; calling them input
+// is not — that read every glance at a card as "one more thing" and un-ticked its done goal.
+const REPLY = /\x1b\[[IO]|\x1b\[\??\d+;\d+R|\x1b\[\d+n|\x1b\[[?>=]?[\d;]*c|\x1b\[\??[\d;]*\$y|\x1b\[<\d+;\d+;\d+[Mm]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\/g;
+
+/** Is this chunk only the terminal answering for itself — no keystroke, paste or command in it? */
+export function isTerminalReply(d: string): boolean {
+  return d.length > 0 && d.replace(REPLY, "") === "";
+}
