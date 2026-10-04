@@ -8,6 +8,7 @@ import {
   mentionedExecs,
   postToBoard,
   setBoardAsker,
+  setBoardWakeMirror,
   startBoardWatcher,
 } from "./board.js";
 
@@ -20,7 +21,10 @@ beforeEach(() => {
     watcherUp = true;
   }
 });
-afterEach(() => setBoardAsker(null));
+afterEach(() => {
+  setBoardAsker(null);
+  setBoardWakeMirror(null);
+});
 
 const settle = async () => {
   for (let i = 0; i < 50; i++) await Promise.resolve();
@@ -136,4 +140,27 @@ test("board.posted carries parsed mentions and depth for downstream consumers", 
   } finally {
     bus.removeListener("event", listener);
   }
+});
+
+// The operator never reads the board: a watch or self-wake that only answered there looked exactly
+// like a watch that never fired.
+test("a watch or self-wake reply also reaches the operator — a plain mention reply does not", async () => {
+  const mirrored: Array<{ kind: string; reply: string }> = [];
+  setBoardWakeMirror((post, reply) => mirrored.push({ kind: post.kind, reply }));
+  setBoardAsker(async () => "Deploy is clear — go.");
+  postToBoard({ author: "chronos", kind: "wakeup", body: "⏰ scheduled wake — deploy check\n@robert you asked to be woken for this." });
+  postToBoard({ author: "chronos", kind: "watch", body: "⏱ watch fired — PR merged\n@robert you asked to be woken for this." });
+  postToBoard({ author: "operator", body: "@robert thoughts?" });
+  await settle();
+  assert.deepEqual(mirrored.map((m) => m.kind).sort(), ["wakeup", "watch"]);
+  assert.ok(mirrored.every((m) => m.reply === "Deploy is clear — go."));
+});
+
+test("an empty self-wake reply mirrors nothing", async () => {
+  let mirrored = 0;
+  setBoardWakeMirror(() => mirrored++);
+  setBoardAsker(async () => "  ");
+  postToBoard({ author: "chronos", kind: "watch", body: "⏱ watch fired — x\n@robert ping" });
+  await settle();
+  assert.equal(mirrored, 0);
 });
