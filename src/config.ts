@@ -558,12 +558,15 @@ export const CONFIG = {
     enabled: process.env.CHRONOS_ROBERT_DRIVE !== "0",
     graceSec: Number(process.env.CHRONOS_ROBERT_DRIVE_GRACE_SEC ?? 90),
     perSessionHour: Math.max(1, Number(process.env.CHRONOS_ROBERT_DRIVE_PER_TERMINAL_HOUR ?? 4)),
-    globalHour: Math.max(1, Number(process.env.CHRONOS_ROBERT_DRIVE_PER_HOUR ?? 30)),
+    globalHour: Math.max(1, Number(process.env.CHRONOS_ROBERT_DRIVE_PER_HOUR ?? 60)),
     maxAgeHours: Number(process.env.CHRONOS_ROBERT_DRIVE_MAX_AGE_H ?? 12),
     // Computers (src/robert-host-drive.ts): a host must sit behind the brain this long before Robert
     // hears about it — a deploy makes every host "behind" for the minutes an update takes.
     hostBehindHours: Math.max(1, Number(process.env.CHRONOS_ROBERT_HOST_BEHIND_H ?? 24)),
   },
+  // Robert's presence sweep (src/robert-sweep.ts): every N minutes, one look per workspace that has a
+  // terminal WORKING. A workspace with nothing working is never swept. 0 → no sweep.
+  robertSweepMin: Math.max(0, Number(process.env.CHRONOS_ROBERT_SWEEP_MIN ?? 5)),
   // A Lead's own wake budget (LEADS.md), deliberately NOT Robert's. A Lead steering six workers
   // legitimately hears from them an order of magnitude more often than Robert hears from the whole
   // wall, and sharing one budget meant either Robert's cap throttled the Leads or the Leads burned

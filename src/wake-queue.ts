@@ -40,6 +40,13 @@ export const WAKE_DEBOUNCE_MS = 15 * 60_000;
 export const TERMINAL_PROMPT_KEY = "terminal-prompt:";
 /** Key prefix of a stopped-terminal wake (src/robert-drive.ts). Same exemption, same reason: one wake per stop is in the key. */
 export const TERMINAL_DRIVE_KEY = "term-drive:";
+/** Key prefix of a presence sweep (src/robert-sweep.ts): one per workspace while its terminals work. */
+export const SWEEP_KEY = "robert-sweep:";
+/** What a sweep answers when nothing needs him. Acked, never posted — the Desk only hears real work. */
+export const QUIET_REPLY = "QUIET";
+/** A turn made only of sweeps that came back QUIET: nothing to show anyone. Pure. */
+export const quietSweep = (rows: Pick<RobertWake, "key">[], text: string): boolean =>
+  rows.length > 0 && rows.every((r) => r.key.startsWith(SWEEP_KEY)) && text.replace(/[`*.\s]/g, "").toUpperCase() === QUIET_REPLY;
 /** How often the drain loop looks for queued wakes. Also sets the beacon cadence. */
 export const WAKE_DRAIN_MS = 30_000;
 /** Failed turns before a row is parked for a human instead of retried forever. */
@@ -225,7 +232,8 @@ export async function drainScope(scope: string, nowMs = Date.now()): Promise<Dra
       const text = (reply || "").trim();
       // A turn that produced no words still happened; acking it is what keeps an empty reply from
       // re-presenting the same wakes every 30 seconds forever.
-      if (text || steps?.length) poster({ body: text, ticket_id: rows.length === 1 ? rows[0].subject : null, workspace_id: wsId, steps, turn, engine });
+      if (quietSweep(rows, text)) console.log(`[robert-sweep] ${scope}: quiet`);
+      else if (text || steps?.length) poster({ body: text, ticket_id: rows.length === 1 ? rows[0].subject : null, workspace_id: wsId, steps, turn, engine });
       robertWakes.ackIds(ids, WAKE_ATTEMPT_CAP);
       return "drained";
     } catch (e: any) {
