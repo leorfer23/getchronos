@@ -1102,7 +1102,7 @@
   .jv-tabsbar .sp { flex:1; }
   .jv-sort { padding:4px 8px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--ink); font:inherit; font-size:13.5px; }
   /* the table: one grid for header, group rows and job rows so every column lines up */
-  .jv-t { --cols: 26px 40px minmax(220px,2fr) minmax(190px,1.35fr) 62px 66px 78px 104px 70px 66px; }
+  .jv-t { --cols: 26px 40px minmax(220px,2fr) minmax(190px,1.35fr) 62px 66px 78px 104px 70px 96px; }
   .jv-hd, .jv-r { display:grid; grid-template-columns:var(--cols); column-gap:12px; align-items:center; padding:0 10px; }
   .jv-hd { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--faint); font-weight:700; padding-top:8px; padding-bottom:6px; }
   .jv-hd .n, .jv-r .n { text-align:right; font-variant-numeric:tabular-nums; }
@@ -1147,6 +1147,13 @@
   .jv-r .acts { display:flex; justify-content:flex-end; gap:2px; }
   .jv-r .acts button { border:0; background:transparent; color:var(--muted); border-radius:7px; padding:3px 7px; font-size:14px; }
   .jv-r .acts button:hover { background:var(--surface-2); color:var(--ink); }
+  .jv-r .acts { align-items:center; }
+  .jv-u .ua { display:flex; align-items:center; justify-content:flex-end; gap:6px; }
+  .jv-r .acts .del { opacity:0; font-size:13px; white-space:nowrap; }
+  .jv-r:hover .acts .del, .jv-r .acts .del:focus-visible, .jv-r .acts .del[data-armed] { opacity:1; }
+  .jv-r .acts .del:hover, .jv-r .acts .del[data-armed] { color:var(--danger); background:color-mix(in srgb, var(--danger) 12%, transparent); }
+  .jv-freq { font:inherit; font-size:13px; padding:4px 10px; margin-right:8px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--muted); cursor:pointer; }
+  .jv-freq:hover { color:var(--ink); } .jv-freq.on { border-style:dashed; }
   /* the run strip: oldest left, newest right, like reading a log; one square per run */
   .jv-strip { display:flex; gap:2px; align-items:center; height:22px; }
   .jv-strip .sq { flex:1 1 0; max-width:9px; min-width:3px; height:18px; border-radius:2px; background:var(--surface-2); }
@@ -1167,7 +1174,7 @@
   /* runs feed and upcoming: one row per run / per fire, grouped by day */
   .jv-day { font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); font-weight:700; padding:14px 10px 6px; }
   .jv-f { --cols: 16px 74px minmax(170px,1.2fr) 120px 62px 62px 70px minmax(200px,2fr); }
-  .jv-u { --cols: 84px 76px minmax(200px,1.5fr) 150px minmax(160px,1fr) 44px; }
+  .jv-u { --cols: 84px 76px minmax(200px,1.5fr) 150px minmax(160px,1fr) 84px; }
   .jv-u .t { white-space:nowrap; }
   .jv-f .jv-r, .jv-u .jv-r { min-height:40px; }
   .jv-f .st { font-weight:650; font-size:13px; }
@@ -1249,11 +1256,11 @@
   /* narrower (the drawer is open, or a small window): the columns you can live without go first */
   @container (max-width:1180px) {
     .jv-top { grid-template-columns:1fr; }
-    .jv-t { --cols: 26px 40px minmax(180px,2fr) minmax(130px,1.3fr) 56px 74px 100px 58px; }
+    .jv-t { --cols: 26px 40px minmax(180px,2fr) minmax(130px,1.3fr) 56px 74px 100px 92px; }
     .jv-t .c-avg, .jv-t .c-cost { display:none; }
     .jv-f { --cols: 16px 74px minmax(150px,1fr) 58px 58px minmax(160px,1.6fr); }
     .jv-f .c-ws, .jv-f .c-cost { display:none; }
-    .jv-u { --cols: 84px 70px minmax(160px,1fr) 130px 44px; }
+    .jv-u { --cols: 84px 70px minmax(160px,1fr) 130px 84px; }
     .jv-u .dim { display:none; }
   }
   @container (max-width:720px) {
@@ -5111,6 +5118,7 @@ const J = {
   sys: localStorage.getItem("jobs-sys") === "1",
   sort: localStorage.getItem("jobs-sort") || "health",
   shut: new Set(readJson("jobs-shut", [])),
+  hideFreq: localStorage.getItem("jobs-hidefreq") !== "0",
 };
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const STRIP = 30;
@@ -5179,6 +5187,7 @@ function savePrefs() {
   try {
     localStorage.setItem("jobs-view", J.view); localStorage.setItem("jobs-ws", J.ws); localStorage.setItem("jobs-win", String(J.win));
     localStorage.setItem("jobs-sys", J.sys ? "1" : "0"); localStorage.setItem("jobs-sort", J.sort); localStorage.setItem("jobs-shut", JSON.stringify([...J.shut]));
+    localStorage.setItem("jobs-hidefreq", J.hideFreq ? "1" : "0");
   } catch {}
 }
 
@@ -5217,6 +5226,28 @@ function matchesQ(j) {
   return J.q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
 }
 const inWs = (j) => J.ws === "all" || wsKey(j) === J.ws;
+// How many times a cron fires on a day it runs: minute values × hour values. Triage-style jobs
+// (every 30 min, hourly through the workday) drown the lists, so they hide behind a toggle.
+function cronCount(f, lo, hi) {
+  let n = 0;
+  for (const part of String(f).split(",")) {
+    const [r, st] = part.split("/"), step = Number(st) || 1;
+    const [a, b] = r === "*" ? [lo, hi] : r.includes("-") ? r.split("-").map(Number) : [Number(r), st ? hi : Number(r)];
+    if (Number.isNaN(a) || Number.isNaN(b)) return 1;
+    n += Math.floor((b - a) / step) + 1;
+  }
+  return n;
+}
+const FREQ_PER_DAY = 6;
+function frequent(j) {
+  if (!j || j.trigger_type !== "cron") return false;
+  const m = String(j.cron_expr || "").trim().split(/\s+/);
+  return m.length === 5 && cronCount(m[0], 0, 59) * cronCount(m[1], 0, 23) >= FREQ_PER_DAY;
+}
+// Hidden only while healthy: a frequent job that is failing still shows up.
+const freqHidden = (j) => J.hideFreq && frequent(j) && !failing(j);
+const freqN = () => J.jobs.filter((j) => inWs(j) && freqHidden(j)).length;
+const freqBtn = () => { const n = J.jobs.filter((j) => inWs(j) && frequent(j)).length; return n ? `<button class="jv-freq${J.hideFreq ? " on" : ""}" data-freq title="Jobs that fire ${FREQ_PER_DAY}+ times a day (triage, monitors). Failing ones always show.">${J.hideFreq ? `${freqN()} frequent hidden · show` : "Hide frequent"}</button>` : ""; };
 const FILTERS = [
   ["all", "All", () => true],
   ["failing", "Failing", failing],
@@ -5227,7 +5258,7 @@ const FILTERS = [
 ];
 function visibleJobs() {
   const f = (FILTERS.find((x) => x[0] === J.filter) || FILTERS[0])[2];
-  return J.jobs.filter((j) => inWs(j) && matchesQ(j) && f(j));
+  return J.jobs.filter((j) => inWs(j) && matchesQ(j) && f(j) && !freqHidden(j));
 }
 const lastAt = (j) => (j.recent[0] ? Date.parse(j.recent[0].started_at || j.recent[0].ended_at || 0) || Infinity : 0);
 const SORTS = {
@@ -5255,17 +5286,17 @@ function renderJobChrome() {
     order.map((k) => { const c = by.get(k); return `<button class="jv-chip${J.ws === k ? " on" : ""}" data-ws="${esc(k)}">${wsDot(k)}${esc(wsLabel(k))} <b>${c.n}</b>${c.bad ? ` <b class="bad">${c.bad}✕</b>` : ""}</button>`; }).join("");
   renderKpis();
   renderHist();
-  const scoped = J.jobs.filter(inWs);
+  const scoped = J.jobs.filter((j) => inWs(j) && !freqHidden(j));
   const liveN = scoped.reduce((n, j) => n + j.stats.live, 0);
   qs("#jv-tabs").innerHTML = [["jobs", "Jobs", scoped.length], ["runs", "Runs", null], ["upcoming", "Upcoming", scoped.filter((j) => j.enabled && j.next_run).length]]
     .map(([k, l, n]) => `<button data-view="${k}" class="${J.view === k ? "on" : ""}">${l}${n != null ? `<b>${n}</b>` : k === "runs" && liveN ? `<b style="color:var(--p-work)">${liveN} live</b>` : ""}</button>`).join("");
   if (J.view === "jobs") {
     qs("#jv-filter").innerHTML = FILTERS.map(([k, l, f]) => { const n = scoped.filter(f).length; return `<button data-filter="${k}" class="${J.filter === k ? "on" : ""}">${l}${k === "all" ? "" : " " + n}</button>`; }).join("");
-    qs("#jv-tools").innerHTML = `<select class="jv-sort" id="jv-sort" title="Order">${Object.entries(SORTS).map(([k, [l]]) => opt(k, J.sort, "Sort: " + l)).join("")}</select>`;
+    qs("#jv-tools").innerHTML = freqBtn() + `<select class="jv-sort" id="jv-sort" title="Order">${Object.entries(SORTS).map(([k, [l]]) => opt(k, J.sort, "Sort: " + l)).join("")}</select>`;
   } else if (J.view === "runs") {
     qs("#jv-filter").innerHTML = [["all", "All"], ["failed", "Failed"], ["live", "Live"], ["success", "Succeeded"]].map(([k, l]) => `<button data-fs="${k}" class="${J.feedStatus === k ? "on" : ""}">${l}</button>`).join("");
-    qs("#jv-tools").innerHTML = "";
-  } else { qs("#jv-filter").innerHTML = ""; qs("#jv-tools").innerHTML = ""; }
+    qs("#jv-tools").innerHTML = freqBtn();
+  } else { qs("#jv-filter").innerHTML = ""; qs("#jv-tools").innerHTML = freqBtn(); }
   qs("#jv-filter").hidden = J.view === "upcoming";
 }
 function renderKpis() {
@@ -5322,7 +5353,7 @@ function jobRowHtml(j) {
     `<span class="when" title="${lr ? esc(fmtWhen(lr.started_at)) : ""}">${lr ? esc(age(lr.started_at || lr.ended_at)) + (age(lr.started_at || lr.ended_at) === "now" ? "" : " ago") + `<small>${esc(RUN_WORD[lr.status] || lr.status)}</small>` : `<span class="dim">—</span>`}</span>` +
     `<span class="when">${j.enabled && j.next_run ? esc(inWhen(j.next_run)) + `<small>${esc(fmtSoon(j.next_run))}</small>` : `<span class="dim">${j.enabled ? "—" : "paused"}</span>`}</span>` +
     `<span class="n c-cost">${st.cost ? money(st.cost) : `<span class="dim">—</span>`}</span>` +
-    `<span class="acts"><button data-go="${j.id}" title="Run it now">▶</button><button data-open="${j.id}" title="Open">›</button></span></div>`;
+    `<span class="acts"><button data-go="${j.id}" title="Run it now">▶</button><button data-open="${j.id}" title="Open">›</button><button class="del" data-del="${j.id}" title="Delete this job">🗑</button></span></div>`;
 }
 const groupByWs = () => J.ws === "all";
 function renderJobList() {
@@ -5360,7 +5391,7 @@ function dayLabel(iso) {
   return d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
 }
 function renderFeed(host) {
-  const rows = J.feed.filter((r) => (J.ws === "all" || (r.workspace_id || "") === J.ws) && (!J.q || (r.job_name + " " + (r.summary || "") + " " + (r.error || "")).toLowerCase().includes(J.q.toLowerCase())));
+  const rows = J.feed.filter((r) => (FAILED.has(r.status) || !freqHidden(jobById(r.job_id))) && (J.ws === "all" || (r.workspace_id || "") === J.ws) && (!J.q || (r.job_name + " " + (r.summary || "") + " " + (r.error || "")).toLowerCase().includes(J.q.toLowerCase())));
   if (!rows.length) { host.innerHTML = `<div class="jv-empty">${J.feedAt ? "No runs in this window." : "loading…"}</div>`; return; }
   let out = `<div class="jv-f"><div class="jv-hd"><span></span><span>Status</span><span>Job</span><span class="c-ws">Client</span><span class="n">Started</span><span class="n">Took</span><span class="n c-cost">Cost</span><span>Result</span></div>`;
   let day = "";
@@ -5377,13 +5408,13 @@ function renderFeed(host) {
   host.innerHTML = out + `</div></div>`;
 }
 function renderUpcoming(host) {
-  const js = J.jobs.filter((j) => inWs(j) && matchesQ(j) && j.enabled && j.next_run).sort((a, b) => Date.parse(a.next_run) - Date.parse(b.next_run));
-  const paused = J.jobs.filter((j) => inWs(j) && matchesQ(j) && !j.enabled && (j.trigger_type === "cron" || (j.trigger_type === "once" && j.run_at)));
+  const js = J.jobs.filter((j) => inWs(j) && matchesQ(j) && !freqHidden(j) && j.enabled && j.next_run).sort((a, b) => Date.parse(a.next_run) - Date.parse(b.next_run));
+  const paused = J.jobs.filter((j) => inWs(j) && matchesQ(j) && !freqHidden(j) && !j.enabled && (j.trigger_type === "cron" || (j.trigger_type === "once" && j.run_at)));
   if (!js.length && !paused.length) { host.innerHTML = `<div class="jv-empty">Nothing scheduled. Jobs on a schedule or set to run once show up here.</div>`; return; }
   let out = `<div class="jv-u">`, day = "";
   const row = (j, on) => `<div class="jv-r${on ? "" : " off"}" data-job="${j.id}"><span class="t">${on ? esc(fmtTime(j.next_run)) : "—"}</span><span class="in">${on ? esc(inWhen(j.next_run)) : "paused"}</span>` +
     `<span class="jn">${esc(j.name)}</span><span class="wsn">${wsDot(j.workspace_id)}${esc(wsLabel(j.workspace_id))}</span><span class="dim">${esc(schedText(j))}</span>` +
-    `<button class="jv-switch${j.enabled ? " on" : ""}" data-tog="${j.id}" title="${j.enabled ? "Pause" : "Resume"}"></button></div>`;
+    `<span class="ua"><button class="jv-switch${j.enabled ? " on" : ""}" data-tog="${j.id}" title="${j.enabled ? "Pause" : "Resume"}"></button><span class="acts"><button class="del" data-del="${j.id}" title="Delete this job">🗑</button></span></span></div>`;
   for (const j of js) {
     const d = dayLabel(j.next_run);
     if (d !== day) { if (day) out += `</div>`; day = d; out += `<div class="jv-day">${esc(d)}</div><div class="jv-rows">`; }
@@ -5561,6 +5592,10 @@ async function runJob(id) {
   try { const r = await api("/jobs/" + id + "/run", { method: "POST" }); toast("running · " + (j?.name || "job")); await loadJobs(); renderJobs(); return r; }
   catch (e) { toast("run failed: " + errMsg(e)); return null; }
 }
+async function deleteJob(j) {
+  try { await api("/jobs/" + j.id, { method: "DELETE" }); if (J.sel === j.id) J.sel = null; J.checked.delete(j.id); await loadJobs(); renderJobs(); toast("deleted · " + j.name); }
+  catch (e) { toast("delete: " + errMsg(e)); }
+}
 async function bulk(action, ids) {
   if (!ids.length) return;
   try {
@@ -5605,7 +5640,7 @@ async function jobAction(a, j, btn) {
     return;
   }
   if (a === "copyid") { try { await navigator.clipboard.writeText(j.id); toast("copied " + j.id.slice(0, 8)); } catch { toast(j.id); } J.menu = false; return renderDrawer(); }
-  if (a === "del") return arm(btn, "Delete? click again", async () => { try { await api("/jobs/" + j.id, { method: "DELETE" }); J.sel = null; J.checked.delete(j.id); await loadJobs(); renderJobs(); toast("deleted · " + j.name); } catch (e) { toast(errMsg(e)); } });
+  if (a === "del") return arm(btn, "Delete? click again", () => deleteJob(j));
   if (a === "hook") { try { await api("/triggers", { method: "POST", body: JSON.stringify({ name: j.name + " webhook", job_id: j.id, source: "http" }) }); await selectJob(j.id, "triggers"); } catch (e) { toast("webhook: " + errMsg(e)); } }
 }
 async function runAction(a, btn) {
@@ -5655,6 +5690,8 @@ jv.addEventListener("click", async (e) => {
   if ((x = b("[data-chkall]"))) { const vis = visibleJobs(); if (x.checked) for (const j of vis) J.checked.add(j.id); else for (const j of vis) J.checked.delete(j.id); return renderJobs(); }
   if ((x = b("[data-chk]"))) { x.checked ? J.checked.add(x.dataset.chk) : J.checked.delete(x.dataset.chk); renderBulk(); const all = qs("[data-chkall]", jv); if (all) all.checked = visibleJobs().every((j) => J.checked.has(j.id)); return; }
   if ((x = b("[data-tog]"))) return toggleJob(x.dataset.tog);
+  if ((x = b("[data-del]"))) { const j = jobById(x.dataset.del); if (j) arm(x, "sure?", () => deleteJob(j)); return; }
+  if ((x = b("[data-freq]"))) { J.hideFreq = !J.hideFreq; savePrefs(); return renderJobs(); }
   if ((x = b("[data-go]"))) { const r = await runJob(x.dataset.go); if (r?.run_id) { await selectJob(x.dataset.go, "runs"); openRun(r.run_id); } return; }
   if ((x = b("#jv-list [data-run]"))) { const row = x.closest("[data-job]"); return openRun(x.dataset.run, row?.dataset.job); }
   if ((x = b("[data-frun]"))) return openRun(x.dataset.frun, x.dataset.fjob);
