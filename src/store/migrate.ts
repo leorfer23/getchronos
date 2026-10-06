@@ -2052,6 +2052,53 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       ALTER TABLE jots ADD COLUMN worker_at TEXT;`),
   },
 
+  {
+    version: 145,
+    name: "continuations — park a terminal's work on a condition, pick it back up when it is met",
+    // `mc when` (src/continuations.ts). One row = "continue <session> when <kind/target/until>".
+    // status: armed → met (condition true, delivery pending: seat cap / busy machine) → fired
+    // (delivered into fired_session_id) | cancelled. outcome says WHY it fired: met | timeout | manual
+    // | broken (the check kept failing). next_check_at is the scheduler's clock — the soonest of the
+    // next poll and timeout_at — so one armed timer covers every row. baseline is the PR snapshot taken
+    // at creation ("a NEW review" needs to know how many there were). round = how many continuations
+    // this line of work has already fired, carried into the next one so a self-re-arming loop is capped.
+    up: (db) => db.exec(`
+      CREATE TABLE continuations (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        session_id TEXT,
+        kind TEXT NOT NULL,
+        target TEXT,
+        until TEXT,
+        label TEXT NOT NULL,
+        note TEXT,
+        goal TEXT,
+        on_met TEXT NOT NULL DEFAULT 'auto',
+        every_sec INTEGER,
+        status TEXT NOT NULL DEFAULT 'armed',
+        outcome TEXT,
+        evidence TEXT,
+        baseline TEXT,
+        round INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        next_check_at TEXT,
+        timeout_at TEXT,
+        last_check_at TEXT,
+        last_check TEXT,
+        checks INTEGER NOT NULL DEFAULT 0,
+        errors INTEGER NOT NULL DEFAULT 0,
+        check_run_id TEXT,
+        met_at TEXT,
+        fired_at TEXT,
+        fired_session_id TEXT,
+        fired_how TEXT
+      );
+      CREATE INDEX idx_continuations_due ON continuations(status, next_check_at);
+      CREATE INDEX idx_continuations_session ON continuations(session_id, status);
+      CREATE INDEX idx_continuations_ws ON continuations(workspace_id, status);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

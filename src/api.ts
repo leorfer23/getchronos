@@ -85,6 +85,7 @@ import { recordRead, recordRecall, sessionFor, usageRoute } from "./memory-usage
 import * as dreamRoutes from "./dream-routes.js";
 import * as inboxRoutes from "./inbox-routes.js";
 import * as artifactRoutes from "./artifact-routes.js";
+import * as continuationRoutes from "./continuation-routes.js";
 import { cockpitRoute } from "./desk-cockpit.js";
 import { inbox } from "./store/inbox.js";
 import { openConflicts } from "./memory-conflicts.js";
@@ -158,6 +159,7 @@ import {
   NewSkillSchema, PatchSkillSchema, ArchiveSkillSchema,
   NewWorkspaceVarSchema, PatchWorkspaceVarSchema,
   NewIdeaSchema, PromoteIdeaSchema, PromoteIdeasSchema, KillIdeasSchema, GenerateIdeasSchema,
+  NewContinuationSchema, FireContinuationSchema, CancelContinuationSchema,
   NewJotSchema, JotPatchSchema, JotAppendSchema, JotFollowUpSchema, JotResolveSchema, JOT_BODY_MAX, RunJotSchema, ReorderJotsSchema, PlanNextDaySchema,
   NewTicketSchema, PatchTicketSchema, TicketLinkSchema, TicketNoteSchema, PushCommentSchema, PushStatusSchema, PushHoursSchema,
   DeclareStepsSchema, SetStepSchema, NewAskSchema, AnswerAskSchema, EscalateAskSchema, HoldSchema, WatchSchema, ClipboardSchema, ClaimWorktreeSchema, RemoveWorktreeSchema, NewMessageSchema,
@@ -1795,6 +1797,15 @@ export function startServer() {
   api.post("/artifacts/:id/events", validate(ArtifactEventSchema), artifactRoutes.eventRoute);
   api.get("/artifacts/:id/events", artifactRoutes.eventsRoute);
   api.put("/artifacts/:id/state", validate(ArtifactStateSchema), artifactRoutes.stateRoute);
+
+  // Continuations (src/continuations.ts, src/continuation-routes.ts): `mc when` — park a terminal's
+  // work on a condition (PR review, another terminal, an ask, a time, a script, an agent check) and
+  // continue it when it is met.
+  api.post("/continuations", validate(NewContinuationSchema), continuationRoutes.createRoute);
+  api.get("/continuations", continuationRoutes.listRoute);
+  api.get("/continuations/:id", continuationRoutes.getRoute);
+  api.post("/continuations/:id/fire", validate(FireContinuationSchema), continuationRoutes.fireRoute);
+  api.post("/continuations/:id/cancel", validate(CancelContinuationSchema), continuationRoutes.cancelRoute);
 
   // Pairs of remembered facts a judge found to disagree. Read-only and workspace-walled, same as
   // recall: a conflict quotes two pieces of this workspace's memory.

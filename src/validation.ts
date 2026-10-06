@@ -1080,3 +1080,24 @@ export const ArtifactEventSchema = z.object({
 });
 
 export const ArtifactStateSchema = z.object({ state: z.unknown().optional() });
+
+// Continuations (src/continuations.ts, `mc when`). Kind-specific rules live in parseWhen, which says
+// what is wrong in words an agent can act on; this only bounds the shape.
+export const NewContinuationSchema = z.object({
+  kind: z.string().trim().min(1).max(20),
+  target: z.string().max(4000).nullable().optional(),
+  until: z.string().max(20).nullable().optional(),
+  at: z.string().max(80).nullable().optional(),
+  every: z.union([z.string().max(20), z.number()]).nullable().optional(),
+  timeout: z.string().max(80).nullable().optional(),
+  note: z.string().max(4000).nullable().optional(),
+  goal: z.string().max(400).nullable().optional(),
+  then: z.string().max(10).nullable().optional(),
+  /** The terminal to continue. Defaults to the caller's own (x-mc-session). */
+  session_id: z.string().max(64).nullable().optional(),
+  /** For a continuation with no terminal (operator/Robert): which client it opens in. */
+  workspace_id: z.string().max(64).nullable().optional(),
+  by: z.string().max(80).nullable().optional(),
+});
+export const FireContinuationSchema = z.object({ evidence: z.string().max(2000).nullable().optional(), by: z.string().max(80).nullable().optional() });
+export const CancelContinuationSchema = z.object({ why: z.string().max(400).nullable().optional() });

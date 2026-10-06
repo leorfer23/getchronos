@@ -265,6 +265,25 @@ const HELP = `mc — Mission Control backlog CLI
   mc pad add "<title>" [--body "..."] [--follow <when> [--check "..."]]   park a thought (body may be piped on stdin) — any terminal, own client
   mc pad follow <id> <when> [--check "what to look at"]   an agent opens a terminal on this row at <when>: +2d, tomorrow 9:00, monday 10, 2026-10-01 14:00
   mc pad follow <id> off             cancel the follow-up
+  mc when <condition> [--note "what you will do then"] [--timeout 3d] [--every 5m] [--then auto|resume|new]
+                                     park THIS terminal's work until the condition holds, then continue it: typed
+                                     into this terminal if open, else reopened on the same transcript, else a fresh
+                                     terminal with the handoff. Conditions:
+      pr <url> [--until review|approved|changes|merged|closed|checks|change]   (default review)
+      terminal <id8> [--until done|ended]          another terminal finishes
+      ask <id8>                                     an mc ask / ask-robert is answered
+      at <when>                                     +2h, tomorrow 9:00, monday 10, 2026-10-01 14:00
+      script "<command>"                            no agent: exit 0 = met (stdout = evidence), 1 = not yet;
+                                                    runs in this workspace's sandbox with its env + mc vars
+      check "<condition in words>"                  a short read-only haiku probe every --every (default 30m)
+                                                    with the workspace's tools — Slack replies, email, Jira…
+      manual                                        only \`mc when fire\` (or the timeout) continues it
+    operator/Robert: --for <terminal> parks another terminal's work; --workspace <id> --goal "…" with no
+    terminal opens a fresh one when it fires
+  mc when list [--all] [--for <id8>]  what is parked (--all includes fired/cancelled)
+  mc when show <id8>                 one continuation: condition, last look, evidence
+  mc when fire <id8> ["evidence"]    it happened — continue that work now (any terminal of the workspace)
+  mc when cancel <id8> ["why"]       stop waiting
   mc pad resolve <id> ["why"]        close the row, keeping the reason on it (a follow-up terminal's usual last step)
   mc pad due                         this client's scheduled follow-ups, soonest first
   mc pad append <id> "<text>"        ADD to a row's detail without replacing it — the usual one; any terminal
@@ -1563,6 +1582,82 @@ function askCap(question) {
     // comment. `add` and `append` work from any terminal on its own client (the row is stamped as the
     // agent's); edit/done/rm/run stay admin-gated, which Robert satisfies (CHRONOS_ADMIN in his env)
     // and a sandboxed worker does not — a worker may add to the operator's list, never rewrite it.
+    // Continuations (src/continuations.ts): park this terminal's work on a condition; the daemon
+    // continues it when the condition is met.
+    if (cmd === "when") {
+      const H = adminToken() && !process.env.MC_WORKSPACE_TOKEN ? { "x-mc-admin": adminToken() } : undefined;
+      const ago = (iso) => {
+        if (!iso) return "";
+        const m = Math.round((new Date(iso).getTime() - Date.now()) / 60000);
+        const a = Math.abs(m), u = a >= 2880 ? `${Math.round(a / 1440)}d` : a >= 120 ? `${Math.round(a / 60)}h` : `${a}m`;
+        return m >= 0 ? `in ${u}` : `${u} ago`;
+      };
+      const line = (c) => {
+        const st = { armed: "⏳", met: "✅", fired: "▶", cancelled: "✕" }[c.status] || "·";
+        const tail = c.status === "armed"
+          ? (c.next_check_at ? ` · next look ${ago(c.next_check_at)}` : "") + (c.timeout_at ? ` · gives up ${ago(c.timeout_at)}` : "")
+          : c.status === "met" ? " · met, continuing as soon as the terminal is free"
+          : c.status === "fired" ? ` · ${c.fired_how} ${String(c.fired_session_id || "").slice(0, 8)} ${ago(c.fired_at)}${c.outcome && c.outcome !== "met" ? ` (${c.outcome})` : ""}`
+          : "";
+        return `${st} ${c.id.slice(0, 8)} [${c.kind}] ${c.label}${c.session_id ? ` · terminal ${c.session_id.slice(0, 8)}` : " · fresh terminal"}${tail}` +
+          (c.status === "armed" && c.last_check ? `\n    last look: ${c.last_check}` : "");
+      };
+      const sub = pos[1];
+      if (!sub || sub === "list" || sub === "ls") {
+        const q = new URLSearchParams();
+        if (opt.all) q.set("status", "all");
+        if (opt.for) q.set("session", opt.for);
+        if (opt.workspace) q.set("workspace", opt.workspace);
+        const rows = await req("GET", "/continuations?" + q, undefined, H);
+        if (!rows.length) return console.log(opt.all ? "(no continuations)" : "(nothing parked — mc when list --all for history)");
+        return console.log(rows.map(line).join("\n"));
+      }
+      if (sub === "show" || sub === "get") {
+        const c = await req("GET", "/continuations/" + (pos[2] || die("mc when show <id8>")), undefined, H);
+        if (opt.json) return console.log(JSON.stringify(c, null, 2));
+        return console.log([
+          line(c),
+          c.target && c.kind !== "at" ? `  watching: ${c.target}${c.until ? ` (until ${c.until})` : ""}` : null,
+          c.note ? `  then: ${c.note}` : null,
+          c.evidence ? `  evidence: ${c.evidence}` : null,
+          `  looks: ${c.checks}${c.errors ? ` · ${c.errors} failing in a row` : ""} · armed by ${c.created_by || "?"} ${ago(c.created_at)} · round ${c.round}`,
+        ].filter(Boolean).join("\n"));
+      }
+      if (sub === "fire") {
+        const c = await req("POST", `/continuations/${pos[2] || die('mc when fire <id8> ["evidence"]')}/fire`, { evidence: pos.slice(3).join(" ") || null, by: process.env.MC_AGENT_NAME || null }, H);
+        return console.log(`fired ${c.id.slice(0, 8)} — ${c.label}; its work continues in a moment`);
+      }
+      if (sub === "cancel" || sub === "rm") {
+        const c = await req("POST", `/continuations/${pos[2] || die('mc when cancel <id8> ["why"]')}/cancel`, { why: pos.slice(3).join(" ") || null }, H);
+        return console.log(`cancelled ${c.id.slice(0, 8)} — ${c.label}`);
+      }
+      const kind = sub;
+      const body = {
+        kind,
+        target: pos.slice(2).join(" ") || null,
+        until: opt.until ?? null,
+        every: opt.every ?? null,
+        timeout: opt.timeout ?? null,
+        note: opt.note ?? null,
+        goal: opt.goal ?? null,
+        then: opt.then ?? null,
+        session_id: opt.for ?? null,
+        workspace_id: opt.workspace ?? null,
+        by: process.env.MC_AGENT_NAME || null,
+      };
+      if (kind === "at") { body.at = body.target; body.target = null; }
+      const c = await req("POST", "/continuations", body, H);
+      const where = c.session_id
+        ? (c.session_id === process.env.MC_SESSION ? "this terminal" : `terminal ${c.session_id.slice(0, 8)}`)
+        : "a fresh terminal";
+      return console.log(
+        `⏳ ${c.id.slice(0, 8)} parked: continue ${where} when ${c.label}` +
+        (c.timeout_at ? ` (gives up ${ago(c.timeout_at)})` : "") +
+        (c.session_id === process.env.MC_SESSION
+          ? "\n   Finish your turn now. If this terminal is still open you will be told here; if it is closed it reopens on this transcript."
+          : "")
+      );
+    }
     if (cmd === "pad") {
       const wsId = opt.workspace || process.env.MC_WORKSPACE;
       const sub = pos[1] || "list";
