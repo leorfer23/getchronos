@@ -78,7 +78,9 @@ takes `10`, `10m`, `2h`.
 2. **Never stop silently while you wait.** Silence reads 🟠 *your turn* — the operator opens you,
    finds nothing to do, and learns to ignore your card. Launched background subagents? The hooks
    count them for you. Waiting on CI, a deploy, a long command, another terminal? `mc state waiting`
-   with what and roughly how long, *then* stop.
+   with what and roughly how long, *then* stop. Waiting on something that takes **hours or days** — a
+   PR review, a person's reply, an email, another terminal's result? **`mc when`** (below): the daemon
+   watches it and continues your work when it happens, even if this terminal is closed by then.
 3. **`mc ask-robert` for a decision you can't make** (see below) — your card reads 🔵 *waiting on
    Robert* while he triages and 🟣 *decide* once it reaches the operator. **`mc state blocked` for a
    wall, not a question** — say what you need in the label.
@@ -405,6 +407,49 @@ mc pad due                          # this client's scheduled follow-ups
 - Your rows show as `agent` on the Desk. Editing, deleting and running a row are the operator's (and
   Robert's) — deciding a parked thought is ready to start is their call. You may schedule and resolve
   follow-ups only on rows an agent filed, or on the row whose follow-up opened you.
+
+## Waiting on something — `mc when`
+
+When your work is blocked on something outside you that will take a while, park it on the condition
+instead of spinning or stopping silently. The daemon watches it; when it is met (or times out) it
+continues **this** work: typed into this terminal if it is still open and idle, otherwise this terminal
+is reopened on the same transcript with the news as its next prompt (a fresh terminal with a handoff
+only when that is impossible). Your card shows ⏳ *waiting · <condition>* meanwhile.
+
+```bash
+mc when pr https://github.com/o/r/pull/12 --until approved --note "merge, then deploy staging"
+mc when pr <url> --until checks             # CI finished (pass or fail — you are told which)
+                                            # --until review|approved|changes|merged|closed|checks|change
+mc when terminal a1b2c3d4                   # another terminal ticks its goal (--until ended: just ends)
+mc when ask 9f8e7d6c                        # an mc ask / ask-robert you filed is answered
+mc when at "tomorrow 9"                     # a time: +2h, monday 10, 2026-10-01 14:00
+mc when script "python3 ~/bin/inbox_check.py --from ana@acme.com" --every 10m
+                                            # no agent, no tokens: exit 0 = met (last stdout lines = evidence),
+                                            # 1 = not yet, else a failed look. Runs in this workspace's
+                                            # sandbox + env with `mc vars` exported (API tokens).
+mc when check "Ana replied in the #data-eng thread about the schema change" --every 30m
+                                            # only an agent can tell: a short read-only haiku probe with
+                                            # this workspace's tools (Slack, email, Jira…) — costs tokens
+mc when manual --note "Leo signs the contract"   # nothing to watch: `mc when fire` or the timeout continues it
+mc when list                                # what is parked (--all for history) · mc when show <id8>
+mc when fire <id8> "evidence"               # it happened — continue that work now (any terminal of this client)
+mc when cancel <id8> "why"
+```
+
+- **Always `--note` what you will do once it is met.** It is handed back to you with the evidence; a
+  resumed terminal reads it first.
+- **Every wait ends.** Default timeouts: pr/ask/script/manual 3d, check 2d, terminal 1d (`--timeout 6h`,
+  max 14d). On timeout you are still woken — told it timed out and what was last seen — so you can
+  nudge whoever owes it, wait again, or `mc ask`.
+- **Pick the cheapest condition that can tell.** `pr`/`terminal`/`ask`/`at` are free and exact. A
+  `script` with a token is free. `check` spends a model call every `--every`; use it when only reading
+  (a Slack thread, an inbox) can tell.
+- After `mc when`, **finish your turn** — say in your Summary what you parked and on what. Do not ask
+  the operator to close you; if they do, the continuation reopens you.
+- Limits: 5 armed per terminal, at least 5 minutes out for `at`, and a line of work continued 8 times
+  needs the operator (`mc ask`). You can only park your own work; Robert parks others' (`--for`).
+- A `script` is exactly what you could run yourself: same sandbox, same secrets. Keep it a quick,
+  read-only probe (≤60s), print one line of evidence, and never write or send anything from it.
 
 ## Other terminals
 

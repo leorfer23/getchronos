@@ -31,6 +31,8 @@ export type { SessionPr } from "./store/session-prs.js";
 export { sessionSearchHook } from "./store/session-search-hook.js";
 export { notes } from "./store/notes.js";
 export { jots } from "./store/jots.js";
+export { continuations } from "./store/continuations.js";
+export type { Continuation, ContinuationKind, ContinuationStatus, ContinuationOutcome, ContinuationThen, NewContinuation } from "./store/continuations.js";
 export { proseSamples } from "./store/prose.js";
 export type { Jot, NewJot } from "./store/jots.js";
 export { launches } from "./store/launches.js";

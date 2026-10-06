@@ -290,6 +290,15 @@ export const CONFIG = {
   noteWorkers: Number(process.env.CHRONOS_NOTE_WORKERS ?? 3),
   // A note a worker already tried is not handed to another until it is edited, or this many days pass.
   noteWorkerRetryDays: Number(process.env.CHRONOS_NOTE_WORKER_RETRY_DAYS ?? 7),
+  // Continuations (src/continuations.ts, `mc when`). checkModel: the model of a `check` probe on a
+  // claude workspace (other CLIs use the workspace default). maxChecks: probes per continuation before
+  // it gives up and wakes the work as timed out. resumeDays: a closed terminal older than this is
+  // continued in a fresh terminal with a handoff instead of on its own transcript.
+  continuations: {
+    checkModel: process.env.CHRONOS_WHEN_CHECK_MODEL ?? "haiku",
+    maxChecks: Number(process.env.CHRONOS_WHEN_MAX_CHECKS ?? 100),
+    resumeDays: Number(process.env.CHRONOS_WHEN_RESUME_DAYS ?? 14),
+  },
   // Observability sweep cadence + thresholds.
   monitorEveryMin: Number(process.env.CHRONOS_MONITOR_MIN ?? 5),
   stuckRunHours: Number(process.env.CHRONOS_STUCK_RUN_HRS ?? 2),   // a 'running' run older than this = stuck

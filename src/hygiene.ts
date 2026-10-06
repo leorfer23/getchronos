@@ -14,7 +14,7 @@ const HYGIENE_EVERY_DAYS = 6;
 // Jobs created purely to run once (rate-limit fallback clones, the dream pass's per-slot jobs, note workers, the
 // retired hygiene compaction jobs still in old DBs) and never re-dispatched by id afterward — nothing
 // schedules or reruns them. Left alone they pile up in the jobs table/UI forever.
-export const EPHEMERAL_JOB_PREFIXES = ["fallback:", "hygiene:", "prose:", "dream:", "note-work:"];
+export const EPHEMERAL_JOB_PREFIXES = ["fallback:", "hygiene:", "prose:", "dream:", "note-work:", "when-check:"];
 let lastReapDay = "";
 
 // Once a day, delete ephemeral jobs that are done (no running/queued run) and old enough that a

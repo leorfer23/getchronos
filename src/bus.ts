@@ -188,6 +188,11 @@ export type BusEvent = (
   | { topic: "jot.updated"; jot_id: string; workspace_id: string }
   /** A scheduled follow-up opened a terminal on a note (src/jot-followup.ts). */
   | { topic: "jot.followup"; jot_id: string; workspace_id: string; session_id: string }
+  // Continuations (src/continuations.ts, `mc when`): one was armed, checked, met or cancelled
+  // (`updated`), and one was delivered — typed into its live terminal, resumed on the same transcript,
+  // or handed to a fresh terminal (`fired`, how = typed|resumed|opened).
+  | { topic: "continuation.updated"; continuation_id: string; workspace_id: string; session_id: string | null }
+  | { topic: "continuation.fired"; continuation_id: string; workspace_id: string; session_id: string; how: string; outcome: string; label: string }
   /** The workspace inbox changed (src/inbox.ts): a row filed, dismissed, snoozed or dispatched. */
   | { topic: "inbox.updated"; workspace_id: string; item_id: string }
   | { topic: "launch.updated"; launch_id: string; workspace_id: string }
