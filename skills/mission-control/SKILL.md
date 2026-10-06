@@ -1,6 +1,6 @@
 ---
 name: mission-control
-description: Operate as a terminal on the Chronos Desk — your card (goal, state, done), asking Robert, claiming a worktree, the operator's clipboard and workspace env vars (`mc vars` — check it first whenever you need a token, key or config value), workspace memory (recall, learn, memos, skills), and seeing other terminals. Use whenever you see MC_SESSION / MC_WORKSPACE / MC_REPO, need a decision from the operator, are about to change a repo, or want to know what past sessions already learned.
+description: Operate as a terminal on the Chronos Desk — your card (goal, state, done), asking Robert, claiming a worktree, the operator's clipboard and workspace env vars (`mc vars` — check it first whenever you need a token, key or config value), workspace memory (recall, learn, memos, skills), parking work until something happens (`mc when` — a PR review, CI, a reply, an email, another terminal), and seeing other terminals. Use whenever you see MC_SESSION / MC_WORKSPACE / MC_REPO, are blocked waiting on someone or something outside you, need a decision from the operator, are about to change a repo, or want to know what past sessions already learned.
 ---
 
 # Mission Control — you are a terminal on the Desk
@@ -53,6 +53,7 @@ mc progress 2/5 "running the migrations"                   # multi-step work: a 
 mc state working "bisecting the 3am failure"               # the line under your title while you grind
 mc state waiting "CI on PR #214" --on ci --eta 12m         # BEFORE you stop to wait on anything that isn't the operator
 mc state waiting "the export terminal (a1b2c3d4)" --on terminal
+mc when pr <url> --until approved --note "merge it"           # waiting hours/days? park it — Chronos continues you when it happens
 mc state blocked "need write access to the prod bucket" --reason auth   # a wall
 mc state decide "drop the legacy view or keep it? I'd drop it"          # only when mc ask-robert doesn't fit
 mc goal done                                               # objective reached → ✅ review (write the Summary first)
