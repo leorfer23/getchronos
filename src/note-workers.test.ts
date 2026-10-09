@@ -270,7 +270,7 @@ test("stale sweep: agent/nextday notes untouched N days close; operator, high, f
   assert.equal(expireStaleNotes(ws.id, NOW, 0), 0, "0 = off");
   // Reopened by hand → fresh again, not swept on the next fire.
   jots.update(stale.id, { status: "open" });
-  assert.equal(expireStaleNotes(ws.id, Date.now(), 10), 0);
+  assert.equal(expireStaleNotes(ws.id, NOW, 10), 0);
 });
 
 test("unlinkDeadWorkers: a mark whose run is over is dropped, a live one stays", () => {
