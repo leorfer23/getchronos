@@ -1,6 +1,7 @@
 import { bus, type BusEvent } from "./bus.js";
 import { OP_PREFIX } from "./operational-prefix.js";
 import { board, tickets, type BoardPost } from "./store.js";
+import { postRobertToDesk } from "./robert-desk.js";
 
 // The board service: publish posts onto the bus and wake @mentioned executives. This is the
 // in-house replacement for the whole Buzz inbound stack — no relay poller, no LLM router: a
@@ -100,6 +101,27 @@ async function defaultAsker(execId: string, text: string, wsId: string | null): 
   return (await a.askManagerWeb(text, undefined, wsId)).reply;
 }
 
+// A watch firing or a self-wake coming due (src/watches.ts) is the daemon waking Robert so he can tell
+// the operator something — but the operator never reads the board. His reply also goes to the Desk
+// thread and to Telegram, or the watch fired for nobody.
+const SELF_WAKE_KINDS = new Set(["watch", "wakeup"]);
+
+type WakeMirror = (post: BoardPost, reply: string) => void;
+let mirror: WakeMirror | null = null;
+export function setBoardWakeMirror(fn: WakeMirror | null): void {
+  mirror = fn;
+}
+
+function defaultMirror(post: BoardPost, reply: string): void {
+  postRobertToDesk({ body: reply, ws: post.workspace_id });
+  const label = post.body.split("\n")[0].slice(0, 120);
+  void import("./telegram/api.js")
+    .then(({ notify, esc }) =>
+      notify(`👔 <b>Robert</b> · ${esc(label)}\n\n${esc(reply.slice(0, 3500))}`, undefined, { board: false }),
+    )
+    .catch((err) => console.error("[board] wake telegram mirror failed", err));
+}
+
 async function wakeExec(execId: string, e: Extract<BusEvent, { topic: "board.posted" }>): Promise<void> {
   const post = board.get(e.post_id);
   if (!post) return;
@@ -116,6 +138,7 @@ async function wakeExec(execId: string, e: Extract<BusEvent, { topic: "board.pos
       ticket_id: post.ticket_id,
       depth: e.depth + 1,
     });
+    if (execId === "robert" && SELF_WAKE_KINDS.has(post.kind)) (mirror ?? defaultMirror)(post, reply);
   } catch (err: any) {
     // Depth is pinned to the cap so an error post can never wake anyone — no error loops.
     postToBoard({
