@@ -358,6 +358,24 @@ export async function removeWorktreeAs(
   };
 }
 
+/**
+ * The repo `mc worktree <ref>` means, among the repos this session's workspace may work in: its own,
+ * then the ones another workspace shared into it (repo_shares) — a borrower works in a shared repo
+ * exactly as in its own, through its own worktree. Owned rows come first, so they win a name tie. A
+ * session with no workspace keeps its old reach (every repo); a share never widens that. By id, exact
+ * name, path, then a name fragment.
+ */
+export function findClaimRepo(workspaceId: string | null | undefined, ref: string): { repo: Repo | undefined; candidates: Repo[] } {
+  const candidates = workspaceId ? repos.accessible(workspaceId) : repos.list();
+  const r = ref.trim();
+  const repo =
+    candidates.find((c) => c.id === r) ??
+    candidates.find((c) => c.name?.toLowerCase() === r.toLowerCase()) ??
+    candidates.find((c) => c.path === r || path.resolve(c.path) === path.resolve(r)) ??
+    candidates.find((c) => c.name?.toLowerCase().includes(r.toLowerCase()));
+  return { repo, candidates };
+}
+
 /** One row of `mc worktree list`: where it is (`host_id`, `repo_path` on that host) and what it holds. */
 export type ListedWorktree = WorktreeState & {
   repo: string;
@@ -375,7 +393,11 @@ export type ListedWorktree = WorktreeState & {
  */
 export async function listAllWorktrees(workspaceId?: string): Promise<ListedWorktree[]> {
   const live = sessions.list({ status: "live" }).filter((s) => (s.host_id || LOCAL_HOST_ID) === LOCAL_HOST_ID);
-  const list = repos.list(workspaceId);
+  // A workspace sees the trees of the repos it may work in: its own and the ones shared into it, so a
+  // borrower can list and remove the tree it claimed in a shared repo. Removal is still held to "the
+  // tree YOUR terminal claimed" (removeWorktreeAs), so seeing the owner's trees grants nothing more
+  // than the read access the share already gave.
+  const list = workspaceId ? repos.accessible(workspaceId) : repos.list();
   const out: ListedWorktree[] = [];
   for (const repo of list) {
     if (!repo?.path || !fs.existsSync(repo.path) || !(await isGitRepo(repo.path))) continue;

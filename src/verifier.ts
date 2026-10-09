@@ -12,6 +12,7 @@ import { tokenizePaths } from "./hosts/proc-spec.js";
 import { portableAllow, portableEnv, profileNameFor } from "./hosts/spawn-spec.js";
 import { isRemoteDir, type WorkDir } from "./hosts/workdir.js";
 import { worktreeRootFor } from "./worktree-core.js";
+import { sharedInReadonly } from "./shared-repos.js";
 import os from "node:os";
 import type { Job, Workspace } from "./types.js";
 
@@ -126,7 +127,8 @@ export async function verify(job: Job, resultSummary: string, wd?: WorkDir): Pro
   try {
     if (job.add_dirs) addDirs = JSON.parse(job.add_dirs);
   } catch {}
-  const { cmd, cmdArgs } = sandboxWrap(job.sandbox, job.cwd, addDirs, profileDir, denyDirs, spec.cmd, spec.args);
+  // A repo shared into this workspace is off the deny-list; its main checkout stays read-only here too.
+  const { cmd, cmdArgs } = sandboxWrap(job.sandbox, job.cwd, addDirs, profileDir, denyDirs, spec.cmd, spec.args, false, sharedInReadonly(job.workspace_id));
 
   return new Promise<Verdict>((resolve) => {
     const child = spawn(cmd, cmdArgs, {

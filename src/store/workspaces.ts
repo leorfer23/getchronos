@@ -162,13 +162,16 @@ export const workspaces = {
     db.prepare("DELETE FROM workspaces WHERE id = ?").run(id);
   },
   // Filesystem deny-list for a job scoped to `workspaceId`: every OTHER workspace's repo roots
-  // + their secrets files. Re-granted cwd/add_dirs still win (sandbox.ts layering).
+  // + their secrets files. Re-granted cwd/add_dirs still win (sandbox.ts layering). A repo another
+  // workspace explicitly shared INTO this one (repo_shares) is not "other" — it is left off, exactly
+  // like an own repo. Only the share's own workspace gets that; every other one still denies it.
   isolationDenyDirs(workspaceId: string): string[] {
     const otherRoots = db
       .prepare(
-        `SELECT r.path AS p FROM repos r WHERE r.workspace_id != ?`
+        `SELECT r.path AS p FROM repos r WHERE r.workspace_id != ?
+           AND r.id NOT IN (SELECT repo_id FROM repo_shares WHERE workspace_id = ?)`
       )
-      .all(workspaceId) as Array<{ p: string }>;
+      .all(workspaceId, workspaceId) as Array<{ p: string }>;
     const otherSecrets = db
       .prepare(
         `SELECT secrets_file AS p FROM workspaces WHERE id != ? AND secrets_file IS NOT NULL`

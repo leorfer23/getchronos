@@ -89,4 +89,47 @@ export const repos = {
   remove(id: string): void {
     db.prepare("DELETE FROM repos WHERE id = ?").run(id);
   },
+
+  // ── Sharing (migration 146). `list(ws)` stays OWNED only: everything that plans, files or lists a
+  // workspace's own work reads that. `accessible(ws)` is for one question only — may this workspace's
+  // agent touch this repo (sandbox grants, `mc worktree`, spawn cwd checks). A share widens access for
+  // exactly the workspace named in the row and for no one else.
+
+  /** Workspace ids this repo is shared with (never its owner). */
+  sharesOf(repoId: string): string[] {
+    return (
+      db.prepare("SELECT workspace_id FROM repo_shares WHERE repo_id = ? ORDER BY created_at ASC").all(repoId) as Array<{ workspace_id: string }>
+    ).map((r) => r.workspace_id);
+  },
+  /** Share `repoId` into `workspaceId`. Idempotent. Throws for an unknown repo or for its own owner. */
+  share(repoId: string, workspaceId: string): void {
+    const repo = this.get(repoId);
+    if (!repo) throw new Error(`repo not found: ${repoId}`);
+    if (repo.workspace_id === workspaceId) throw new Error("a repo cannot be shared with the workspace that owns it");
+    db.prepare("INSERT OR IGNORE INTO repo_shares (repo_id, workspace_id, created_at) VALUES (?,?,?)").run(repoId, workspaceId, now());
+  },
+  /** Stop sharing. True when a share was removed. */
+  unshare(repoId: string, workspaceId: string): boolean {
+    return db.prepare("DELETE FROM repo_shares WHERE repo_id = ? AND workspace_id = ?").run(repoId, workspaceId).changes > 0;
+  },
+  /** Repos OTHER workspaces shared into this one. The owner's own rows never appear here. */
+  sharedWith(workspaceId: string): Repo[] {
+    return db
+      .prepare(
+        `SELECT r.* FROM repos r JOIN repo_shares s ON s.repo_id = r.id
+         WHERE s.workspace_id = ? AND r.workspace_id != ? ORDER BY r.name ASC`,
+      )
+      .all(workspaceId, workspaceId) as Repo[];
+  },
+  /** Owned ∪ shared-in, deduped by id: every repo this workspace's agents may reach. */
+  accessible(workspaceId: string): Repo[] {
+    const out = new Map<string, Repo>();
+    for (const r of [...this.list(workspaceId), ...this.sharedWith(workspaceId)]) if (!out.has(r.id)) out.set(r.id, r);
+    return [...out.values()];
+  },
+  /** May `workspaceId` reach `repo` — its owner, or a workspace it was shared with. */
+  canAccess(repo: Pick<Repo, "id" | "workspace_id">, workspaceId: string): boolean {
+    if (repo.workspace_id === workspaceId) return true;
+    return !!db.prepare("SELECT 1 FROM repo_shares WHERE repo_id = ? AND workspace_id = ?").get(repo.id, workspaceId);
+  },
 };

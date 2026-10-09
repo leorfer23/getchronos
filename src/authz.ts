@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import type express from "express";
 import { CONFIG } from "./config.js";
-import { sessions, workspaces } from "./store.js";
-import type { Session } from "./types.js";
+import { repos, sessions, workspaces } from "./store.js";
+import type { Repo, Session } from "./types.js";
 import { forwardedHost } from "./hostlink/brain-link.js";
 import { hostPolicy, workspaceDenied } from "./hosts/policy.js";
 
@@ -121,6 +121,21 @@ export function checkScope(req: express.Request, res: express.Response, ownerWsI
   const scope = callerScope(req);
   if (scope === null) { res.status(401).json({ error: "invalid workspace token" }); return false; }
   if (scope.ws !== null && ownerWsId != null && ownerWsId !== scope.ws) {
+    res.status(404).json({ error: "not found" });
+    return false;
+  }
+  return true;
+}
+
+/**
+ * checkScope for a READ an agent makes on a repo it works in: the owner's workspace, or a workspace
+ * the repo was explicitly shared with (repo_shares). Every other workspace token still gets the same
+ * 404 checkScope gives. Never use it for a mutation — those stay admin-gated / owner-scoped.
+ */
+export function checkRepoScope(req: express.Request, res: express.Response, repo: Pick<Repo, "id" | "workspace_id">): boolean {
+  const scope = callerScope(req);
+  if (scope === null) { res.status(401).json({ error: "invalid workspace token" }); return false; }
+  if (scope.ws !== null && !repos.canAccess(repo, scope.ws)) {
     res.status(404).json({ error: "not found" });
     return false;
   }

@@ -3948,7 +3948,7 @@ function syncRunJotCli() {
   const backend = qs("#rj-backend").value;
   const saved = localStorage.getItem("desk-model:" + (backend || ""));
   fillModelSelect(qs("#rj-model"), backend, saved != null ? saved : (w?.default_model || undefined));
-  qs("#rj-cwd").innerHTML = '<option value="">default</option>' + (w?.repos || []).map((r) => '<option value="' + esc(r.path) + '">' + esc(r.name) + "</option>").join("");
+  qs("#rj-cwd").innerHTML = wsRepoOptions(w);
   syncCloudGate(qs("#rj-backend"), j.workspace_id);
 }
 function openRunJot(j, mode = "run", btn = null, check = null) {
@@ -4535,6 +4535,13 @@ function openNew(wsId) {
 }
 // Only what THIS client may run (claude and codex carry a per-workspace config dir; the rest share
 // one login). The daemon refuses the rest at spawn anyway.
+// The Where picker: the workspace's own repos, then the ones another workspace shared into it
+// (repo_shares) — reachable like its own, main checkout read-only, so the agent claims a worktree.
+function wsRepoOptions(w) {
+  const own = (w?.repos || []).map((r) => '<option value="' + esc(r.path) + '">' + esc(r.name) + "</option>").join("");
+  const shared = (w?.shared_repos || []).map((r) => '<option value="' + esc(r.path) + '">' + esc(r.name) + " · shared from " + esc(r.owner_name || r.owner_slug || "?") + "</option>").join("");
+  return '<option value="">default</option>' + own + shared;
+}
 function syncWs() {
   const w = S.workspaces.find((x) => x.id === qs("#f-ws").value);
   fillBackendSelect(qs("#f-backend"), w?.id, qs("#f-backend").value || undefined);
@@ -4542,7 +4549,7 @@ function syncWs() {
   const backend = qs("#f-backend").value;
   const saved = localStorage.getItem("desk-model:" + (backend || ""));
   fillModelSelect(qs("#f-model"), backend, saved != null ? saved : (w?.default_model || undefined));
-  qs("#f-cwd").innerHTML = '<option value="">default</option>' + (w?.repos || []).map((r) => '<option value="' + esc(r.path) + '">' + esc(r.name) + "</option>").join("");
+  qs("#f-cwd").innerHTML = wsRepoOptions(w);
   // The cloud gate needs the repo picker filled in to know which repo it is checking — re-run now
   // that #f-cwd has its options (the earlier call inside fillBackendSelect saw it still empty).
   syncCloudGate(qs("#f-backend"), w?.id);
@@ -5790,7 +5797,42 @@ async function loadSettings() {
     if (e.status === 404 && ST.ws) { ST.ws = null; return loadSettings(); }
     return toast("settings: " + errMsg(e));
   }
+  // A workspace's repos ride along for the Repos section (own repos + what they are shared with, and
+  // the repos shared INTO it). Best-effort: the knobs above render either way.
+  ST.wsInfo = ST.ws ? await api("/workspaces/" + encodeURIComponent(ST.ws)).catch(() => null) : null;
   renderSettings();
+}
+// Repos: what this workspace owns (and which other workspaces each is shared with — their agents may
+// work in it through their own worktree, main checkout read-only), then repos shared into it.
+function stReposSection() {
+  const W = ST.wsInfo;
+  if (!ST.ws || !W) return "";
+  const names = Object.fromEntries((ST.data?.workspaces || []).map((w) => [w.id, w.name]));
+  const own = (W.repos || []).map((r) => {
+    const on = r.shared_with || [];
+    const chips = on.map((id) => `<button class="on" data-st-unshare="${esc(r.id)}" data-ws="${esc(id)}" title="Stop sharing with ${esc(names[id] || id)}">${esc(names[id] || id.slice(0, 8))} ×</button>`).join("");
+    const opts = (ST.data?.workspaces || []).filter((w) => w.id !== ST.ws && !on.includes(w.id));
+    const pick = opts.length
+      ? `<select data-st-share="${esc(r.id)}"><option value="">share with…</option>${opts.map((w) => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join("")}</select>`
+      : "";
+    return `<div class="st-row"><div class="st-l"><div class="t">${esc(r.name)}</div><div class="h">${esc(r.path || "")}</div></div><div class="st-c"><div class="st-chips">${chips}${pick}</div></div></div>`;
+  }).join("");
+  const shared = (W.shared_repos || []).map((r) =>
+    `<div class="st-row"><div class="st-l"><div class="t">${esc(r.name)} <span class="src">shared from ${esc(r.owner_name || r.owner_slug || "?")}</span></div><div class="h">${esc(r.path || "")} · read-only checkout; agents claim a worktree</div></div><div class="st-c"><div class="st-chips"><button data-st-unshare="${esc(r.id)}" data-ws="${esc(ST.ws)}" title="Stop sharing it into this workspace">unshare</button></div></div></div>`).join("");
+  if (!own && !shared) return "";
+  return `<section class="st-sec"><h3>Repos</h3><div class="st-card">${own}${shared}</div></section>`;
+}
+async function stShare(repoId, wsId, on) {
+  try {
+    await api("/repos/" + encodeURIComponent(repoId) + "/shares" + (on ? "" : "/" + encodeURIComponent(wsId)), on
+      ? { method: "POST", body: JSON.stringify({ workspace_id: wsId }) }
+      : { method: "DELETE" });
+    toast(on ? "repo shared" : "repo unshared");
+  } catch (e) {
+    toast(errMsg(e));
+  }
+  await loadSettings();
+  load();
 }
 function stFmtWhen(iso) {
   if (!iso) return "";
@@ -5838,7 +5880,7 @@ function renderSettings() {
   };
   const groups = D.groups.filter((g) => D.settings.some((v) => v.group === g));
   qs("#st-main").innerHTML = acct + groups.map((g) =>
-    `<section class="st-sec"><h3>${esc(g)}</h3><div class="st-card">${D.settings.filter((v) => v.group === g).map(row).join("")}</div></section>`).join("");
+    `<section class="st-sec"><h3>${esc(g)}</h3><div class="st-card">${D.settings.filter((v) => v.group === g).map(row).join("")}</div></section>`).join("") + stReposSection();
 }
 async function saveSetting(key, value) {
   try {
@@ -5859,6 +5901,7 @@ stDlg.addEventListener("click", (e) => {
   if (t.id === "settings-close") return stDlg.close();
   if (t.dataset.stWs !== undefined) { ST.ws = t.dataset.stWs || null; return loadSettings(); }
   if (t.dataset.stReset) return saveSetting(t.dataset.stReset, null);
+  if (t.dataset.stUnshare) return stShare(t.dataset.stUnshare, t.dataset.ws, false);
   if (t.dataset.stBool) return saveSetting(t.dataset.stBool, !stDef(t.dataset.stBool)?.value);
   if (t.dataset.stList) {
     const cur = Array.isArray(stDef(t.dataset.stList)?.value) ? [...stDef(t.dataset.stList).value] : [];
@@ -5874,6 +5917,7 @@ stDlg.addEventListener("keydown", (e) => {
 stDlg.addEventListener("change", (e) => {
   const t = e.target;
   if (t.dataset.stEnum) return saveSetting(t.dataset.stEnum, t.value === "" ? null : t.value);
+  if (t.dataset.stShare) return t.value ? stShare(t.dataset.stShare, t.value, true) : undefined;
   if (t.dataset.stText) {
     const v = stDef(t.dataset.stText);
     const raw = t.value.trim();

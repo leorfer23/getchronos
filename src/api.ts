@@ -74,7 +74,7 @@ import { applyHook, declare as declareStatus, sessionGoalReached, setProgress, s
 import { parseEvery, watchView } from "./desk-watch.js";
 import { clipboardEnabled, readClipboard, writeClipboard } from "./clipboard.js";
 import { hostJobPin } from "./hosts/job-cwd.js";
-import { ensureSessionWorktree, listAllWorktrees, remoteWorktreeBranch, removeWorktreeAs, type WorktreeState } from "./worktrees.js";
+import { ensureSessionWorktree, findClaimRepo, listAllWorktrees, remoteWorktreeBranch, removeWorktreeAs, type WorktreeState } from "./worktrees.js";
 import { askRobertEnabled, askerLabel, escalateAsk } from "./ask-robert.js";
 import * as noteSvc from "./notes.js";
 import { forgetMemorySeen, markMemorySeen, memoryNotice, rememberFact } from "./memory-tree.js";
@@ -138,7 +138,8 @@ import { ensureIntakeJob } from "./intake.js";
 import { RepoGitError, resolveRepoGitFields } from "./repo-git.js";
 import type { GoalKind, LessonState, Session } from "./types.js";
 import { redactConnectorConfig, publicTrigger } from "./redact.js";
-import { requireAdmin, tokenOk, callerScope, checkScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
+import { sharedRepoViews } from "./shared-repos.js";
+import { requireAdmin, tokenOk, callerScope, checkScope, checkRepoScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
 import { wsByIdOrSlug, wsRefs } from "./ws-ref.js";
 import { findHost, hostOnline } from "./hosts/index.js";
 import { RemoteHost } from "./hosts/remote.js";
@@ -162,7 +163,7 @@ import {
   NewContinuationSchema, FireContinuationSchema, CancelContinuationSchema,
   NewJotSchema, JotPatchSchema, JotAppendSchema, JotFollowUpSchema, JotResolveSchema, JOT_BODY_MAX, RunJotSchema, ReorderJotsSchema, PlanNextDaySchema,
   NewTicketSchema, PatchTicketSchema, TicketLinkSchema, TicketNoteSchema, PushCommentSchema, PushStatusSchema, PushHoursSchema,
-  DeclareStepsSchema, SetStepSchema, NewAskSchema, AnswerAskSchema, EscalateAskSchema, HoldSchema, WatchSchema, ClipboardSchema, ClaimWorktreeSchema, RemoveWorktreeSchema, NewMessageSchema,
+  DeclareStepsSchema, SetStepSchema, NewAskSchema, AnswerAskSchema, EscalateAskSchema, HoldSchema, WatchSchema, ClipboardSchema, ClaimWorktreeSchema, ShareRepoSchema, RemoveWorktreeSchema, NewMessageSchema,
   DispatchTicketSchema, SetPlanSchema, GradeSchema, NewAttachmentSchema,
   ReviewNotesSchema, ReviewVerdictSchema,
   NewCalendarSchema, PatchCalendarSchema, CalendarIngestSchema, ImportLocalCalendarsSchema,
@@ -821,12 +822,7 @@ export function startServer() {
     if (sess.status !== "live") return res.status(409).json({ error: "that terminal has ended" });
     // Name it by repo name, id, or path — the agent knows the repo by whatever the task called it.
     const ref = String(req.body.repo).trim();
-    const candidates = repos.list(sess.workspace_id ?? undefined);
-    const repo =
-      candidates.find((r) => r.id === ref) ??
-      candidates.find((r) => r.name?.toLowerCase() === ref.toLowerCase()) ??
-      candidates.find((r) => r.path === ref || path.resolve(r.path) === path.resolve(ref)) ??
-      candidates.find((r) => r.name?.toLowerCase().includes(ref.toLowerCase()));
+    const { repo, candidates } = findClaimRepo(sess.workspace_id, ref);
     if (!repo)
       return res.status(404).json({
         error: `no repo matching "${ref}" in this workspace`,
@@ -1239,6 +1235,9 @@ export function startServer() {
         // git_remote rides along so the picker can tell whether cursor-cloud may offer this repo at
         // all (GET /backends/cursor-cloud/repos checks whether the Cursor GitHub App can also see it).
         repos: repos.list(w.id).map((r) => ({ id: r.id, name: r.name, path: r.path, git_remote: r.git_remote })),
+        // Repos another workspace shared INTO this one (repo_shares): the spawn dialog may open a
+        // terminal in one, and the Desk marks it "shared from <owner>".
+        shared_repos: sharedRepoViews(w.id),
       })),
       backends: listBackends(),
       // Every client's parked rows ride the same payload as the wall: the Desk repaints on every bus
@@ -2887,7 +2886,10 @@ export function startServer() {
     return {
       ...rest,
       connector_config: redactConnectorConfig(w.connector_config),
-      repos: repos.list(w.id),
+      // `shared_with`: the workspaces each OWN repo is shared into (ids). `shared_repos`: repos other
+      // workspaces shared into this one, with their owner — never mixed into `repos` (= owned only).
+      repos: repos.list(w.id).map((r) => ({ ...r, shared_with: repos.sharesOf(r.id) })),
+      shared_repos: sharedRepoViews(w.id),
     };
   };
 
@@ -2914,7 +2916,7 @@ export function startServer() {
     // Asked from a terminal on another computer (the forwarder's stamp, never the caller's): each repo
     // also carries `host_path`, that computer's checkout of it, or null — `repos.path` is the brain's.
     const fh = forwardedHost(req);
-    const onHost = (w: any) => fh ? { ...w, repos: reposOnHost(w.repos, fh) } : w;
+    const onHost = (w: any) => fh ? { ...w, repos: reposOnHost(w.repos, fh), shared_repos: reposOnHost(w.shared_repos, fh) } : w;
     res.json(all.map((w) => ({ ...onHost(wsWithRepos(w)), last_sync: syncs[w.id] ?? null })));
   });
 
@@ -3675,6 +3677,43 @@ export function startServer() {
     res.json({ ok: true });
   });
 
+  // ── Shared repos (repo_shares, migration 146). The owner stays repos.workspace_id; a share lets
+  // ONE other workspace's agents reach the repo like their own (sandbox, `mc worktree`), main checkout
+  // still read-only. Admin-gated, reads included: who can reach which client's code is the operator's
+  // call, never something an agent looks up or grants itself.
+  const shareView = (repoId: string) =>
+    repos.sharesOf(repoId).map((id) => {
+      const w = workspaces.get(id);
+      return { workspace_id: id, slug: w?.slug ?? null, name: w?.name ?? null };
+    });
+  api.get("/repos/:id/shares", requireAdmin, (req, res) => {
+    const repo = repos.get(req.params.id);
+    if (!repo) return res.status(404).json({ error: "repo not found" });
+    res.json({ repo_id: repo.id, owner_id: repo.workspace_id, shares: shareView(repo.id) });
+  });
+  api.post("/repos/:id/shares", requireAdmin, validate(ShareRepoSchema), (req, res) => {
+    const repo = repos.get(req.params.id);
+    if (!repo) return res.status(404).json({ error: "repo not found" });
+    const ref = String(req.body.workspace_id);
+    const ws = workspaces.get(ref) ?? workspaces.getBySlug(ref);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+    if (ws.id === repo.workspace_id) return res.status(400).json({ error: "a repo cannot be shared with the workspace that owns it" });
+    repos.share(repo.id, ws.id);
+    activity.add({ workspace_id: repo.workspace_id, topic: "repo.shared", actor: "operator", entity: ws.slug, detail: repo.name });
+    bus.publish({ topic: "workspace.changed" });
+    res.status(201).json({ repo_id: repo.id, owner_id: repo.workspace_id, shares: shareView(repo.id) });
+  });
+  api.delete("/repos/:id/shares/:workspaceId", requireAdmin, (req, res) => {
+    const repo = repos.get(req.params.id);
+    if (!repo) return res.status(404).json({ error: "repo not found" });
+    const ws = workspaces.get(req.params.workspaceId) ?? workspaces.getBySlug(req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+    if (!repos.unshare(repo.id, ws.id)) return res.status(404).json({ error: "not shared with that workspace" });
+    activity.add({ workspace_id: repo.workspace_id, topic: "repo.unshared", actor: "operator", entity: ws.slug, detail: repo.name });
+    bus.publish({ topic: "workspace.changed" });
+    res.json({ repo_id: repo.id, owner_id: repo.workspace_id, shares: shareView(repo.id) });
+  });
+
   // Gate commands this repo's own build files imply — npm scripts, pytest, go test, cargo, flutter,
   // dbt, gradle, make. Read-only suggestion: attaching a repo shouldn't mean the operator (or Robert)
   // remembering every stack's incantation. Nothing runs until it's saved to gate_cmds.
@@ -3691,7 +3730,8 @@ export function startServer() {
   api.get("/repos/:id/accel", (req, res) => {
     const repo = repos.get(req.params.id);
     if (!repo) return res.status(404).json({ error: "repo not found" });
-    if (!checkScope(req, res, repo.workspace_id)) return;
+    // Read-only status: the owner, and a workspace the repo is shared with (it works in that repo too).
+    if (!checkRepoScope(req, res, repo)) return;
     const ws = workspaces.get(repo.workspace_id);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
     res.json(accelStatus(repo, ws));
@@ -4601,7 +4641,7 @@ export function startServer() {
       if (scope.ws) {
         const w = workspaces.get(scope.ws);
         if (w) roots.push(wsTicketsDir(w.slug));
-        for (const r of repos.list()) if (r.workspace_id === scope.ws && (r as any).path) roots.push((r as any).path);
+        for (const r of repos.accessible(scope.ws)) if (r.path) roots.push(r.path);
       }
       const inRoots = roots.some((root) => {
         try { return (p + path.sep).startsWith(fs.realpathSync(root) + path.sep); } catch { return false; }

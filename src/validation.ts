@@ -754,6 +754,11 @@ export const NewAskSchema = z
     message: "an ask needs exactly one of run_id (a dispatched run) or session_id (a terminal)",
   });
 
+/** POST /repos/:id/shares — share a repo into another workspace (id or slug). */
+export const ShareRepoSchema = z.object({
+  workspace_id: z.string().min(1).max(200),
+}).strict();
+
 export const ClaimWorktreeSchema = z.object({
   /** Repo by name, id or path — the agent knows it by whatever the task called it. */
   repo: z.string().min(1).max(300),
