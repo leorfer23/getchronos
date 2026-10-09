@@ -2099,6 +2099,22 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       CREATE INDEX idx_continuations_ws ON continuations(workspace_id, status);`),
   },
 
+  {
+    version: 146,
+    name: "repo_shares — a repo one workspace owns, shared into another workspace's sandbox",
+    // repos.workspace_id stays the one OWNER. A row here lets `workspace_id` reach the repo the way it
+    // reaches its own (sandbox deny-list, terminal/run grants, `mc worktree`), with the main checkout
+    // still read-only. Ownership listings (ideas, dream, intake, tickets, nextday) never read this.
+    up: (db) => db.exec(`
+      CREATE TABLE repo_shares (
+        repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (repo_id, workspace_id)
+      );
+      CREATE INDEX idx_repo_shares_ws ON repo_shares(workspace_id);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

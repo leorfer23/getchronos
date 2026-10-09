@@ -565,7 +565,9 @@ export function scriptVerdict(code: number | null, stdout: string, stderr: strin
 const realRunScript: RunScriptFn = async (c) => {
   const ws = workspaces.get(c.workspace_id);
   if (!ws) return { met: false, error: true, out: "workspace is gone" };
-  const repoPaths = repos.list(ws.id).map((r) => r.path).filter((p) => p && fs.existsSync(p));
+  // Owned + shared-in (repo_shares), exactly as a terminal of this workspace gets them: every main
+  // checkout among them read-only below, so a borrower's script reads the shared repo, never writes it.
+  const repoPaths = repos.accessible(ws.id).map((r) => r.path).filter((p) => p && fs.existsSync(p));
   const cwd = ws.default_dir && fs.existsSync(ws.default_dir) ? ws.default_dir : repoPaths[0] || os.homedir();
   const mode = clampSandbox(ws.sandbox_mode as SandboxMode, ws.id);
   const { cmd, cmdArgs } = sandboxWrap(

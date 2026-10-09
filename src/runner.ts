@@ -82,6 +82,8 @@ export function shouldFileReviewOnEnd(name?: string | null): boolean {
 // worktreeSandboxDirs moved to worktree-core.ts (store-free) so a host builds the same sandbox for a
 // run in ITS worktree (HOSTS.md phase 5); re-exported here for existing callers.
 import { worktreeSandboxDirs } from "./worktree-core.js";
+import { ensureRoot, mainCheckouts } from "./hostd/resolve.js";
+import { sharedReposBlock } from "./shared-repos.js";
 import { routeConfigDir, routeProfileForHost } from "./profile-route.js";
 export { worktreeSandboxDirs };
 
@@ -305,6 +307,8 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
   const appendSystem = [
     ctx && ctx !== job.append_system ? [ctx, job.append_system].filter(Boolean).join("\n\n") : job.append_system,
     mcNote,
+    // Repos shared into this workspace — a brain run only: a host run is never granted them.
+    job.workspace_id && runHostId === LOCAL_HOST_ID ? sharedReposBlock(job.workspace_id) : "",
     retryNote,
     messagesNoteText,
   ].filter(Boolean).join("\n\n");
@@ -317,13 +321,21 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
   } catch {}
   const buildRepo = ctxRepoId ? repos.get(ctxRepoId) : undefined;
   const wt = worktreeSandboxDirs(buildRepo?.path, job.cwd);
+  // Write-denied dirs for this run: the build repo's main checkout when it builds in a worktree, plus
+  // the main checkout of every repo another workspace SHARED into this one (repo_shares). A borrower
+  // reads a shared repo and works in a worktree of it, never in the owner's checkout — that is the
+  // whole difference from `sandbox_allow`. Its worktree root is granted so `mc worktree` works there.
+  const readonlyDirs = [...wt.readonly];
   if (ws) {
     const excluded = new Set<string>([job.cwd, ...wt.readonly]);
+    const sharedIn = repos.sharedWith(ws.id).filter((r) => r.path && fs.existsSync(r.path));
     const grant = [
-      ...repos.list(ws.id).map((r) => r.path).filter((p) => p && !excluded.has(p) && fs.existsSync(p)),
+      ...repos.accessible(ws.id).map((r) => r.path).filter((p) => p && !excluded.has(p) && fs.existsSync(p)),
+      ...sharedIn.map((r) => ensureRoot(r.path)).filter((p): p is string => !!p),
       ensureWsTicketsDir(ws.slug),
     ];
     addDirs = [...new Set([...addDirs, ...grant, ...wt.grant])];
+    for (const d of mainCheckouts(sharedIn.map((r) => r.path))) if (!readonlyDirs.includes(d)) readonlyDirs.push(d);
   }
   const effJob = { ...job, append_system: appendSystem, add_dirs: addDirs.length ? JSON.stringify(addDirs) : null };
   const context = [replayNote, runs.get(runId)?.context ?? null].filter(Boolean).join("\n\n") || null;
@@ -398,7 +410,7 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
     const allowSecrets = workspaceSandboxAllow(
       job.workspace_id ? (workspaces.get(job.workspace_id)?.sandbox_allow ?? null) : null,
     );
-    const sandboxed = sandboxWrap(sandboxMode, job.cwd, addDirs, profileDir, denyDirs, backend.bin(), args, egressLocked(job.workspace_id), wt.readonly, allowSecrets);
+    const sandboxed = sandboxWrap(sandboxMode, job.cwd, addDirs, profileDir, denyDirs, backend.bin(), args, egressLocked(job.workspace_id), readonlyDirs, allowSecrets);
     // Headless runs get the same `nice` a Desk terminal does (src/machine.ts): a dispatched build is
     // no less able to fork a full vitest pool, and the operator's UI outranks both.
     const { cmd, cmdArgs } = niceWrap(sandboxed.cmd, sandboxed.cmdArgs);

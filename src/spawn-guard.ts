@@ -19,11 +19,13 @@ interface Root {
 
 // Directories a workspace's jobs/sessions may legitimately point cwd/add_dirs at: its own repos (+
 // their sibling worktree checkouts) and ticket-files dir, plus $HOME itself (bare/no-repo chats land
-// there). No workspace → only $HOME (nothing else to trust it against).
+// there). No workspace → only $HOME (nothing else to trust it against). Repos another workspace
+// shared INTO this one (repo_shares) count as its own here — the sandbox still keeps their main
+// checkout read-only, so a cwd there reads but cannot write.
 function allowedRoots(workspaceId?: string | null): Root[] {
   const roots: Root[] = [{ path: fs.realpathSync(home), exact: true }];
   if (!workspaceId) return roots;
-  for (const r of repos.list(workspaceId)) {
+  for (const r of repos.accessible(workspaceId)) {
     if (!r.path) continue;
     try {
       const realRepoPath = fs.realpathSync(r.path);

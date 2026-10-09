@@ -31,6 +31,7 @@ import { getBody, appendNote, updateTicket, ticketBranch } from "./tickets.js";
 import { bus } from "./bus.js";
 import { captureLearnings } from "./notes.js";
 import { agentContext } from "./skills.js";
+import { sharedReposBlock } from "./shared-repos.js";
 import { markMemorySeen } from "./memory-tree.js";
 import { relevanceBlock } from "./recall.js";
 import { aiSessionDigest, quickTitle } from "./summarize.js";
@@ -698,7 +699,7 @@ export async function openSession(
   // Repo-scoped ★ memos load only for their repos: use the session's repo, falling back to its
   // ticket's repo (a ticket terminal may carry only ticket_id) — same resolution as resolveSessionCwd.
   const ctxRepoId = row.repo_id ?? (row.ticket_id ? tickets.get(row.ticket_id)?.repo_id ?? null : null);
-  const ctx = opts.workspace_id ? agentContext(opts.workspace_id, ctxRepoId) : "";
+  const ctx = opts.workspace_id ? [agentContext(opts.workspace_id, ctxRepoId), sharedReposBlock(opts.workspace_id, { paths: !remote })].filter(Boolean).join("\n\n") : "";
   // This spawn bakes today's memory into the prompt: only changes after now need a notice (memory-tree.ts).
   if (opts.workspace_id) markMemorySeen(row.id);
   // Ticket-bound Desk terminals get the same relevance pointers dispatched jobs get (tickets.ts):
@@ -768,9 +769,12 @@ export async function openSession(
     // without this line a strict workspace's agent would `cd` into its worktree and get "Operation
     // not permitted" on every write, with nothing explaining why. Granting the ROOT (not a specific
     // worktree) is what makes it work for whichever repo the agent turns out to need.
+    // Shared-in repos (repo_shares) count as the workspace's own here — reachable, worktree root
+    // writable — and, like every own repo, their main checkout is read-only (sharedCheckouts below).
+    const reachable = opts.workspace_id ? repos.accessible(opts.workspace_id) : [];
     const repoDirs = opts.workspace_id
       ? [
-          ...repos.list(opts.workspace_id).flatMap((r) =>
+          ...reachable.flatMap((r) =>
             r.path && fs.existsSync(r.path) ? [r.path, ensureWorktreeRoot(r.path)].filter((p): p is string => !!p) : [],
           ).filter((p) => p !== cwd),
           ...(ws ? [ensureWsTicketsDir(ws.slug)] : []),
@@ -789,7 +793,8 @@ export async function openSession(
     // change a repo claims its own worktree (`mc worktree`, created by the daemon, outside the sandbox)
     // and works there. Only real main checkouts: `.git` a directory, so a repo registered at a worktree
     // or a non-git folder (nowhere to claim a worktree from) stays writable.
-    const sharedCheckouts = opts.workspace_id ? mainCheckouts(repos.list(opts.workspace_id).map((r) => r.path)) : [];
+    // A repo shared in from another workspace is no exception: its borrower claims a worktree too.
+    const sharedCheckouts = opts.workspace_id ? mainCheckouts(reachable.map((r) => r.path)) : [];
     const doResume = !!(opts.resumeId || opts.resumeAgent);
     // Pin / resume id for CLIs that store the transcript under a UUID we choose (claude, cursor, grok).
     // Bus/Focus stay keyed by this Chronos id. Grok before pinning minted its own UUID under cwd —
@@ -885,7 +890,8 @@ export async function openSession(
       cliSession: spawnSessionId,
       resume: doResume,
       repo: repo ? { id: repo.id, git_remote: repo.git_remote } : null,
-      wsRepos: opts.workspace_id ? repos.list(opts.workspace_id).map((r) => ({ id: r.id, git_remote: r.git_remote })) : [],
+      // Shared-in repos too: the host grants them like own repos, main checkout read-only (hostd/terminals.ts).
+      wsRepos: opts.workspace_id ? repos.accessible(opts.workspace_id).map((r) => ({ id: r.id, git_remote: r.git_remote })) : [],
       worktree: t && repo ? { branch: ticketBranch(t.key), base: repo.default_branch } : null,
       // Only a path the HOST reported: this row's cwd or claimed worktree (a resume), or those of the
       // terminal this one stands in for on the same host (failover). Never a brain-chosen directory.
@@ -906,7 +912,7 @@ export async function openSession(
     });
     if (dropped.length) console.warn(`[terminal] remote ${row.id.slice(0, 8)}: not sent to host ${targetHost} (brain-only paths): ${dropped.join(", ")}`);
     // HOSTS.md's rule, checked on every spawn rather than trusted: no brain path reaches a host.
-    const leaks = brainPathsIn(spec, [os.homedir(), process.cwd(), configDir, ...(opts.workspace_id ? repos.list(opts.workspace_id).map((r) => r.path) : [])]);
+    const leaks = brainPathsIn(spec, [os.homedir(), process.cwd(), configDir, ...(opts.workspace_id ? repos.accessible(opts.workspace_id).map((r) => r.path) : [])]);
     if (leaks.length) {
       sessions.end(row.id, "spawn refused: brain path in remote spec");
       throw new Error(`refusing to send brain paths to host ${targetHost}: ${leaks.join("; ")}`);
