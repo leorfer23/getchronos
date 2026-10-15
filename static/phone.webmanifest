@@ -1,0 +1,11 @@
+{
+  "name": "Chronos",
+  "short_name": "Chronos",
+  "start_url": "/phone",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#10140F",
+  "theme_color": "#10140F",
+  "icons": [{ "src": "/phone-icon.png", "sizes": "192x192", "type": "image/png", "purpose": "any" }]
+}

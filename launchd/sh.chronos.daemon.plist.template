@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template. Do not install this file directly — run `npm run install:launchd`, which substitutes
+     the double-underscore tokens below with values from the machine it runs on and writes the
+     result to ~/Library/LaunchAgents/. Machine-specific values (home dir, checkout location,
+     which node) differ per Mac, so they must never be committed here. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.chronos.daemon</string>
+
+  <!-- Absolute node path, captured at install time. Two reasons it is not just "node":
+       launchd starts with a minimal PATH, and on a machine using a version manager the
+       Homebrew node may be a DIFFERENT major than the one node_modules was built against —
+       better-sqlite3 is a native module and aborts on a NODE_MODULE_VERSION mismatch. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE_BIN__</string>
+    <string>__REPO_DIR__/dist/index.js</string>
+  </array>
+
+  <!-- Also where .secrets is read from (src/env.ts loads ./.secrets relative to cwd). -->
+  <key>WorkingDirectory</key>
+  <string>__REPO_DIR__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- node's own dir first so child processes (claude, npm, tsx) inherit the same runtime.
+         Toolchains that only a login profile normally exports belong here too, because evidence
+         gates run through `bash -l` and a profile written for zsh is invisible to it. That split
+         is not theoretical: a repo's gates failed with `flutter: command not found` while the build
+         agent — which runs its commands through the user's own shell — had just run flutter fine.
+         A gate must see the same tools as the build it is gating. Paths that do not exist on a
+         given machine are harmless. -->
+    <!-- launchd hands a gui agent no HOME/USER/LOGNAME, and the claude CLI's keychain lookup needs
+         USER: without it every spawned agent reports "not logged in" and silently degrades to the
+         fallback engine, which then answers as the vendor instead of the persona. Cost an afternoon
+         on 2026-08-13 — the credentials were fine, the environment was not. -->
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>USER</key>
+    <string>__USER__</string>
+    <key>LOGNAME</key>
+    <string>__USER__</string>
+    <key>PATH</key>
+    <string>__NODE_DIR__:__HOME__/.local/bin:__HOME__/flutter/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <!-- launchd gives a gui agent no locale, and CoreFoundation-backed tools then assume MacRoman:
+         pbcopy/pbpaste (and anything a spawned agent shells out to) turn "│ ❯" into "‚îÇ ‚ùØ" on the
+         way to the clipboard. UTF-8 here, and child-env.ts defaults it again for spawned agents. -->
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+    <key>LC_ALL</key>
+    <string>en_US.UTF-8</string>
+    <key>CHRONOS_PORT</key>
+    <string>__PORT__</string>
+    <!-- Telegram/relay tokens and this machine's CHRONOS_PROTECTED_DIRS_EXTRA live in
+         __REPO_DIR__/.secrets (gitignored), loaded at boot. Nothing secret belongs in here:
+         plists in ~/Library/LaunchAgents are world-readable. -->
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/chronos.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/chronos.err.log</string>
+</dict>
+</plist>

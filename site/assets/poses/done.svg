@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 182" role="img" aria-label="Tock the Chronos hourglass mascot, done">
+  <defs>
+    <pattern id="ink-slate" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(15)"><circle cx="1.5" cy="1.5" r="1.5" fill="#8D97AC"/></pattern>
+    <pattern id="ink-slate-lt" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(15)"><circle cx="1.5" cy="1.5" r="1.02" fill="#8D97AC"/></pattern>
+    <pattern id="ink-amber" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><circle cx="1.5" cy="1.5" r="1.5" fill="#E8A33D"/></pattern>
+    <pattern id="ink-amber-lt" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><circle cx="1.5" cy="1.5" r="1.08" fill="#E8A33D"/></pattern>
+    <pattern id="ink-white" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(75)"><circle cx="1.5" cy="1.5" r="1.56" fill="#F2EDE3"/></pattern>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+    <clipPath id="clip-top"><path d="M28 30 C 26 52, 58 62, 69 74 L81 74 C 92 62, 124 52, 122 30 Z"/></clipPath>
+    <clipPath id="clip-bot"><path d="M69 76 C 58 88, 26 96, 28 118 L122 118 C 124 96, 92 88, 81 76 Z"/></clipPath>
+    
+  </defs>
+  <rect id="ground" width="150" height="182" fill="#EFE6D4"/>
+
+  <g id="plate-slate" transform="translate(-0.6 0.5)"><g id="limbs"><path id="arm-l" d="M34 108 q -19 6 -20 22" fill="none" stroke="url(#ink-slate)" stroke-width="9" stroke-linecap="round"/>
+       <path id="arm-r" d="M116 108 q 19 6 20 22" fill="none" stroke="url(#ink-slate)" stroke-width="9" stroke-linecap="round"/>
+    <g id="legs"><path d="M57 134 V152 M93 134 V152" stroke="url(#ink-slate)" stroke-width="11" stroke-linecap="round"/>
+    <path d="M51 159 h15 M99 159 h-15" stroke="url(#ink-slate)" stroke-width="11" stroke-linecap="round"/></g></g>
+    <g id="frame"><path id="cap-top" d="M16 22 a8 8 0 0 1 8 -8 h102 a8 8 0 0 1 0 16 h-102 a8 8 0 0 1 -8 -8 Z" fill="url(#ink-slate)"/><path id="cap-bottom" d="M16 126 a8 8 0 0 1 8 -8 h102 a8 8 0 0 1 0 16 h-102 a8 8 0 0 1 -8 -8 Z" fill="url(#ink-slate)"/></g>
+    <g id="glass"><path id="bulb-top" d="M28 30 C 26 52, 58 62, 69 74 L81 74 C 92 62, 124 52, 122 30 Z" fill="none" stroke="url(#ink-slate)" stroke-width="2.6"/><path id="bulb-bottom" d="M69 76 C 58 88, 26 96, 28 118 L122 118 C 124 96, 92 88, 81 76 Z" fill="none" stroke="url(#ink-slate)" stroke-width="2.6"/></g></g>
+  <g id="plate-amber" transform="translate(1.2 -0.8)"><g id="sand-top"></g><g id="stream"></g><g id="sand-bottom-wrap" clip-path="url(#clip-bot)"><path id="sand-bottom" d="M-20 102.0 Q 75 87.0 170 102.0 L 170 126 L -20 126 Z" fill="url(#ink-amber)"/></g></g>
+  <g id="plate-white" transform="translate(0 0)"><g id="eye" data-mood="bright">
+      <circle cx="58" cy="100" r="11.0" fill="url(#ink-white)"/><circle cx="92" cy="100" r="11.0" fill="url(#ink-white)"/><circle cx="58.0" cy="100.0" r="4.6" fill="#3A4152"/><circle cx="92.0" cy="100.0" r="4.6" fill="#3A4152"/>
+      <g id="brow"><path d="M48.0 79.9 Q 58 78.1 68.0 83.1" fill="none" stroke="url(#ink-slate)" stroke-width="3.2" stroke-linecap="round"/><path d="M82.0 83.1 Q 92 78.1 102.0 79.9" fill="none" stroke="url(#ink-slate)" stroke-width="3.2" stroke-linecap="round"/></g></g></g>
+  <g id="flecks"><circle cx="49.6" cy="114.9" r="0.91" fill="#C0506A" opacity="0.31"/><circle cx="138.1" cy="107.3" r="1.46" fill="#8D97AC" opacity="0.37"/><circle cx="33.4" cy="100.0" r="1.49" fill="#C0506A" opacity="0.39"/><circle cx="6.8" cy="41.4" r="0.82" fill="#C0506A" opacity="0.57"/><circle cx="149.3" cy="151.8" r="0.62" fill="#8D97AC" opacity="0.48"/><circle cx="92.4" cy="155.0" r="1.55" fill="#E8A33D" opacity="0.58"/><circle cx="98.9" cy="145.7" r="1.44" fill="#E8A33D" opacity="0.55"/><circle cx="57.0" cy="69.0" r="0.78" fill="#E8A33D" opacity="0.31"/><circle cx="82.2" cy="129.9" r="0.85" fill="#E8A33D" opacity="0.53"/><circle cx="10.4" cy="79.9" r="1.16" fill="#C0506A" opacity="0.53"/><circle cx="116.9" cy="117.6" r="1.44" fill="#E8A33D" opacity="0.56"/><circle cx="112.3" cy="82.4" r="0.93" fill="#8D97AC" opacity="0.56"/><circle cx="73.5" cy="67.1" r="1.45" fill="#E8A33D" opacity="0.37"/><circle cx="19.2" cy="93.7" r="1.04" fill="#C0506A" opacity="0.32"/></g>
+  <rect id="grain" width="150" height="182" filter="url(#grain)" opacity="0.08" style="mix-blend-mode:overlay"/>
+</svg>

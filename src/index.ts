@@ -1,0 +1,154 @@
+import "./env.js";
+import { CONFIG } from "./config.js";
+import { startServer } from "./api.js";
+import { reloadSchedules } from "./scheduler.js";
+import { startTelegram } from "./telegram.js";
+import { startRelay } from "./relay-client.js";
+import { startNotify } from "./notify.js";
+import { startPush } from "./push.js";
+import { sessionActivity, sessionPrompt } from "./terminal.js";
+import { startCalendar } from "./calendar.js";
+import { startReminders } from "./reminders.js";
+import { startTerminals } from "./terminal.js";
+import { startRemoteTerminals } from "./remote-terminals.js";
+import { startHostFailover } from "./host-failover.js";
+import { startRemoteRuns } from "./remote-runs.js";
+import { startConnectorSync } from "./connectors/index.js";
+import { startRepoScan } from "./repo-scan.js";
+import { startMonitor } from "./monitor.js";
+import { startFollowUps } from "./jot-followup.js";
+import { startContinuations } from "./continuations.js";
+import { startAutoPlan } from "./autoplan.js";
+import { startBurnGuard } from "./burn-guard.js";
+import { startIdeas } from "./ideas.js";
+import { startWriteback } from "./writeback.js";
+import { startIntake } from "./intake.js";
+import { installAllSlackMcp } from "./slack.js";
+import { ensureAllCleanupJobs, startNoteWorkerHook } from "./inbox-cleanup.js";
+import { installAllFffMcp, installRtkRewriteScript } from "./efficiency-tools.js";
+import { startEgress } from "./egress.js";
+import { startActivity } from "./activity.js";
+import { startMachineGovernor } from "./machine.js";
+import { startProcReaper } from "./resources/brain.js";
+import { startBrowserPool } from "./resources/browser-pool.js";
+import { startAwake } from "./awake.js";
+import { startWatches } from "./watches.js";
+import { startDayHeartbeat, startStandup } from "./heartbeat.js";
+import { startMergeGate } from "./merge-gate.js";
+import { startSelfDeploy } from "./self-deploy.js";
+import { startAgentLifecycleBridge } from "./agent-lifecycle.js";
+import { startDeskTitles } from "./desk-title.js";
+import { startUsageTicker } from "./session-usage.js";
+import { startTermStatus, statusOf } from "./term-status.js";
+import { startBoardWatcher } from "./board.js";
+import { startRobertWake } from "./robert-wake.js";
+import { startWakeQueue } from "./wake-queue.js";
+import { startDeskWatch } from "./desk-watch.js";
+import { startTerminalPrompts } from "./terminal-prompts.js";
+import { startRobertDrive } from "./robert-drive.js";
+import { startRobertSweep } from "./robert-sweep.js";
+import { startTerminalFailover } from "./terminal-failover.js";
+import { startWorklog } from "./worklog.js";
+import { startCloudReconcile } from "./cloud-reconcile.js";
+import { searchIndex } from "./store.js";
+import { installSessionSearchHooks } from "./session-search.js";
+import { startHostLink } from "./hostlink/brain-link.js";
+
+// Defense-in-depth: every route handler and background async path is expected to catch its own
+// errors (see api.ts) — this is the backstop for whatever still slips through. Without it, Node's
+// default is to crash the whole daemon (every live terminal, WS client, scheduled job) on a single
+// unhandled rejection from anywhere in the process.
+process.on("unhandledRejection", (reason) => {
+  console.error("[chronos] unhandled rejection (daemon stays up):", reason);
+});
+process.on("uncaughtException", (err) => {
+  // @xterm/headless occasionally throws from its async parse timer when a buffer line is missing
+  // (`Cannot set … isWrapped`). The ScreenMirror write path is best-effort; don't treat this as a
+  // daemon fault — the existing listener already keeps us up, this just stops the err-log spam.
+  if (err instanceof TypeError && /setting 'isWrapped'/.test(String(err.message))) {
+    console.warn("[term-screen] xterm parse glitch (ignored):", err.message);
+    return;
+  }
+  console.error("[chronos] uncaught exception (daemon stays up):", err);
+});
+
+console.log(`[chronos] starting — db=${CONFIG.dbPath}`);
+// Project dirs have no portable default (checkout locations differ per machine), so an
+// unconfigured Mac silently runs guard-mode jobs with NO sibling-project isolation. Say so.
+if (CONFIG.sandbox.defaultMode !== "off" && CONFIG.sandbox.projectDirs.length === 0) {
+  console.warn(
+    "[sandbox] CHRONOS_PROTECTED_DIRS_EXTRA is unset — guard/strict jobs can read sibling " +
+      "project dirs. Set it in .secrets (see .secrets.example) to your checkout root.",
+  );
+}
+searchIndex.backfill();
+installSessionSearchHooks();
+startActivity();
+startMachineGovernor();
+startProcReaper();
+startBrowserPool();
+reloadSchedules();
+startServer();
+// Hosts (HOSTS.md): the LAN listener for `chronos host` links — a no-op unless CHRONOS_HOST_LISTEN is set.
+void startHostLink(CONFIG.hostListen);
+void startEgress();
+startTelegram();
+startRelay();
+startNotify();
+startPush({ activity: sessionActivity, prompt: sessionPrompt, phase: (id) => statusOf(id)?.phase ?? null });
+startTermStatus();
+startMergeGate();
+startSelfDeploy();
+startAgentLifecycleBridge();
+startDeskTitles();
+startWorklog();
+startUsageTicker();
+startBoardWatcher();
+startRobertWake();
+// Durable wake queue: every decision event is a row before it is a turn, replayed on boot.
+startWakeQueue();
+// A terminal that stops on a question wakes him too, not just an API ask.
+startTerminalPrompts();
+startRobertDrive();
+// While terminals work, a look over each busy workspace every few minutes (CHRONOS_ROBERT_SWEEP_MIN).
+startRobertSweep();
+startTerminalFailover();
+// Standing watches on single terminals + the deadlines that stop a question sitting with Robert forever.
+startDeskWatch();
+startCalendar();
+startReminders();
+void startTerminals();
+// Terminals on other computers (HOSTS.md phase 3): re-attached when their host says hello, never
+// reaped or revived at boot like local ones — they did not die with this daemon.
+startRemoteTerminals();
+// …and when one of those computers stays gone past the grace, its terminals move to one that is here.
+startHostFailover();
+// Headless runs on other computers (phase 5): egress records from host proxies, and a removed host's
+// runs marked interrupted. The per-hello reconcile rides the terminals' subscription above.
+startRemoteRuns();
+startConnectorSync();
+startRepoScan();
+startMonitor();
+startBurnGuard();
+// A cloud run's process lives on the provider's VM, not here — this is the other half of
+// "launch, sleep, reconcile" (runner.ts executeCloud/finalizeCloudRun): pick back up whatever was
+// still 'running' when this daemon last stopped.
+startCloudReconcile();
+startAutoPlan();
+startIdeas();
+startWriteback();
+startIntake();
+startAwake();
+startWatches();
+startFollowUps();
+startContinuations();
+startDayHeartbeat();
+startStandup();
+installAllSlackMcp();
+ensureAllCleanupJobs();
+startNoteWorkerHook();
+installRtkRewriteScript();
+installAllFffMcp();
+
+process.on("SIGINT", () => process.exit(0));
+process.on("SIGTERM", () => process.exit(0));

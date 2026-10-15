@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Chronos app icon: the hourglass mark">
+  <!-- The macOS app icon: site/assets/favicon.svg's mark on the night ground, inside Apple's icon grid
+       (824px body at 100px inset, 185px corner) so it sits at the same size as every other Dock icon.
+       Regenerate desktop/icon.icns with scripts/build-icon.sh after editing. -->
+  <defs>
+    <clipPath id="ft"><path d="M11 15 C10 27, 27 31, 32 37 C37 31, 54 27, 53 15 Z"/></clipPath>
+    <clipPath id="fb"><path d="M32 39 C27 45, 10 49, 11 61 L53 61 C54 49, 37 45, 32 39 Z"/></clipPath>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#1E2430"/>
+  <g transform="translate(233 190) scale(8.7)">
+    <g><rect x="6" y="7" width="52" height="9" rx="4.5" fill="#8D97AC"/><rect x="6" y="59" width="52" height="9" rx="4.5" fill="#8D97AC"/></g>
+    <g><path d="M11 15 C10 27, 27 31, 32 37 C37 31, 54 27, 53 15 Z" fill="none" stroke="#8D97AC" stroke-width="2.4"/>
+    <path d="M32 39 C27 45, 10 49, 11 61 L53 61 C54 49, 37 45, 32 39 Z" fill="none" stroke="#8D97AC" stroke-width="2.4"/></g>
+    <g><rect x="0" y="22" width="64" height="18" clip-path="url(#ft)" fill="#E8A33D"/>
+    <rect x="0" y="50" width="64" height="18" clip-path="url(#fb)" fill="#E8A33D"/></g>
+    <g><circle cx="25" cy="50" r="5" fill="#F2EDE3"/><circle cx="39" cy="50" r="5" fill="#F2EDE3"/>
+    <circle cx="25" cy="50" r="2.2" fill="#1E2430"/><circle cx="39" cy="50" r="2.2" fill="#1E2430"/></g>
+  </g>
+</svg>

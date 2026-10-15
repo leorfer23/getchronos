@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Altitude — Chronos</title>
+<style>
+  /* Same token set as the Desk (static/desk.html) and the Mission UI — one product, three surfaces. */
+  :root {
+    --bg:#F3F5F3; --surface:#FFFFFF; --surface-2:#EBEEEB; --ink:#1B211E; --muted:#67716B;
+    --faint:#9AA49E; --line:#DEE3DF; --accent:#2E7D64; --accent-ink:#FFFFFF; --accent-soft:#E1EEE8;
+    --warn:#9A6B00; --warn-soft:#F5EAD0; --danger:#B23B2E; --danger-soft:#F6E3E0; --ok:#2E7D64;
+    --grid:#E7EBE8;
+    --shadow:0 1px 2px rgba(27,33,30,.06),0 4px 16px rgba(27,33,30,.05);
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg:#121614; --surface:#1B201D; --surface-2:#232925; --ink:#E6ECE8; --muted:#93A099;
+    --faint:#6B7671; --line:#2B322E; --accent:#56B693; --accent-ink:#0D1511; --accent-soft:#1F332B;
+    --warn:#D9A83F; --warn-soft:#33290F; --danger:#E0705F; --danger-soft:#38201C; --ok:#56B693;
+    --grid:#242B27;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.25);
+  } }
+  * { box-sizing:border-box; }
+  html { height:100%; } body { min-height:100%; margin:0; }
+  body { background:var(--bg); color:var(--ink);
+    font:16px/1.45 -apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif; -webkit-font-smoothing:antialiased; }
+  /* Numbers are the whole page: tabular figures everywhere so a column of dollars lines up. */
+  .mono, .num { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-variant-numeric:tabular-nums; }
+  button { font:inherit; color:inherit; cursor:pointer; }
+  a { color:inherit; }
+
+  header.bar { display:flex; align-items:center; gap:12px; padding:0 16px; background:var(--surface);
+    border-bottom:1px solid var(--line); position:sticky; top:0; z-index:30;
+    height:52px; flex-wrap:nowrap; white-space:nowrap; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
+  header.bar::-webkit-scrollbar { display:none; }
+  header.bar > *:not(.filters):not(.ranges) { flex:0 0 auto; }
+  .wordmark { font-weight:700; letter-spacing:-.02em; }
+  .wordmark span { color:var(--accent); }
+  .wordmark a { text-decoration:none; color:var(--faint); font-weight:600; margin-right:7px; }
+  .wordmark a:hover { color:var(--ink); }
+  .ranges, .filters { display:flex; gap:4px; flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
+    scrollbar-width:none; flex:0 1 auto; min-width:90px; }
+  .ranges { flex:0 0 auto; }
+  .ranges::-webkit-scrollbar, .filters::-webkit-scrollbar { display:none; }
+  .filters { margin-left:auto; }
+  .chip { padding:4px 11px; border-radius:999px; border:1px solid var(--line); background:transparent;
+    font-size:15px; color:var(--muted); white-space:nowrap; flex:0 0 auto; }
+  .chip:hover { color:var(--ink); }
+  .chip.on { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:600; }
+  .chip .swatch { display:inline-block; width:7px; height:7px; border-radius:2px; margin-right:6px; vertical-align:middle; }
+  .tiles { display:flex; align-items:center; gap:2px; padding:2px; border-radius:999px; background:var(--surface-2); }
+  .tiles button { border:none; background:transparent; color:var(--muted); border-radius:999px;
+    padding:3px 9px; font-size:15px; line-height:1.3; }
+  .tiles button.on { background:var(--surface); color:var(--ink); font-weight:650; box-shadow:var(--shadow); }
+  .tools { display:flex; gap:2px; }
+  .tools .icon, .tools a.icon { font-size:17px; padding:4px 8px; border:0; background:transparent;
+    text-decoration:none; color:var(--muted); border-radius:8px; }
+  .tools .icon:hover { background:var(--surface-2); color:var(--ink); }
+
+  main { padding:14px 16px 70px; display:flex; flex-direction:column; gap:12px; max-width:1680px; margin:0 auto; }
+
+  /* ── KPI row: the eight numbers you actually steer by ─────────────────────────────────────── */
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(168px,1fr)); gap:10px; }
+  .kpi { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:10px 12px 11px;
+    box-shadow:var(--shadow); display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .kpi .k { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); font-weight:700; }
+  .kpi .v { font-size:26px; font-weight:650; letter-spacing:-.02em; line-height:1.15; }
+  .kpi .sub { font-size:13.5px; color:var(--faint); overflow:hidden; text-overflow:ellipsis; }
+  /* A delta is only useful with its sign attached to a direction: more spend is not "good". */
+  .kpi .d { font-size:13px; font-weight:650; }
+  .kpi .d.up { color:var(--warn); } .kpi .d.down { color:var(--ok); } .kpi .d.flat { color:var(--faint); }
+
+  .panel { background:var(--surface); border:1px solid var(--line); border-radius:12px;
+    box-shadow:var(--shadow); padding:12px 14px 14px; min-width:0; }
+  .panel h3 { margin:0; font-size:14px; text-transform:uppercase; letter-spacing:.09em;
+    color:var(--muted); font-weight:700; }
+  .panel-head { display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+  .panel-head .note { font-size:13px; color:var(--faint); margin-left:auto; }
+  .cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); gap:12px; }
+  .cols-2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(430px,1fr)); gap:12px; }
+
+  /* ── charts: hand-drawn SVG, no library. Every bar carries its own <title> so the number is one
+       hover away and the page needs no tooltip machinery. ─────────────────────────────────────── */
+  svg { display:block; width:100%; overflow:visible; }
+  .chart-wrap { overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; }
+  .bar { cursor:default; }
+  .bar:hover { opacity:.82; }
+  .axis { fill:var(--faint); font-size:11px; font-family:ui-monospace,Menlo,monospace; }
+  .gridline { stroke:var(--grid); stroke-width:1; shape-rendering:crispEdges; }
+  .zero { stroke:var(--line); stroke-width:1; shape-rendering:crispEdges; }
+  .cum { fill:none; stroke:var(--ink); stroke-width:1.5; opacity:.5; stroke-dasharray:3 3; }
+  .legend { display:flex; flex-wrap:wrap; gap:9px; margin-top:9px; font-size:13px; color:var(--muted); }
+  .legend span.k { display:inline-flex; align-items:center; gap:5px; }
+  .legend i { width:9px; height:9px; border-radius:2px; display:inline-block; }
+
+  /* ── tables ────────────────────────────────────────────────────────────────────────────────── */
+  table { width:100%; border-collapse:collapse; font-size:14.5px; }
+  th { text-align:left; font-size:12.5px; text-transform:uppercase; letter-spacing:.07em;
+    color:var(--faint); font-weight:700; padding:0 8px 6px 0; white-space:nowrap; }
+  th.r, td.r { text-align:right; padding-right:0; padding-left:14px; }
+  .nowrap { white-space:nowrap; }
+  td { padding:5px 8px 5px 0; border-top:1px solid var(--line); vertical-align:middle; }
+  tbody tr:hover td { background:var(--surface-2); }
+  .nm { display:flex; align-items:center; gap:7px; min-width:0; }
+  .nm i { width:8px; height:8px; border-radius:2px; flex:0 0 auto; }
+  .nm span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* A share bar behind the number: reading order is "who is big", not "what is 84.6". */
+  .share { position:relative; min-width:52px; }
+  .share .fill { position:absolute; inset:2px auto 2px 0; border-radius:3px; opacity:.22; }
+  .share em { position:relative; font-style:normal; }
+  .tag { font-size:12.5px; padding:1px 7px; border-radius:999px; background:var(--surface-2);
+    color:var(--muted); white-space:nowrap; }
+  .tag.est { background:var(--warn-soft); color:var(--warn); }
+  .tag.live { background:var(--accent-soft); color:var(--accent); font-weight:650; }
+  .tag.fail { background:var(--danger-soft); color:var(--danger); }
+  .scroll { max-height:420px; overflow:auto; }
+  /* A table with ten numeric columns must scroll rather than crush its headers into each other.
+     Narrow window, wide table: the panel scrolls sideways, the page never does. */
+  .tbl { overflow-x:auto; scrollbar-width:thin; }
+  .tbl table { min-width:360px; }
+  .tbl.wide table { min-width:780px; }
+  .tbl.wider table { min-width:1020px; }
+  .empty { color:var(--faint); padding:26px 4px; text-align:center; font-size:14.5px; }
+
+  /* ── heat: local hour × weekday. Where the day actually goes. ──────────────────────────────── */
+  .heat { display:grid; grid-template-columns:26px repeat(24,1fr); gap:2px; align-items:center; }
+  .heat .hcell { height:17px; border-radius:2px; background:var(--surface-2); }
+  .heat .hlab { font-size:11px; color:var(--faint); font-family:ui-monospace,Menlo,monospace; }
+  .heat .hhour { font-size:10px; color:var(--faint); text-align:center; font-family:ui-monospace,Menlo,monospace; }
+
+  .coverage { font-size:13.5px; color:var(--faint); line-height:1.6; padding:2px 2px 0; }
+  .coverage b { color:var(--muted); font-weight:650; }
+
+  dialog { border:1px solid var(--line); border-radius:14px; padding:0; background:var(--surface);
+    color:var(--ink); box-shadow:0 20px 60px rgba(0,0,0,.25); width:min(440px,92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.35); }
+  .dlg { padding:16px 18px 14px; display:flex; flex-direction:column; gap:11px; }
+  .dlg h3 { margin:0; font-size:19px; }
+  .dlg label { display:flex; flex-direction:column; gap:4px; font-size:14px; color:var(--muted);
+    text-transform:uppercase; letter-spacing:.06em; font-weight:600; }
+  .dlg input { padding:7px 9px; border-radius:8px; border:1px solid var(--line); background:var(--bg);
+    color:var(--ink); font:16.5px/1.4 inherit; }
+  .dlg .row { display:flex; gap:9px; } .dlg .row > * { flex:1; min-width:0; }
+  .dlg .actions { display:flex; gap:8px; justify-content:flex-end; margin-top:3px; }
+  .btn { padding:5px 11px; border-radius:8px; border:1px solid var(--line); background:var(--surface);
+    font-size:15px; font-family:inherit; color:var(--ink); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:600; }
+  .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--ink);
+    color:var(--bg); padding:8px 16px; border-radius:10px; font-size:15px; opacity:0;
+    transition:opacity .2s; pointer-events:none; z-index:80; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wordmark"><a href="/desk" title="Back to the wall">←</a>altitude<span>.</span></div>
+  <div class="ranges" id="ranges"></div>
+  <div class="tiles" id="buckets" title="Bucket width — how much time one bar covers"></div>
+  <div class="filters" id="filters"></div>
+  <div class="tools">
+    <button class="icon" id="btn-custom" title="Custom dates">📅</button>
+    <button class="icon" id="btn-csv" title="Download this window as CSV">⤓</button>
+    <button class="icon" id="btn-refresh" title="Refresh (R)">↻</button>
+  </div>
+</header>
+
+<main>
+  <section class="kpis" id="kpis"></section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h3 id="chart-title">Spend</h3>
+      <div class="tiles" id="metrics"></div>
+      <button class="chip" id="btn-cum" title="Overlay the running total across the window">∑ cumulative</button>
+      <span class="note" id="chart-note"></span>
+    </div>
+    <div class="chart-wrap"><div id="chart"></div></div>
+    <div class="legend" id="chart-legend"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h3>By client</h3><span class="note" id="ws-note"></span><button class="chip" data-csv="workspaces" title="Download this table as CSV">⤓</button></div>
+    <div class="tbl wide" id="ws-table"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h3>When the money goes</h3><span class="note">local hour × weekday · one square is an hour, darker is more spend</span></div>
+    <div id="heat"></div>
+  </section>
+
+  <div class="cols">
+    <section class="panel">
+      <div class="panel-head"><h3>By model</h3><span class="note">Desk terminals rarely record one</span><button class="chip" data-csv="models" title="Download this table as CSV" style="margin-left:auto">⤓</button></div>
+      <div class="tbl" id="model-table"></div>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><h3>By stage</h3><span class="note">headless only</span><button class="chip" data-csv="stages" title="Download this table as CSV">⤓</button></div>
+      <div class="tbl" id="stage-table"></div>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><h3>Who opened it</h3><span class="note">Desk terminals</span></div>
+      <div class="tbl" id="opener-table"></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head"><h3>Terminals</h3><span class="note" id="term-note"></span><button class="chip" data-csv="terminals" title="Download this table as CSV">⤓</button></div>
+    <div class="scroll tbl wider" id="term-table"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h3>Headless jobs</h3><span class="note" id="job-note"></span><button class="chip" data-csv="jobs" title="Download this table as CSV">⤓</button></div>
+    <div class="scroll tbl wide" id="job-table"></div>
+  </section>
+
+  <footer class="coverage" id="coverage"></footer>
+</main>
+
+<dialog id="dlg-custom">
+  <form class="dlg" method="dialog" id="form-custom">
+    <h3>Custom window</h3>
+    <div class="row">
+      <label>From <input type="date" name="from" required></label>
+      <label>To <input type="date" name="to" required></label>
+    </div>
+    <div class="actions">
+      <button class="btn" type="button" id="custom-cancel">Cancel</button>
+      <button class="btn primary" value="ok">Apply</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-token">
+  <form class="dlg" method="dialog" id="form-token">
+    <h3>Admin token</h3>
+    <div style="font-size:15px;color:var(--muted);line-height:1.5">
+      The fleet ledger needs the daemon's admin token. A plain browser tab has none, so paste it once —
+      it stays in this browser's localStorage.<br>
+      <code class="mono">cat ~/chronos/.admin-token</code>
+    </div>
+    <label>Token <input name="token" class="mono" autocomplete="off" required></label>
+    <div class="actions"><button class="btn primary" value="ok">Save</button></div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── token ────────────────────────────────────────────────────────────────────────────────────
+// Same rule as the Desk: the daemon never templates the token into HTML (a sandboxed agent has
+// loopback network and could read it back out). The native wrapper injects it; a browser tab asks
+// once and keeps it in localStorage, which no agent can reach.
+let TOKEN = window.__MC_TOKEN__ || localStorage.getItem("mc-token") || null;
+const qs = (s, r = document) => r.querySelector(s);
+const api = (p, opts) => fetch("/api" + p, {
+  ...opts,
+  headers: { "content-type": "application/json", ...(TOKEN ? { "x-mc-admin": TOKEN } : {}), ...(opts?.headers || {}) },
+}).then(async (r) => { if (!r.ok) throw new Error((await r.text()).slice(0, 200)); return r.json(); });
+
+let toastT;
+function toast(msg) {
+  const t = qs("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 2600);
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ── formatting ───────────────────────────────────────────────────────────────────────────────
+// Money keeps cents under $100 and drops them above it: a bill reading "$2,683.68" next to
+// "$0.04" is a column you cannot scan.
+const money = (n) => {
+  const v = Number(n) || 0;
+  if (Math.abs(v) >= 1000) return "$" + v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (Math.abs(v) >= 100) return "$" + v.toFixed(0);
+  return "$" + v.toFixed(2);
+};
+const tok = (n) => {
+  const v = Number(n) || 0;
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + "B";
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + "M";
+  if (v >= 1e3) return Math.round(v / 1e3) + "K";
+  return String(Math.round(v));
+};
+const int = (n) => (Number(n) || 0).toLocaleString();
+const dur = (min) => {
+  const m = Math.round(Number(min) || 0);
+  if (m < 90) return m + "m";
+  const h = m / 60;
+  return h < 48 ? h.toFixed(1) + "h" : Math.round(h / 24) + "d";
+};
+// A bucket key is a machine string ("2026-09-07"); an axis wants "Sep 7" / "W 7 Sep" / "Sep".
+function bucketLabel(key, bucket) {
+  if (bucket === "month") {
+    const [y, m] = key.split("-");
+    return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString(undefined, { month: "short" }) +
+      (Number(m) === 1 ? " " + String(y).slice(2) : "");
+  }
+  const [y, m, d] = key.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// One colour per client, same list and same order rule as the Desk (index in the workspace list,
+// never a hash of the name — a hash collides at five clients and two read as the same green).
+const WS_COLORS = [
+  ["#2E7D64", "#56B693"], ["#8A5AC2", "#B392E8"], ["#B26B1F", "#E0A44A"],
+  ["#2F6FB0", "#6FA8DC"], ["#B2436B", "#E486A6"], ["#5C7A29", "#9DC45C"],
+];
+const isDark = () => matchMedia("(prefers-color-scheme: dark)").matches;
+function wsColor(id) {
+  const i = S.workspaces.findIndex((w) => w.id === id);
+  if (i < 0) return isDark() ? "#6B7671" : "#9AA49E"; // unscoped / deleted
+  return WS_COLORS[i % WS_COLORS.length][isDark() ? 1 : 0];
+}
+const wsName = (id) => S.workspaces.find((w) => w.id === id)?.name || (id ? id.slice(0, 8) : "Unscoped");
+
+// ── state ────────────────────────────────────────────────────────────────────────────────────
+// The whole view is four values, and all four live in the URL hash: a window worth talking about
+// is a link you can paste to someone (or to Robert) rather than a screenshot.
+const S = {
+  preset: "30d", ws: "all", bucket: "", metric: "usd", cumulative: false,
+  from: null, to: null,
+  data: null, workspaces: [], presets: [],
+};
+const METRICS = [
+  { key: "usd", label: "$", title: "Spend", fmt: money, of: (p) => p.usd, stack: true },
+  { key: "tokens", label: "Tokens", title: "Tokens", fmt: tok, of: (p) => p.tokens_in + p.tokens_out + p.cache_read + p.cache_write, stack: false },
+  { key: "work", label: "Runs", title: "Runs & terminals", fmt: int, of: (p) => p.runs + p.sessions, stack: false },
+  { key: "turns", label: "Turns", title: "Turns", fmt: int, of: (p) => p.turns, stack: false },
+  { key: "model", label: "Model time", title: "Model time", fmt: dur, of: (p) => p.model_minutes, stack: false },
+];
+const metric = () => METRICS.find((m) => m.key === S.metric) || METRICS[0];
+
+function readHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.get("preset")) S.preset = h.get("preset");
+  if (h.get("ws")) S.ws = h.get("ws");
+  if (h.get("bucket")) S.bucket = h.get("bucket");
+  if (h.get("metric")) S.metric = h.get("metric");
+  if (h.get("from")) S.from = h.get("from");
+  if (h.get("to")) S.to = h.get("to");
+  S.cumulative = h.get("cum") === "1";
+}
+function writeHash() {
+  const h = new URLSearchParams();
+  if (S.from && S.to) { h.set("from", S.from); h.set("to", S.to); } else h.set("preset", S.preset);
+  if (S.ws !== "all") h.set("ws", S.ws);
+  if (S.bucket) h.set("bucket", S.bucket);
+  if (S.metric !== "usd") h.set("metric", S.metric);
+  if (S.cumulative) h.set("cum", "1");
+  history.replaceState(null, "", "#" + h.toString());
+  localStorage.setItem("altitude-view", h.toString());
+}
+function queryString() {
+  const q = new URLSearchParams();
+  if (S.from && S.to) { q.set("from", S.from); q.set("to", S.to); } else q.set("preset", S.preset);
+  if (S.ws !== "all") q.set("workspace", S.ws);
+  if (S.bucket) q.set("bucket", S.bucket);
+  return q.toString();
+}
+
+// ── load ─────────────────────────────────────────────────────────────────────────────────────
+let loading = false;
+async function load() {
+  if (loading) return;
+  loading = true;
+  qs("#btn-refresh").textContent = "⟳";
+  try {
+    const d = await api("/analytics?" + queryString() + "&top=60");
+    S.data = d;
+    S.workspaces = d.workspaces.filter((w) => !w.archived);
+    // Keep a filtered-away client visible in the strip rather than vanishing the chip you are on.
+    for (const w of d.workspaces) if (w.id === S.ws && w.archived) S.workspaces.push(w);
+    S.presets = d.presets || [];
+    render();
+  } catch (e) {
+    if (/401|403|token/i.test(e.message)) { qs("#dlg-token").showModal(); }
+    else toast(e.message);
+  } finally {
+    loading = false;
+    qs("#btn-refresh").textContent = "↻";
+  }
+}
+
+// ── chrome ───────────────────────────────────────────────────────────────────────────────────
+function renderChrome() {
+  const r = qs("#ranges");
+  const custom = !!(S.from && S.to);
+  r.innerHTML = (S.presets.length ? S.presets : [{ key: "30d", label: "Last 30 days", short: "30d" }])
+    .map((p) => `<button class="chip${!custom && p.key === S.preset ? " on" : ""}" data-p="${esc(p.key)}" title="${esc(p.label)}">${esc(p.short || p.label)}</button>`)
+    .join("") +
+    (custom ? `<button class="chip on" data-p="__custom">${esc(S.from)} → ${esc(S.to)}</button>` : "");
+  for (const b of r.querySelectorAll("[data-p]")) {
+    b.onclick = () => {
+      if (b.dataset.p === "__custom") return openCustom();
+      S.preset = b.dataset.p; S.from = S.to = null; S.bucket = "";
+      writeHash(); load();
+    };
+  }
+
+  const f = qs("#filters");
+  const mk = (id, label, color) =>
+    `<button class="chip${S.ws === id ? " on" : ""}" data-f="${esc(id)}">` +
+    (color ? `<span class="swatch" style="background:${color}"></span>` : "") + esc(label) + "</button>";
+  f.innerHTML = mk("all", "All clients") + S.workspaces.map((w) => mk(w.id, w.name, wsColor(w.id))).join("");
+  for (const b of f.querySelectorAll("[data-f]")) {
+    b.onclick = () => { S.ws = b.dataset.f; writeHash(); load(); };
+  }
+
+  const cur = S.data?.range?.bucket;
+  qs("#buckets").innerHTML = [["day", "D"], ["week", "W"], ["month", "M"]]
+    .map(([k, l]) => `<button class="${cur === k ? "on" : ""}" data-b="${k}" title="One bar = one ${k}">${l}</button>`)
+    .join("");
+  for (const b of qs("#buckets").querySelectorAll("[data-b]")) {
+    b.onclick = () => { S.bucket = b.dataset.b; writeHash(); load(); };
+  }
+
+  qs("#metrics").innerHTML = METRICS
+    .map((m) => `<button class="${S.metric === m.key ? "on" : ""}" data-m="${m.key}">${esc(m.label)}</button>`)
+    .join("");
+  for (const b of qs("#metrics").querySelectorAll("[data-m]")) {
+    b.onclick = () => { S.metric = b.dataset.m; writeHash(); render(); };
+  }
+  qs("#btn-cum").classList.toggle("on", S.cumulative);
+}
+
+// ── KPIs ─────────────────────────────────────────────────────────────────────────────────────
+function delta(v) {
+  if (v == null) return '<span class="d flat">— no prior window</span>';
+  const cls = v > 0.5 ? "up" : v < -0.5 ? "down" : "flat";
+  const sign = v > 0 ? "+" : "";
+  return `<span class="d ${cls}">${sign}${v}% vs previous</span>`;
+}
+function renderKpis() {
+  const d = S.data, t = d.totals;
+  const cards = [
+    {
+      k: "Spend", v: money(t.usd), d: delta(d.delta.usd),
+      sub: `headless ${money(t.runs_usd)} · Desk ${money(t.sessions_usd)}` +
+        (t.estimated_usd > 0 ? ` · ${money(t.estimated_usd)} estimated` : ""),
+    },
+    {
+      k: "Per day", v: money(t.usd / Math.max(1, d.range.days)),
+      sub: `${d.range.days} days in window`,
+    },
+    {
+      k: "Tokens", v: tok(t.tokens_total), d: delta(d.delta.tokens_total),
+      sub: `${tok(t.tokens_in)} in · ${tok(t.tokens_out)} out · ${tok(t.cache_read)} cache read`,
+    },
+    {
+      k: "Terminals", v: int(t.sessions), d: delta(d.delta.sessions),
+      sub: `${t.live_sessions} live now · ${dur(t.open_minutes)} open · ${dur(t.model_minutes)} model`,
+    },
+    {
+      k: "Runs", v: int(t.runs), d: delta(d.delta.runs),
+      sub: t.success_rate == null ? "no finished runs" : `${t.success_rate}% ok · ${t.failed} failed`,
+    },
+    { k: "Turns", v: int(t.turns), sub: `${int(t.blocked)} times a terminal needed you` },
+    {
+      k: "Code", v: `+${int(t.lines_added)}`,
+      sub: `−${int(t.lines_removed)} removed · ${int(t.goals_reached)} goals reached`,
+    },
+    {
+      k: "Cost per turn", v: t.turns ? money(t.usd / t.turns) : "—",
+      sub: t.sessions ? `${money(t.sessions_usd / Math.max(1, t.sessions))} per terminal` : "—",
+    },
+  ];
+  qs("#kpis").innerHTML = cards
+    .map((c) => `<div class="kpi"><div class="k">${esc(c.k)}</div><div class="v num">${esc(c.v)}</div>` +
+      (c.d || "") + `<div class="sub">${esc(c.sub)}</div></div>`)
+    .join("");
+}
+
+// ── the big chart ────────────────────────────────────────────────────────────────────────────
+// Stacked by client when the metric is money (that's the question: whose money), plain bars
+// otherwise — a stacked token count answers nothing you couldn't read off the table.
+function renderChart() {
+  const d = S.data, M = metric();
+  const pts = d.series;
+  const el = qs("#chart");
+  qs("#chart-title").textContent = M.title;
+  if (!pts.length) { el.innerHTML = '<div class="empty">nothing in this window</div>'; return; }
+
+  const stacked = M.stack && S.ws === "all";
+  const keys = stacked
+    ? [...new Set(pts.flatMap((p) => Object.keys(p.by_ws)))]
+        .sort((a, b) => (d.by_workspace.find((w) => w.workspace_id === b)?.usd ?? 0) -
+                        (d.by_workspace.find((w) => w.workspace_id === a)?.usd ?? 0))
+    : [];
+  const val = (p) => M.of(p);
+  const max = Math.max(...pts.map(val), 0.0001);
+
+  // Geometry: a bar is at least 6px wide and the chart scrolls sideways past ~90 buckets rather
+  // than shrinking into hairlines nobody can hover.
+  const H = 230, padL = 54, padB = 22, padT = 8;
+  const minBar = 7;
+  const innerW = Math.max(pts.length * (minBar + 3), el.clientWidth - padL - 8 || 600);
+  const W = innerW + padL + 8;
+  const bw = innerW / pts.length;
+  const y = (v) => padT + (H - padT - padB) * (1 - v / max);
+
+  // Four gridlines and their labels — enough to read a magnitude, not a graph-paper background.
+  let g = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = (max / 4) * i, yy = y(v);
+    g += `<line class="gridline" x1="${padL}" y1="${yy}" x2="${W - 8}" y2="${yy}"/>` +
+         `<text class="axis" x="${padL - 7}" y="${yy + 3.5}" text-anchor="end">${esc(M.fmt(v))}</text>`;
+  }
+
+  let bars = "";
+  pts.forEach((p, i) => {
+    const x = padL + i * bw;
+    const total = val(p);
+    const label = bucketLabel(p.bucket, d.range.bucket);
+    if (stacked) {
+      let acc = 0;
+      for (const k of keys) {
+        const v = p.by_ws[k] || 0;
+        if (v <= 0) continue;
+        const h = (H - padT - padB) * (v / max);
+        const yy = y(acc + v);
+        acc += v;
+        bars += `<rect class="bar" x="${x + 1}" y="${yy}" width="${Math.max(1, bw - 2)}" height="${Math.max(0.5, h)}" ` +
+          `fill="${wsColor(k)}" rx="1.5"><title>${esc(label)} · ${esc(wsName(k))} — ${esc(money(v))}</title></rect>`;
+      }
+      if (total <= 0) bars += `<rect class="bar" x="${x + 1}" y="${H - padB - 1}" width="${Math.max(1, bw - 2)}" height="1" fill="var(--line)"><title>${esc(label)} — nothing</title></rect>`;
+    } else {
+      const h = (H - padT - padB) * (total / max);
+      bars += `<rect class="bar" x="${x + 1}" y="${y(total)}" width="${Math.max(1, bw - 2)}" height="${Math.max(total > 0 ? 0.5 : 1, h)}" ` +
+        `fill="${total > 0 ? "var(--accent)" : "var(--line)"}" rx="1.5">` +
+        `<title>${esc(label)} — ${esc(M.fmt(total))}</title></rect>`;
+    }
+  });
+
+  // Cumulative overlay on its own scale: the shape of "how fast is this window filling up".
+  let cum = "";
+  if (S.cumulative) {
+    let acc = 0;
+    const totals = pts.map((p) => (acc += val(p)));
+    const cmax = Math.max(...totals, 0.0001);
+    const cy = (v) => padT + (H - padT - padB) * (1 - v / cmax);
+    cum = `<path class="cum" d="${totals.map((v, i) => `${i ? "L" : "M"}${(padL + i * bw + bw / 2).toFixed(1)},${cy(v).toFixed(1)}`).join("")}"/>` +
+      `<text class="axis" x="${W - 10}" y="${cy(cmax) - 4}" text-anchor="end">∑ ${esc(M.fmt(cmax))}</text>`;
+  }
+
+  // Every bucket gets a tick only when they fit; otherwise every nth, always including the last.
+  const step = Math.max(1, Math.ceil(pts.length / Math.floor(innerW / 46)));
+  let ticks = "";
+  pts.forEach((p, i) => {
+    if (i % step !== 0 && i !== pts.length - 1) return;
+    ticks += `<text class="axis" x="${padL + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${esc(bucketLabel(p.bucket, d.range.bucket))}</text>`;
+  });
+
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(M.title)} by ${esc(d.range.bucket)}">` +
+    g + `<line class="zero" x1="${padL}" y1="${H - padB}" x2="${W - 8}" y2="${H - padB}"/>` + bars + cum + ticks + "</svg>";
+
+  qs("#chart-legend").innerHTML = stacked
+    ? keys.map((k) => `<span class="k"><i style="background:${wsColor(k)}"></i>${esc(wsName(k))}</span>`).join("")
+    : "";
+  const peak = Math.max(...pts.map(val));
+  qs("#chart-note").textContent =
+    `${pts.length} ${d.range.bucket}${pts.length === 1 ? "" : "s"} · peak ${M.fmt(peak)}` +
+    (stacked ? " · stacked by client" : "");
+}
+
+// ── heat ─────────────────────────────────────────────────────────────────────────────────────
+function renderHeat() {
+  const d = S.data;
+  const max = Math.max(...d.heat.map((h) => h.usd), 0);
+  const cell = new Map(d.heat.map((h) => [h.dow + ":" + h.hour, h]));
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim() || "#2E7D64";
+  let html = '<div class="heat">';
+  html += '<div class="hlab">h</div>' + Array.from({ length: 24 }, (_, h) =>
+    `<div class="hhour">${h % 3 === 0 ? String(h).padStart(2, "0") : ""}</div>`).join("");
+  for (let dw = 0; dw < 7; dw++) {
+    html += `<div class="hlab">${days[dw]}</div>`;
+    for (let h = 0; h < 24; h++) {
+      const c = cell.get(dw + ":" + h);
+      // Square-root ramp: one $700 afternoon otherwise flattens every other hour to invisible.
+      const a = c && max > 0 ? Math.min(1, Math.sqrt(c.usd / max)) : 0;
+      const style = a > 0 ? `background:${accent};opacity:${(0.12 + a * 0.88).toFixed(2)}` : "";
+      const t = c ? `${days[dw]} ${String(h).padStart(2, "0")}:00 — ${money(c.usd)} · ${c.events} starts` : `${days[dw]} ${String(h).padStart(2, "0")}:00 — nothing`;
+      html += `<div class="hcell" style="${style}" title="${esc(t)}"></div>`;
+    }
+  }
+  html += "</div>";
+  qs("#heat").innerHTML = max > 0 ? html : '<div class="empty">nothing in this window</div>';
+}
+
+// ── tables ───────────────────────────────────────────────────────────────────────────────────
+function table(cols, rows, opts = {}) {
+  if (!rows.length) return '<div class="empty">' + (opts.empty || "nothing here") + "</div>";
+  return "<table><thead><tr>" +
+    cols.map((c) => `<th class="${c.r ? "r" : ""}">${esc(c.h)}</th>`).join("") +
+    "</tr></thead><tbody>" +
+    rows.map((r) => "<tr>" + cols.map((c) => `<td class="${c.r ? "r" : ""} ${c.cls || ""}">${c.f(r)}</td>`).join("") + "</tr>").join("") +
+    "</tbody></table>";
+}
+
+function renderTables() {
+  const d = S.data;
+
+  qs("#ws-table").innerHTML = table([
+    { h: "Client", f: (r) => `<div class="nm"><i style="background:${wsColor(r.workspace_id)}"></i><span>${esc(r.name)}</span></div>` },
+    { h: "Spend", r: true, cls: "num", f: (r) => money(r.usd) + (r.estimated_usd > 0 ? ` <span class="tag est">est ${money(r.estimated_usd)}</span>` : "") },
+    { h: "Share", r: true, cls: "num", f: (r) => `<div class="share"><div class="fill" style="width:${Math.min(100, r.share)}%;background:${wsColor(r.workspace_id)}"></div><em>${r.share}%</em></div>` },
+    { h: "Runs", r: true, cls: "num", f: (r) => int(r.runs) },
+    { h: "Terminals", r: true, cls: "num", f: (r) => int(r.sessions) },
+    { h: "Turns", r: true, cls: "num", f: (r) => int(r.turns) },
+    { h: "Model", r: true, cls: "num", f: (r) => dur(r.model_minutes) },
+    { h: "Code", r: true, cls: "num", f: (r) => `+${int(r.lines_added)}/−${int(r.lines_removed)}` },
+    // Today against that client's daily ceiling — the only column that ignores the window, because
+    // a budget is a property of today and the answer to "am I about to get parked" can't wait.
+    { h: "Today", r: true, cls: "num", f: (r) => r.daily_budget_usd
+        ? `${money(r.today_usd)} <span class="tag${r.today_usd >= r.daily_budget_usd ? " fail" : ""}">of ${money(r.daily_budget_usd)}</span>`
+        : money(r.today_usd) },
+  ], d.by_workspace, { empty: "no spend in this window" });
+  qs("#ws-note").textContent = d.by_workspace.length
+    ? `${d.by_workspace.length} client${d.by_workspace.length === 1 ? "" : "s"}` : "";
+
+  qs("#model-table").innerHTML = table([
+    { h: "Model", f: (r) => `<span class="mono">${esc(r.model)}</span>` },
+    { h: "Spend", r: true, cls: "num", f: (r) => money(r.usd) },
+    { h: "Runs", r: true, cls: "num", f: (r) => int(r.runs) },
+    { h: "Terms", r: true, cls: "num", f: (r) => int(r.sessions) },
+    { h: "Tokens", r: true, cls: "num", f: (r) => tok(r.tokens_in + r.tokens_out) },
+  ], d.by_model, { empty: "no model attributed yet" });
+
+  qs("#stage-table").innerHTML = table([
+    { h: "Stage", f: (r) => esc(r.stage) },
+    { h: "Spend", r: true, cls: "num", f: (r) => money(r.usd) },
+    { h: "Runs", r: true, cls: "num", f: (r) => int(r.runs) },
+    { h: "Ok", r: true, cls: "num", f: (r) => r.ok + (r.failed ? ` <span class="tag fail">${r.failed} failed</span>` : "") },
+  ], d.by_stage, { empty: "no headless runs in this window" });
+
+  qs("#opener-table").innerHTML = table([
+    { h: "Opened by", f: (r) => esc(r.opener) },
+    { h: "Terminals", r: true, cls: "num", f: (r) => int(r.sessions) },
+    { h: "Spend", r: true, cls: "num", f: (r) => money(r.usd) },
+    { h: "Turns", r: true, cls: "num", f: (r) => int(r.turns) },
+    { h: "Model", r: true, cls: "num", f: (r) => dur(r.model_minutes) },
+  ], d.by_opener, { empty: "no terminals in this window" });
+
+  const when = (iso) => new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  qs("#term-table").innerHTML = table([
+    { h: "Started", f: (r) => `<span class="mono nowrap" style="color:var(--muted)">${esc(when(r.started))}</span>` },
+    { h: "Terminal", f: (r) => `<div class="nm"><i style="background:${wsColor(r.workspace_id)}"></i>` +
+        `<span title="${esc(r.title)}">${esc(r.title.slice(0, 90))}</span>` +
+        (r.live ? ' <span class="tag live">live</span>' : r.reached ? ' <span class="tag">✅</span>' : "") + "</div>" },
+    { h: "Cost", r: true, cls: "num", f: (r) => money(r.usd) + (r.estimated ? ' <span class="tag est">est</span>' : "") },
+    { h: "Turns", r: true, cls: "num", f: (r) => int(r.turns) },
+    { h: "Context", r: true, cls: "num", f: (r) => tok(r.context_peak) },
+    { h: "Open", r: true, cls: "num", f: (r) => dur(r.minutes) },
+    { h: "Model", r: true, cls: "num", f: (r) => dur(r.model_minutes) },
+    { h: "Code", r: true, cls: "num", f: (r) => `+${int(r.lines_added)}/−${int(r.lines_removed)}` },
+    // The row is a door, not an epitaph: the Desk reopens a dead terminal with its transcript intact.
+    { h: "", r: true, f: (r) => `<a class="tag" href="/desk#reopen=${esc(r.id)}" title="Open it on the wall">${r.live ? "show" : "↻ reopen"}</a>` },
+  ], d.top_terminals, { empty: "no terminals in this window" });
+  qs("#term-note").textContent = d.top_terminals.length
+    ? `top ${d.top_terminals.length} of ${int(d.totals.sessions)} by cost` : "";
+
+  qs("#job-table").innerHTML = table([
+    { h: "Job", f: (r) => `<div class="nm"><i style="background:${wsColor(r.workspace_id)}"></i><span class="mono">${esc(r.job)}</span></div>` },
+    { h: "Stage", f: (r) => `<span class="tag">${esc(r.stage)}</span>` },
+    { h: "Spend", r: true, cls: "num", f: (r) => money(r.usd) },
+    { h: "Runs", r: true, cls: "num", f: (r) => int(r.runs) },
+    { h: "Ok", r: true, cls: "num", f: (r) => r.ok + (r.failed ? ` <span class="tag fail">${r.failed}</span>` : "") },
+    { h: "Tokens", r: true, cls: "num", f: (r) => tok(r.tokens_in + r.tokens_out) },
+  ], d.top_jobs, { empty: "no headless runs in this window" });
+  qs("#job-note").textContent = d.top_jobs.length ? `top ${d.top_jobs.length} by cost` : "";
+}
+
+// The honesty line. An estimate must never read as a metered fact, and a run nobody could price is
+// a hole in the ledger that has to be visible rather than quietly counted as zero.
+function renderCoverage() {
+  const d = S.data, c = d.coverage;
+  const bits = [
+    `<b>${money(c.priced_usd)}</b> metered by the CLI`,
+    c.estimated_usd > 0 ? `<b>${money(c.estimated_usd)}</b> estimated from the token table across ${c.estimated_sessions} terminal${c.estimated_sessions === 1 ? "" : "s"}` : null,
+    c.unpriced_runs ? `<b>${c.unpriced_runs}</b> finished run${c.unpriced_runs === 1 ? "" : "s"} carry no cost` : null,
+    c.unpriced_sessions ? `<b>${c.unpriced_sessions}</b> ended terminal${c.unpriced_sessions === 1 ? "" : "s"} carry no cost` : null,
+    c.unpriced_backends.length ? `unpriced backends: ${c.unpriced_backends.map(esc).join(", ")}` : null,
+  ].filter(Boolean);
+  qs("#coverage").innerHTML =
+    `${esc(d.range.label)} · ${esc(d.range.from.slice(0, 10))} → ${esc(d.range.to.slice(0, 10))} (exclusive) · ` +
+    `local days · headless runs and Desk terminals summed once each, never cross-attributed.<br>` +
+    bits.join(" · ") +
+    `<br>read at ${esc(new Date(d.generated_at).toLocaleTimeString())} · ` +
+    `<span class="mono">GET /api/analytics?${esc(queryString())}</span> · <span class="mono">mc altitude ${esc(d.range.preset)}</span>`;
+}
+
+function render() {
+  if (!S.data) return;
+  renderChrome();
+  renderKpis();
+  renderChart();
+  renderHeat();
+  renderTables();
+  renderCoverage();
+  document.title = `${money(S.data.totals.usd)} · ${S.data.range.label} — Altitude`;
+}
+
+// ── controls ─────────────────────────────────────────────────────────────────────────────────
+qs("#btn-refresh").onclick = () => load();
+qs("#btn-cum").onclick = () => { S.cumulative = !S.cumulative; writeHash(); render(); };
+// The export is a fetch, not a plain link: a bare <a href> carries no admin header and would 401.
+function downloadCsv(table) {
+  const q = queryString() + "&table=" + encodeURIComponent(table);
+  fetch("/api/analytics/export.csv?" + q, { headers: TOKEN ? { "x-mc-admin": TOKEN } : {} })
+    .then((r) => (r.ok ? r.text() : r.text().then((t) => Promise.reject(new Error(t.slice(0, 120))))))
+    .then((csv) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+      a.download = `chronos-${table}-${S.data?.range.from.slice(0, 10) || "window"}.csv`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      toast(table + ".csv downloaded");
+    })
+    .catch((e) => toast(String(e.message || e)));
+}
+qs("#btn-csv").onclick = () => downloadCsv("series");
+for (const b of document.querySelectorAll("[data-csv]")) b.onclick = () => downloadCsv(b.dataset.csv);
+
+function openCustom() {
+  const dlg = qs("#dlg-custom");
+  const r = S.data?.range;
+  if (r) {
+    dlg.querySelector('[name=from]').value = S.from || r.from.slice(0, 10);
+    // The API's `to` is exclusive; the picker shows the last day you can actually see.
+    dlg.querySelector('[name=to]').value = S.to || new Date(new Date(r.to).getTime() - 86400000).toISOString().slice(0, 10);
+  }
+  dlg.showModal();
+}
+qs("#btn-custom").onclick = openCustom;
+qs("#custom-cancel").onclick = () => qs("#dlg-custom").close();
+qs("#form-custom").addEventListener("submit", (e) => {
+  const f = new FormData(e.target);
+  S.from = String(f.get("from")); S.to = String(f.get("to")); S.bucket = "";
+  writeHash(); load();
+});
+
+qs("#form-token").addEventListener("submit", (e) => {
+  const t = String(new FormData(e.target).get("token") || "").trim();
+  if (!t) return;
+  localStorage.setItem("mc-token", t); TOKEN = t;
+  location.reload();
+});
+
+addEventListener("keydown", (e) => {
+  if (e.target.matches("input,textarea")) return;
+  if (e.key === "r" || e.key === "R") { load(); return; }
+  if (e.key === "c" || e.key === "C") { S.cumulative = !S.cumulative; writeHash(); render(); return; }
+  // 1-5 pick the metric, the same way the Desk's 1-6 pick a tiling.
+  const i = Number(e.key) - 1;
+  if (i >= 0 && i < METRICS.length) { S.metric = METRICS[i].key; writeHash(); render(); }
+});
+// A window resize changes how many bars fit; the tables and the heat don't care.
+let rz;
+addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => S.data && renderChart(), 150); });
+
+// A dashboard nobody refreshes is a dashboard that lies. Cheap poll — the payload is one query pass.
+setInterval(() => { if (!document.hidden) load(); }, 60_000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+
+// Boot: the hash wins (a pasted link), then the last view this browser was on, then the default.
+if (!location.hash && localStorage.getItem("altitude-view")) {
+  history.replaceState(null, "", "#" + localStorage.getItem("altitude-view"));
+}
+readHash();
+if (!TOKEN) setTimeout(() => qs("#dlg-token").showModal(), 300);
+load();
+</script>
+</body>
+</html>

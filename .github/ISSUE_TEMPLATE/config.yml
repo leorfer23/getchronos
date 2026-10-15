@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/leorfer23/getchronos/security/advisories/new
+    about: Report privately. Do not open a public issue for anything exploitable.
+  - name: Configuration questions
+    url: https://github.com/leorfer23/getchronos/blob/main/CONFIGURATION.md
+    about: Every environment variable, its default, and what it costs you to get wrong.

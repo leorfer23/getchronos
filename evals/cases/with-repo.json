@@ -1,0 +1,27 @@
+{
+ "name": "with-repo — a ticket with a repo attached and no rework rounds",
+ "_why": "The default shape: one ticket, one repo, straight to build. Every stage template (build / plan / plan-merge / grade / ci-fix) is replayed against this case, so it is the one fixture that must stay boring — no rework, no gates, nothing special.",
+ "workspace": {
+  "name": "Example",
+  "default_backend": "claude-code",
+  "default_model": null,
+  "sandbox_mode": "guard",
+  "route_config": null
+ },
+ "repo": {
+  "name": "example-api",
+  "default_branch": "main",
+  "delivery": "pr",
+  "human_gate": "always",
+  "done_criteria": null,
+  "gate_cmds": null
+ },
+ "ticket": {
+  "title": "Session cookies are readable from JavaScript",
+  "priority": "P2",
+  "complexity": "3",
+  "tags": null,
+  "body": "---\nkey: EX-4\ntitle: Session cookies are readable from JavaScript\nstatus: ready\npriority: P2\ncomplexity: 3\ncomplexity_source: human\nassignee: agent\n---\n\n## Context\n\n`setSession` writes the session cookie without `HttpOnly`, so any script running on the page can\nread it — including anything a dependency pulls in at runtime. The cookie is the whole\nauthentication story: with it, a request is the user.\n\nThe flag was almost certainly dropped by accident. The comment above the call still claims the\ncookie is \"not reachable from the page\", which has not been true since the helper was rewritten.\n\n## Fix\n\n1. Set `HttpOnly` and `SameSite=Lax` on the session cookie.\n2. Delete the stale comment, or make it true.\n3. Cover it: a test that asserts the flags are present, and fails without the change.\n\n## Acceptance criteria\n\n- [ ] The session cookie is served with `HttpOnly` and `SameSite=Lax`.\n- [ ] `document.cookie` in the browser no longer shows the session cookie.\n- [ ] A test fails if either flag is removed.\n- [ ] Comments describing cookie reachability match what the code does.\n\n## Out of scope\n\n- Rotating the signing key, and the wider question of session lifetime. Separate ticket if wanted.\n\n## Work log\n<!-- agent appends timestamped entries; never rewrites history -->\n\n## Review notes\n\n## Plan\n"
+ },
+ "reviews": []
+}

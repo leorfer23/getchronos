@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "node",
+      "args": [
+        "{{repo}}/node_modules/@playwright/mcp/cli.js",
+        "--headless",
+        "--isolated",
+        "--output-dir",
+        "{{home}}/.mc/browser"
+      ]
+    }
+  }
+}
