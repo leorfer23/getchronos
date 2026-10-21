@@ -14,7 +14,8 @@
  * When the operator answers, Robert hears it on a queued wake (src/wake-queue.ts): he asked in one
  * turn and the answer can come hours later, from the phone.
  */
-import { asks, workspaces, type Ask } from "./store.js";
+import { CONFIG } from "./config.js";
+import { asks, kv, workspaces, type Ask } from "./store.js";
 import type { UiAction } from "./telegram/agent.js";
 
 /** Who a Robert-raised ask says it is from. Its only other distinguishing mark is having no run and no terminal. */
@@ -54,12 +55,58 @@ function cleanOptions(v: unknown): string[] | null {
 
 type Raise = (f: { question: string; options: string[] | null; workspace_id: string | null }) => Ask;
 
-/** File one Robert ask and tell the operator (phone card). Late import: asks.ts pulls the dispatcher. */
+/**
+ * The terminal that holds one of Robert's questions (kv `ask.holder:<session id>` → ask id). The
+ * operator reads terminals, not the chat — so a question Robert raises for a project opens its own
+ * terminal there; answering in it (src/ask-in-terminal.ts) answers the ask, and Robert hears it on
+ * his usual wake. Closing that terminal unanswered drops the question.
+ */
+const holderKey = (sessionId: string) => `ask.holder:${sessionId}`;
+export function holderAsk(sessionId: string): Ask | undefined {
+  const id = kv.get(holderKey(sessionId));
+  const a = id ? asks.get(id) : undefined;
+  return a?.status === "open" ? a : undefined;
+}
+
+export function holderBrief(a: Pick<Ask, "question" | "options">): string {
+  const opts = a.options ? (JSON.parse(a.options) as string[]) : [];
+  return [
+    "Robert (the operator's master agent) needs a decision from the operator, and the operator only reads terminals — this one holds the question.",
+    "",
+    "## The question",
+    a.question,
+    ...(opts.length ? ["", "Options: " + opts.map((o) => `"${o}"`).join(" / ")] : []),
+    "",
+    "## What to do",
+    "1. Gather just enough context to make the call easy (read the repo, PR, data or thread it refers to) — a few minutes, not a project.",
+    "2. Put on screen, last: the question in one line, the options, and the one you recommend with a one-line reason. Run `mc state decide \"<the question in a few words>\"` and stop.",
+    "3. When he answers here, Robert receives the answer and acts on it. Acknowledge in one line and `mc goal done`. Do not carry out the decision yourself unless he tells you to in this terminal.",
+  ].join("\n");
+}
+
+/** File one Robert ask; for a project, open the terminal that holds it. Late imports: asks.ts pulls the dispatcher, terminal.ts the world. */
 export const raiseRobertAsk: Raise = (f) => {
   const ask = asks.create({ asked_by: ROBERT_ASKER, route: "operator", ...f });
   void import("./asks.js")
     .then((m) => m.notifyAskCreated(ask, undefined, { desk: false }))
     .catch((e) => console.error("[robert-asks] notify failed", e));
+  if (f.workspace_id && CONFIG.robertAskTerminals) {
+    void import("./terminal.js")
+      .then((m) =>
+        m.openSession({
+          workspace_id: f.workspace_id,
+          goal: `Robert asks: ${f.question}`.slice(0, 400),
+          goal_kind: "investigation",
+          goal_source: "human",
+          description: holderBrief(ask),
+          model: "sonnet",
+          created_by: "robert",
+          role: "human",
+        } as any),
+      )
+      .then((s) => kv.set(holderKey(s.id), ask.id))
+      .catch((e) => console.error("[robert-asks] holder terminal failed", e?.message ?? e));
+  }
   return ask;
 };
 

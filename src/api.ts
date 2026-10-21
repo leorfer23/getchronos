@@ -18,6 +18,7 @@ import { postToBoard } from "./board.js";
 import { nameError as varNameError, expiryFromHours } from "./store/workspace-vars.js";
 import { answerAsk, notifyAskCreated, resolveAsk, waitForAskAnswer } from "./asks.js";
 import { isOperatorsAsk } from "./robert-asks.js";
+import { operatorAnswered, operatorKeys } from "./ask-in-terminal.js";
 import { deliverPending, resolveMessageTarget, sendMessage } from "./messages.js";
 import { egressCfg, egressPort, syncEgress } from "./egress.js";
 import { createSkill, skillBody, skillRef, patchSkill, appendSkill, setSkillStatus, removeSkill, useSkill } from "./skills.js";
@@ -808,6 +809,10 @@ export function startServer() {
     }
     const err = sendInput(req.params.id, req.body, req.body.by || "operator");
     if (err) return res.status(err.startsWith("rate limit") ? 429 : 409).json({ error: err });
+    // The operator answering from the Desk composer / Focus buttons — never Robert's or a Lead's typing.
+    const submitted = req.body.enter !== false && (req.body.text || req.body.key === "enter" || req.body.keys?.includes("enter"));
+    if (admin && (req.body.by || "operator") === "operator" && submitted)
+      void operatorAnswered(s.id, req.body.text ?? "").catch((e) => console.warn("[ask-in-terminal]", e?.message ?? e));
     res.json({ ok: true });
   });
   // A file dragged from Finder onto this terminal on the Desk (or an image pasted into it): raw
@@ -5003,7 +5008,11 @@ export function startServer() {
     ws.on("message", (raw) => {
       let m: any;
       try { m = JSON.parse(raw.toString()); } catch { return; }
-      if (m.t === "in") writeTo(id, m.d);
+      if (m.t === "in") {
+        writeTo(id, m.d);
+        // His Enter in this pane answers the question it holds (src/ask-in-terminal.ts).
+        if (typeof m.d === "string") void operatorKeys(id, m.d)?.catch((e) => console.warn("[ask-in-terminal]", e?.message ?? e));
+      }
       else if (m.t === "resize") resize(id, m.cols, m.rows);
       else if (m.t === "refresh") refreshClient(id, ws); // pane was hidden and dropped its stream
       else if (m.t === "rate") setClientRate(id, ws, m.ms); // this socket's own frame pace (0 = every flush)
