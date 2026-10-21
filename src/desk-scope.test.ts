@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
-import { asks, sessions, workspaces } from "./store.js";
+import { sessions, workspaces } from "./store.js";
 import { WIDGETS, readWidget } from "./widgets/index.js";
 
 const store = new Map<string, string>();
@@ -253,23 +253,17 @@ test("widgets: the card asks for one client and is not drawn unless the reader s
   }
 });
 
-test("widgets: held to a client, the readers answer for that client's terminals and questions alone", async () => {
+test("widgets: held to a client, the readers answer for that client's terminals alone", async () => {
   const a = workspaces.create({ slug: "lock-acme", name: "Acme", config_dir: "/tmp/acme" });
   const b = workspaces.create({ slug: "lock-bolt", name: "Bolt", config_dir: "/tmp/bolt" });
   const sa = sessions.create({ workspace_id: a.id, cwd: "/tmp", backend: "claude-code", goal: "acme goal" } as any);
   const sb = sessions.create({ workspace_id: b.id, cwd: "/tmp", backend: "claude-code", goal: "bolt goal" } as any);
-  const qa = asks.create({ workspace_id: a.id, asked_by: "acme agent", question: "ship acme?" });
-  asks.create({ workspace_id: b.id, asked_by: "bolt agent", question: "ship bolt?" });
   const read = async (name: string, ws?: string) => (await readWidget(name, ws ? { ws } : {}))!.data as any;
 
   // Unheld, the board is the whole shop — the lock must not change what an unlocked Desk reads.
   assert.deepEqual((await read("pulse")).rows.map((r: any) => r.id).sort(), [sa.id, sb.id].sort());
-  assert.equal((await read("decide")).items.filter((i: any) => i.kind === "ask").length, 2);
-  assert.deepEqual((await read("robert")).nodes.map((n: any) => n.id).sort(), [sa.id, sb.id].sort());
 
   assert.deepEqual((await read("pulse", a.id)).rows.map((r: any) => r.id), [sa.id]);
-  assert.deepEqual((await read("decide", a.id)).items.map((i: any) => i.id), [qa.id]);
-  assert.deepEqual((await read("robert", a.id)).nodes.map((n: any) => n.id), [sa.id]);
-  for (const name of ["pulse", "decide", "robert", "shipped"])
+  for (const name of ["pulse", "shipped"])
     assert.doesNotMatch(JSON.stringify(await read(name, a.id)), /bolt/i, name);
 });

@@ -221,14 +221,15 @@ test("the card escapes model and agent text, and collapses once answered", () =>
   assert.doesNotMatch(done, /ak-f|data-akopt/, "an answered card has nothing left to press");
 });
 
-test("both chat surfaces load the widget, embed cards, relay its topics and carry one ? button", () => {
-  for (const [file, btn] of [["static/desk.html", "chat-asks"], ["static/phone.html", "r-asks"]] as const) {
+test("both chat surfaces load the widget, embed cards and relay its topics; only the phone keeps a ? button", () => {
+  assert.doesNotMatch(read("static/desk.html"), /id="chat-asks"/, "on the Desk a question lives in its terminal");
+  for (const [file, btn] of [["static/desk.html", null], ["static/phone.html", "r-asks"]] as const) {
     const html = read(file);
     assert.match(html, /<script src="\/ask-card\.js"><\/script>/, file);
     assert.match(html, /AskCard\.embed\(d\)/, `${file}: every Robert row goes through embed`);
     assert.match(html, /const BUS_TOPICS = \[[^\]]*"ask\.created", "ask\.answered"/, `${file}: the socket asks for ask.* events`);
     assert.match(html, /AskCard\.onEvent\(e\)/, file);
-    assert.match(html, new RegExp(`id="${btn}"`), file);
+    if (btn) assert.match(html, new RegExp(`id="${btn}"`), file);
     assert.match(html, /AskCard\.init\(/, file);
   }
   assert.deepEqual(plain(AC.TOPICS), ["ask.created", "ask.answered"]);
