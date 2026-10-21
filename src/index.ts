@@ -46,6 +46,7 @@ import { startWakeQueue } from "./wake-queue.js";
 import { startDeskWatch } from "./desk-watch.js";
 import { startTerminalPrompts } from "./terminal-prompts.js";
 import { startRobertDrive } from "./robert-drive.js";
+import { startInboxAutoDispatch } from "./inbox-autodispatch.js";
 import { startRobertSweep } from "./robert-sweep.js";
 import { startTerminalFailover } from "./terminal-failover.js";
 import { startWorklog } from "./worklog.js";
@@ -147,6 +148,7 @@ startStandup();
 installAllSlackMcp();
 ensureAllCleanupJobs();
 startNoteWorkerHook();
+startInboxAutoDispatch();
 installRtkRewriteScript();
 installAllFffMcp();
 
