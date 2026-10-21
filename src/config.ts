@@ -289,6 +289,9 @@ export const CONFIG = {
     denyMcp: (process.env.CHRONOS_INBOX_AUTO_DENY_MCP ?? "slack,atlassian,clickup,ClickUp,jira,gmail,jenkins,launchdarkly")
       .split(",").map((x) => x.trim()).filter(Boolean),
   },
+  // A question Robert raises for a project opens a terminal that holds it (src/robert-asks.ts) — the
+  // operator reads terminals, not the chat. 0 → the old chat card only.
+  robertAskTerminals: process.env.CHRONOS_ROBERT_ASK_TERMINALS !== "0" && process.env.CHRONOS_TEST !== "1",
   inboxCleanupCron: process.env.CHRONOS_INBOX_CLEANUP_CRON ?? "0 10,18 * * *",
   inboxCleanupModel: process.env.CHRONOS_INBOX_CLEANUP_MODEL ?? "sonnet",
   // Stale notes (src/note-workers.ts): right before a cleanup fire the daemon itself (no model) closes
