@@ -155,7 +155,10 @@ test("the Desk carries the panel and the full-screen toggle; the Ask widget expo
   assert.match(html, /id="chat-full"/);
   assert.match(html, /desk-chat-full/, "full screen is remembered per viewer");
   // Reply-to (#74) and the Ask cards (#75) keep their anchors inside the reorganised pane.
-  for (const id of ["chat-log", "chat-att", "chat-ask", "chat-input", "askpop", "chat-asks"]) assert.match(html, new RegExp(`id="${id}"`));
+  for (const id of ["chat-log", "chat-att", "chat-ask", "chat-input"]) assert.match(html, new RegExp(`id="${id}"`));
+  // Questions live in their terminals now: no "? N" list in the chat head, no Questions section here.
+  for (const id of ["askpop", "chat-asks"]) assert.doesNotMatch(html, new RegExp(`id="${id}"`));
+  assert.doesNotMatch(read("static/desk-cockpit.js"), /"Questions"/);
   const ask: any = {};
   vm.runInNewContext(read("static/ask-card.js"), ask);
   for (const k of ["items", "onChange", "host", "wire", "answer"]) assert.equal(typeof ask.AskCard[k], "function", k);

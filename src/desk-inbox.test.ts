@@ -10,9 +10,11 @@ import path from "node:path";
 
 const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
 
-test("the bar carries the inbox with an unread badge fed by /desk and repainted on inbox.updated", () => {
-  assert.match(html, /id="btn-inbox"/);
-  assert.match(html, /id="inbox-unread"/);
+test("the inbox log sits behind ⋯ with its count, fed by /desk and repainted on inbox.updated", () => {
+  // Every item opens its own terminal (src/inbox-autodispatch.ts); the list is a log, not a badge on the bar.
+  assert.match(html, /<div class="menu" id="menu-bar">[^]*?<button id="btn-inbox"[^>]*>📥 Inbox log<\/button>[^]*?<\/div>/);
+  assert.doesNotMatch(html, /id="inbox-unread"/);
+  assert.match(html, /qs\("#btn-inbox"\)\.textContent = n \? `📥 Inbox log · \$\{n\}` : "📥 Inbox log";/);
   assert.match(html, /IB\.counts = d\.inbox \|\| \{\}; syncInboxBadge\(\);/);
   assert.match(html, /"inbox\.updated",\n\]\.join\(","\)/);
   assert.match(html, /e\.topic === "inbox\.updated"\) return loadInboxSoon\(\)/);

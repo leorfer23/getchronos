@@ -4,4 +4,4 @@
 //
 // ADD ONE STRING. Nothing else in this file ever changes, which is what keeps four widgets landing
 // the same week from fighting over it.
-export const WIDGETS = ["pulse", "decide", "robert", "shipped"];
+export const WIDGETS = ["pulse", "shipped"];

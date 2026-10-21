@@ -1,7 +1,7 @@
 /* The Robert panel — the control half of the Desk's Robert pane.
  *
- * The chat is the conversation; this is what you glance at beside it: the questions waiting on you,
- * the terminals that stopped (blocked, idle, done), the PRs they opened with their CI, and today —
+ * The chat is the conversation; this is what you glance at beside it: the terminals that stopped
+ * (blocked, deciding, idle, done — a question waiting on you is its terminal's "decide"), the PRs they opened with their CI, and today —
  * follow-ups due and spend. Subscription usage lives in the Desk header, not here. One compact row
  * per thing, one or two buttons each, a count on every header, and a section with nothing in it is
  * not drawn at all. Folded (the default, remembered per browser) it is one line of counts; a click
@@ -83,19 +83,6 @@
 
   // ── the sections ───────────────────────────────────────────────────────────────────────────────
   var items = new Map(); // row key → what it stands for, for the click handler
-  function askRows() {
-    if (!C.ask.items) return [];
-    return C.ask.items().filter(function (it) { return !hidden(it.key); }).map(function (it) {
-      items.set(it.key, { kind: "ask", it: it });
-      var ops = it.options || [];
-      var b = ops.length && ops.length <= 2
-        ? ops.map(function (o, i) { return btn("opt:" + i, o.length > 18 ? o.slice(0, 17) + "…" : o, o); }).join("")
-        : btn("expand", st.open === it.key ? "Close" : "Answer", "Answer in place");
-      var html = row(it.key, "decide", "<b>" + e(it.question) + '</b> <span class="ck-s">' + e(it.who) + "</span>", ago(it.at), b, it.who + " asks: " + it.question);
-      if (st.open === it.key) html += '<div class="ck-card" data-card="' + e(it.key) + '"></div>';
-      return html;
-    });
-  }
   var PH_DOT = { blocked: "blocked", decide: "decide", stalled: "waiting", your_turn: "waiting", review: "done" };
   var PH_SAY = { blocked: "blocked", decide: "decide", stalled: "stalled", your_turn: "your turn", review: "done" };
   function termRows(askKeys) {
@@ -146,12 +133,12 @@
     if (a && C.el.contains(a) && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")) { st.pend = true; return; }
     st.pend = false;
     items.clear();
-    var asks = askRows();
-    var askKeys = new Set((C.ask.items ? C.ask.items() : []).map(function (it) { return it.key; }));
-    var terms = termRows(askKeys), prs = prRows(), fus = fuRows(), today = todayLine();
+    // No Questions section: a terminal waiting on an answer shows as that terminal ("decide"), and
+    // the operator answers it in the pty (src/ask-in-terminal.ts).
+    var terms = termRows(new Set()), prs = prRows(), fus = fuRows(), today = todayLine();
     var html = st.fold
-      ? foldLine([["asks", "Questions", asks.length], ["terms", "Terminals", terms.length], ["prs", "PRs", prs.length], ["today", "Today", fus.length]])
-      : section("asks", "Questions", asks) + section("terms", "Terminals", terms) + section("prs", "PRs", prs) + section("today", "Today", fus, today);
+      ? foldLine([["terms", "Terminals", terms.length], ["prs", "PRs", prs.length], ["today", "Today", fus.length]])
+      : section("terms", "Terminals", terms) + section("prs", "PRs", prs) + section("today", "Today", fus, today);
     if (html && !st.fold) html = '<button type="button" class="ck-unfold" data-fold title="Fold the panel to one line"><i class="ck-ar">▾</i> hide</button>' + html;
     if (html === C.el._html) return;
     C.el._html = html;
@@ -184,10 +171,6 @@
   // ── clicks ─────────────────────────────────────────────────────────────────────────────────────
   async function act(name, k, b) {
     var x = items.get(k); if (!x) return;
-    if (x.kind === "ask") {
-      if (name === "expand") { st.open = st.open === k ? null : k; C.el._html = null; render(); var f = C.el.querySelector(".ck-card .ak-f input"); if (f) f.focus(); return; }
-      if (name.indexOf("opt:") === 0) { hide(k); return C.ask.answer(x.it, Number(name.slice(4)), null); }
-    }
     if (x.kind === "term") {
       if (name === "open") return C.open(x.t.id);
       if (name === "nudge") { hide(k); return C.input(x.t.id, { text: "continue", enter: true }); }
@@ -213,7 +196,6 @@
       if (name === "row") return C.openFollow(x.j);
     }
     if (name === "row" && x.kind === "term") return C.open(x.t.id);
-    if (name === "row" && x.kind === "ask") return act("expand", k);
   }
 
   function init(ctx) {

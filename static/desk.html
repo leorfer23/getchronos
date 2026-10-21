@@ -270,7 +270,7 @@
   body.no-terms:not(.mode-fleet) .chat { display:flex; width:auto; flex:1; border-left:0; }
   body.no-terms:not(.mode-fleet) #chat-close { display:none; }
   body.no-terms:not(.mode-fleet) .chat-log, body.no-terms:not(.mode-fleet) .chat-ask, body.no-terms:not(.mode-fleet) .chat-work,
-  body.no-terms:not(.mode-fleet) .chat-hint, body.no-terms:not(.mode-fleet) .chat-head, body.no-terms:not(.mode-fleet) .askpop { padding-left:max(14px, calc((100% - 820px) / 2)); padding-right:max(14px, calc((100% - 820px) / 2)); }
+  body.no-terms:not(.mode-fleet) .chat-hint, body.no-terms:not(.mode-fleet) .chat-head { padding-left:max(14px, calc((100% - 820px) / 2)); padding-right:max(14px, calc((100% - 820px) / 2)); }
   .empty { color:var(--faint); padding:26px 10px; text-align:center; font-size:14px; }
   /* Parked: a thought that is not a terminal yet. One line each; the body opens on click. */
   .row.jot .t { font-weight:500; }
@@ -1365,14 +1365,8 @@
   .chat-ask { display:flex; gap:7px; padding:10px 12px; border-top:1px solid var(--line); }
   .chat-ask textarea { flex:1; min-width:0; padding:10px 13px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font-size:17px; line-height:1.45; font-family:inherit; resize:none; max-height:45vh; min-height:48px; }
   .chat-hint { padding:0 12px 9px; font-size:13px; color:var(--faint); }
-  /* The Ask widget (static/ask-card.js): a question for you is a card you answer where you read it,
-     and "? N" in the head is every one still waiting, across the fleet. */
-  .askn { flex:none; height:26px; padding:0 10px; border-radius:999px; border:1px solid var(--warn); background:var(--warn-soft); color:var(--warn);
-    font:inherit; font-size:13.5px; font-weight:700; font-variant-numeric:tabular-nums; cursor:pointer; }
-  .askn[hidden] { display:none; }
-  .askn.on { background:var(--warn); color:var(--bg); }
-  .askpop { flex:none; max-height:62%; overflow:auto; padding:10px 12px; display:flex; flex-direction:column; gap:8px; border-bottom:1px solid var(--line); background:var(--bg); }
-  .askpop[hidden] { display:none; }
+  /* The Ask widget (static/ask-card.js): a question card in the log, answered where you read it. The
+     "? N" list is gone — open questions live in the terminal that asked them. */
   .ak-empty { font-size:14px; color:var(--faint); padding:4px 2px; }
   .bub.ak-only { padding:0; background:transparent; border:0; width:min(88%, 800px); display:flex; flex-direction:column; }
   .bub.ak-only > .wsc { float:none; align-self:flex-end; margin:0 0 4px; }
@@ -1414,7 +1408,6 @@
   <div class="usage" id="usage" title="Subscription usage — click for every profile and window"></div>
   <div class="tools">
     <button class="icon" id="btn-startday" title="Start the day — one terminal per workspace proposes today's work">☀️</button>
-    <button class="icon" id="btn-inbox" title="Inbox — what needs you, per client">📥</button><span class="fab-unread" id="inbox-unread" hidden></span>
     <button class="icon" id="btn-robert" title="Robert (⌘K)">🤖</button><span class="fab-unread" id="fab-unread" hidden></span>
     <button class="icon" id="btn-more" title="More">⋯</button>
   </div>
@@ -1480,7 +1473,6 @@
       <span class="dot ended" id="rob-dot"></span>
       <strong>Robert</strong>
       <span class="who" id="rob-status" title="What he is doing right now">idle</span>
-      <button class="askn" id="chat-asks" hidden>? 0</button>
       <select id="chat-model" class="model" title="Model Robert uses — chat, wakes, watches. Same list as a new Claude terminal."></select>
       <button class="icon" id="chat-voice" title="Voice call — talk, he does it and answers out loud (⌘⇧V)">🎙</button>
       <button class="icon" id="chat-briefs" title="Briefs — what each project is and what you want from it; Robert keeps them current">📋</button>
@@ -1488,7 +1480,6 @@
       <button class="icon" id="chat-full" title="Full screen — Robert takes the stage (⌘⇧K)">⤢</button>
       <button class="icon" id="chat-close" title="Close (⌘K / ⎋)">✕</button>
     </div>
-    <div class="askpop" id="askpop" hidden></div>
     <div class="chat-body">
     <div class="ck" id="cockpit" hidden></div>
     <div class="chat-main">
@@ -1520,6 +1511,7 @@
 <div class="menu" id="menu-bar">
   <button id="btn-tomorrow">🌙 Plan tomorrow</button>
   <button id="btn-log">🗒 Log</button>
+  <button id="btn-inbox" title="Every inbox item already opens its own terminal; this is the log">📥 Inbox log</button>
   <button id="btn-vars">🔑 Shared vars</button>
   <a href="/altitude" id="lnk-altitude">📊 Altitude</a>
   <div class="sep"></div>
@@ -6226,8 +6218,7 @@ const byWeight = ([, a], [, b]) => { const x = wsWeight(a), y = wsWeight(b); ret
 const IB_ICON = { slack: "💬", jira: "🔷", clickup: "✅" };
 function syncInboxBadge() {
   const n = Object.values(IB.counts).reduce((a, b) => a + b, 0);
-  const b = qs("#inbox-unread"); b.textContent = n; b.hidden = !n;
-  qs("#btn-inbox").title = n ? `Inbox — ${n} need${n === 1 ? "s" : ""} you` : "Inbox — nothing needs you";
+  qs("#btn-inbox").textContent = n ? `📥 Inbox log · ${n}` : "📥 Inbox log";
 }
 async function loadInbox() {
   // The closed list only matters with the page open; the badge refresh stays one request.
@@ -6933,8 +6924,8 @@ async function ovHistory(reload = false) {
     }
   } catch {}
 }
-// The Ask widget: cards in the log, and every open question behind "? N" (static/ask-card.js).
-AskCard.init({ api, toast, sessions: () => S.sessions, askOf, who: chipLabel, button: qs("#chat-asks"), panel: qs("#askpop"), log: OV.log });
+// The Ask widget: cards in the log (static/ask-card.js). No "? N" list — questions live in their terminals.
+AskCard.init({ api, toast, sessions: () => S.sessions, askOf, who: chipLabel, button: null, panel: null, log: OV.log });
 // Artifacts: an agent's HTML page as a card in the chat, opened in a sandboxed viewer (static/artifact-view.js).
 ArtifactView.init({ api, toast });
 // The panel over (docked) or beside (full screen) his conversation: questions, stopped terminals, PRs,

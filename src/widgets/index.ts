@@ -41,10 +41,8 @@ export type Widget = {
  *   export const WIDGETS: Widget[] = [fleet];
  */
 import pulse from "./pulse.js";
-import decide from "./decide.js";
-import robert from "./robert.js";
 import shipped from "./shipped.js";
-export const WIDGETS: Widget[] = [pulse, decide, robert, shipped];
+export const WIDGETS: Widget[] = [pulse, shipped];
 
 export const widgetByName = (name: string): Widget | null => WIDGETS.find((w) => w.name === name) ?? null;
 

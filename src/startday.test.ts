@@ -193,8 +193,8 @@ test("the request: optional ids and steering keyed by id; Robert may call it wit
 
 const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
 
-test("the button sits in the bar right before the inbox, and the dialog posts the ticked workspaces to /startday", () => {
-  assert.match(html, /<div class="tools">\s*<button class="icon" id="btn-startday"[^>]*>☀️<\/button>\s*<button class="icon" id="btn-inbox"/);
+test("the button leads the bar's tools, and the dialog posts the ticked workspaces to /startday", () => {
+  assert.match(html, /<div class="tools">\s*<button class="icon" id="btn-startday"[^>]*>☀️<\/button>\s*<button class="icon" id="btn-robert"/);
   assert.match(html, /<dialog id="dlg-startday">/);
   assert.match(html, /api\("\/startday", \{ method: "POST", body: JSON\.stringify\(\{ workspaces, steering \}\) \}\)/);
   assert.match(html, /qs\("#btn-startday"\)\.onclick = openStartDay/);
