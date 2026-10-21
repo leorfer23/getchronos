@@ -13,6 +13,7 @@ import { answerAsk, notifyAskCreated } from "./asks.js";
 import { escalateAsk } from "./ask-robert.js";
 import { ASK_MARKER_RE, ROBERT_ASKER, askMarker, isOperatorsAsk, isRobertAsk, liftRobertAsks, raiseRobertAsk } from "./robert-asks.js";
 import { setWakeAsker, setWakePoster } from "./wake-queue.js";
+import { writeSetting } from "./settings.js";
 
 let turns: string[] = [];
 beforeEach(() => {
@@ -90,8 +91,17 @@ test("the ? count is the operator's questions: his route, or escalated to him �
 
 // ── the card in the chat ──────────────────────────────────────────────────────────────────────────
 
+test("Robert posts on his own is off by default: an operator-routed ask leaves the chat alone", async () => {
+  const ws = mkWs();
+  const a = asks.create({ asked_by: "acme terminal", route: "operator", workspace_id: ws.id, question: "staging or prod?" });
+  await notifyAskCreated(a, undefined);
+  const n = (db.prepare("SELECT COUNT(*) AS n FROM chat_messages WHERE reply = ?").get(askMarker(a.id)) as { n: number }).n;
+  assert.equal(n, 0);
+});
+
 test("an operator-routed ask lands in the Desk chat as its card; Robert's own does not post a second one", async () => {
   const ws = mkWs();
+  writeSetting("robert.desk_posts", true, ws.id);
   const a = asks.create({ asked_by: "acme terminal", route: "operator", workspace_id: ws.id, question: "staging or prod?" });
   await notifyAskCreated(a, undefined);
   assert.deepEqual(deskRows(), [{ reply: askMarker(a.id), source: "robert", workspace_id: ws.id }]);
@@ -103,6 +113,7 @@ test("an operator-routed ask lands in the Desk chat as its card; Robert's own do
 
 test("a Robert-triaged ask posts its card only when he hands it up, with his line above it", async () => {
   const ws = mkWs();
+  writeSetting("robert.desk_posts", true, ws.id);
   const a = asks.create({ asked_by: "acme terminal", route: "robert", workspace_id: ws.id, question: "drop the table?" });
   await notifyAskCreated(a, undefined).catch(() => {}); // triage is fire-and-forget; its turn is not what this tests
   const before = deskRows().filter((r) => r.reply.includes("::ask")).length;

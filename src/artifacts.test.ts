@@ -10,6 +10,7 @@ import { artifacts, asks, db, sessions, workspaces } from "./store.js";
 import { CONFIG } from "./config.js";
 import { answerAsk } from "./asks.js";
 import { callerScope } from "./authz.js";
+import { writeSetting } from "./settings.js";
 import {
   FRAME_CSP,
   artifactFile,
@@ -237,6 +238,7 @@ test("every artifact the API hands back carries its link", async () => {
 });
 
 test("a new version with notify puts its card in the chat again; without, it does not", async () => {
+  writeSetting("robert.desk_posts", true, ws.id);
   const { artifact: a } = await publishArtifact({ title: "Report", html: "<p>x</p>", workspace_id: ws.id, session_id: term.id });
   const cards = () => (db.prepare("SELECT COUNT(*) AS n FROM chat_messages WHERE reply = ?").get(artifactMarker(a.id)) as { n: number }).n;
   const before = cards();

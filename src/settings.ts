@@ -257,6 +257,12 @@ defineSetting({
   default: () => true,
 });
 defineSetting({
+  key: "robert.desk_posts", group: "Robert", level: "both", type: "bool", env: "CHRONOS_ROBERT_DESK_POSTS",
+  label: "Robert posts on his own",
+  help: "Off: the chat only shows his replies to you. What he does on his own (wakes, triage, watch reports, ask cards) stays in the terminals he touches.",
+  default: () => false,
+});
+defineSetting({
   key: "robert.drive", group: "Robert", level: "both", type: "bool", env: "CHRONOS_ROBERT_DRIVE",
   label: "Wake when a terminal stops",
   help: "Robert looks at terminals when they finish, block or need a decision (all of them, or only 🤖 ones — see Watch every terminal).",
