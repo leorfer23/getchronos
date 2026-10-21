@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { INBOX_AUTO_RULES, inboxAutoDenyArgs, isInboxAuto } from "./inbox-guard.js";
 import path from "node:path";
 import os from "node:os";
 import type { WebSocket } from "ws";
@@ -720,7 +721,7 @@ export async function openSession(
   // and dev servers all mean THAT machine (agents/_blocks/on-host.md). Nothing on the brain.
   const hostBlock = onHostBlock(targetHost);
   const sysArg = backend.appendsSystem
-    ? ([row.role === "lead" ? agentPrompt("lead") : null, leadBlock, FOCUS_CONTRACT, hostBlock, browserBlock(), artifactChoiceBlock(backend.name), ctx, rel].filter(Boolean).join("\n\n") || null)
+    ? ([row.role === "lead" ? agentPrompt("lead") : null, leadBlock, isInboxAuto(row) ? INBOX_AUTO_RULES : null, FOCUS_CONTRACT, hostBlock, browserBlock(), artifactChoiceBlock(backend.name), ctx, rel].filter(Boolean).join("\n\n") || null)
     : null;
   // Seed the conversation: the ticket context (or a passed seed) is typed in once the CLI has booted.
   // Defined here (a remote spec carries it) but, for a local terminal, still EVALUATED after the spawn
@@ -745,7 +746,7 @@ export async function openSession(
     // contract alone into a bare exploratory chat).
     // A resumed chat already carries them from its first prompt: pasting them again would be a new turn.
     if (!backend.appendsSystem && !opts.resumeId && (seed || ctx)) {
-      const pre = [leadBlock, FOCUS_CONTRACT, hostBlock, browserBlock(), ctx].filter(Boolean).join("\n\n");
+      const pre = [leadBlock, isInboxAuto(row) ? INBOX_AUTO_RULES : null, FOCUS_CONTRACT, hostBlock, browserBlock(), ctx].filter(Boolean).join("\n\n");
       seed = pre + (seed ? `\n\n--- Your task ---\n${seed}` : "");
     }
     return seed;
@@ -817,6 +818,8 @@ export async function openSession(
     const iArgs = backend.interactiveArgs
       ? backend.interactiveArgs(opts.model ?? null, sysArg, repoDirs, spawnSessionId, doResume)
       : [];
+    // An auto-opened inbox terminal: the CLI itself refuses merges, deploys and messaging (inbox-guard.ts).
+    if (isInboxAuto(row) && backend.name === "claude-code") iArgs.push(...inboxAutoDenyArgs());
     // Credential stores this client is trusted with (Globex ↔ ~/.config/gcloud, so `bq` can auth).
     // Empty for every workspace that hasn't been given one explicitly.
     const allowSecrets = workspaceSandboxAllow(ws?.sandbox_allow);

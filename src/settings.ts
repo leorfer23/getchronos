@@ -245,6 +245,12 @@ const backendNames = () => listBackends().map((b) => b.name);
 
 // Robert — every automatic turn he takes. The chat always answers the operator, whatever is off here.
 defineSetting({
+  key: "inbox.auto_dispatch", group: "Autonomy", level: "both", type: "bool", env: "CHRONOS_INBOX_AUTODISPATCH",
+  label: "Inbox opens terminals",
+  help: "Each new inbox item (Slack, Jira, ClickUp) opens its own terminal after 2 minutes, up to 3 at a time per client. Close the ones you don't need.",
+  default: () => CONFIG.inboxAuto.enabled,
+});
+defineSetting({
   key: "robert.enabled", group: "Robert", level: "both", type: "bool",
   label: "Robert works on his own",
   help: "Off: no automatic Robert turns here — no wake-ups, prompt answers, watch reports or ask triage. Chat still answers you.",

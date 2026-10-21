@@ -278,6 +278,17 @@ export const CONFIG = {
   // ranks the rest. Operator-requested 2026-09-30 at 10:00 and 18:00 every day, in slackTriageTz.
   // CHRONOS_INBOX_CLEANUP=0 removes the jobs. A fire with nothing open is skipped before any model runs.
   inboxCleanup: process.env.CHRONOS_INBOX_CLEANUP !== "0",
+  // Every new inbox row opens a Desk terminal by itself (src/inbox-autodispatch.ts). 0 → Dispatch button only.
+  inboxAuto: {
+    enabled: process.env.CHRONOS_INBOX_AUTODISPATCH !== "0" && process.env.CHRONOS_TEST !== "1",
+    graceSec: Math.max(0, Number(process.env.CHRONOS_INBOX_AUTO_GRACE_SEC ?? 120)),
+    perWorkspace: Math.max(1, Number(process.env.CHRONOS_INBOX_AUTO_PER_WS ?? 3)),
+    model: process.env.CHRONOS_INBOX_AUTO_MODEL ?? "sonnet",
+    // MCP servers an auto-opened inbox terminal cannot use at all (src/inbox-guard.ts): the ones that
+    // send messages or change trackers. Comma list; add your own server names via the env.
+    denyMcp: (process.env.CHRONOS_INBOX_AUTO_DENY_MCP ?? "slack,atlassian,clickup,ClickUp,jira,gmail,jenkins,launchdarkly")
+      .split(",").map((x) => x.trim()).filter(Boolean),
+  },
   inboxCleanupCron: process.env.CHRONOS_INBOX_CLEANUP_CRON ?? "0 10,18 * * *",
   inboxCleanupModel: process.env.CHRONOS_INBOX_CLEANUP_MODEL ?? "sonnet",
   // Stale notes (src/note-workers.ts): right before a cleanup fire the daemon itself (no model) closes

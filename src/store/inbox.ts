@@ -4,7 +4,7 @@ import { now } from "./util.js";
 
 /**
  * The workspace inbox (migration 138, src/inbox.ts): "something needs you", per client. A row is a
- * notification and nothing more — no code path turns one into work except the operator's Dispatch.
+ * notification; the operator's Dispatch or auto-dispatch (src/inbox-autodispatch.ts) turns it into a terminal.
  */
 export const INBOX_SOURCES = ["slack", "jira", "clickup"] as const;
 export const INBOX_KINDS = ["dm", "mention", "self_note", "assigned", "comment", "status"] as const;
@@ -172,5 +172,31 @@ export const inbox = {
   dispatchedTo(id: string, session_id: string): InboxItem | undefined {
     db.prepare("UPDATE inbox_items SET dispatched_session=?, updated_at=? WHERE id=?").run(session_id, now(), id);
     return this.get(id);
+  },
+  /** Highest rowid so far — auto-dispatch only takes rows filed after it was turned on. */
+  maxRowid(): number {
+    return (db.prepare("SELECT COALESCE(MAX(rowid),0) n FROM inbox_items").get() as { n: number }).n;
+  },
+  /** `new` rows filed after `afterRowid`, in the order the Desk shows them. */
+  autoCandidates(afterRowid: number): InboxItem[] {
+    wake();
+    return db.prepare(
+      "SELECT * FROM inbox_items WHERE state='new' AND rowid > ? ORDER BY urgent DESC, rank IS NOT NULL, rank, created_at",
+    ).all(afterRowid) as InboxItem[];
+  },
+  /** Live terminals per workspace that an inbox row opened. */
+  liveDispatched(): Record<string, number> {
+    const rows = db.prepare(
+      `SELECT i.workspace_id, COUNT(*) n FROM inbox_items i JOIN sessions s ON s.id = i.dispatched_session
+       WHERE i.state='dispatched' AND s.ended_at IS NULL GROUP BY i.workspace_id`,
+    ).all() as { workspace_id: string; n: number }[];
+    return Object.fromEntries(rows.map((r) => [r.workspace_id, r.n]));
+  },
+  /** The terminal a row opened has closed: the row is done with it. */
+  closeForSession(session_id: string): InboxItem | undefined {
+    const row = db.prepare("SELECT * FROM inbox_items WHERE dispatched_session=? AND state='dispatched'").get(session_id) as InboxItem | undefined;
+    if (!row) return undefined;
+    db.prepare("UPDATE inbox_items SET state='resolved', resolved_reason='its terminal was closed', updated_at=? WHERE id=?").run(now(), row.id);
+    return this.get(row.id);
   },
 };
