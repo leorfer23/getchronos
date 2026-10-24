@@ -15,7 +15,8 @@
  * turn and the answer can come hours later, from the phone.
  */
 import { CONFIG } from "./config.js";
-import { asks, kv, workspaces, type Ask } from "./store.js";
+import { asks, kv, sessions, workspaces, type Ask } from "./store.js";
+import type { Session } from "./types.js";
 import type { UiAction } from "./telegram/agent.js";
 
 /** Who a Robert-raised ask says it is from. Its only other distinguishing mark is having no run and no terminal. */
@@ -53,19 +54,43 @@ function cleanOptions(v: unknown): string[] | null {
   return out.length ? out : null;
 }
 
-type Raise = (f: { question: string; options: string[] | null; workspace_id: string | null }) => Ask;
-
 /**
- * The terminal that holds one of Robert's questions (kv `ask.holder:<session id>` → ask id). The
- * operator reads terminals, not the chat — so a question Robert raises for a project opens its own
- * terminal there; answering in it (src/ask-in-terminal.ts) answers the ask, and Robert hears it on
- * his usual wake. Closing that terminal unanswered drops the question.
+ * The terminal that holds Robert's questions (kv `ask.holder:<session id>` → ask ids, comma-joined;
+ * `ask.at:<ask id>` → session id back). The operator reads terminals, not the chat. A question about
+ * work a terminal is already doing rides on THAT terminal — its rail row turns red with a count and
+ * he answers by typing there (src/ask-in-terminal.ts). Only a question no terminal owns opens a new
+ * one to hold it. Robert hears the answer on his usual wake; closing the terminal unanswered drops it.
  */
 const holderKey = (sessionId: string) => `ask.holder:${sessionId}`;
-export function holderAsk(sessionId: string): Ask | undefined {
-  const id = kv.get(holderKey(sessionId));
-  const a = id ? asks.get(id) : undefined;
-  return a?.status === "open" ? a : undefined;
+const atKey = (askId: string) => `ask.at:${askId}`;
+export function holderAsks(sessionId: string): Ask[] {
+  const ids = (kv.get(holderKey(sessionId)) ?? "").split(",").filter(Boolean);
+  return ids.map((id) => asks.get(id)).filter((a): a is Ask => a?.status === "open");
+}
+/** The terminal a Robert question rides on, if any. */
+export const heldBy = (askId: string): string | null => kv.get(atKey(askId)) ?? null;
+export function holdOn(sessionId: string, askId: string): void {
+  const ids = [...holderAsks(sessionId).map((a) => a.id), askId];
+  kv.set(holderKey(sessionId), [...new Set(ids)].join(","));
+  kv.set(atKey(askId), sessionId);
+}
+
+const ID8 = /\b[0-9a-f]{8}\b/g;
+/**
+ * The live terminal a Robert question is about: the one he named (`"terminal":"<id8>"`), else the one
+ * its text names by id8 ("PR triage (6de592b0): …") when exactly one live terminal matches. Same
+ * workspace when he gave one.
+ */
+export function targetTerminal(f: { question: string; terminal?: string | null; workspace_id: string | null }): Session | null {
+  const live = sessions.list({ status: "live", limit: 500 }).filter((s) => !f.workspace_id || s.workspace_id === f.workspace_id);
+  const named = f.terminal?.trim().toLowerCase().replace(/^#/, "");
+  if (named && named.length >= 6) {
+    const hit = live.find((s) => s.id.startsWith(named));
+    if (hit) return hit;
+  }
+  const ids = new Set(f.question.toLowerCase().match(ID8) ?? []);
+  const hits = live.filter((s) => ids.has(s.id.slice(0, 8)));
+  return hits.length === 1 ? hits[0] : null;
 }
 
 export function holderBrief(a: Pick<Ask, "question" | "options">): string {
@@ -84,13 +109,23 @@ export function holderBrief(a: Pick<Ask, "question" | "options">): string {
   ].join("\n");
 }
 
-/** File one Robert ask; for a project, open the terminal that holds it. Late imports: asks.ts pulls the dispatcher, terminal.ts the world. */
-export const raiseRobertAsk: Raise = (f) => {
-  const ask = asks.create({ asked_by: ROBERT_ASKER, route: "operator", ...f });
+type RaiseFields = { question: string; options: string[] | null; workspace_id: string | null; terminal?: string | null };
+type Raise = (f: RaiseFields) => Ask;
+
+/**
+ * File one Robert ask. About a live terminal → it rides on that terminal (no new one). Otherwise, for
+ * a project, open the terminal that holds it. Late imports: asks.ts pulls the dispatcher, terminal.ts the world.
+ */
+export const raiseRobertAsk: Raise = ({ terminal, ...f }) => {
+  const on = targetTerminal({ ...f, terminal });
+  const ask = asks.create({ asked_by: ROBERT_ASKER, route: "operator", ...f, workspace_id: on?.workspace_id ?? f.workspace_id });
   void import("./asks.js")
     .then((m) => m.notifyAskCreated(ask, undefined, { desk: false }))
     .catch((e) => console.error("[robert-asks] notify failed", e));
-  if (f.workspace_id && CONFIG.robertAskTerminals) {
+  if (on) {
+    holdOn(on.id, ask.id);
+    void import("./term-status.js").then((m) => m.refresh(on.id)).catch(() => {});
+  } else if (f.workspace_id && CONFIG.robertAskTerminals) {
     void import("./terminal.js")
       .then((m) =>
         m.openSession({
@@ -104,7 +139,7 @@ export const raiseRobertAsk: Raise = (f) => {
           role: "human",
         } as any),
       )
-      .then((s) => kv.set(holderKey(s.id), ask.id))
+      .then((s) => holdOn(s.id, ask.id))
       .catch((e) => console.error("[robert-asks] holder terminal failed", e?.message ?? e));
   }
   return ask;
@@ -127,7 +162,8 @@ export function liftRobertAsks(
     const q = typeof a.question === "string" ? a.question : typeof a.q === "string" ? a.q : "";
     const question = q.trim().slice(0, 1000);
     if (!question) continue;
-    raised.push(raise({ question, options: cleanOptions(a.options), workspace_id: resolveWs(a.ws ?? a.workspace, wsId) }));
+    const terminal = typeof a.terminal === "string" ? a.terminal : typeof a.session === "string" ? a.session : null;
+    raised.push(raise({ question, options: cleanOptions(a.options), workspace_id: resolveWs(a.ws ?? a.workspace, wsId), ...(terminal ? { terminal } : {}) }));
   }
   if (!raised.length) return { ...out, asks: [] };
   const reply = [out.reply, ...raised.map((a) => askMarker(a.id))].filter(Boolean).join("\n\n");

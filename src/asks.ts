@@ -16,7 +16,7 @@ import { reportAgentState } from "./agent-lifecycle.js";
 import { notify, esc } from "./telegram/api.js";
 import { kb, type Btn } from "./telegram/keyboards.js";
 import { postRobertToDesk } from "./robert-desk.js";
-import { askMarker, isRobertAsk } from "./robert-asks.js";
+import { askMarker, heldBy, isRobertAsk } from "./robert-asks.js";
 
 function parseOptions(ask: Ask): string[] {
   try {
@@ -263,10 +263,13 @@ export async function answerAsk(
  * queue imports the manager, which is a long way from the asks layer.
  */
 function tellRobertAnswered(ask: Ask): void {
+  const on = heldBy(ask.id);
   const say =
     `The operator answered the question you asked him (ask \`${ask.id.slice(0, 8)}\`).\n` +
     `Q: ${ask.question}\nA: ${ask.answer}\n` +
-    `Act on it now, the way you said you would when you asked.`;
+    (on
+      ? `He answered by typing in terminal ${on.slice(0, 8)}, so its agent got the answer too. If the decision is that terminal's work, let it carry it out and only check it did; act yourself on the part that is yours.`
+      : `Act on it now, the way you said you would when you asked.`);
   void import("./wake-queue.js")
     .then((m) => m.enqueueWake({ topic: "ask.answered", key: `robert-ask:${ask.id}`, workspace_id: ask.workspace_id, payload: { say } }))
     .catch((e) => console.error("[asks] robert wake failed", e));

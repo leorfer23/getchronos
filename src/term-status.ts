@@ -19,6 +19,7 @@
  */
 import { bus } from "./bus.js";
 import { db, asks, sessions } from "./store.js";
+import { heldBy, holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { clearAgentOverlay, getAgent, reportAgentState } from "./agent-lifecycle.js";
 import { focusEvents, isLive, sessionActivity, sessionPrompt } from "./terminal.js";
 import type { DeskPrompt } from "./desk-prompt.js";
@@ -63,6 +64,8 @@ export type TermStatus = {
   progress: { n: number; of: number } | null;
   /** True once any hook has been seen from this terminal. */
   hooked: boolean;
+  /** Open questions on this terminal that are the operator's to answer — the red count on its rail row. */
+  asks?: number;
 };
 
 export const WORD: Record<Phase, string> = {
@@ -320,7 +323,10 @@ export function statusOf(id: string, now = Date.now()): TermStatus | null {
     return { phase: "ended", word: WORD.ended, needs_you: false, line: "", since: now, on: null, eta_at: null, subagents: 0, progress: null, hooked: false };
   }
   const agent = getAgent(id);
-  const open = asks.openForSession(id)[0];
+  const held = holderAsks(id);
+  const own = asks.openForSession(id);
+  const open = held[0] ?? own[0];
+  const mine = held.length + own.filter((a) => isOperatorsAsk(a)).length;
   const n = narrationOf(id);
   const r = resolve({
     live,
@@ -350,7 +356,7 @@ export function statusOf(id: string, now = Date.now()): TermStatus | null {
   const prev = phaseAt.get(id);
   const since = prev && prev.phase === r.phase ? prev.at : r.phase === "your_turn" && act.last_out ? act.last_out : now;
   if (!prev || prev.phase !== r.phase) { phaseAt.set(id, { phase: r.phase, at: since }); recordPhase(id, r.phase, since); }
-  return { ...r, since };
+  return { ...r, since, ...(mine ? { asks: mine } : {}) };
 }
 function parseOptions(o: unknown): string[] {
   if (Array.isArray(o)) return o.map(String);
@@ -513,6 +519,11 @@ export function startTermStatus() {
       case "agent.state":
         if (e.kind === "session") refreshSoon(e.id);
         return;
+      case "ask.answered": {
+        const sid = e.session_id ?? heldBy(e.ask_id);
+        if (sid) refreshSoon(sid);
+        return;
+      }
       case "focus.event": {
         const n = narr.get(e.session_id);
         if (n && take(n, e.event)) refreshSoon(e.session_id, 1000);

@@ -28,7 +28,7 @@ import { postRobertToDesk } from "./robert-desk.js";
 import type { RobertStep } from "./robert-steps.js";
 import { esc, notify, notifyInfo } from "./telegram/api.js";
 import { kb, type Btn } from "./telegram/keyboards.js";
-import { askMarker, holderAsk } from "./robert-asks.js";
+import { askMarker, holderAsks } from "./robert-asks.js";
 
 /** How long an ask may sit with Robert before it becomes the operator's anyway. The agent is blocked. */
 export const TRIAGE_DEADLINE_MIN = Number(process.env.CHRONOS_ASK_TRIAGE_MIN ?? 3);
@@ -231,8 +231,7 @@ export async function sweepTriageDeadline(nowMs = Date.now()): Promise<void> {
 
 /** A terminal died with questions open: nothing is coming back for them. Say so once, quietly. */
 export function cancelSessionAsks(sessionId: string): void {
-  const held = holderAsk(sessionId);
-  const open = [...asks.openForSession(sessionId), ...(held ? [held] : [])];
+  const open = [...asks.openForSession(sessionId), ...holderAsks(sessionId)];
   if (!open.length) return;
   for (const a of open) asks.cancel(a.id);
   void notifyInfo(

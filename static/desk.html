@@ -176,6 +176,9 @@
     font:inherit; font-size:12.5px; font-weight:650; line-height:18px; font-variant-numeric:tabular-nums; cursor:pointer; }
   .row .fold:hover { color:var(--ink); border-color:var(--muted); }
   .row .fold.hot { color:var(--danger); border-color:var(--danger); background:var(--danger-soft); }
+  /* Questions waiting on you in this terminal (yours, or Robert's riding on it): a red count. */
+  .row .side .asks { min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:var(--danger); color:var(--surface);
+    font-size:11.5px; font-weight:700; line-height:18px; text-align:center; font-variant-numeric:tabular-nums; margin-right:3px; }
   .row.child { margin-left:16px; }
   /* The ✕ appearing on hover must not slide the fold out from under the pointer. */
   .row.lead .x { display:inline-block; visibility:hidden; }
@@ -2135,7 +2138,7 @@ function rowEl(s) {
   const el = document.createElement("div");
   el.className = "row"; el.dataset.sid = s.id;
   el.innerHTML = '<span class="stripe"></span><div class="main"><div class="t"><span class="dot"></span><span class="ws"></span><span class="txt"></span></div><div class="l"></div></div>' +
-    '<span class="side"><span class="htag" hidden></span><span class="eye" hidden></span><span class="board" hidden></span><span class="workers" hidden></span><button type="button" class="fold" hidden></button><span class="age"></span><button class="x" title="Remove from the list">✕</button></span>';
+    '<span class="side"><span class="htag" hidden></span><span class="eye" hidden></span><span class="board" hidden></span><span class="workers" hidden></span><button type="button" class="fold" hidden></button><span class="asks" hidden></span><span class="age"></span><button class="x" title="Remove from the list">✕</button></span>';
   el.onclick = (e) => { if (e.target.closest(".x, .fold")) return; pickTerminal(s.id); };
   qs(".fold", el).onclick = () => toggleLead(s.id);
   qs(".x", el).onclick = () => (byId(s.id)?.live ? kill(s.id, qs(".x", el)) : dismiss(s.id));
@@ -2184,6 +2187,10 @@ function paintRow(el, s) {
     line.replaceChildren(phChip(ph), txt);
     line.title = (PH_WORD[ph] || ph) + (l.text ? " — " + l.text : "");
   } else line.textContent = l.text;
+  const nq = s.live ? s.status?.asks || 0 : 0;
+  const q = qs(".asks", el);
+  q.hidden = !nq;
+  if (nq) { q.textContent = String(nq); q.title = nq + " question" + (nq === 1 ? "" : "s") + " waiting on you — answer by typing here"; }
   const eye = qs(".eye", el);
   const w = s.live && s.watch?.active ? s.watch : null;
   eye.hidden = !w;
