@@ -9,7 +9,7 @@
  */
 import { asks } from "./store.js";
 import { answerAsk } from "./asks.js";
-import { holderAsk } from "./robert-asks.js";
+import { holderAsks } from "./robert-asks.js";
 
 const buf = new Map<string, string>();
 const CAP = 2000;
@@ -18,8 +18,7 @@ const isHis = (a: { route: string | null; escalated_at: string | null }) => a.ro
 
 /** Close his open asks on this terminal with what he submitted. Returns how many closed. */
 export async function operatorAnswered(sessionId: string, text: string, answer = answerAsk): Promise<number> {
-  const held = holderAsk(sessionId);
-  const open = [...asks.openForSession(sessionId).filter(isHis), ...(held ? [held] : [])];
+  const open = [...asks.openForSession(sessionId).filter(isHis), ...holderAsks(sessionId)];
   let n = 0;
   for (const a of open) {
     const r = await answer(a.id, text.trim() || "(answered in the terminal)", "operator");
