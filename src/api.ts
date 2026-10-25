@@ -67,6 +67,7 @@ import { helperSpendSnapshot } from "./helper-spend.js";
 import { efficiencyToolsStatus } from "./efficiency-tools.js";
 import { focusEfficiencySnapshot } from "./focus.js";
 import { sessionArtifacts } from "./session-artifacts.js";
+import { findMedia, mediaMime, sessionMedia } from "./session-media.js";
 import { recordSessionPrs } from "./terminal-automerge.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
@@ -1221,6 +1222,26 @@ export function startServer() {
     } catch (e: any) {
       res.status(500).json({ error: String(e?.message ?? e) });
     }
+  });
+
+  // Its media: the files dropped on it and the images it read, wrote or captured — the companion
+  // rail's thumbnails (src/session-media.ts). Admin-gated like /drop: the file route reads disk, and
+  // only what the list holds, so the list is the allowlist.
+  api.get("/sessions/:id/media", requireAdmin, (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    res.json({ media: sessionMedia(s, focusEvents(s.id)) });
+  });
+  api.get("/sessions/:id/media/file", requireAdmin, (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    const m = findMedia(sessionMedia(s, focusEvents(s.id)), String(req.query.path ?? ""));
+    if (!m) return res.status(404).json({ error: "not found" });
+    res.setHeader("Content-Type", m.image ? mediaMime(m.path) : "application/octet-stream");
+    res.setHeader("Content-Disposition", `${m.image ? "inline" : "attachment"}; filename="${m.name.replace(/[^\x20-\x7e]|["\\]/g, "_")}"`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, max-age=300");
+    fs.createReadStream(m.path).pipe(res);
   });
 
   // ───────────────────────────── Desk wall ─────────────────────────────

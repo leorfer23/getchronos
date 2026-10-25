@@ -628,6 +628,24 @@
   .pin.page .i { color:var(--accent); }
   .pin.page.ask .i, .pin.page.ask .s { color:var(--warn); }
   .pin.page.done .i, .pin.page.done .s { color:var(--ok); }
+  /* Media: what it was handed and what it saw — drops, and every image the agent read, wrote or
+     captured. Thumbnails, newest first; a click opens the picture, ⌥-click copies its path. */
+  .comp-media { padding:6px 8px 8px; border-bottom:1px solid var(--line); flex:none; }
+  .comp-media[hidden] { display:none; }
+  .comp-media .hd { display:flex; align-items:center; gap:6px; width:100%; padding:2px 4px; border:0; background:none;
+    color:var(--faint); font:inherit; font-size:11px; font-weight:800; letter-spacing:.09em; text-transform:uppercase; cursor:pointer; }
+  .comp-media .hd:hover { color:var(--muted); }
+  .comp-media .hd b { font-weight:700; font-variant-numeric:tabular-nums; }
+  .comp-media .grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:4px; margin-top:5px; max-height:30vh; overflow-y:auto; }
+  .comp-media .grid::-webkit-scrollbar { width:0; }
+  .comp-media.shut .grid { display:none; }
+  .mt { position:relative; aspect-ratio:1; border-radius:6px; overflow:hidden; border:1px solid var(--line); background:var(--surface-2);
+    display:flex; align-items:center; justify-content:center; padding:0; color:var(--muted); font:inherit; cursor:pointer; text-decoration:none; }
+  .mt:hover { border-color:var(--accent); }
+  .mt img { width:100%; height:100%; object-fit:cover; display:block; }
+  .mt .x { font:10.5px ui-monospace,"SF Mono",Menlo,monospace; font-weight:700; text-transform:uppercase; padding:0 4px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+  .mt.drop::after { content:""; position:absolute; top:4px; right:4px; width:6px; height:6px; border-radius:50%; background:var(--accent); }
   .comp-tl { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:2px 0 16px; }
   .comp-tl::-webkit-scrollbar { width:0; }
   .ctl { display:grid; grid-template-columns:34px 11px 1fr; column-gap:6px; align-items:baseline;
@@ -1458,6 +1476,7 @@
           </div>
           <div class="comp-now" id="comp-now"><div class="hd"><span class="ph" id="comp-ph"></span><span class="for" id="comp-for"></span></div><div class="line" id="comp-line"></div><div class="tool" id="comp-tool"></div><div class="asked" id="comp-asked"></div></div>
           <div class="comp-pins" id="comp-pins" hidden></div>
+          <div class="comp-media" id="comp-media" hidden><button type="button" class="hd" id="comp-media-hd"></button><div class="grid" id="comp-media-grid"></div></div>
           <div class="comp-tl" id="comp-tl"></div>
           <button class="comp-new" id="comp-new" hidden>↓ newest</button>
         </div>
@@ -2955,6 +2974,7 @@ const C = {
   promptOpen: false, stick: true, lastPhase: null,
   raf: 0, sig: "", gutSig: "", gutRaf: 0,
   pins: { prs: [], docs: [], pages: [] }, pinAt: 0, pinBusy: false, pinSig: "", screen: [], // artifacts: /sessions/:id/artifacts
+  media: [], mediaAt: 0, mediaBusy: false, mediaSig: "", mediaShut: localStorage.getItem("desk-comp-media") === "0", // /sessions/:id/media
 };
 // How often the rail re-asks what this terminal has produced. The answer changes on the scale of a
 // PR being merged, and the server caches gh behind it (src/session-artifacts.ts), so 30s is generous.
@@ -2968,8 +2988,10 @@ function compSoon() { if (C.raf) return; C.raf = requestAnimationFrame(() => { C
 function compOpen(id) {
   C.id = id; C.chapters = []; C.open = new Set(); C.promptOpen = false; C.stick = true; C.lastPhase = null; C.sig = "";
   C.pins = { prs: [], docs: [], pages: [] }; C.pinAt = 0; C.pinSig = ""; C.screen = [];
+  C.media = []; C.mediaAt = 0; C.mediaSig = ""; mediaForget();
   qs("#comp-tl").replaceChildren();
   compPinsLoad(id);
+  compMediaLoad(id);
   const s = byId(id);
   if (s && s.live) compChapter(phaseOf(s), s.status?.line || "", phaseSince(s), false);
   compSoon();
@@ -3083,7 +3105,7 @@ function compRender() {
   const s = on && S.active ? byId(S.active) : null;
   if (!s) { qs("#ticker").hidden = true; qs("#askbar").hidden = true; return; }
   // The ticker and the ask bar are not part of the rail — they stay whether it is open or collapsed.
-  compTop(s); compNow(s); compAsk(s); compTicker(s); compStrip(); compPins(s);
+  compTop(s); compNow(s); compAsk(s); compTicker(s); compStrip(); compPins(s); compMedia(s);
   if (!C.min) compRows(s);
 }
 // ── pins: the PR to merge and the doc it wrote ────────────────────────────────────────────────
@@ -3160,6 +3182,78 @@ function compPins(s) {
   if (html !== C.pinSig) { C.pinSig = html; setHtml(box, html); }
   box.hidden = !out.length;
 }
+// ── media: what it was handed and what it saw ─────────────────────────────────────────────────
+// Drops, plus every image path in the feed that exists on this disk (src/session-media.ts). The list
+// is a readdir and a few stats, so it is re-asked every 10s, and at once after a drop or a feed event
+// that names an image. The file route is admin-gated and an <img src> cannot carry the token, so each
+// thumbnail is a blob fetched with it — the same road as the chat's attachments (attSrc).
+const MEDIA_EVERY_MS = 10000;
+const MEDIA_IMG_RE = /\.(png|jpe?g|gif|webp|heic|heif|avif|bmp)\b/i;
+const MEDIA_URL = new Map(); // path:mtime → object URL
+function mediaForget() { for (const u of MEDIA_URL.values()) URL.revokeObjectURL(u); MEDIA_URL.clear(); }
+async function compMediaLoad(id, force) {
+  if (!id || C.mediaBusy || !TOKEN) return;
+  if (!force && Date.now() - C.mediaAt < MEDIA_EVERY_MS) return;
+  C.mediaBusy = true;
+  try {
+    const r = await api("/sessions/" + id + "/media");
+    if (C.id !== id) return;
+    C.media = r.media || [];
+  } catch {
+  } finally {
+    C.mediaBusy = false;
+    C.mediaAt = Date.now();
+    compSoon();
+  }
+}
+async function mediaSrc(id, m) {
+  const k = m.path + ":" + m.mtime;
+  if (MEDIA_URL.has(k)) return MEDIA_URL.get(k);
+  const r = await fetch("/api/sessions/" + id + "/media/file?path=" + encodeURIComponent(m.path), { headers: { "x-mc-admin": TOKEN } });
+  if (!r.ok) throw new Error("gone");
+  const u = URL.createObjectURL(await r.blob());
+  MEDIA_URL.set(k, u);
+  return u;
+}
+function compMedia(s) {
+  const box = qs("#comp-media");
+  if (s.id === C.id) compMediaLoad(s.id);
+  const list = C.id === s.id ? C.media : [];
+  box.hidden = !list.length;
+  box.classList.toggle("shut", C.mediaShut);
+  setHtml(qs("#comp-media-hd"), `<span>${C.mediaShut ? "▸" : "▾"} Media</span><b>${list.length}</b>`);
+  const sig = s.id + "|" + list.map((m) => m.path + ":" + m.mtime).join("|");
+  if (sig === C.mediaSig) return;
+  C.mediaSig = sig;
+  const grid = qs("#comp-media-grid");
+  grid.innerHTML = list.map((m, i) => {
+    const tip = esc(m.name + (m.source === "drop" ? " · dropped" : "") + " — click to open, ⌥-click copies the path");
+    return m.image
+      ? `<a class="mt${m.source === "drop" ? " drop" : ""}" data-mi="${i}" title="${tip}"><img alt="${esc(m.name)}"></a>`
+      : `<button type="button" class="mt${m.source === "drop" ? " drop" : ""}" data-mi="${i}" title="${esc(m.name)} — click to copy the path"><span class="x">${esc((m.name.split(".").pop() || "file").slice(0, 6))}</span></button>`;
+  }).join("");
+  for (const a of qsa("a[data-mi]", grid)) {
+    const m = list[Number(a.dataset.mi)];
+    mediaSrc(s.id, m).then((u) => {
+      if (C.id !== s.id) return;
+      qs("img", a).src = u;
+      a.href = u; a.target = "_blank"; a.rel = "noopener";
+    }).catch(() => {});
+  }
+}
+// The drop code is tested on its own (desk-term-drop.test.ts), so it reaches the rail through this.
+window.deskMediaDropped = (id) => { if (id === C.id) setTimeout(() => compMediaLoad(id, true), 1500); };
+qs("#comp-media-hd").addEventListener("click", () => {
+  C.mediaShut = !C.mediaShut;
+  localStorage.setItem("desk-comp-media", C.mediaShut ? "0" : "1");
+  C.mediaSig = ""; compSoon(); compFocusBack();
+});
+qs("#comp-media-grid").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-mi]"); if (!t) return;
+  const m = C.media[Number(t.dataset.mi)]; if (!m) return;
+  if (!m.image || e.altKey || !t.href) { e.preventDefault(); compCopy(m.path); }
+  compFocusBack();
+});
 // What was typed to open it: the first thing the operator said in the transcript, else the brief the
 // terminal was launched with.
 function compPrompt(s) {
@@ -3489,6 +3583,7 @@ function insertDropped(id, text) {
 function landed(id, out) {
   if (!out.length) return;
   insertDropped(id, out.map(shq).join(" "));
+  window.deskMediaDropped?.(id);
   toast("dropped → " + (out.length > 1 ? out.length + " files" : out[0]));
 }
 
@@ -7421,6 +7516,7 @@ function connectBus() {
       const evn = e.event;
       const t = evn?.text;
       if (t) { S.focus.set(e.session_id, String(t).replace(/\s+/g, " ").slice(0, 160)); const s = byId(e.session_id); if (s) repaint(s); }
+      if (t && e.session_id === C.id && MEDIA_IMG_RE.test(t)) setTimeout(() => compMediaLoad(C.id, true), 1500);
       if (evn && e.session_id === F.id && evn.seq != null && !F.seen.has(evn.seq)) {
         F.seen.add(evn.seq); F.events.push(evn); F.events.sort((a, b) => a.seq - b.seq); renderStorySoon();
         // An untickmarked marker per live event: it is what maps a timeline row back to the line the
