@@ -101,7 +101,12 @@ export function describeTool(name: string, input: any): string {
     case "Glob": return `find ${one(inp.pattern, 40)}`;
     case "Task": return `delegate: ${one(inp.description ?? "", 60)}`;
     case "apply_patch": case "update_plan": return name.replace("_", " ");
-    default: return one(name, 40) + (inp.command ? `: ${one(inp.command)}` : "");
+    default: {
+      // A screenshot tool that saved to disk (chrome-devtools take_screenshot `filePath`, …): keep the
+      // path, so the companion's Media strip can show what the agent saw (src/session-media.ts).
+      const saved = [inp.filePath, inp.file_path, inp.path, inp.savePath].find((v) => typeof v === "string" && /\.(png|jpe?g|webp|gif)$/i.test(v));
+      return one(name, 40) + (inp.command ? `: ${one(inp.command)}` : "") + (saved ? ` → ${one(saved, 200)}` : "");
+    }
   }
 }
 
