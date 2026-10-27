@@ -48,6 +48,19 @@ const BM25_BODY_WEIGHT = 1.0;
 const insertFts = db.prepare(
   "INSERT INTO search_fts (title,body,kind,ref_id,workspace,ts) VALUES (@title,@body,@kind,@ref_id,@workspace,@ts)"
 );
+// search_refs (migration 147) is the index search_fts cannot have on its UNINDEXED ref_id: every row
+// written here gets one, so dropping a ref is an index lookup instead of a walk of the whole index.
+// The extra `ref_id = ?` on the delete is a guard, not a filter — a ref left behind by a raw
+// `DELETE FROM search_fts` (tests do that) may name a rowid since reused, and must not delete it.
+const insertRef = db.prepare("INSERT OR REPLACE INTO search_refs (rid, ref_id, kind) VALUES (?, ?, ?)");
+const deleteByRef = db.prepare(
+  "DELETE FROM search_fts WHERE rowid IN (SELECT rid FROM search_refs WHERE ref_id = ?) AND ref_id = ?"
+);
+const dropRefs = db.prepare("DELETE FROM search_refs WHERE ref_id = ?");
+const removeRefTx = db.transaction((refId: string) => {
+  deleteByRef.run(refId, refId);
+  dropRefs.run(refId);
+});
 const eventMeta = db.prepare(
   "SELECT j.workspace_id ws, j.name name FROM runs r JOIN jobs j ON j.id = r.job_id WHERE r.id = ?"
 );
@@ -67,7 +80,7 @@ export interface SearchHit {
 export const searchIndex = {
   add(row: { kind: string; ref_id: string; workspace: string | null; title: string; body: string; ts?: string }): void {
     if (!row.body?.trim() && !row.title?.trim()) return;
-    insertFts.run({
+    const { lastInsertRowid } = insertFts.run({
       title: row.title ?? "",
       body: row.body ?? "",
       kind: row.kind,
@@ -75,18 +88,21 @@ export const searchIndex = {
       workspace: row.workspace ?? "",
       ts: row.ts ?? now(),
     });
+    insertRef.run(lastInsertRowid, row.ref_id, row.kind);
   },
   removeRef(refId: string): void {
-    db.prepare("DELETE FROM search_fts WHERE ref_id = ?").run(refId);
+    removeRefTx(refId);
   },
   // Companion to events.prune(): once a run's events are pruned out of run_events, its indexed
   // 'event' rows here have nothing left to point at — drop them too, or search surfaces snippets
   // for a run whose actual event log is already gone.
   pruneOrphanEvents(): void {
     try {
-      db.prepare(
-        `DELETE FROM search_fts WHERE kind = 'event' AND ref_id NOT IN (SELECT DISTINCT run_id FROM run_events)`
-      ).run();
+      db.transaction(() => db.exec(`
+        DELETE FROM search_fts WHERE rowid IN (
+          SELECT rid FROM search_refs WHERE kind = 'event' AND ref_id NOT IN (SELECT DISTINCT run_id FROM run_events)
+        ) AND kind = 'event' AND ref_id NOT IN (SELECT DISTINCT run_id FROM run_events);
+        DELETE FROM search_refs WHERE kind = 'event' AND ref_id NOT IN (SELECT DISTINCT run_id FROM run_events);`))();
     } catch {}
   },
   indexEvent(run_id: string, type: string, payload: unknown): void {
