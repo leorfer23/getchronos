@@ -6,7 +6,7 @@ import type { WebSocket } from "ws";
 import { CONFIG } from "./config.js";
 import { detectPrompt, renderScreen, type DeskPrompt } from "./desk-prompt.js";
 import { FLUSH_MS, clampRate, fanOut, type TermClient } from "./term-fanout.js";
-import { ScreenMirror, type Screen } from "./term-screen.js";
+import { SCROLLBACK, ScreenMirror, type Screen } from "./term-screen.js";
 import { ModeTracker, isTerminalReply } from "./term-modes.js";
 import { pasteOf, seedEnterMsFor, ttyCooked, typeSeed } from "./term-seed.js";
 import { sessions, sessionGoals, workspaces, repos, tickets, runs, jobs, notes as notesStore, kv, hosts } from "./store.js";
@@ -276,9 +276,11 @@ interface Live {
   /** Re-arm for sockets that still owe a frame with no pty output to trigger one (paced, laggards). */
   paceT?: NodeJS.Timeout;
   clients: Set<TermClient>;
-  /** The daemon's own parse of the current frame — text cards, prompt detection, agents (term-screen.ts). */
+  /** The daemon's own parse of the terminal — text cards, prompt detection, agents, and the snapshot
+   *  a (re)attaching socket gets (term-screen.ts). */
   screen: ScreenMirror;
-  /** DEC private modes the stream has set (term-modes.ts) — replayed ahead of the tail on attach. */
+  /** DEC private modes the stream has set (term-modes.ts) — replayed ahead of a raw tail (a snapshot
+   *  carries its own), and what the seed reads to know the TUI takes bracketed paste. */
   modes: ModeTracker;
   focusCtx: FocusCtx;
   // first-prompt capture (bare chats only) → instant deterministic title
@@ -303,7 +305,7 @@ interface Live {
   quietTimer?: NodeJS.Timeout;
   /** What the settled screen is asking (desk-prompt.ts). Set on the quiet flip, dropped on output. */
   prompt?: DeskPrompt | null;
-  /** Ignore output before this ms — a fresh attach forces a repaint (see attach's SIGWINCH jiggle),
+  /** Ignore output before this ms — a raw replay forces a repaint (see replay's SIGWINCH jiggle),
    *  and a repaint is the terminal answering US, not the agent doing work. Without this, opening the
    *  wall turns every card green for one QUIET_MS window. */
   muteUntil?: number;
@@ -317,28 +319,7 @@ const live = new Map<string, Live>();
 // CLI cost one syscall + one client parse *per chunk*. Coalesce ~one frame's worth (16ms) into a
 // single send, then fan out per socket (term-fanout.ts). The pty is NEVER paused: a stalled pty
 // blocks the agent's writes, and a hidden terminal must not stall the work it is showing.
-const replayTail = (e: Live) => e.modes.preamble() + (e.buffer.length > BUF_CAP ? e.buffer.slice(-BUF_CAP) : e.buffer);
-
-// Full-screen TUIs only paint on their own events or on SIGWINCH — a raw byte replay doesn't
-// reconstruct the current frame. Jiggle the pty ±1 row to force one; reads size at fire time so we
-// restore the client's dims. muteUntil: the repaint is the terminal answering US, not the agent
-// working, and must not flip the card green.
-function jiggle(e: Live) {
-  e.muteUntil = Date.now() + 900;
-  setTimeout(() => {
-    try {
-      const c = e.pty.cols, r = e.pty.rows;
-      e.pty.resize(c, Math.max(2, r - 1));
-      e.pty.resize(c, r);
-    } catch {}
-  }, 150);
-}
-
-function resync(e: Live, ws: WebSocket) {
-  if (e.buffer && ws.readyState === 1) ws.send(replayTail(e));
-  jiggle(e);
-}
-
+//
 // One coalesced flush → every socket at its own pace (term-fanout.ts). A paced socket or a laggard
 // leaves work for later that no pty output will trigger, so the tick re-arms itself.
 //
@@ -353,6 +334,82 @@ function flushOut(e: Live) {
   const { again, resync: stale } = fanOut(e.clients, out, Date.now());
   for (const c of stale) resync(e, c);
   if (again) e.paceT = setTimeout(() => flushOut(e), again);
+}
+
+// ── (re)attach: bringing a socket up to date ─────────────────────────────────────────────────
+// A socket that needs the whole terminal — a pane just mounted, one that dropped frames while hidden,
+// a laggard cut off past LAG_HIGH — gets the mirror's exact state at this byte of the stream
+// (term-screen.ts serializeAt), then the stream from that byte on. Measured on two live Claude
+// terminals (2026-10-27): 5 KB fullscreen and 24 KB inline with its history, where the raw tails were
+// 261 and 328 KB for the browser to parse on every click (a full 500-line history at 209 columns is
+// ~80 KB). And nothing is asked of the CLI — no SIGWINCH, so no repaint and no "working" flash on the
+// card. The raw tail could be wrong as well as big: it starts wherever the 256 KB cut fell (mid-escape
+// prints the rest as text), and it can't rebuild a fullscreen TUI that paints only what changed — the
+// jiggle meant to fix that got no repaint from a Claude that sees its size come back unchanged.
+// While its snapshot is taken the socket is held (term-fanout.ts _snap): its share of the output
+// piles up and leaves right behind the snapshot.
+const SNAP_TRIES = 5;
+const SNAP_RETRY_MS = 30;
+let snapGen = 0;
+
+function resync(e: Live, ws: WebSocket, tries = 0) {
+  const c = ws as TermClient;
+  if (c.readyState !== 1) return;
+  // A remote terminal's mirror is rebuilt from the host's 256 KB ring after a brain restart, and a
+  // mirror that is not the pty's size (it floors at 20×4) is not the pty's frame: both go raw.
+  if (e.remote || !e.screen.fits(e.pty.cols, e.pty.rows)) return replay(e, c);
+  const gen = (c._snap = ++snapGen);
+  flushOthers(e, c);
+  e.screen.serializeAt((r) => {
+    if (c._snap !== gen) return; // a newer resync of this socket owns it now
+    if (r.ok) {
+      c._snap = 0;
+      if (c.readyState !== 1) return;
+      c.send(r.data);
+      if (c._acc) flushOut(e);
+    } else if (r.busy && tries < SNAP_TRIES) {
+      setTimeout(() => { if (c._snap === gen) resync(e, ws, tries + 1); }, SNAP_RETRY_MS);
+    } else {
+      c._snap = 0;
+      replay(e, c);
+    }
+  });
+}
+
+// Every other socket gets what is waiting now; `c` gets it inside its catch-up (snapshot or tail),
+// so from here on it is owed only what comes after this byte — never the same bytes twice.
+function flushOthers(e: Live, c: TermClient) {
+  if (e.pending) {
+    const had = e.clients.delete(c);
+    flushOut(e);
+    if (had) e.clients.add(c);
+  }
+  c._acc = "";
+}
+
+// The raw road (remote terminals, and any snapshot that can't be had): the last BUF_CAP bytes behind
+// the modes they need, then a jiggle — full-screen TUIs only paint on their own events or on
+// SIGWINCH, and a raw tail doesn't reconstruct the current frame.
+const replayTail = (e: Live) => e.modes.preamble() + (e.buffer.length > BUF_CAP ? e.buffer.slice(-BUF_CAP) : e.buffer);
+
+function replay(e: Live, c: TermClient) {
+  flushOthers(e, c);
+  if (e.buffer && c.readyState === 1) c.send(replayTail(e));
+  jiggle(e);
+}
+
+// Resize the pty ±1 row to force a repaint; reads size at fire time so we restore the client's dims.
+// muteUntil: the repaint is the terminal answering US, not the agent working, and must not flip the
+// card green.
+function jiggle(e: Live) {
+  e.muteUntil = Date.now() + 900;
+  setTimeout(() => {
+    try {
+      const c = e.pty.cols, r = e.pty.rows;
+      e.pty.resize(c, Math.max(2, r - 1));
+      e.pty.resize(c, r);
+    } catch {}
+  }, 150);
 }
 
 // Workspace a session belongs to (for per-workspace backend routing of AI title/summary helpers).
@@ -999,7 +1056,8 @@ function installLive(
   const backendName = w.backendName;
   const entry: Live = {
     pty: term, buffer: "", pending: "", clients: new Set(), focusCtx,
-    screen: new ScreenMirror(term.cols, term.rows), modes: new ModeTracker(),
+    // History only where a snapshot is served from it: a remote terminal replays raw (resync).
+    screen: new ScreenMirror(term.cols, term.rows, w.remote ? 0 : SCROLLBACK), modes: new ModeTracker(),
     inbuf: "", titleDone: w.titleDone,
     lastOut: Date.now(), lastIn: w.adopted ? 0 : Date.now(), startedAt: w.startedAt ?? Date.now(), quiet: false,
     remote: w.remote,
@@ -1383,16 +1441,13 @@ function ticketSeed(ticketId: string, remote = false): string | null {
 export function attach(id: string, ws: WebSocket): boolean {
   const e = live.get(id);
   if (!e) return false;
-  if (e.buffer && ws.readyState === 1) ws.send(replayTail(e)); // replay scrollback
   e.clients.add(ws);
   ws.on("close", () => e.clients.delete(ws));
-  // A raw byte replay doesn't reconstruct a full-screen TUI's current frame — force a repaint after
-  // the client's own onopen resize settles. Harmless for line-oriented CLIs; they just reflow.
-  jiggle(e);
+  resync(e, ws); // the terminal as it is now, then the stream from here on
   return true;
 }
 
-/** A client whose pane was hidden dropped its stream — replay the scrollback and force a repaint. */
+/** A client whose pane was hidden dropped its stream — send it the whole terminal again. */
 export function refreshClient(id: string, ws: WebSocket) {
   const e = live.get(id);
   if (e) resync(e, ws);
