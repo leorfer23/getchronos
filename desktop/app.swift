@@ -270,11 +270,11 @@ config.userContentController.add(bridge, name: "mc")
 let web = WKWebView(frame: window.contentView!.bounds, configuration: config)
 web.autoresizingMask = [.width, .height]
 web.uiDelegate = ui
-// Which page this window hosts: default /app, a path (`mc-app /desk` → the terminal wall), or a full
+// Which page this window hosts: default /desk (the terminal wall), a path (`mc-app /app`), or a full
 // URL (`mc-app http://localhost:7788/desk` → a dev daemon on another port). Token injection is the
 // same either way, which is what lets /desk attach to /term at all.
 let arg = CommandLine.arguments.dropFirst().first(where: { $0.hasPrefix("/") || $0.hasPrefix("http") })
-let target = arg.map { $0.hasPrefix("http") ? $0 : "http://localhost:7777" + $0 } ?? "http://localhost:7777/app"
+let target = arg.map { $0.hasPrefix("http") ? $0 : "http://localhost:7777" + $0 } ?? "http://localhost:7777/desk"
 let targetURL = URL(string: target)!
 
 // At login launchd spawns this window and the daemon in the same second, and the daemon takes
