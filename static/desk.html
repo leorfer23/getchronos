@@ -2287,8 +2287,9 @@ function repaintRow(id) {
 }
 
 // ── selecting ────────────────────────────────────────────────────────────────────────────────
-// The stage shows one terminal. Selecting another swaps the story at once and the pty a beat later,
-// so walking the rail with J/K or a swipe does not open a socket per step.
+// The stage shows one terminal. A click swaps the story and the pty at once; walking the rail with
+// J/K or a swipe (opts.walk) swaps the story at once and the pty a beat later, so a walk does not open
+// a socket per step. The beat used to apply to every click, and was most of what a click cost.
 let mountT = 0;
 function select(id, opts = {}) {
   S.notifyCount.delete(id);
@@ -2308,7 +2309,7 @@ function select(id, opts = {}) {
   renderStage();
   if (!opts.quiet) qs('#rows [data-sid="' + id + '"]')?.scrollIntoView({ block: "nearest" });
   clearTimeout(mountT);
-  mountT = setTimeout(syncPane, prev === id ? 0 : 140);
+  mountT = setTimeout(syncPane, opts.walk && prev !== id ? 140 : 0);
 }
 function step(dir, needsOnly = false) {
   const needs = needsOnly ? needsList().map((s) => s.id) : [];
@@ -2316,7 +2317,7 @@ function step(dir, needsOnly = false) {
   if (!r.length) return;
   const i = r.indexOf(S.active);
   const next = i < 0 ? (dir > 0 ? r[0] : r[r.length - 1]) : r[(i + dir + r.length) % r.length];
-  select(next);
+  select(next, { walk: true });
 }
 // A two-finger swipe on the stage is J/K. Horizontal wheel deltas accumulate; one step per gesture.
 (() => {
@@ -2344,6 +2345,7 @@ function setMode(m) {
   document.body.classList.toggle("mode-fleet", S.mode === "fleet");
   for (const b of qsa("#mode button")) b.classList.toggle("on", b.dataset.m === S.mode);
   if (S.mode === "fleet") renderFleet();
+  if (S.mode === "focus" && F.stale) renderStory();
   syncPane();
   compRender();
   if (S.mode === "term") setTimeout(focusSay, 60);
@@ -2673,6 +2675,11 @@ function boardTimeline(s) {
 
 function renderStory() {
   const s = S.active && byId(S.active); if (!s || F.id !== s.id) return;
+  // The story is only on screen in Focus. Rebuilding it behind the terminal (markdown, sanitize, a
+  // forced layout per clamp) on every update of the active terminal was paid for nothing; setMode
+  // draws it once on the way back.
+  if (S.mode !== "focus") { F.stale = true; return; }
+  F.stale = false;
   const p = s.prompt && typeof s.prompt === "object" ? s.prompt : null;
   const evs = F.events;
   const last = (k) => { for (let i = evs.length - 1; i >= 0; i--) if (evs[i].kind === k) return evs[i]; return null; };
@@ -3765,9 +3772,14 @@ document.addEventListener("keydown", (e) => {
   setFont(d === 0 ? FONT.default : S.font + d);
 }, true);
 
-function mountPane(s, host) {
-  if (!s.live || S.panes.has(s.id)) return;
-  if (!TOKEN) return;
+// The stage's one xterm, built once and handed from terminal to terminal. Building a Terminal and its
+// WebGL context on every click was most of a switch (16ms in Chromium, ~80ms in WebKit before the
+// replay even started); reset() + the next socket's replay keeps the context and its glyph atlas.
+// Everything that belongs to the TERMINAL (links, clipboard, chords, scroll gutter) is wired here
+// once; everything that belongs to the SESSION (its socket, its size, its chapter marks) is the pane.
+let XT = null;
+function stageTerm(host) {
+  if (XT) return XT;
   const openLink = (event, uri) => {
     if (event.button !== 0) return;
     if (!/^https?:\/\//i.test(uri)) return;
@@ -3801,27 +3813,43 @@ function mountPane(s, host) {
   host.insertBefore(mount, host.firstChild);
   term.open(mount);
   try { fit.fit(); } catch {}
-  host.classList.remove("scrollable");
-  let scrollable = false;
-  const syncScrollable = () => {
+  const x = { term, fit, host, mount, gl: null, owner: null, scrollable: false, roT: 0 };
+  x.syncScrollable = () => {
     const b = term.buffer.active;
     const on = b.type === "normal" && b.length > term.rows;
-    if (on !== scrollable) { scrollable = on; host.classList.toggle("scrollable", on); }
+    if (on !== x.scrollable) { x.scrollable = on; host.classList.toggle("scrollable", on); }
   };
-  term.onWriteParsed(syncScrollable);
-  term.buffer.onBufferChange(syncScrollable);
-  term.onResize(syncScrollable);
+  term.onWriteParsed(x.syncScrollable);
+  term.buffer.onBufferChange(x.syncScrollable);
+  term.onResize(x.syncScrollable);
+  term.onScroll(() => compGutSoon());
+  term.onRender(() => compGutSoon());
+  term.onData((d) => { const p = S.panes.get(x.owner); if (p && p.ws.readyState === 1) p.ws.send(JSON.stringify({ t: "in", d })); });
+  try {
+    const gl = new WebglAddon.WebglAddon();
+    gl.onContextLoss(() => { try { gl.dispose(); } catch {} x.gl = null; const p = S.panes.get(x.owner); if (p) p.gl = null; });
+    term.loadAddon(gl); x.gl = gl;
+  } catch { x.gl = null; }
+  new ResizeObserver(() => { clearTimeout(x.roT); x.roT = setTimeout(() => { try { fit.fit(); S.panes.get(x.owner)?.sendSize(); } catch {} }, 60); }).observe(host);
+  XT = x;
+  return x;
+}
+function mountPane(s, host) {
+  if (!s.live || S.panes.has(s.id)) return;
+  if (!TOKEN) return;
+  const x = stageTerm(host);
+  const { term, fit } = x;
+  // Whatever the last terminal left — its screen, its scrollback, its modes — goes before this one's
+  // replay lands, so a switch never shows one session's tail under another's title. Through write(),
+  // not reset(): xterm parses writes asynchronously, and a frame of the last session still in that
+  // queue would otherwise be parsed AFTER a reset() and land on this one's screen.
+  term.write("\x1bc");
+  host.classList.remove("scrollable"); x.scrollable = false;
+  x.owner = s.id;
   const ws = new WebSocket(`${WS_SCHEME}//${location.host}/term?id=${s.id}&token=${encodeURIComponent(TOKEN)}`);
   // Chapter marks in this pane's scrollback (the companion). xterm markers follow reflow, so they
   // survive a pty resize; the oldest are disposed past TermCompanion.MAX_MARKS.
-  const pane = { term, fit, ws, host, mount, gl: null, offscreen: false, dropped: false, ro: null, roT: 0, rate: -1, id: s.id, marks: [] };
-  term.onScroll(() => compGutSoon());
-  term.onRender(() => compGutSoon());
-  try {
-    const gl = new WebglAddon.WebglAddon();
-    gl.onContextLoss(() => { try { gl.dispose(); } catch {} pane.gl = null; });
-    term.loadAddon(gl); pane.gl = gl;
-  } catch { pane.gl = null; }
+  const pane = { term, fit, ws, host, mount: x.mount, gl: x.gl, offscreen: false, dropped: false, rate: -1, id: s.id, marks: [] };
   let sentCols = 0, sentRows = 0;
   const sendSize = () => {
     if (ws.readyState !== 1 || (term.cols === sentCols && term.rows === sentRows)) return;
@@ -3831,13 +3859,13 @@ function mountPane(s, host) {
   pane.sendSize = sendSize;
   // The pty is shared with the phone, which resizes it to its own width while you are out.
   pane.forceSize = () => { sentCols = sentRows = 0; sendSize(); };
-  ws.onopen = () => { try { fit.fit(); sendSize(); } catch {} pane.rate = -1; syncRates(); };
-  ws.onmessage = (e) => { if (pane.offscreen) { pane.dropped = true; return; } term.write(e.data); };
-  ws.onclose = (e) => { if (e.code !== 4404) term.write("\r\n\x1b[90m[detached]\x1b[0m\r\n"); };
-  term.onData((d) => { if (ws.readyState === 1) ws.send(JSON.stringify({ t: "in", d })); });
+  // The terminal outlives this socket now: once the stage has moved on, a late frame or close from
+  // it would land in the NEXT session's screen. Ownership is checked on every one.
+  const mine = () => x.owner === s.id && S.panes.get(s.id) === pane;
+  ws.onopen = () => { if (!mine()) return; try { fit.fit(); sendSize(); } catch {} pane.rate = -1; syncRates(); };
+  ws.onmessage = (e) => { if (!mine()) return; if (pane.offscreen) { pane.dropped = true; return; } term.write(e.data); };
+  ws.onclose = (e) => { if (mine() && e.code !== 4404) term.write("\r\n\x1b[90m[detached]\x1b[0m\r\n"); };
   S.panes.set(s.id, pane);
-  pane.ro = new ResizeObserver(() => { clearTimeout(pane.roT); pane.roT = setTimeout(() => { try { fit.fit(); sendSize(); } catch {} }, 60); });
-  pane.ro.observe(host);
   setTimeout(focusSay, 30);
   // The rail is painted before the pane exists, so the phase it opened in has no tick yet: give it one.
   if (S.active === s.id && C.lastPhase) compMark(C.lastPhase);
@@ -3862,16 +3890,18 @@ document.addEventListener("visibilitychange", () => {
     try { p.fit.fit(); p.forceSize(); } catch {}
   }
 });
+// Lets go of a session, not of the terminal: the xterm stays for the next one (stageTerm).
 function unmountPane(id = S.active) {
   const p = id && S.panes.get(id);
   if (!p) return;
-  clearTimeout(p.roT);
-  try { p.ro?.disconnect(); } catch {}
+  S.panes.delete(id);
+  if (XT && XT.owner === id) XT.owner = null;
+  p.ws.onopen = p.ws.onmessage = p.ws.onclose = null;
   try { p.ws.close(); } catch {}
   for (const m of p.marks || []) { try { m.mk.dispose(); } catch {} }
-  try { p.term.dispose(); } catch {}
-  try { p.mount.remove(); } catch {}
-  S.panes.delete(id);
+  // Nobody took the terminal over (Focus, an ended card, nothing open): clear it, so the next thing
+  // to show it never shows this session's screen first.
+  if (XT && XT.owner === null) { XT.term.write("\x1bc"); XT.host.classList.remove("scrollable"); XT.scrollable = false; }
   C.gutSig = "";
   qs("#gut").replaceChildren();
 }
@@ -7530,7 +7560,9 @@ function connectBus() {
       const s = byId(e.session_id);
       if (!s) return;
       s.usage = e.usage;
-      if (S.active === s.id) renderStage();
+      // Through the same 150ms batch as every other per-terminal event: usage lands once per turn per
+      // terminal, and a stage rebuild per event is what a busy wall of them used to cost.
+      if (S.active === s.id) repaint(s);
       return;
     }
     if (e.topic === "focus.event") {
