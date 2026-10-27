@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { db, inbox, kv, workspaces } from "./store.js";
 import { CONFIG } from "./config.js";
-import { createAutoDispatcher } from "./inbox-autodispatch.js";
+import { createAutoDispatcher, NO_WORK } from "./inbox-autodispatch.js";
 
 const mkWs = () =>
   workspaces.create({ slug: "ia-" + randomUUID().slice(0, 8), name: "Acme", config_dir: `/tmp/mc-test/${randomUUID()}` } as any);
@@ -20,7 +20,8 @@ const opener: any = async (o: any) => {
   opened.push(o);
   return { id };
 };
-const mk = (over: any = {}) => createAutoDispatcher({ opener, now: () => clock, enabled: () => true, ...over });
+const work = async () => ({ work: true, why: "asks for a fix", task: null });
+const mk = (over: any = {}) => createAutoDispatcher({ opener, now: () => clock, enabled: () => true, triage: work, triageOn: () => true, ...over });
 
 beforeEach(() => {
   db.exec("DELETE FROM inbox_items; DELETE FROM sessions; DELETE FROM workspaces; DELETE FROM kv WHERE key LIKE 'inbox.%';");
@@ -126,4 +127,91 @@ test("the box: rules + CLI deny list keyed off the row, so a reopen keeps them",
   for (const ok of ["mcp__slack", "mcp__slack__slack_send_message_draft", "mcp__slack__slack_search_public_and_private", "mcp__slack__slack_read_thread"]) assert.ok(!list.split(",").includes(ok), `${ok} stays usable`);
   assert.ok(INBOX_AUTO_RULES.includes("slack_send_message_draft"));
   assert.ok(!list.includes("Bash(git push:*)"), "pushing its own branch stays allowed");
+});
+
+// ───────────────────────────── first pass: is there work? ─────────────────────────────
+
+const pastGrace = async (d: ReturnType<typeof mk>) => { await d.pump(); clock += CONFIG.inboxAuto.graceSec * 1000; return d.pump(); };
+
+test("no work → no terminal: the row closes with the reason, judged once", async () => {
+  const ws = mkWs();
+  let calls = 0;
+  const d = mk({ triage: async () => { calls++; return { work: false, why: "a joke in #random", task: null }; } });
+  await d.pump();
+  const row = add(ws.id);
+  assert.deepEqual(await pastGrace(d), []);
+  assert.equal(opened.length, 0);
+  const r = inbox.get(row.id)!;
+  assert.equal(r.state, "resolved");
+  assert.equal(r.resolved_reason, NO_WORK + "a joke in #random");
+  clock += 10 * 60_000;
+  await d.pump();
+  assert.equal(calls, 1);
+});
+
+test("work → the terminal opens with the first pass's read of the job in its brief", async () => {
+  const ws = mkWs();
+  const d = mk({ triage: async () => ({ work: true, why: "asks for a data pull", task: "Pull September fees by processor for Ana" }) });
+  await d.pump();
+  const row = add(ws.id);
+  assert.deepEqual(await pastGrace(d), [row.id]);
+  assert.match(opened[0].description, /First read of the job: Pull September fees by processor for Ana/);
+});
+
+test("reopening a no-work row in the Inbox log opens it without asking again", async () => {
+  const ws = mkWs();
+  let calls = 0;
+  const d = mk({ triage: async () => { calls++; return { work: false, why: "FYI", task: null }; } });
+  await d.pump();
+  const row = add(ws.id);
+  await pastGrace(d);
+  assert.equal(inbox.get(row.id)!.state, "resolved");
+  inbox.reopen(row.id);
+  assert.deepEqual(await pastGrace(d), [row.id]);
+  assert.equal(calls, 1);
+  assert.equal(inbox.get(row.id)!.state, "dispatched");
+});
+
+test("a work row waiting for a seat is not judged twice", async () => {
+  const ws = mkWs();
+  let calls = 0;
+  const d = mk({ triage: async () => { calls++; return { work: true, why: "x", task: null }; } });
+  await d.pump();
+  const rows = Array.from({ length: CONFIG.inboxAuto.perWorkspace + 1 }, () => add(ws.id));
+  await pastGrace(d);
+  for (let i = 0; i < 3; i++) await d.pump();
+  assert.equal(calls, rows.length);
+});
+
+test("a full client still closes its no-work rows as they arrive", async () => {
+  const ws = mkWs();
+  const d = mk({ triage: async (i: any) => ({ work: !i.title.startsWith("fyi"), why: "x", task: null }) });
+  await d.pump();
+  for (let i = 0; i < CONFIG.inboxAuto.perWorkspace; i++) add(ws.id);
+  await pastGrace(d);
+  assert.equal(opened.length, CONFIG.inboxAuto.perWorkspace);
+  const fyi = inbox.add({ workspace_id: ws.id, source: "slack", kind: "dm", external_key: randomUUID(), title: "fyi shared a link" })!;
+  await pastGrace(d);
+  assert.equal(inbox.get(fyi.id)!.state, "resolved");
+});
+
+test("a failing first pass waits one tick, then opens the row as before", async () => {
+  const ws = mkWs();
+  let calls = 0;
+  const d = mk({ triage: async () => { calls++; if (calls === 1) throw new Error("timeout"); return null; } });
+  await d.pump();
+  const row = add(ws.id);
+  assert.deepEqual(await pastGrace(d), [], "first failure waits");
+  assert.deepEqual(await d.pump(), [row.id], "second failure opens");
+  assert.equal(calls, 2);
+});
+
+test("first pass off for a client → every row opens and the model is never asked", async () => {
+  const ws = mkWs();
+  let calls = 0;
+  const d = mk({ triageOn: () => false, triage: async () => { calls++; return { work: false, why: "x", task: null }; } });
+  await d.pump();
+  const row = add(ws.id);
+  assert.deepEqual(await pastGrace(d), [row.id]);
+  assert.equal(calls, 0);
 });

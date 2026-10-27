@@ -284,6 +284,10 @@ export const CONFIG = {
     graceSec: Math.max(0, Number(process.env.CHRONOS_INBOX_AUTO_GRACE_SEC ?? 120)),
     perWorkspace: Math.max(1, Number(process.env.CHRONOS_INBOX_AUTO_PER_WS ?? 3)),
     model: process.env.CHRONOS_INBOX_AUTO_MODEL ?? "sonnet",
+    // The first pass (src/inbox-triage.ts) that decides whether a row has any work in it before a
+    // terminal opens. Claude workspaces only; others use their own helper model.
+    triageModel: process.env.CHRONOS_INBOX_TRIAGE_MODEL ?? "sonnet",
+    triageTimeoutMs: Math.max(5_000, Number(process.env.CHRONOS_INBOX_TRIAGE_TIMEOUT_MS ?? 90_000)),
     // MCP servers an auto-opened inbox terminal cannot use at all (src/inbox-guard.ts): the ones that
     // send messages or change trackers. Comma list; add your own server names via the env.
     denyMcp: (process.env.CHRONOS_INBOX_AUTO_DENY_MCP ?? "atlassian,clickup,ClickUp,jira,gmail,jenkins,launchdarkly")
