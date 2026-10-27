@@ -3774,7 +3774,7 @@ document.addEventListener("keydown", (e) => {
 
 // The stage's one xterm, built once and handed from terminal to terminal. Building a Terminal and its
 // WebGL context on every click was most of a switch (16ms in Chromium, ~80ms in WebKit before the
-// replay even started); reset() + the next socket's replay keeps the context and its glyph atlas.
+// replay even started); a reset + the next socket's replay keeps the context and its glyph atlas.
 // Everything that belongs to the TERMINAL (links, clipboard, chords, scroll gutter) is wired here
 // once; everything that belongs to the SESSION (its socket, its size, its chapter marks) is the pane.
 let XT = null;
@@ -3825,19 +3825,26 @@ function stageTerm(host) {
   term.onScroll(() => compGutSoon());
   term.onRender(() => compGutSoon());
   term.onData((d) => { const p = S.panes.get(x.owner); if (p && p.ws.readyState === 1) p.ws.send(JSON.stringify({ t: "in", d })); });
-  try {
-    const gl = new WebglAddon.WebglAddon();
-    gl.onContextLoss(() => { try { gl.dispose(); } catch {} x.gl = null; const p = S.panes.get(x.owner); if (p) p.gl = null; });
-    term.loadAddon(gl); x.gl = gl;
-  } catch { x.gl = null; }
+  stageGl(x);
   new ResizeObserver(() => { clearTimeout(x.roT); x.roT = setTimeout(() => { try { fit.fit(); S.panes.get(x.owner)?.sendSize(); } catch {} }, 60); }).observe(host);
   XT = x;
   return x;
+}
+// WebGL for the stage's xterm. A lost context (GPU reset, sleep) falls back to the DOM renderer, and
+// the next mount tries again — a fresh xterm per click used to give that retry for free.
+function stageGl(x) {
+  if (x.gl) return;
+  try {
+    const gl = new WebglAddon.WebglAddon();
+    gl.onContextLoss(() => { try { gl.dispose(); } catch {} x.gl = null; const p = S.panes.get(x.owner); if (p) p.gl = null; });
+    x.term.loadAddon(gl); x.gl = gl;
+  } catch { x.gl = null; }
 }
 function mountPane(s, host) {
   if (!s.live || S.panes.has(s.id)) return;
   if (!TOKEN) return;
   const x = stageTerm(host);
+  stageGl(x);
   const { term, fit } = x;
   // Whatever the last terminal left — its screen, its scrollback, its modes — goes before this one's
   // replay lands, so a switch never shows one session's tail under another's title. Through write(),
