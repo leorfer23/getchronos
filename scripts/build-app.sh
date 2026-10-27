@@ -51,9 +51,17 @@ fi
 mkdir -p "$(dirname "$LINK")"
 ln -sf "$APP/Contents/MacOS/mc-app" "$LINK"
 
+# ~/.mc is a dot-directory, and Spotlight never indexes those — so the bundle there cannot be found
+# by name. A copy in ~/Applications can. Same bundle id and signature, so it is the same app to macOS.
+SPOT="$HOME/Applications/Chronos.app"
+mkdir -p "$(dirname "$SPOT")"
+rm -rf "$SPOT"
+ditto "$APP" "$SPOT"
+mdimport "$SPOT" 2>/dev/null || true
+
 # The icon is cached per bundle path by the icon services daemon, and a rebuilt bundle at the same
 # path keeps showing the old tile until the mtime moves and the Dock restarts. Both are cheap.
 touch "$APP"
 killall Dock 2>/dev/null || true
 
-echo "built $APP (symlinked as $LINK)"
+echo "built $APP (symlinked as $LINK, copied to $SPOT for Spotlight)"

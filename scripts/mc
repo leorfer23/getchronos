@@ -977,7 +977,7 @@ function askCap(question) {
       // running, window closed" is the normal case — spawning here would give him a second Dock
       // icon and a second WKWebView on the same Desk. `open -b` re-activates the live one, which
       // lands in applicationShouldHandleReopen and puts the window back.
-      if (spawnSync("pgrep", ["-f", "mc-app.app/Contents/MacOS/mc-app"]).status === 0) {
+      if (spawnSync("pgrep", ["-f", "\\.app/Contents/MacOS/mc-app"]).status === 0) {
         spawnSync("open", ["-b", "sh.chronos.app"]);
         return console.log(`desk → ${url} (raised the window that was already open)`);
       }
