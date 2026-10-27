@@ -5,12 +5,12 @@ import type { WebSocket } from "ws";
 // of the wall asks for four a second, a window in the background for two. The bytes are never
 // dropped for a paced socket — they accumulate and go out as one frame when its slot comes round —
 // so a TUI's screen is still exact, it just repaints less often. A socket that stops draining
-// (backgrounded tab, slow link) is cut off past LAG_HIGH and resynced from the scrollback buffer
-// once it drains; the pty is never paused.
+// (backgrounded tab, slow link) is cut off past LAG_HIGH and resynced once it drains — a snapshot of
+// the whole terminal, then the stream (terminal.ts resync); the pty is never paused.
 export const FLUSH_MS = 16;
 export const LAG_HIGH = 1_500_000;
 export const LAG_LOW = 64 * 1024;
-/** A paced socket that has this much waiting is resynced from scrollback instead — cheaper than the backlog. */
+/** A paced socket that has this much waiting is resynced instead — cheaper than the backlog. */
 export const ACC_CAP = 256 * 1024;
 /** Slowest pace a client may ask for: nobody watches a terminal that repaints once a minute. */
 export const RATE_MAX_MS = 5000;
@@ -21,12 +21,15 @@ export type TermClient = WebSocket & {
   _rate?: number;
   _acc?: string;
   _lastSend?: number;
+  /** Non-zero while terminal.ts takes this socket's snapshot: output piles up in _acc and nothing is
+   *  sent, so the snapshot goes out first and the bytes after it follow in order. */
+  _snap?: number;
 };
 
 export type FanOut = {
   /** ms until this entry needs another tick with no new pty output (0 = none). */
   again: number;
-  /** sockets that must be resynced from the scrollback buffer (recovered laggards, overflowed accumulators). */
+  /** sockets that must be resynced (recovered laggards, overflowed accumulators). */
   resync: TermClient[];
 };
 
@@ -42,6 +45,7 @@ export function fanOut(clients: Iterable<TermClient>, out: string, now: number):
   const sooner = (ms: number) => { again = again ? Math.min(again, ms) : ms; };
   for (const c of clients) {
     if (c.readyState !== 1) continue;
+    if (c._snap) { if (out) c._acc = (c._acc ?? "") + out; continue; }
     if (c._lagging) {
       if (c.bufferedAmount <= LAG_LOW) { c._lagging = false; c._acc = ""; resync.push(c); }
       else sooner(250);

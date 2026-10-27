@@ -812,6 +812,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_STUCK_SESSION_HRS` | `8` | `src/config.ts` |
 | `CHRONOS_TERM_INPUT_MAX` | `12` | `src/terminal.ts` |
 | `CHRONOS_TERM_QUIET_MS` | `6000` | `src/terminal.ts` |
+| `CHRONOS_TERM_SCROLLBACK` | `500` | `src/term-screen.ts` |
 | `CHRONOS_TEST` | — | `src/broker.ts` |
 | `CHRONOS_TEST_LEAK` | — | `src/calendar.test.ts` |
 | `CHRONOS_TEST_SECRET` | — | `src/agent-defs.test.ts` |

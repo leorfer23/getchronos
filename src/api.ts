@@ -5015,8 +5015,9 @@ export function startServer() {
   wsHeartbeat.unref?.();
   wss.on("close", () => clearInterval(wsHeartbeat));
 
-  // Terminal IO: one socket per attached PTY session. Server→client frames are raw pty output;
-  // client→server frames are JSON ({t:'in',d} keystrokes | {t:'resize',cols,rows}).
+  // Terminal IO: one socket per attached PTY session. Server→client frames are the terminal as it is
+  // (a snapshot that opens with RIS — terminal.ts resync), then raw pty output; client→server frames
+  // are JSON ({t:'in',d} keystrokes | {t:'resize',cols,rows}).
   termWss.on("connection", (ws, req) => {
     const id = new URL(req.url ?? "", "http://x").searchParams.get("id") ?? "";
     if (!attach(id, ws)) {

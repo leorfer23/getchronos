@@ -69,3 +69,21 @@ test("clampRate: at or under one flush means unpaced, and there is a ceiling", (
   assert.equal(clampRate(99999), 5000);
   assert.equal(clampRate("nope"), 0);
 });
+
+test("a socket waiting for its snapshot is sent nothing; its share piles up, in order, for after it", () => {
+  const c = client({ _snap: 7 });
+  fanOut([c], "a", 1000);
+  fanOut([c], "b", 1016);
+  assert.deepEqual(c.sent, []);
+  c._snap = 0; // the snapshot went out
+  fanOut([c], "c", 1032);
+  assert.deepEqual(c.sent, ["abc"]);
+});
+
+test("while held, a socket is neither cut off as a laggard nor resynced for its backlog", () => {
+  const c = client({ _snap: 7, bufferedAmount: 2_000_000 });
+  const r = fanOut([c], "x".repeat(ACC_CAP + 1), 1000);
+  assert.equal(c._lagging, undefined);
+  assert.deepEqual(r.resync, [], "its snapshot is already on the way");
+  assert.equal(r.again, 0, "and no tick for it: the snapshot's own send flushes what piled up");
+});

@@ -53,6 +53,7 @@
   },
   "dependencies": {
     "@playwright/mcp": "^0.0.83",
+    "@xterm/addon-serialize": "^0.14.0",
     "@xterm/headless": "^6.0.0",
     "better-sqlite3": "^13.0.3",
     "croner": "^10.0.1",
