@@ -3487,14 +3487,17 @@ async function stageAction(a) {
   if (a === "close") {
     if (s.state === "working" && Date.now() - F.arm > 2500) { F.arm = Date.now(); renderBar(); setTimeout(() => { if (S.active === s.id && Date.now() - F.arm >= 2500) renderBar(); }, 2600); return; }
     F.arm = 0;
+    // The stage moves on at once and the daemon catches up behind it: two round trips in a row used
+    // to stand between the click and the next terminal. A refused close comes back with load().
+    const wasLive = s.live, wasState = s.state;
+    s.live = false; s.state = "ended";
+    advance(s.id, "closed");
     try {
       // Closing the terminal means the terminal is finished — with a queue behind the card, that is
       // every open goal, not only the one showing (goal_done_all, src/goals.ts).
       if (s.goal && !s.goal_done_at) await api("/sessions/" + s.id, { method: "PATCH", body: JSON.stringify({ goal_done: true, goal_done_all: true }) });
       await api("/sessions/" + s.id + "/kill", { method: "POST" });
-      s.live = false; s.state = "ended";
-    } catch (err) { return toast("couldn't close: " + err.message); }
-    advance(s.id, "closed");
+    } catch (err) { s.live = wasLive; s.state = wasState; toast("couldn't close: " + err.message); }
     return load();
   }
 }
@@ -4033,8 +4036,13 @@ function dismiss(id) {
 }
 function kill(id, btn) {
   arm(btn, "sure?", async () => {
-    if (!byId(id)?.live) return dismiss(id);
-    try { await api("/sessions/" + id + "/kill", { method: "POST" }); } catch (e) { toast(e.message); }
+    const s = byId(id);
+    if (!s?.live) return dismiss(id);
+    try { await api("/sessions/" + id + "/kill", { method: "POST" }); } catch (e) { return toast(e.message); }
+    // The kill was accepted: the row goes now, not when the CLI gets round to exiting and the
+    // daemon's session.ended reaches us.
+    s.live = false; s.state = "ended";
+    if (S.active === id) advance(id, "closed"); else renderRail();
   });
 }
 async function restart(id) {
@@ -7068,6 +7076,8 @@ DeskCockpit.init({
       if (s.goal && !s.goal_done_at) await api("/sessions/" + id, { method: "PATCH", body: JSON.stringify({ goal_done: true, goal_done_all: true }) });
       await api("/sessions/" + id + "/kill", { method: "POST" });
     } catch (e) { return toast("couldn't close: " + e.message); }
+    s.live = false; s.state = "ended";
+    if (S.active === id) advance(id, "closed"); else renderRail();
     toast("closed"); load();
   },
   openFollow,

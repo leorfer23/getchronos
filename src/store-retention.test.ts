@@ -11,7 +11,7 @@ const egressCount = () => (db.prepare("SELECT COUNT(*) c FROM egress_log").get()
 const mkRun = () => runs.create(jobs.create({ name: "test", goal: "g" }).id, "manual").id;
 
 beforeEach(() => {
-  db.exec("DELETE FROM run_events; DELETE FROM search_fts; DELETE FROM egress_log; DELETE FROM runs; DELETE FROM jobs;");
+  db.exec("DELETE FROM run_events; DELETE FROM search_fts; DELETE FROM search_refs; DELETE FROM egress_log; DELETE FROM runs; DELETE FROM jobs;");
 });
 
 test("events.prune keeps only the last N rows by insertion order", () => {
@@ -43,4 +43,34 @@ test("egressLog.prune keeps only the last N rows", () => {
   for (let i = 0; i < 5; i++) egressLog.add({ host: `h${i}.example.com`, port: 443, action: "allow" });
   egressLog.prune(2);
   assert.equal(egressCount(), 2);
+});
+
+test("searchIndex.removeRef drops every row for that ref and nothing else, through search_refs", () => {
+  const a = mkRun(), b = mkRun();
+  searchIndex.add({ kind: "session", ref_id: a, workspace: "ws", title: "one", body: "first row for a" });
+  searchIndex.add({ kind: "session", ref_id: a, workspace: "ws", title: "two", body: "second row for a" });
+  searchIndex.add({ kind: "session", ref_id: b, workspace: "ws", title: "three", body: "row for b" });
+  const refsFor = (r: string) => (db.prepare("SELECT COUNT(*) c FROM search_refs WHERE ref_id = ?").get(r) as { c: number }).c;
+  assert.equal(refsFor(a), 2);
+
+  searchIndex.removeRef(a);
+
+  const left = (db.prepare("SELECT ref_id FROM search_fts WHERE kind = 'session'").all() as Array<{ ref_id: string }>).map((r) => r.ref_id);
+  assert.deepEqual(left, [b]);
+  assert.equal(refsFor(a), 0);
+  assert.equal(refsFor(b), 1);
+});
+
+test("searchIndex.removeRef never deletes a row whose rowid a stale ref still names", () => {
+  // A raw delete (as these tests' beforeEach does) leaves search_refs behind; the rowid it names can
+  // be handed to the next insert. The ref_id guard on the delete is what keeps that row alive.
+  const a = mkRun(), b = mkRun();
+  searchIndex.add({ kind: "session", ref_id: a, workspace: "ws", title: "old", body: "row that will be raw-deleted" });
+  db.exec("DELETE FROM search_fts");
+  searchIndex.add({ kind: "session", ref_id: b, workspace: "ws", title: "new", body: "row that may reuse the rowid" });
+
+  searchIndex.removeRef(a);
+
+  const left = (db.prepare("SELECT ref_id FROM search_fts WHERE kind = 'session'").all() as Array<{ ref_id: string }>).map((r) => r.ref_id);
+  assert.deepEqual(left, [b]);
 });

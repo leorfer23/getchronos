@@ -2115,6 +2115,26 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       CREATE INDEX idx_repo_shares_ws ON repo_shares(workspace_id);`),
   },
 
+  {
+    version: 147,
+    name: "search_refs — an indexed ref_id → rowid map beside search_fts",
+    // search_fts.ref_id is UNINDEXED, so `DELETE FROM search_fts WHERE ref_id = ?` walks every row
+    // of the index and seeks its content one row at a time. Warm that is ~15ms; with the DB's pages
+    // evicted (a Mac under memory pressure, a 500MB chronos.db) it measured 700–900ms, synchronously,
+    // on every terminal open, retitle, close digest, note and ticket edit — the whole daemon froze
+    // for it. This map turns that delete into an index lookup. Backfilled from the FTS content table,
+    // whose columns are c0..c5 in declaration order (c2 = kind, c3 = ref_id).
+    up: (db) => db.exec(`
+      CREATE TABLE search_refs (
+        rid INTEGER PRIMARY KEY,
+        ref_id TEXT NOT NULL,
+        kind TEXT NOT NULL
+      );
+      INSERT INTO search_refs (rid, ref_id, kind) SELECT id, c3, c2 FROM search_fts_content;
+      CREATE INDEX idx_search_refs_ref ON search_refs(ref_id);
+      CREATE INDEX idx_search_refs_kind ON search_refs(kind, ref_id);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
