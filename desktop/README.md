@@ -6,7 +6,7 @@ launchd; these are just renderers in real windows, and each reads `.admin-token`
 
 | File | Builds to | What it is |
 |---|---|---|
-| `app.swift` | `mc-app` (`scripts/build-app.sh`) | Resizable app window. Takes the page as an argument: `mc-app /desk` is the terminal wall, bare `mc-app` opens `/app`. |
+| `app.swift` | `mc-app` (`scripts/build-app.sh`) | Resizable app window. Takes the page as an argument: bare `mc-app` is the terminal wall (`/desk`), `mc-app /app` opens Chat/Tickets. |
 | `icon.svg` → `icon.icns` | `scripts/build-icon.sh` | The Mac app icon: the hourglass mark from `site/assets/favicon.svg` on the night ground, sized to Apple's icon grid. `build-app.sh` bundles it. |
 | `wapp.swift` | `wapp` (`scripts/build-wapp.sh`) | Drives the real WhatsApp desktop client. See below. |
 | `hostbar.swift` | `~/.chronos-host/bin/chronos-hostbar` (`getchronos host menubar install`) | A **host's** menu bar item: how many agents work on this Mac right now, and on which repos. Reads only the host's loopback `/__host/status`, no token. Ships in the npm package and is compiled on the host. See HOSTS.md → Menu bar. |

@@ -855,8 +855,8 @@ None of these has a build step. `marked` and `DOMPurify` are vendored under `sta
 - **`codex` backend is untested** — no binary installed; cost/tokens report null. (`cursor-agent`'s
   result schema was live-verified; camelCase `usage` fields, no cost — subscription pricing.)
 - **Native shells are Swift, not Tauri.** `desktop/app.swift` builds to `mc-app` (a normal
-  resizable window; it takes the page as an argument — `mc-app /desk` is the terminal wall, a bare
-  `mc-app` opens `/app`). It reads `.admin-token` itself and injects `window.__MC_TOKEN__`, which is what
+  resizable window; it takes the page as an argument — bare `mc-app` is the terminal wall (`/desk`), `mc-app /app`
+  opens Chat/Tickets). It reads `.admin-token` itself and injects `window.__MC_TOKEN__`, which is what
   lets `/desk` attach to `/term`. `scripts/build-app.sh` bundles it.
 - **`desktop/src-tauri/` is vestigial.** A Tauri v2 scaffold from before the Swift shells existed.
   Nothing builds it; `scripts/build-app.sh` reads one file out of it (`icons/icon.icns`). Retiring it
