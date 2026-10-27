@@ -247,8 +247,14 @@ const backendNames = () => listBackends().map((b) => b.name);
 defineSetting({
   key: "inbox.auto_dispatch", group: "Autonomy", level: "both", type: "bool", env: "CHRONOS_INBOX_AUTODISPATCH",
   label: "Inbox opens terminals",
-  help: "Each new inbox item (Slack, Jira, ClickUp) opens its own terminal after 2 minutes, up to 3 at a time per client. Close the ones you don't need.",
+  help: "Each new inbox item (Slack, Jira, ClickUp) with work in it opens its own terminal after 2 minutes, up to 3 at a time per client. Close the ones you don't need.",
   default: () => CONFIG.inboxAuto.enabled,
+});
+defineSetting({
+  key: "inbox.triage", group: "Autonomy", level: "both", type: "bool", env: "CHRONOS_INBOX_TRIAGE",
+  label: "Inbox: only open what has work",
+  help: "A quick first pass reads each item before its terminal opens. Thanks, FYIs, shared links and repeats of a live terminal close in the Inbox log instead (Reopen there opens one). Off: every item opens.",
+  default: () => process.env.CHRONOS_INBOX_TRIAGE !== "0",
 });
 defineSetting({
   key: "robert.enabled", group: "Robert", level: "both", type: "bool",

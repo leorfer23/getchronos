@@ -184,6 +184,12 @@ export const inbox = {
       "SELECT * FROM inbox_items WHERE state='new' AND rowid > ? ORDER BY urgent DESC, rank IS NOT NULL, rank, created_at",
     ).all(afterRowid) as InboxItem[];
   },
+  /** A client's other rows since `sinceIso`, newest first — what the triage checks a new row against for repeats. */
+  recent(workspace_id: string, sinceIso: string, exceptId: string, limit = 20): InboxItem[] {
+    return db.prepare(
+      "SELECT * FROM inbox_items WHERE workspace_id=? AND id<>? AND created_at>=? ORDER BY created_at DESC LIMIT ?",
+    ).all(workspace_id, exceptId, sinceIso, limit) as InboxItem[];
+  },
   /** Live terminals per workspace that an inbox row opened. */
   liveDispatched(): Record<string, number> {
     const rows = db.prepare(

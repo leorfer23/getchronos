@@ -16,6 +16,7 @@ export type HelperKind =
   | "conflict"
   | "ticket-summary"
   | "route"
+  | "inbox-triage"
   | "other";
 
 const HELPER_KINDS: HelperKind[] = [
@@ -27,6 +28,7 @@ const HELPER_KINDS: HelperKind[] = [
   "conflict",
   "ticket-summary",
   "route",
+  "inbox-triage",
   "other",
 ];
 
