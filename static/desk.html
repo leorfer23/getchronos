@@ -218,6 +218,10 @@
   /* A Lead reads at the same weight as the phase chip — before the client name, not a new panel. */
   .lead-chip { display:inline-flex; align-items:center; font-size:10.5px; font-weight:750; letter-spacing:.05em; text-transform:uppercase;
     color:var(--accent); background:var(--accent-soft); border-radius:5px; padding:0 6px; line-height:17px; margin-right:5px; vertical-align:1px; }
+  /* Who opened a terminal the operator did not: the inbox, Robert, a follow-up. Same footprint as the
+     Lead chip but quiet, so "mine vs. opened for me" reads at a glance without competing with phase. */
+  .auto-chip { display:inline-flex; align-items:center; font-size:10.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--faint); border:1px solid var(--line); border-radius:5px; padding:0 5px; line-height:15px; margin-right:5px; vertical-align:1px; }
   /* Robert's standing watch (src/desk-watch.ts): an eye on the rail row, a pill in the header, a card in
      Focus. While a check is in flight the eye blinks off the same 1Hz body class as everything else. */
   .eye { display:inline-flex; color:var(--accent); flex:none; }
@@ -2153,6 +2157,21 @@ function leadChip() {
   el.textContent = "◆ Lead";
   return el;
 }
+// Openers that carry on the operator's own terminal (a reopen on another computer, a parked
+// continuation, a cloud handoff) keep it his; anything else opened it for him.
+const OWN_OPENERS = new Set(["operator", "failover", "continuation", "handoff"]);
+const OPENER_WORD = { inbox: "Inbox", robert: "Robert", "follow-up": "Follow-up" };
+function openedFor(s) {
+  const by = s.created_by || "operator";
+  return OWN_OPENERS.has(by) || s.role === "lead" || s.lead_id ? null : by;
+}
+function autoChip(by) {
+  const el = document.createElement("span");
+  el.className = "auto-chip";
+  el.textContent = OPENER_WORD[by] || "Auto";
+  el.title = "Opened automatically by " + (OPENER_WORD[by] || by) + " — not by you";
+  return el;
+}
 function rowEl(s) {
   const el = document.createElement("div");
   el.className = "row"; el.dataset.sid = s.id;
@@ -2174,7 +2193,9 @@ function paintRow(el, s) {
   el.style.setProperty("--ws", wsColor(s.workspace_id));
   qs(".dot", el).className = "dot " + (s.live ? s.state : "ended");
   const wsEl = qs(".ws", el);
+  const by = openedFor(s);
   if (s.role === "lead") wsEl.replaceChildren(leadChip(), document.createTextNode(wsName(s.workspace_id)));
+  else if (by) wsEl.replaceChildren(autoChip(by), document.createTextNode(wsName(s.workspace_id)));
   else wsEl.textContent = wsName(s.workspace_id);
   const txtEl = qs(".txt", el);
   txtEl.textContent = (s.lead_id ? "↳ " : "") + title(s);
