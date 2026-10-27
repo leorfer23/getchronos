@@ -122,6 +122,8 @@ test("the box: rules + CLI deny list keyed off the row, so a reopen keeps them",
   for (const bit of ["merge a PR", "deploy", "NO messages anywhere", "open a pull request"]) assert.ok(INBOX_AUTO_RULES.includes(bit), bit);
   const [flag, list] = inboxAutoDenyArgs();
   assert.equal(flag, "--disallowed-tools");
-  for (const bit of ["Bash(gh pr merge:*)", "Bash(npm run deploy:*)", "Bash(git push --force:*)", "mcp__slack"]) assert.ok(list.split(",").includes(bit), bit);
+  for (const bit of ["Bash(gh pr merge:*)", "Bash(npm run deploy:*)", "Bash(git push --force:*)", "mcp__jira", "mcp__slack__slack_send_message", "mcp__slack__slack_add_reaction"]) assert.ok(list.split(",").includes(bit), bit);
+  for (const ok of ["mcp__slack", "mcp__slack__slack_send_message_draft", "mcp__slack__slack_search_public_and_private", "mcp__slack__slack_read_thread"]) assert.ok(!list.split(",").includes(ok), `${ok} stays usable`);
+  assert.ok(INBOX_AUTO_RULES.includes("slack_send_message_draft"));
   assert.ok(!list.includes("Bash(git push:*)"), "pushing its own branch stays allowed");
 });

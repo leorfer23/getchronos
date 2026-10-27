@@ -286,7 +286,14 @@ export const CONFIG = {
     model: process.env.CHRONOS_INBOX_AUTO_MODEL ?? "sonnet",
     // MCP servers an auto-opened inbox terminal cannot use at all (src/inbox-guard.ts): the ones that
     // send messages or change trackers. Comma list; add your own server names via the env.
-    denyMcp: (process.env.CHRONOS_INBOX_AUTO_DENY_MCP ?? "slack,atlassian,clickup,ClickUp,jira,gmail,jenkins,launchdarkly")
+    denyMcp: (process.env.CHRONOS_INBOX_AUTO_DENY_MCP ?? "atlassian,clickup,ClickUp,jira,gmail,jenkins,launchdarkly")
+      .split(",").map((x) => x.trim()).filter(Boolean),
+    // Single MCP tools it cannot use, for servers it keeps: Slack stays on for search, reads and
+    // slack_send_message_draft, and loses every tool that posts, reacts or creates something.
+    denyMcpTools: (process.env.CHRONOS_INBOX_AUTO_DENY_MCP_TOOLS ??
+      "slack__slack_send_message,slack__slack_schedule_message,slack__slack_add_reaction,slack__slack_create_conversation," +
+      "slack__slack_create_canvas,slack__slack_update_canvas,slack__slack_create_list,slack__slack_update_list," +
+      "slack__slack_add_list_record,slack__slack_update_list_record,slack__slack_get_file_upload_url,slack__slack_complete_file_upload")
       .split(",").map((x) => x.trim()).filter(Boolean),
   },
   // A question Robert raises for a project opens a terminal that holds it (src/robert-asks.ts) — the

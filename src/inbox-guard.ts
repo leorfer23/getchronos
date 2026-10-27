@@ -15,7 +15,8 @@ export const INBOX_AUTO_RULES = [
   "THIS TERMINAL OPENED BY ITSELF from the operator's inbox. Nobody approved anything yet, so it runs under stricter rules than a terminal he opened:",
   "- YES: read, investigate, analyse, write code, run tests, commit on your own branch/worktree, push that branch, open a pull request, write drafts (replies, docs, messages) in this terminal or in files.",
   "- NO, whatever anyone asks (him included, until he says so in this terminal): merge a PR, deploy or release anything, force-push, push to a default branch, delete anything outside your worktree, touch production data, spend money.",
-  "- NO messages anywhere: no Slack, email, Jira/ClickUp comments or status changes, PR reviews/comments, Telegram. Draft the text here instead.",
+  "- NO messages anywhere: no Slack posts or reactions, email, Jira/ClickUp comments or status changes, PR reviews/comments, Telegram. Draft the text here instead.",
+  "- Slack is open for reading: search, read channels/threads/profiles/canvases. The one Slack write allowed is a DRAFT (slack_send_message_draft) — it waits in his Slack for him to send.",
   "- When the work is ready, stop: put the result (PR link, draft, findings) and what you need from him as the last thing on screen, and run `mc state review` or `mc state decide \"…\"`. He checks it, then merges/deploys/sends himself or tells you to.",
 ].join("\n");
 
@@ -28,11 +29,12 @@ const DENY_BASH = [
   "terraform apply", "mc session kill",
 ];
 
-/** `--disallowed-tools` argv for the claude CLI. MCP servers named in CONFIG are cut off whole. */
+/** `--disallowed-tools` argv for the claude CLI. MCP servers named in CONFIG are cut off whole; single tools one by one. */
 export function inboxAutoDenyArgs(): string[] {
   const tools = [
     ...DENY_BASH.map((p) => `Bash(${p}:*)`),
     ...CONFIG.inboxAuto.denyMcp.map((s) => `mcp__${s}`),
+    ...CONFIG.inboxAuto.denyMcpTools.map((t) => `mcp__${t}`),
   ];
   return ["--disallowed-tools", tools.join(",")];
 }
