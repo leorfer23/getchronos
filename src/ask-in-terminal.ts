@@ -21,7 +21,7 @@ export async function operatorAnswered(sessionId: string, text: string, answer =
   const open = [...asks.openForSession(sessionId).filter(isHis), ...holderAsks(sessionId)];
   let n = 0;
   for (const a of open) {
-    const r = await answer(a.id, text.trim() || "(answered in the terminal)", "operator");
+    const r = await answer(a.id, text.trim() || "(answered in the terminal)", "operator", { typedIn: sessionId });
     if (r.ok) n++;
   }
   return n;

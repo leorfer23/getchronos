@@ -168,7 +168,9 @@ async function notifyAnswered(ask: Ask, tk: Ticket | undefined): Promise<void> {
 export async function answerAsk(
   idOrPrefix: string,
   answerText: string,
-  by: string
+  by: string,
+  /** The terminal he typed it into (ask-in-terminal.ts) — that one already has it on screen. */
+  opts: { typedIn?: string } = {},
 ): Promise<{ ok: true; ask: Ask } | { ok: false; error: string; status?: number }> {
   const cur = resolveAsk(idOrPrefix);
   if (!cur) return { ok: false, error: "ask not found" };
@@ -225,7 +227,7 @@ export async function answerAsk(
   }
 
   // Robert asked it himself, in a turn that is long over: the answer reaches him as a queued wake.
-  if (isRobertAsk(updated)) tellRobertAnswered(updated);
+  if (isRobertAsk(updated)) await tellRobertAnswered(updated, opts.typedIn ?? null);
 
   // Parked run: the process already exited 0 and we only kept status=paused so the open ask
   // stayed visible on the fleet board. Once that ask is answered, the park is over — finalize to
@@ -258,19 +260,46 @@ export async function answerAsk(
 }
 
 /**
+ * Types an answer into the terminal holding Robert's question: null when it was typed, else why not
+ * ("terminal is not live", the input cap). Late import, like the wake below. Test seam.
+ */
+type HolderDelivery = (sessionId: string, text: string) => Promise<string | null>;
+let deliverToHolder: HolderDelivery = async (sessionId, text) =>
+  (await import("./terminal.js")).sendInput(sessionId, { text }, "ask");
+export function setHolderDelivery(fn: HolderDelivery): void { deliverToHolder = fn; }
+
+/** The line the holder terminal's agent reads when the answer came from a card, not its keyboard. */
+export const holderAnswerLine = (ask: Ask): string =>
+  `The operator answered Robert's question (ask ${ask.id.slice(0, 8)}) on its card. Q: ${ask.question.slice(0, 300)} — A: ${ask.answer}`;
+
+/**
  * The operator answered a question Robert raised. A wake, not a direct turn: it is durable across a
  * restart, and it queues behind whatever he is doing instead of racing it. Late import — the wake
  * queue imports the manager, which is a long way from the asks layer.
+ *
+ * A question riding on a terminal is that terminal's too: its agent waits for the answer there
+ * (holderBrief). Typed into it, it already has it. Answered anywhere else — the Ask card, Focus,
+ * Telegram — nothing reached its pty, so the answer is typed in here, once, and Robert is told which
+ * happened. Telling him "its agent got it" either way is how answers sat unseen in their terminals on
+ * 2026-10-28 until he or the operator retyped them.
  */
-function tellRobertAnswered(ask: Ask): void {
+async function tellRobertAnswered(ask: Ask, typedIn: string | null): Promise<void> {
   const on = heldBy(ask.id);
+  const carry = `If the decision is that terminal's work, let it carry it out and only check it did; act yourself on the part that is yours.`;
+  let held = `Act on it now, the way you said you would when you asked.`;
+  if (on && on === typedIn) {
+    held = `He answered by typing in terminal ${on.slice(0, 8)}, so its agent got the answer too. ${carry}`;
+  } else if (on) {
+    const why = await deliverToHolder(on, holderAnswerLine(ask)).catch((e) => String(e?.message ?? e));
+    held = why
+      ? `He answered from a card, not in terminal ${on.slice(0, 8)}, and it could not be typed there (${why}) — its agent does NOT have it. Act on it yourself.`
+      : `He answered from a card, not in terminal ${on.slice(0, 8)}, so Chronos typed the answer into it — its agent has it now. ${carry}`;
+  }
   const say =
     `The operator answered the question you asked him (ask \`${ask.id.slice(0, 8)}\`).\n` +
     `Q: ${ask.question}\nA: ${ask.answer}\n` +
-    (on
-      ? `He answered by typing in terminal ${on.slice(0, 8)}, so its agent got the answer too. If the decision is that terminal's work, let it carry it out and only check it did; act yourself on the part that is yours.`
-      : `Act on it now, the way you said you would when you asked.`);
-  void import("./wake-queue.js")
+    held;
+  await import("./wake-queue.js")
     .then((m) => m.enqueueWake({ topic: "ask.answered", key: `robert-ask:${ask.id}`, workspace_id: ask.workspace_id, payload: { say } }))
     .catch((e) => console.error("[asks] robert wake failed", e));
 }
