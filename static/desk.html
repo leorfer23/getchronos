@@ -2693,6 +2693,7 @@ function focusGoal(s) {
     + finish + queueHtml + addRow + prog + now + ship + `</section>`;
 }
 
+const DAEMON_LINE = /^\s*(?:\/[a-z]|\[chronos\b)/i;
 // ② Decisions: what it needs from you now — its asks (answerable here even while Robert still has
 // them), the question on its screen, a wall — then everything decided so far, your steering included.
 function focusDecisions(s) {
@@ -2731,7 +2732,9 @@ function focusDecisions(s) {
     const firstUser = F.events.find((e) => e.kind === "user");
     let prev = "";
     for (const e of F.events) {
-      if (e.kind !== "user" || (e === firstUser && (s.spawn_goal || s.first_prompt)) || SYS_LINE.test(e.text)) continue;
+      // The daemon types too — the cache keeper's `/compact`, a `[chronos budget]` notice — and neither is
+      // you steering. Slash commands are mechanics, not decisions.
+      if (e.kind !== "user" || (e === firstUser && (s.spawn_goal || s.first_prompt)) || SYS_LINE.test(e.text) || DAEMON_LINE.test(e.text)) continue;
       const t = cleanUser(e.text); if (!t || norm(t) === prev) continue;
       prev = norm(t);
       hist.push({ at: e.ts || 0, html: `<span class="you">you · ${esc(clip(t, 260))}</span>` });

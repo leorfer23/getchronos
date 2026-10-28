@@ -56,6 +56,10 @@ test("decisions: every open ask with a button per option, answerable before Robe
   assert.match(html, /<button type="button" data-fterm>Open the terminal \(⌘E\)<\/button>/);
   // What was decided — answered asks and your own steering — stays on the card underneath.
   assert.match(html, /hist\.push\(\{ at: e\.ts \|\| 0, html: `<span class="you">you · /);
+  // …but not the daemon's own typing: the cache keeper's /compact, a budget notice.
+  const re = new Function("return " + html.match(/const DAEMON_LINE = (\/.+\/i);/)![1])() as RegExp;
+  assert.ok(re.test("/compact Chronos cache keeper: idle 46 min") && re.test("[chronos budget] this workspace is over its share"));
+  assert.ok(!re.test("keep it friendly, Thomas is new") && !re.test("Permission update: you may merge"));
 });
 
 test("the hand-off: summary, changes, proof, screenshots, PRs — and the buttons to approve", () => {
