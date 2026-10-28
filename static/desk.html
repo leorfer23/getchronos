@@ -178,9 +178,19 @@
     font:inherit; font-size:12.5px; font-weight:650; line-height:18px; font-variant-numeric:tabular-nums; cursor:pointer; }
   .row .fold:hover { color:var(--ink); border-color:var(--muted); }
   .row .fold.hot { color:var(--danger); border-color:var(--danger); background:var(--danger-soft); }
-  /* Questions waiting on you in this terminal (yours, or Robert's riding on it): a red count. */
-  .row .side .asks { min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:var(--danger); color:var(--surface);
-    font-size:11.5px; font-weight:700; line-height:18px; text-align:center; font-variant-numeric:tabular-nums; margin-right:3px; }
+  /* What this terminal needs from you (needOf): a filled pill that names it — answer, approve, blocked —
+     its dot blinking off the page's 1Hz clock, and the row tinted, so a glance down the rail finds it. */
+  .row .side .asks { display:inline-flex; align-items:center; gap:5px; height:20px; padding:0 8px 0 7px; border-radius:999px; margin-right:3px;
+    font-size:11.5px; font-weight:750; letter-spacing:.02em; line-height:20px; white-space:nowrap; font-variant-numeric:tabular-nums;
+    background:var(--p-decide); color:var(--surface); }
+  .row .side .asks[hidden] { display:none; }
+  .row .side .asks i { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  body.blink .row .side .asks i { opacity:.25; }
+  .row .side .asks.blocked { background:var(--danger); }
+  .row .side .asks.approve { background:var(--accent); color:var(--accent-ink); }
+  .row.needs:not(.on) { background:color-mix(in srgb, var(--p-decide) 8%, transparent); }
+  .row.needs.n-blocked:not(.on) { background:color-mix(in srgb, var(--danger) 8%, transparent); }
+  .row.needs.n-approve:not(.on) { background:color-mix(in srgb, var(--accent) 8%, transparent); }
   .row.child { margin-left:16px; }
   /* The ✕ appearing on hover must not slide the fold out from under the pointer. */
   .row.lead .x { display:inline-block; visibility:hidden; }
@@ -367,9 +377,10 @@
   .term-off { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px;
     color:var(--faint); font-size:15px; background:var(--term-bg); }
   .term-off[hidden] { display:none; }
-  .story { position:absolute; inset:0; overflow-y:auto; padding:18px 22px 30px; display:none; }
-  body.mode-focus .story { display:block; }
-  .story > * { max-width:940px; margin-left:auto; margin-right:auto; }
+  /* Focus fills the stage, edge to edge, and fits it: no page scroll on a desk-sized window. Cards that
+     can grow (Talk, the hand-off) scroll inside themselves and expand to the whole board on a click. */
+  .story { position:absolute; inset:0; overflow-y:auto; padding:12px 16px; display:none; container-type:inline-size; }
+  body.mode-focus .story { display:flex; flex-direction:column; gap:10px; }
   /* ── the Fleet board: the third view of the stage ────────────────────────────────────────── */
   /* One scrolling column of live cards. No animation anywhere in here: the page's only clock is the
      1Hz body.blink, and a board that breathes on its own is the opposite of calm. */
@@ -444,33 +455,82 @@
   .fempty { color:var(--faint); font-size:14px; }
   .skel { background:linear-gradient(90deg, var(--surface-2), var(--line), var(--surface-2)); border-radius:6px; height:18px; margin:8px 0; opacity:.7; }
 
-  /* ── Focus: goal → decisions → hand-off ─────────────────────────────────────────────────────
-     Focus is three things and nothing else (Leo, 2026-10-28): what this terminal is for and how we
-     will know it is done (with how far along it is and how long it has run), the decisions it needs
-     from you along the way, and the hand-off you approve the merge/deploy from. No timeline, no
-     commands, no files — the raw terminal is ⌘E away and has every byte. One column, read top down. */
-  .fx { max-width:880px; margin:0 auto 12px; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 20px 18px; }
-  .fx-top { display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-bottom:10px; font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  /* ── Focus: status · goal · talk · hand-off · what needs you ──────────────────────────────────
+     Leo, 2026-10-28: the whole board in one view, full width, no scrolling to reach a button. Top: the
+     status strip — what it is doing right now, always in the same place. Middle: three columns read
+     left to right — the goal and its finish line, the talk, the hand-off(s); each scrolls inside and
+     ⤢ expands it over the board (Esc / ⤡ back). Bottom: the dock — every answer, approval and ship
+     button lives there and nowhere else. No timeline, no commands, no files: the raw terminal is ⌘E. */
+  .fx { margin:0; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:12px 16px 14px;
+    display:flex; flex-direction:column; min-height:0; min-width:0; overflow:hidden; }
+  .fx-body { flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; }
+  .fx-top { display:flex; align-items:center; gap:9px; flex-wrap:wrap; flex:none; margin-bottom:8px; font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
   .fx-lbl { font-size:11.5px; font-weight:750; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
   .fx-top .sp { flex:1; }
   .fx-top time, .fx-top .n { font:12px ui-monospace,Menlo,monospace; color:var(--faint); }
+  .fx-exp { border:1px solid var(--line); background:var(--bg); color:var(--muted); border-radius:7px; height:24px; padding:0 8px; font:inherit; font-size:12px; font-weight:650; cursor:pointer; }
+  .fx-exp:hover { color:var(--accent); border-color:var(--accent); }
   .fx-chip { font-size:11.5px; font-weight:650; padding:2px 8px; border-radius:6px; background:var(--surface-2); color:var(--muted); }
   .fx-chip.ok { background:var(--accent-soft); color:var(--accent); }
   .fx-chip.warn { background:var(--warn-soft); color:var(--warn); }
-  .fx-sub { font-size:11.5px; font-weight:750; letter-spacing:.09em; text-transform:uppercase; color:var(--faint); margin:14px 0 6px; }
+  .fx-sub { font-size:11.5px; font-weight:750; letter-spacing:.09em; text-transform:uppercase; color:var(--faint); margin:12px 0 6px; }
   .fx a { color:var(--accent); overflow-wrap:anywhere; }
-  .fx code { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:.9em; background:var(--surface-2); padding:0 4px; border-radius:4px; }
+  .fx code, .fx-dock code { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:.9em; background:var(--surface-2); padding:0 4px; border-radius:4px; }
   .fx-none { color:var(--faint); font-size:14.5px; }
   .fx-warn { color:var(--warn); font-size:14.5px; }
-  /* The goal: the biggest words on the stage. */
+  /* The board: three columns on a wide stage, two below 1280px (talk over hand-off), one below 700px. */
+  .fx-grid { flex:1 1 0; min-height:0; display:grid; gap:12px; grid-template-columns:minmax(300px,.85fr) minmax(0,1.15fr) minmax(0,1.15fr); grid-template-rows:minmax(0,1fr); }
+  .fx-col { display:flex; flex-direction:column; gap:12px; min-height:0; min-width:0; }
+  .fx-col > .fx { flex:0 1 auto; }
+  .fx-col > .fx-talk, .fx-col > .fx-out { flex:1 1 0; }
+  .fx-col > .fx-out.wait { flex:0 1 auto; }
+  @container (max-width:1280px) {
+    .fx-grid { grid-template-columns:minmax(280px,.8fr) minmax(0,1.2fr); grid-template-rows:minmax(0,1fr) minmax(0,1fr); }
+    .fx-grid:not(.has-out) { grid-template-rows:minmax(0,1fr) auto; }
+    .fx-grid > .c1 { grid-column:1; grid-row:1 / span 2; }
+    .fx-grid > .c2 { grid-column:2; grid-row:1; }
+    .fx-grid > .c3 { grid-column:2; grid-row:2; }
+  }
+  @container (max-width:700px) {
+    .fx-grid { display:flex; flex-direction:column; flex:none; }
+    .fx, .fx-body { overflow:visible; }
+    .fx-col > .fx-talk .fx-body, .fx-col > .fx-out .fx-body { max-height:60vh; overflow-y:auto; }
+    .fx-dock { position:sticky; bottom:0; }
+  }
+  /* One card expanded: it takes the whole board; the status strip and the dock stay where they are. */
+  .fx-grid.exp { display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); flex:1 1 0; }
+  .fx-grid.exp > .fx-col { grid-column:1; grid-row:1; }
+  .fx-grid.exp > .fx-col:not(.holds-exp), .fx-grid.exp .fx-col > .fx:not(.exp) { display:none; }
+  .fx-grid.exp .fx.exp { flex:1 1 0; }
+  .fx-grid.exp .fx.exp .fx-body { max-height:none; overflow-y:auto; }
+  /* The status strip: what it is doing right now. Always on top, never scrolled away. */
+  .fx-status { flex:none; display:flex; align-items:center; gap:14px; min-height:58px; padding:9px 16px; border-radius:14px; background:var(--surface);
+    border:1px solid var(--line); border-left:4px solid var(--nc,var(--line)); }
+  .fx-status .st-l { flex:none; display:flex; align-items:center; gap:6px; font:12px ui-monospace,Menlo,monospace; color:var(--faint); }
+  .fx-status .st-l .ph { font-size:12px; line-height:22px; padding:0 9px; margin:0; }
+  .fx-status .st-m { flex:1; min-width:0; }
+  .fx-status .st-line { font-size:17px; font-weight:650; line-height:1.35; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fx-status .fx-pulse { margin-top:2px; }
+  .fx-status .st-r { flex:none; display:flex; align-items:center; gap:10px; font-size:13.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .fx-status .st-r b { color:var(--ink); }
+  .fx-status .st-r .over { color:var(--warn); }
+  .fx-status.need { border-color:var(--nc); background:color-mix(in srgb, var(--nc) 9%, var(--surface)); }
+  .fx-status.need .st-line { color:var(--nc); }
+  .st-others { border:0; border-radius:999px; height:26px; padding:0 11px; background:var(--danger-soft); color:var(--danger); font:inherit; font-size:12.5px; font-weight:700; cursor:pointer; white-space:nowrap; }
+  .st-others:hover { background:var(--danger); color:var(--surface); }
+  /* The goal: the biggest words on the board. */
   .fx-goal { border-top:3px solid var(--nc,var(--line)); }
-  .fx-title { margin:0; font-size:23px; line-height:1.3; font-weight:700; color:var(--ink); overflow-wrap:anywhere; }
-  .fx-title.none { color:var(--warn); font-weight:600; font-size:19px; }
+  .fx-title { margin:0; font-size:21px; line-height:1.3; font-weight:700; color:var(--ink); overflow-wrap:anywhere; }
+  .fx-title.none { color:var(--warn); font-weight:600; font-size:18px; }
   .fx-from { margin-top:6px; font-size:13.5px; color:var(--muted); overflow-wrap:anywhere; }
-  .fx-checks { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:5px; }
-  .fx-checks li { display:grid; grid-template-columns:20px 1fr; font-size:15.5px; line-height:1.45; color:var(--ink); overflow-wrap:anywhere; }
+  .fx-checks { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:3px; }
+  .fx-checks li { display:grid; grid-template-columns:22px 1fr auto; column-gap:2px; font-size:15px; line-height:1.45; color:var(--ink); overflow-wrap:anywhere;
+    padding:2px 4px; margin:0 -4px; border-radius:6px; cursor:pointer; }
+  .fx-checks li:hover { background:var(--surface-2); }
   .fx-checks li::before { content:"☐"; color:var(--faint); }
-  .fx-goal.reached .fx-checks li::before { content:"✓"; color:var(--accent); }
+  .fx-checks li.ok::before, .fx-goal.reached .fx-checks li::before { content:"✓"; color:var(--accent); font-weight:700; }
+  .fx-checks li.ok { color:var(--muted); }
+  .fx-checks li time { font:11.5px ui-monospace,Menlo,monospace; color:var(--faint); padding-top:3px; }
   .fx-queue { list-style:none; margin:12px 0 0; padding:0; display:flex; flex-direction:column; gap:3px; }
   .fx-queue li { font-size:13.5px; color:var(--muted); cursor:pointer; border-radius:5px; padding:1px 4px; margin-left:-4px; overflow-wrap:anywhere; }
   .fx-queue li:hover { background:var(--surface-2); color:var(--ink); }
@@ -478,58 +538,66 @@
   .fx-queue li.now { color:var(--ink); font-weight:650; }
   .fx-gadd { margin-top:6px; background:none; border:none; padding:2px 0; color:var(--faint); font:inherit; font-size:12.5px; cursor:pointer; }
   .fx-gadd:hover { color:var(--accent); }
-  /* Progress: the agent's own step count and its guess of the time left, beside the real clock. */
-  .fx-prog { margin-top:16px; }
+  /* Progress: the agent's own step count — or, when it gave none, how many checks are met. */
+  .fx-foot { flex:none; }
+  .fx-prog { margin-top:12px; }
   .fx-bar { height:10px; border-radius:6px; background:var(--surface-2); overflow:hidden; }
   .fx-bar i { display:block; height:100%; background:var(--nc,var(--accent)); border-radius:6px; }
   .fx-bar.unknown i { width:0; }
-  .fx-pmeta { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-top:8px; font-size:14.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .fx-pmeta { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-top:7px; font-size:14px; color:var(--muted); font-variant-numeric:tabular-nums; }
   .fx-pmeta b { color:var(--ink); font-weight:700; }
   .fx-pmeta .step { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .fx-pmeta .over { color:var(--warn); }
-  .fx-now { display:flex; gap:8px; align-items:baseline; margin-top:10px; font-size:15px; line-height:1.45; color:var(--ink); overflow-wrap:anywhere; }
-  .fx-now .ph { flex:none; }
+  .fx-pmeta .stale { color:var(--warn); }
   /* What it may do at the end — the operator's to grant, per terminal, at spawn or here. */
-  .fx-ship { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:14px; padding-top:12px; border-top:1px solid var(--line); font-size:13.5px; color:var(--muted); }
+  .fx-ship { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:12px; padding-top:10px; border-top:1px solid var(--line); font-size:13.5px; color:var(--muted); }
   .fx-ship .seg button { font-size:13.5px; padding:4px 11px; }
   .fx-ship .seg button.arm { color:var(--warn); }
-  /* Decisions: what it needs from you now, then what was decided. */
-  .fx-dec.open { border-color:var(--p-decide,var(--warn)); }
-  .fx-q { padding:12px 0; border-top:1px solid var(--line); }
-  .fx-q:first-of-type { border-top:0; padding-top:2px; }
-  .fx-q .who { font-size:12.5px; color:var(--muted); margin-bottom:4px; }
+  /* Decided so far: the questions already answered. */
+  .fx-hist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:7px; }
+  .fx-hist li { display:grid; grid-template-columns:44px 1fr; column-gap:8px; font-size:14px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere; }
+  .fx-hist time { font:12px ui-monospace,Menlo,monospace; color:var(--faint); padding-top:2px; }
+  .fx-hist .a { color:var(--ink); font-weight:600; }
+  .fx-more { border:0; background:none; color:var(--accent); font:inherit; font-size:12.5px; font-weight:650; padding:6px 0 0; cursor:pointer; }
+  /* The dock: everything that needs you, always at the bottom of the board. */
+  .fx-dock { flex:none; max-height:46%; overflow-y:auto; display:flex; flex-direction:column; gap:0; padding:4px 16px; border-radius:14px;
+    background:var(--surface); border:1px solid var(--line); }
+  .fx-dock.on { border-color:var(--dk,var(--p-decide)); box-shadow:0 0 0 1px var(--dk,var(--p-decide)); }
+  .fx-dock .dk-none { padding:10px 0; font-size:14px; color:var(--faint); }
+  .fx-q { padding:10px 0; border-top:1px solid var(--line); }
+  .fx-q:first-child { border-top:0; }
+  .fx-q .who { font-size:12.5px; color:var(--muted); margin-bottom:3px; }
   .fx-q .who b { color:var(--p-decide,var(--warn)); font-weight:700; }
   .fx-q.blocked .who b { color:var(--danger); }
-  .fx-q .q { font-size:17.5px; line-height:1.4; font-weight:600; color:var(--ink); white-space:pre-wrap; overflow-wrap:anywhere; }
-  .fx-q .rec { margin-top:6px; font-size:14px; color:var(--muted); overflow-wrap:anywhere; }
+  .fx-q.approve .who b { color:var(--accent); }
+  .fx-q .q { font-size:16.5px; line-height:1.4; font-weight:600; color:var(--ink); white-space:pre-wrap; overflow-wrap:anywhere; max-height:7.2em; overflow-y:auto; }
+  .fx-q .rec { margin-top:5px; font-size:14px; color:var(--muted); overflow-wrap:anywhere; }
   .fx-q .rec::before { content:"Robert: "; font-weight:650; color:var(--ink); }
-  .fx-opts { display:flex; flex-wrap:wrap; gap:8px; margin-top:11px; }
+  .fx-opts { display:flex; flex-wrap:wrap; gap:8px; margin-top:9px; }
   .fx-opts button { min-height:38px; padding:6px 16px; border-radius:9px; border:1px solid var(--line); background:var(--surface); color:var(--ink);
-    font-size:15.5px; font-weight:600; text-align:left; max-width:100%; overflow-wrap:anywhere; cursor:pointer; }
+    font-size:15px; font-weight:600; text-align:left; max-width:100%; overflow-wrap:anywhere; cursor:pointer; }
   .fx-opts button:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
   .fx-opts button.go { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
   .fx-opts button.no:hover { border-color:var(--danger); color:var(--danger); background:var(--danger-soft); }
   .fx-opts button kbd { font:inherit; font-size:11.5px; color:var(--faint); margin-right:6px; }
   .fx-opts input { flex:1; min-width:180px; min-height:38px; padding:6px 12px; border-radius:9px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font:inherit; font-size:15px; }
   .fx-opts input:focus { outline:0; border-color:var(--accent); }
-  .fx-hist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:7px; }
-  .fx-hist li { display:grid; grid-template-columns:44px 1fr; column-gap:8px; font-size:14.5px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere; }
-  .fx-hist time { font:12px ui-monospace,Menlo,monospace; color:var(--faint); padding-top:2px; }
-  .fx-hist .a { color:var(--ink); font-weight:600; }
-  .fx-more { border:0; background:none; color:var(--accent); font:inherit; font-size:12.5px; font-weight:650; padding:6px 0 0; cursor:pointer; }
-  /* A question dialog open in its CLI: one big button per answer, its description under it. */
-  .fx-choices { display:flex; flex-direction:column; gap:8px; margin-top:12px; }
-  .fx-choice { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--surface);
+  /* A question dialog open in its CLI: a button per answer, its description under it, side by side. */
+  .fx-choices { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:8px; margin-top:9px; }
+  .fx-choice { display:flex; flex-wrap:wrap; align-content:flex-start; align-items:baseline; gap:3px 10px; padding:9px 13px; border-radius:10px; border:1px solid var(--line); background:var(--surface);
     color:var(--ink); font:inherit; text-align:left; cursor:pointer; }
-  .fx-choice b { font-size:15.5px; font-weight:650; }
+  .fx-choice b { font-size:15px; font-weight:650; }
   .fx-choice em { font-style:normal; font-size:11.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); }
-  .fx-choice span { flex-basis:100%; font-size:14px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere; }
+  .fx-choice span { flex-basis:100%; font-size:13.5px; line-height:1.4; color:var(--muted); overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
   .fx-choice:hover:not([disabled]) { border-color:var(--accent); background:var(--accent-soft); }
   .fx-choice.best { border-color:var(--accent); }
   .fx-choice[disabled] { cursor:default; opacity:.6; }
-  /* Talk: your line, then what it said back. The newest answer reads in full. */
+  /* Shipping: merge/deploy was approved and it is on it — a turning glyph off the page's 1Hz clock. */
+  .fx-q.ship .q { display:flex; align-items:baseline; gap:10px; font-size:16px; }
+  .fx-q.ship .spin { font-style:normal; color:var(--accent); font-size:18px; width:18px; text-align:center; }
+  .fx-q.ship .q span { font-weight:500; color:var(--muted); font-size:14px; }
+  /* Talk: your line, then what it said back. The newest answer reads in full, at the bottom. */
   .fx-talk .turn { padding:10px 0; border-top:1px solid var(--line); }
-  .fx-talk .turn:first-of-type { border-top:0; padding-top:0; }
+  .fx-talk .turn:first-child { border-top:0; padding-top:0; }
   .fx-talk .turn.foldable { cursor:pointer; }
   .fx-talk .tq { display:grid; grid-template-columns:44px 1fr; column-gap:8px; font-size:15px; line-height:1.45; color:var(--accent); font-weight:600; overflow-wrap:anywhere; white-space:pre-wrap; }
   .fx-talk .tq time { font:12px ui-monospace,Menlo,monospace; color:var(--faint); font-weight:400; padding-top:3px; }
@@ -537,11 +605,11 @@
   .fx-talk .ta { margin:6px 0 0 52px; }
   .fx-talk .tq.opening + .ta, .fx-talk .tq.opening + .fx-more { margin-left:0; }
   .fx-talk .fx-more { margin-left:52px; padding:4px 0 0; }
-  .fx-talk .ta.fx-sum { font-size:16px; }
+  .fx-talk .ta.fx-sum { font-size:15.5px; }
   .fx-talk .ta.folded { font-size:14px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .fx-talk .ta.wait { font-size:14px; color:var(--faint); }
   /* Is it working: printing now (the dot blinks off the page's 1Hz clock) or quiet since when. */
-  .fx-pulse { display:flex; align-items:baseline; gap:8px; margin-top:8px; font-size:13.5px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:0; }
+  .fx-pulse { display:flex; align-items:baseline; gap:8px; font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:0; }
   .fx-pulse i { flex:none; width:8px; height:8px; border-radius:50%; background:var(--faint); align-self:center; }
   .fx-pulse.on i { background:var(--p-work,var(--accent)); }
   body.blink .fx-pulse.on i { opacity:.3; }
@@ -549,29 +617,36 @@
   .fx-pulse:not(.on) b { color:var(--muted); }
   .fx-pulse .what { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
   .fx-pulse time { flex:none; font:12px ui-monospace,Menlo,monospace; color:var(--faint); }
-  /* The hand-off: everything needed to say yes, and the yes. */
+  /* The hand-off(s): the newest in full, the earlier ones folded under it. */
   .fx-out.ready { border-color:var(--accent); }
-  .fx-sum { font-size:17.5px; line-height:1.5; color:var(--ink); overflow-wrap:anywhere; }
+  .fx-sum { font-size:16.5px; line-height:1.5; color:var(--ink); overflow-wrap:anywhere; }
   .fx-sum p { margin:0 0 6px; } .fx-sum p:last-child { margin:0; }
-  .fx-list { margin:0; padding-left:20px; display:flex; flex-direction:column; gap:4px; font-size:15px; line-height:1.45; color:var(--ink); }
+  .fx-list { margin:0; padding-left:20px; display:flex; flex-direction:column; gap:4px; font-size:14.5px; line-height:1.45; color:var(--ink); }
   .fx-proof { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
-  .fx-proof li { display:grid; grid-template-columns:20px 1fr; font-size:15px; line-height:1.45; color:var(--ink); overflow-wrap:anywhere; }
+  .fx-proof li { display:grid; grid-template-columns:20px 1fr; font-size:14.5px; line-height:1.45; color:var(--ink); overflow-wrap:anywhere; }
   .fx-proof li::before { content:"✓"; color:var(--accent); font-weight:700; }
-  .fx-shots { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:10px; }
+  .fx-shots { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:10px; }
   .fx-shots figure { margin:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--bg); cursor:zoom-in; }
-  .fx-shots img { display:block; width:100%; max-height:320px; object-fit:contain; background:var(--bg); min-height:60px; }
+  .fx-shots img { display:block; width:100%; max-height:260px; object-fit:contain; background:var(--bg); min-height:60px; }
   .fx-shots figcaption { padding:6px 10px; font-size:12.5px; font-weight:650; color:var(--muted); text-transform:capitalize; border-top:1px solid var(--line); }
+  .fx-shots figure.zoom { grid-column:1 / -1; cursor:zoom-out; }
+  .fx-shots figure.zoom img { max-height:none; }
   .fx-prs { display:flex; flex-direction:column; gap:2px; }
   .fx-prs .pin { font-size:14.5px; padding:5px 6px; grid-template-columns:18px 1fr auto auto; }
   .fx-prs .ci { font-size:12px; font-weight:650; margin-left:8px; }
   .fx-prs .ci.passing { color:var(--accent); } .fx-prs .ci.failing { color:var(--danger); } .fx-prs .ci.pending { color:var(--warn); }
   .fx-shipped { margin-top:12px; font-size:14px; color:var(--accent); font-weight:650; }
-  .fx-act { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; padding-top:14px; border-top:1px solid var(--line); }
-  .fx-act .fa { height:40px; }
-  .fx-wait { color:var(--muted); font-size:14.5px; line-height:1.5; }
+  .fx-wait { color:var(--muted); font-size:14px; line-height:1.5; }
   .fx .drow { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  .fx-shots figure.zoom { grid-column:1 / -1; cursor:zoom-out; }
-  .fx-shots figure.zoom img { max-height:none; }
+  .fx-prev { margin-top:14px; border-top:1px solid var(--line); padding-top:8px; }
+  .fx-prev .ho { padding:7px 0; border-bottom:1px solid var(--line); }
+  .fx-prev .ho:last-child { border-bottom:0; }
+  .fx-prev .ho-h { display:flex; gap:8px; align-items:baseline; cursor:pointer; font-size:14px; color:var(--muted); min-width:0; }
+  .fx-prev .ho-h b { flex:none; color:var(--ink); font-weight:650; }
+  .fx-prev .ho-h time { flex:none; font:12px ui-monospace,Menlo,monospace; color:var(--faint); }
+  .fx-prev .ho-h span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fx-prev .ho-h:hover span { color:var(--ink); }
+  .fx-prev .ho .ho-b { margin-top:8px; }
   /* The bar under the stage: what the terminal wants answered, then the three moves. */
   .sbar { display:flex; align-items:center; gap:6px; padding:8px 14px; background:var(--surface); border-top:1px solid var(--line); flex:none; min-height:48px; flex-wrap:wrap; }
   .sbar:empty { display:none; }
@@ -2037,6 +2112,11 @@ const S = {
   ended: [],                          // the newest ended terminals, for the rail's Recent section
   stickEnded: false,                  // you chose an ended terminal (Recent, the log, a link): keep it on the stage
 };
+// Merge/deploy approved from Focus's dock, per terminal, until it ships (shipState). Up here because
+// the rail's needs-you pill reads it on the first paint.
+const SHIPPING = (() => {
+  try { return new Map(Object.entries(JSON.parse(localStorage.getItem("desk-shipping") || "{}"))); } catch { return new Map(); }
+})();
 // The story on the stage: events of the active terminal, what is unfolded, the armed close.
 const F = { id: null, events: [], seen: new Set(), loaded: false, all: false, open: new Set(), arm: 0, req: 0, headline: "" };
 // Live first, then the ended rows Recent holds: selecting one of those has to resolve to a session
@@ -2166,8 +2246,11 @@ function toggleLead(id, open = !S.leadOpen.has(id)) {
 }
 // Needs you = something to answer: a wall, a decision, a finished turn. Review waits for "close all done".
 // A folded worker's finished turn is its Lead's to answer; only its wall or decision needs you.
-const needsList = () => railOrder().filter((s) => ["blocked", "decide", "your_turn"].includes(phaseOf(s)) && !(S.answered.get(s.id) > Date.now() - ANSWERED_MS)
+const needsList = () => railOrder().filter((s) => (["blocked", "decide", "your_turn"].includes(phaseOf(s)) || needOf(s)) && !(S.answered.get(s.id) > Date.now() - ANSWERED_MS)
   && !(folded(s) && !URGENT.includes(phaseOf(s))));
+// The ones that cannot move without you — a wall, a question, a hand-off to approve (needOf). A finished
+// turn is not among them: it waits for you, it does not need you.
+const needsNow = () => railOrder().filter((s) => needOf(s) && !(S.answered.get(s.id) > Date.now() - ANSWERED_MS) && !(folded(s) && !URGENT.includes(phaseOf(s))));
 
 async function load() {
   const d = await api("/desk");
@@ -2201,7 +2284,7 @@ function render() {
 function renderCounts() {
   const live = S.sessions.filter((s) => s.live && !S.dismissed.has(s.id));
   const n = (...ph) => live.filter((s) => ph.includes(phaseOf(s))).length;
-  const need = n("blocked", "decide"), blocked = n("blocked"), turn = n("your_turn"), waiting = n("waiting"), working = n("working"), stalled = n("stalled");
+  const need = live.filter((s) => needOf(s)).length, blocked = n("blocked"), turn = n("your_turn"), waiting = n("waiting"), working = n("working"), stalled = n("stalled");
   AskCard.recount();
   const parts = [];
   if (need) parts.push(`<span class="need${blocked ? " stop" : ""}" data-need>${need} need${need === 1 ? "s" : ""} you</span>`);
@@ -2258,7 +2341,8 @@ function paintRow(el, s) {
   const ph = phaseOf(s);
   const child = s.live && !!s.lead_id && !!byId(s.lead_id)?.live && !S.dismissed.has(s.lead_id);
   const ho = hostOf(s);
-  el.className = "row" + (s.live ? "" : " ended") + (ph === "review" && s.live ? " done" : "") + (S.active === s.id ? " on" : "") + (s.role === "lead" ? " lead" : "") + (child ? " child" : "") + (ho?.off && s.live ? " hoff" : "");
+  const need = needOf(s);
+  el.className = "row" + (s.live ? "" : " ended") + (ph === "review" && s.live ? " done" : "") + (S.active === s.id ? " on" : "") + (s.role === "lead" ? " lead" : "") + (child ? " child" : "") + (ho?.off && s.live ? " hoff" : "") + (need ? " needs n-" + need.k : "");
   const ht = qs(".htag", el);
   ht.hidden = !ho;
   if (ho) { ht.textContent = ho.off && s.live ? ho.name + " offline" : ho.name; ht.title = ho.off && s.live ? `Its computer (${ho.name}) is offline — the terminal keeps running there and comes back when it reconnects` : "Runs on " + ho.name + (s.placement ? " — " + s.placement : ""); }
@@ -2299,10 +2383,13 @@ function paintRow(el, s) {
     line.replaceChildren(phChip(ph), txt);
     line.title = (PH_WORD[ph] || ph) + (l.text ? " — " + l.text : "");
   } else line.textContent = l.text;
-  const nq = s.live ? s.status?.asks || 0 : 0;
   const q = qs(".asks", el);
-  q.hidden = !nq;
-  if (nq) { q.textContent = String(nq); q.title = nq + " question" + (nq === 1 ? "" : "s") + " waiting on you — answer by typing here"; }
+  q.hidden = !need;
+  if (need) {
+    q.className = "asks " + need.k;
+    q.innerHTML = `<i></i>${esc(need.word)}`;
+    q.title = need.k === "approve" ? "Its hand-off is waiting for your approval" : need.k === "blocked" ? "It hit a wall and needs you" : "It is waiting for your answer";
+  }
   const eye = qs(".eye", el);
   const w = s.live && s.watch?.active ? s.watch : null;
   eye.hidden = !w;
@@ -2615,9 +2702,9 @@ const EXPECT = {
 // What the hand-off buttons type into the terminal. Typed, not executed by the page: the agent knows
 // the repo's own way to merge and deploy, and the line is in its transcript as your decision.
 const OK_LINE = {
-  merge: "Approved: merge the PR once its checks are green. Don't deploy. Then re-file `mc outcome` with --shipped.",
-  "merge+deploy": "Approved: merge the PR once its checks are green, then deploy it. Then re-file `mc outcome` with --shipped.",
-  deploy: "Approved: deploy it. Then re-file `mc outcome` with --shipped.",
+  merge: "Approved: merge the PR once its checks are green. Don't deploy. Then run `mc outcome --shipped \"merged #<n>\"`.",
+  "merge+deploy": "Approved: merge the PR once its checks are green, then deploy it. Then run `mc outcome --shipped \"merged #<n>\" --shipped \"deployed\"`.",
+  deploy: "Approved: deploy it. Then run `mc outcome --shipped \"deployed\"`.",
 };
 
 // The goal QUEUE, for a terminal that was given more than one finish line (src/goals.ts). Fetched
@@ -2642,17 +2729,20 @@ async function goalsLoad(id, total) {
 
 // Its questions (open and answered) and its hand-off: one read for the terminal on stage, again when
 // anything it would change moves — a phase, an ask count, a new hand-off — and at most every 15s.
-const D = { id: null, asks: [], outcome: null, dialog: null, at: 0, busy: false, sig: "", all: false, armShip: 0, drafts: new Map() };
+const D = { id: null, asks: [], outcome: null, earlier: [], dialog: null, at: 0, busy: false, sig: "", all: false, armShip: 0, drafts: new Map() };
+// The board's layout: which card is expanded over it (null = the whole board), which earlier hand-offs
+// are open, and where each scrolling card was — a repaint rebuilds the cards and must not jump them.
+const FX = { id: null, exp: null, hopen: new Set(), scroll: new Map() };
 const decisionsSig = (s) => [s.id, s.status?.phase, s.status?.asks || 0, s.status?.line || "", s.outcome_at || "", s.state, s.prompt?.question || ""].join("|");
 async function decisionsLoad(s, force) {
   if (!s) return;
-  if (D.id !== s.id) Object.assign(D, { id: s.id, asks: [], outcome: null, dialog: null, at: 0, sig: "", all: false, armShip: 0 });
+  if (D.id !== s.id) Object.assign(D, { id: s.id, asks: [], outcome: null, earlier: [], dialog: null, at: 0, sig: "", all: false, armShip: 0 });
   const sig = decisionsSig(s);
   if (D.busy || (!force && sig === D.sig && Date.now() - D.at < 15000)) return;
   D.busy = true; D.sig = sig;
   try {
     const r = await api("/sessions/" + s.id + "/decisions");
-    if (D.id === s.id) { D.asks = r.asks || []; D.outcome = r.outcome || null; D.dialog = r.dialog || null; }
+    if (D.id === s.id) { D.asks = r.asks || []; D.outcome = r.outcome || null; D.earlier = r.earlier || []; D.dialog = r.dialog || null; }
   } catch {
     // An older daemon, or the terminal just closed: the cards fall back to what the row carries.
   } finally {
@@ -2661,7 +2751,8 @@ async function decisionsLoad(s, force) {
   }
 }
 
-// ① The goal: what it is for, the finish line, how far along, how long, and what it may do at the end.
+// ① The goal: what it is for, the finish line ticked check by check, how far along, and what it may
+// do at the end. What it is doing right now is the status strip's, above the board.
 function focusGoal(s) {
   const ph = phaseOf(s);
   const started = s.spawn_goal || s.first_prompt || "";
@@ -2672,18 +2763,17 @@ function focusGoal(s) {
   const done = s.goal_done_at ? Date.parse(s.goal_done_at) || 0 : 0;
   const reached = !!done && (ph === "review" || !s.live);
   const checks = Array.isArray(s.done_when) ? s.done_when : [];
+  const met = checks.map((_, i) => (Array.isArray(s.done_checked) ? s.done_checked[i] : null) || null);
+  const nMet = met.filter(Boolean).length;
   const st = (s.live && s.status) || {};
   const p = st.progress && st.progress.of > 0 ? st.progress : null;
-  const pct = reached ? 100 : p ? Math.max(0, Math.min(100, Math.round((p.n / p.of) * 100))) : 0;
+  // The bar is the agent's own step count; with none, the share of the finish line that is met.
+  const pct = reached ? 100 : p ? Math.max(0, Math.min(100, Math.round((p.n / p.of) * 100))) : checks.length ? Math.round((nMet / checks.length) * 100) : 0;
   const top = [
     `<span class="fx-lbl">Goal</span>`,
     s.goal_kind ? `<span class="fx-chip" title="${esc(KIND_TIP[s.goal_kind] || "")}">${esc(s.goal_kind === "investigation" ? "investigation" : s.goal_kind.toUpperCase())}</span>` : "",
     done ? `<span class="fx-chip ok" title="the agent ticked this goal off">✓ reached ${esc(TermCompanion.hhmm(done))}</span>` : "",
     s.goals_total > 1 ? `<span class="n" title="goals ticked off">${s.goals_done}/${s.goals_total}</span>` : "",
-    `<span class="sp"></span>`,
-    s.live
-      ? `${phChip(ph).outerHTML}<time data-clock="phase" data-at="${phaseSince(s)}">${esc(elapsedOf(phaseSince(s)))}</time>`
-      : `<span class="fx-chip">ended ${esc(age(s.ended_at || s.created_at))} ago</span>`,
   ].join("");
   const title = goal || started;
   const titleHtml = title
@@ -2691,7 +2781,8 @@ function focusGoal(s) {
     : `<h2 class="fx-title none">What is this terminal for?</h2>`;
   const undefinedNote = !goal && s.live ? `<div class="fx-from">Not confirmed yet — the agent asks you what done looks like before it starts.</div>` : "";
   const finish = checks.length
-    ? `<div class="fx-sub">Done when</div><ul class="fx-checks">${checks.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>`
+    ? `<div class="fx-sub">Done when · ${reached ? checks.length : nMet}/${checks.length}</div><ul class="fx-checks">${checks.map((c, i) =>
+      `<li class="${met[i] ? "ok" : ""}" data-check="${i + 1}" title="${met[i] ? "met " + esc(TermCompanion.hhmm(Date.parse(met[i]) || 0)) + " — click to untick" : "click to tick it off yourself"}"><span>${esc(c)}</span>${met[i] ? `<time>${esc(TermCompanion.hhmm(Date.parse(met[i]) || 0))}</time>` : ""}</li>`).join("")}</ul>`
     : `<div class="fx-sub">Done when</div><div class="fx-warn">${s.live ? "No finish line yet — the agent sets it with you before it starts." : "No finish line was written."}</div>`;
   if (s.goals_total > 1) goalsLoad(s.id, s.goals_total);
   const queue = GOALS.id === s.id && s.goals_total > 1 ? GOALS.items : [];
@@ -2700,18 +2791,18 @@ function focusGoal(s) {
     ? `<ol class="fx-queue">` + queue.map((g) => `<li class="${g.done_at ? "done" : g.seq === nowSeq ? "now" : ""}" data-gtick="${esc(g.id)}" title="${g.done_at ? "click to untick" : "click to tick this one off"}">${g.done_at ? "✓" : "·"} ${esc(clip(g.text, 160))}</li>`).join("") + `</ol>`
     : "";
   const addRow = s.live && goal ? `<button type="button" class="fx-gadd" data-gadd>+ another goal</button>` : "";
-  const ran = s.live ? `<b data-clock="run">${esc(elapsedOf(runSince(s)))}</b>` : `<b>${esc(TermCompanion.elapsed((Date.parse(s.ended_at || "") || Date.now()) - runSince(s)))}</b>`;
-  const eta = s.live && !reached && p?.eta_at ? `<span data-clock="eta" data-at="${p.eta_at}" class="${p.eta_at < Date.now() ? "over" : ""}">${esc(etaWord(p.eta_at))}</span>` : "";
   const step = p ? `<b>${esc(p.n)}/${esc(p.of)}</b><span class="step" title="${esc(p.label || "")}">${esc(p.label || "")}</span>`
     : reached ? `<b>done</b><span class="step"></span>`
+    : checks.length && nMet ? `<b>${nMet}/${checks.length}</b><span class="step">checks met</span>`
     : `<span class="step">${s.live ? "no steps reported yet" : ""}</span>`;
-  const prog = `<div class="fx-prog"><div class="fx-bar${p || reached ? "" : " unknown"}" title="the agent's own step count (mc progress)"><i style="width:${pct}%"></i></div>`
-    + `<div class="fx-pmeta">${step}<span>⏱ ${s.live ? "running" : "ran"} ${ran}</span>${eta}</div></div>`;
-  // The one line of what it is doing — except when it is a question or a wall: the Decisions card
-  // right below carries that, with its buttons, and saying it twice is how a board gets skimmed.
-  const asking = ph === "decide" || ph === "blocked" || st.on === "robert" || (D.id === s.id && D.asks.some((a) => a.status === "open"));
-  const line = s.live ? (asking ? "" : oneLiner(s).text || "") : s.end_reason ? "↪ " + s.end_reason : "";
-  const now = (line && !reached ? `<div class="fx-now">${esc(line)}</div>` : "") + pulseHtml(s);
+  // How long since it last moved its board: a bar that has not moved in a while is a bar to distrust.
+  const tickAt = Math.max(0, ...met.map((t) => (t ? Date.parse(t) || 0 : 0)));
+  const moved = Math.max(p?.at || 0, tickAt);
+  const fresh = s.live && !reached && moved
+    ? `<span class="${Date.now() - moved > 10 * 60000 ? "stale" : ""}" title="when it last moved its progress or ticked a check">updated <time data-clock="ago" data-at="${moved}" data-suffix=" ago">${esc(elapsedOf(moved))} ago</time></span>`
+    : "";
+  const prog = `<div class="fx-prog"><div class="fx-bar${p || reached || nMet ? "" : " unknown"}" title="the agent's own step count (mc progress), else the checks it has met (mc goal check)"><i style="width:${pct}%"></i></div>`
+    + `<div class="fx-pmeta">${step}${fresh}</div></div>`;
   const cur = s.ship || "ask";
   const armed = Date.now() - D.armShip < 2500;
   const ship = s.live
@@ -2720,9 +2811,11 @@ function focusGoal(s) {
       + `</span></div>`
     : "";
   return `<section class="fx fx-goal${reached ? " reached" : ""}" style="--nc:${COMP_PH_COLOR[ph] || "var(--line)"}"><div class="fx-top">${top}</div>`
-    + titleHtml + undefinedNote
+    + `<div class="fx-body" data-keep="goal">` + titleHtml + undefinedNote
     + (drift ? `<div class="fx-from">You asked: “${esc(clip(started, 220))}”</div>` : "")
-    + finish + queueHtml + addRow + prog + now + ship + `</section>`;
+    + finish + queueHtml + addRow + `</div>`
+    // The bar and the permission are the card's footer: a long finish line scrolls, they never do.
+    + `<div class="fx-foot">${prog}${ship}</div></section>`;
 }
 
 const DAEMON_LINE = /^\s*(?:\/[a-z]|\[chronos\b)/i;
@@ -2741,6 +2834,70 @@ function pulseHtml(s) {
   const state = printing ? `<b>printing now</b>` : quietAt ? `<b>quiet <time data-clock="ago" data-at="${quietAt}">${esc(elapsedOf(quietAt))}</time></b>` : `<b>quiet</b>`;
   const step = what ? `<span class="what" title="${esc(what)}">${esc(clip(what, 160))}</span><time data-clock="ago" data-at="${last.ts}" data-suffix=" ago">${esc(elapsedOf(last.ts))} ago</time>` : "";
   return `<div class="fx-pulse${printing ? " on" : ""}" title="Is it working? Whether its terminal is printing right now, and the last thing it did."><i></i>${state}${step}</div>`;
+}
+// What a terminal needs from you right now — a wall, a question (its own or one Robert holds), a
+// hand-off waiting for your yes — or null. One answer for the rail's pill, ⌘J and Focus's strip.
+function needOf(s) {
+  if (!s || !s.live) return null;
+  const ph = phaseOf(s);
+  if (ph === "blocked") return { k: "blocked", word: "blocked" };
+  const asks = s.status?.asks || 0;
+  if (ph === "decide" || asks) return { k: "decide", word: asks > 1 ? asks + " questions" : "answer" };
+  if (s.handoff && !SHIPPING.has(s.id)) return { k: "approve", word: "approve" };
+  return null;
+}
+const NEED_COLOR = { blocked: "var(--danger)", decide: "var(--p-decide)", approve: "var(--accent)" };
+
+// Merge / deploy approved from the dock: the agent is on it. Kept per terminal (and across a reload)
+// until its hand-off says it shipped, its PRs are merged, or the terminal ends — so the click never
+// vanishes into the pty. Over 45 minutes with no word, the dock says so instead of spinning forever.
+const SHIP_KIND = { merge: "Merging", "merge+deploy": "Merging + deploying", deploy: "Deploying" };
+const shipSave = () => { try { localStorage.setItem("desk-shipping", JSON.stringify(Object.fromEntries(SHIPPING))); } catch {} };
+function shipStart(s, kind) { SHIPPING.set(s.id, { kind, at: Date.now() }); shipSave(); repaintRow(s.id); renderCounts(); }
+function shipEnd(id) { if (SHIPPING.delete(id)) { shipSave(); repaintRow(id); } }
+function shipState(s) {
+  const x = SHIPPING.get(s.id); if (!x) return null;
+  if (!s.live) { shipEnd(s.id); return null; }
+  const o = D.id === s.id ? D.outcome : null;
+  const prs = C.id === s.id ? C.pins.prs : [];
+  const merged = prs.length > 0 && prs.every((p) => p.state === "merged" || p.state === "closed");
+  if ((o && (Date.parse(o.at) || 0) > x.at && o.shipped?.length) || (x.kind === "merge" && merged)) {
+    shipEnd(s.id);
+    toast("shipped" + (o?.shipped?.length ? " · " + o.shipped.join(" · ") : ""));
+    return null;
+  }
+  return { ...x, stale: Date.now() - x.at > 45 * 60000 };
+}
+
+// The status strip: what it is doing right now, always on top of the board. When it needs you, it says
+// so in the need's colour and points at the dock; when other terminals need you, it says how many.
+function focusStatus(s) {
+  const ph = phaseOf(s);
+  const need = needOf(s);
+  const sh = s.live ? shipState(s) : null;
+  const st = (s.live && s.status) || {};
+  const p = st.progress && st.progress.of > 0 ? st.progress : null;
+  const said = oneLiner(s).text || "";
+  let line;
+  if (!s.live) line = s.end_reason ? "↪ " + s.end_reason : "Ended " + age(s.ended_at || s.created_at) + " ago";
+  else if (need?.k === "blocked") line = "Blocked — " + (st.line || s.state_label || REASON[s.blocked_reason] || "it needs you") + "  ↓";
+  else if (need?.k === "decide") line = "Waiting for you — " + (said || "it asked you something") + "  ↓";
+  else if (need?.k === "approve") line = "Hand-off ready — approve it below  ↓";
+  else if (sh) line = SHIP_KIND[sh.kind] + (said ? " — " + said : "…");
+  else line = said || (ph === "working" ? "Working…" : ph === "review" ? "Done — nothing left to do" : "");
+  const chip = s.live
+    ? phChip(ph).outerHTML + `<time data-clock="phase" data-at="${phaseSince(s)}" title="in this phase for">${esc(elapsedOf(phaseSince(s)))}</time>`
+    : `<span class="ph ended">ended</span>`;
+  const ran = s.live ? `<b data-clock="run">${esc(elapsedOf(runSince(s)))}</b>` : `<b>${esc(TermCompanion.elapsed((Date.parse(s.ended_at || "") || Date.now()) - runSince(s)))}</b>`;
+  const eta = s.live && p?.eta_at && ph !== "review" ? `<span data-clock="eta" data-at="${p.eta_at}" class="${p.eta_at < Date.now() ? "over" : ""}">${esc(etaWord(p.eta_at))}</span>` : "";
+  const others = needsNow().filter((x) => x.id !== s.id).length;
+  const color = need ? NEED_COLOR[need.k] : COMP_PH_COLOR[ph] || "var(--line)";
+  return `<section class="fx-status${need ? " need" : ""}" style="--nc:${color}">`
+    + `<div class="st-l">${chip}</div>`
+    + `<div class="st-m"><div class="st-line" title="${esc(line)}">${esc(line)}</div>${pulseHtml(s)}</div>`
+    + `<div class="st-r"><span title="how long this terminal has been running">⏱ ${s.live ? "" : "ran "}${ran}</span>${eta}`
+    + (others ? `<button type="button" class="st-others" data-fnext title="the next terminal that needs you (⌘J)">${others} more need${others === 1 ? "s" : ""} you · ⌘J</button>` : "")
+    + `</div></section>`;
 }
 const plainLine = (t) => String(t || "").replace(/[*_`#>]/g, "").replace(/\s+/g, " ").trim();
 
@@ -2837,7 +2994,9 @@ function focusTalk(s) {
   const turns = talkTurns(s);
   // Your line from the composer, until its own record lands in the transcript.
   if (T.pending && turns.some((t) => !t.opening && norm(t.you) === norm(T.pending.text) && (!t.at || t.at >= T.pending.at - 10000))) T.pending = null;
-  if (!turns.length && !T.pending) return "";
+  // Its column stays on the board either way: an empty card says where your words will show.
+  if (!turns.length && !T.pending)
+    return s.live ? `<section class="fx fx-talk"><div class="fx-top"><span class="fx-lbl">Talk</span></div><div class="fx-body"><div class="fx-wait">Nothing said yet — what you type below shows here, with its answer under it.</div></div></section>` : "";
   const working = s.live && s.quiet === false;
   const last = turns[turns.length - 1];
   const shown = T.all ? turns : turns.slice(-6);
@@ -2860,11 +3019,15 @@ function focusTalk(s) {
     return `<div class="turn${newest ? " last" : ""}${fold ? " foldable" : ""}"${fold}>${qLine(t)}${a}</div>`;
   });
   if (T.pending) rows.push(`<div class="turn last"><div class="tq"><time>${esc(TermCompanion.hhmm(T.pending.at))}</time><span>${esc(clip(T.pending.text, 600))}</span></div><div class="ta wait">sent — waiting for it to answer…</div></div>`);
-  return `<section class="fx fx-talk"><div class="fx-top"><span class="fx-lbl">Talk</span><span class="sp"></span>`
+  return `<section class="fx fx-talk${FX.exp === "talk" ? " exp" : ""}"><div class="fx-top"><span class="fx-lbl">Talk</span><span class="sp"></span>`
     + (turns.length > 6 ? `<button type="button" class="fx-more" data-tall>${T.all ? "only the last 6" : "all " + turns.length}</button>` : "")
-    + `</div>${rows.join("")}</section>`;
+    + expBtn("talk")
+    + `</div><div class="fx-body" data-keep="talk" data-stick>${rows.join("")}</div></section>`;
 }
+// ⤢ on a card that can grow: it takes the whole board; ⤡ (or Esc) gives the board back.
+const expBtn = (k) => `<button type="button" class="fx-exp" data-fexp="${k}" title="${FX.exp === k ? "Back to the whole board (Esc)" : "Expand — read it all"}">${FX.exp === k ? "⤡ Back to board" : "⤢ Expand"}</button>`;
 // You just sent it something from Focus: bring the exchange into view, and again when its answer starts.
+// Talk scrolls inside its card, so "into view" is that card's bottom — never the page.
 function talkFollow() {
   if (!T.follow) return;
   const el = qs("#story .fx-talk .turn.last"); if (!el) return;
@@ -2872,115 +3035,163 @@ function talkFollow() {
   if (sig === T.sig) return;
   const first = !T.sig || T.sig[0] !== sig[0];
   T.sig = sig;
-  if (first) el.scrollIntoView({ block: "start", behavior: "smooth" });
+  const box = el.closest(".fx-body");
+  if (first && box) box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top - 8;
 }
-// ② Decisions: what it needs from you now — its asks (answerable here even while Robert still has
-// them), the question dialog or menu on its screen, a wall — then the questions decided so far.
-function focusDecisions(s) {
+// ② What it needs from you now — its asks (answerable here even while Robert still has them), the
+// question dialog or menu on its screen, a wall. These are the dock's: the bottom of the board, the
+// one place every answer lives. Each entry is one `.fx-q`.
+function openDecisions(s) {
   const p = s.prompt && typeof s.prompt === "object" ? s.prompt : null;
   const ph = phaseOf(s);
   const asks = D.id === s.id ? D.asks : [];
   const open = [];
-  if (s.live) {
-    for (const a of asks) {
-      if (a.status !== "open") continue;
-      const who = a.for_operator
-        ? `<b>For you</b>${a.escalated ? " · Robert handed it up" : ""}`
-        : a.route === "lead" ? `<b>Its Lead is deciding</b> — answer now to decide it yourself` : `<b>Robert is deciding</b> — answer now to decide it yourself`;
-      const draft = D.drafts.get(a.id) || "";
-      open.push(`<div class="fx-q"><div class="who">${who} · ${esc(age(a.created_at))}</div><div class="q">${esc(a.question)}</div>`
-        + (a.triage ? `<div class="rec">${esc(a.triage)}</div>` : "")
-        + `<div class="fx-opts">${(a.options || []).map((o, i) => `<button type="button" data-aans="${esc(a.id)}" data-v="${esc(o)}" class="${i === 0 ? "go" : ""}">${esc(o)}</button>`).join("")}`
-        + `<input data-atext="${esc(a.id)}" value="${esc(draft)}" placeholder="${(a.options || []).length ? "or say something else" : "your answer"} · ⏎" autocomplete="off"></div></div>`);
-    }
-    const dlg = s.state !== "working" ? dialogOf(s, p, ph) : null;
-    if (dlg) open.push(dialogHtml(dlg));
-    else if ((s.state === "waiting" || s.state === "blocked") && p?.question && p.kind !== "turn") {
-      let opts = "";
-      if (p.kind === "select" && p.options?.length) opts = p.options.map((o, i) => `<button type="button" data-fopt="${i}" class="${i === 0 ? "go" : i === p.options.length - 1 && p.options.length > 1 ? "no" : ""}"><kbd>${i === 0 ? "y" : i === 1 ? "a" : i === p.options.length - 1 ? "n" : ""}</kbd>${esc(o.label)}</button>`).join("");
-      else if (p.kind === "yn") opts = `<button type="button" data-fyn="y" class="go"><kbd>y</kbd>Yes</button><button type="button" data-fyn="n" class="no"><kbd>n</kbd>No</button>`;
-      else opts = `<button type="button" data-ftype class="go">Reply ⌨</button>`;
-      open.push(`<div class="fx-q"><div class="who"><b>${p.kind === "select" ? "Pick one" : p.kind === "yn" ? "Yes or no" : "It asked you"}</b></div><div class="q">${esc(p.question)}</div><div class="fx-opts">${opts}</div></div>`);
-    } else if (ph === "blocked") {
-      const why = s.status?.line || s.state_label || REASON[s.blocked_reason] || String(s.blocked_reason || "blocked").replace(/_/g, " ");
-      open.push(`<div class="fx-q blocked"><div class="who"><b>Blocked</b></div><div class="q">${esc(why)}</div><div class="fx-opts"><button type="button" data-ftype class="go">Reply ⌨</button><button type="button" data-fterm>Open the terminal (⌘E)</button></div></div>`);
-    }
-    // Never "decide" with nothing on the card to decide: whatever it stopped on that this page could
-    // not read (a dialog shape it does not know yet) still gets its line and a way in.
-    if (!open.length && ph === "decide")
-      open.push(`<div class="fx-q"><div class="who"><b>Waiting on you</b></div><div class="q">${esc(s.status?.line || "It stopped for you, but its question did not reach this card.")}</div><div class="fx-opts"><button type="button" data-ftype class="go">Reply ⌨</button><button type="button" data-fterm>Open the terminal (⌘E)</button></div></div>`);
+  if (!s.live) return open;
+  for (const a of asks) {
+    if (a.status !== "open") continue;
+    const who = a.for_operator
+      ? `<b>For you</b>${a.escalated ? " · Robert handed it up" : ""}`
+      : a.route === "lead" ? `<b>Its Lead is deciding</b> — answer now to decide it yourself` : `<b>Robert is deciding</b> — answer now to decide it yourself`;
+    const draft = D.drafts.get(a.id) || "";
+    open.push(`<div class="fx-q"><div class="who">${who} · ${esc(age(a.created_at))}</div><div class="q">${esc(a.question)}</div>`
+      + (a.triage ? `<div class="rec">${esc(a.triage)}</div>` : "")
+      + `<div class="fx-opts">${(a.options || []).map((o, i) => `<button type="button" data-aans="${esc(a.id)}" data-v="${esc(o)}" class="${i === 0 ? "go" : ""}">${esc(o)}</button>`).join("")}`
+      + `<input data-atext="${esc(a.id)}" value="${esc(draft)}" placeholder="${(a.options || []).length ? "or say something else" : "your answer"} · ⏎" autocomplete="off"></div></div>`);
   }
-  // What was decided: answered asks, oldest first. The lines you typed into it are in Talk, below,
-  // each beside what it said back.
+  const dlg = s.state !== "working" ? dialogOf(s, p, ph) : null;
+  if (dlg) open.push(dialogHtml(dlg));
+  else if ((s.state === "waiting" || s.state === "blocked") && p?.question && p.kind !== "turn") {
+    let opts = "";
+    if (p.kind === "select" && p.options?.length) opts = p.options.map((o, i) => `<button type="button" data-fopt="${i}" class="${i === 0 ? "go" : i === p.options.length - 1 && p.options.length > 1 ? "no" : ""}"><kbd>${i === 0 ? "y" : i === 1 ? "a" : i === p.options.length - 1 ? "n" : ""}</kbd>${esc(o.label)}</button>`).join("");
+    else if (p.kind === "yn") opts = `<button type="button" data-fyn="y" class="go"><kbd>y</kbd>Yes</button><button type="button" data-fyn="n" class="no"><kbd>n</kbd>No</button>`;
+    else opts = `<button type="button" data-ftype class="go">Reply ⌨</button>`;
+    open.push(`<div class="fx-q"><div class="who"><b>${p.kind === "select" ? "Pick one" : p.kind === "yn" ? "Yes or no" : "It asked you"}</b></div><div class="q">${esc(p.question)}</div><div class="fx-opts">${opts}</div></div>`);
+  } else if (ph === "blocked") {
+    const why = s.status?.line || s.state_label || REASON[s.blocked_reason] || String(s.blocked_reason || "blocked").replace(/_/g, " ");
+    open.push(`<div class="fx-q blocked"><div class="who"><b>Blocked</b></div><div class="q">${esc(why)}</div><div class="fx-opts"><button type="button" data-ftype class="go">Reply ⌨</button><button type="button" data-fterm>Open the terminal (⌘E)</button></div></div>`);
+  }
+  // Never "decide" with nothing in the dock to decide: whatever it stopped on that this page could
+  // not read (a dialog shape it does not know yet) still gets its line and a way in.
+  if (!open.length && ph === "decide")
+    open.push(`<div class="fx-q"><div class="who"><b>Waiting on you</b></div><div class="q">${esc(s.status?.line || "It stopped for you, but its question did not reach this card.")}</div><div class="fx-opts"><button type="button" data-ftype class="go">Reply ⌨</button><button type="button" data-fterm>Open the terminal (⌘E)</button></div></div>`);
+  return open;
+}
+// What was decided: answered asks, oldest first — a small card under the goal. The lines you typed
+// into it are in Talk, each beside what it said back.
+function focusDecided(s) {
+  const asks = D.id === s.id ? D.asks : [];
   const hist = [];
   for (const a of asks) if (a.status === "answered")
     hist.push({ at: Date.parse(a.answered_at || a.created_at) || 0, html: `${esc(clip(a.question, 220))} → <span class="a">${esc(clip(a.answer || "", 220))}</span>${a.answered_by && a.answered_by !== "operator" && a.answered_by !== "human" ? ` <span>(${esc(a.answered_by)})</span>` : ""}` });
+  if (!hist.length) return "";
   hist.sort((a, b) => a.at - b.at);
-  if (!open.length && !hist.length) return "";
-  const shown = D.all ? hist : hist.slice(-5);
-  const histHtml = hist.length
-    ? (open.length ? `<div class="fx-sub">Decided so far</div>` : "") + `<ul class="fx-hist">`
-      + shown.map((h) => `<li><time>${esc(h.at ? TermCompanion.hhmm(h.at) : "")}</time><span>${h.html}</span></li>`).join("") + `</ul>`
-      + (hist.length > 5 ? `<button type="button" class="fx-more" data-dall>${D.all ? "only the last 5" : "all " + hist.length}</button>` : "")
-    : "";
-  return `<section class="fx fx-dec${open.length ? " open" : ""}"><div class="fx-top"><span class="fx-lbl">${open.length ? "Needs you" : "Decisions"}</span>`
-    + (open.length ? `<span class="fx-chip warn">${open.length} open</span>` : "") + `</div>`
-    + open.join("") + histHtml + `</section>`;
+  return `<section class="fx fx-dec"><div class="fx-top"><span class="fx-lbl">Decided</span><span class="n">${hist.length}</span></div>`
+    + `<div class="fx-body" data-keep="dec" data-stick><ul class="fx-hist">`
+    + hist.map((h) => `<li><time>${esc(h.at ? TermCompanion.hhmm(h.at) : "")}</time><span>${h.html}</span></li>`).join("") + `</ul></div></section>`;
 }
 
-// ③ The hand-off: the agent's `mc outcome` — summary, what changed, proof, screenshots, its PRs — and
-// the buttons to approve it. A terminal that never filed one still gets its Summary and PRs here.
-function focusOutcome(s) {
+// ③ The hand-off(s): the agent's `mc outcome` — summary, what changed, proof, screenshots, its PRs.
+// A terminal that hands off more than once (a follow-up, a round of changes) keeps every one: the
+// newest in full, the earlier ones folded under it. A terminal that never filed one still gets its
+// Summary and PRs. The buttons to approve it are the dock's.
+const CI_WORD = { passing: "checks ✓", failing: "checks ✕", pending: "checks …" };
+function handoffOf(s) {
   const o = D.id === s.id ? D.outcome : null;
   const ph = phaseOf(s);
   if (s.id === C.id) compPinsLoad(s.id);
   const pins = C.id === s.id ? C.pins.prs : [];
-  const u = s.usage || {};
-  const la = s.lines_added || u.lines_added, lr = s.lines_removed || u.lines_removed;
-  const diff = la || lr ? `<span class="vchip diff"><b>+${la || 0}</b> <i>−${lr || 0}</i></span>` : "";
   // Its PRs: the daemon's pins (state + checks) for every link it filed or said, plus any filed one
   // the pins have not caught up with yet.
-  const prUrls = o?.prs || [];
   const prs = pins.slice();
-  for (const url of prUrls) if (!prs.some((x) => x.url === url)) { const m = url.match(/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/); if (m) prs.push({ url, repo: m[1], num: Number(m[2]), state: null }); }
-  const CI = { passing: "checks ✓", failing: "checks ✕", pending: "checks …" };
-  const prHtml = prs.length
-    ? `<div class="fx-sub">Pull request${prs.length === 1 ? "" : "s"}</div><div class="fx-prs">` + prs.map((p) => pinPrHtml(p).replace(/<\/a>$/, (p.ci ? `<span class="ci ${esc(p.ci)}">${CI[p.ci] || ""}</span>` : "") + "</a>")).join("") + `</div>` + (diff ? `<div class="drow" style="margin-top:6px">${diff}</div>` : "")
-    : diff ? `<div class="drow" style="margin-top:10px">${diff}</div>` : "";
-  const inTalk = !o && !!F.headline && T.id === s.id && norm(T.shows).includes(norm(stripLead(F.headline, "summary")));
+  for (const url of o?.prs || []) if (!prs.some((x) => x.url === url)) { const m = url.match(/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/); if (m) prs.push({ url, repo: m[1], num: Number(m[2]), state: null }); }
+  const open = prs.filter((p) => p.state !== "merged" && p.state !== "closed");
   const fallback = !o && (F.headline || s.summary || "");
   const stopped = !s.live || ["review", "your_turn", "decide", "blocked"].includes(ph) || !!s.goal_done_at;
-  if (!o && !(fallback && stopped)) {
-    if (!s.live) return "";
-    return `<section class="fx fx-out"><div class="fx-top"><span class="fx-lbl">Hand-off</span><span class="sp"></span><span class="n">not yet</span></div>`
-      + `<div class="fx-wait">${esc(EXPECT[s.goal_kind] || EXPECT.pr)}</div>${prHtml}</section>`;
-  }
-  const open = prs.filter((p) => p.state !== "merged" && p.state !== "closed");
-  const ask = o ? o.ask : open.length ? "merge" : "review";
-  const shots = o?.shots?.length
+  const ask = o ? (o.shipped?.length ? "none" : o.ask) : open.length ? "merge" : "review";
+  return { o, prs, open, fallback, stopped, ask, earlier: D.id === s.id ? D.earlier : [] };
+}
+const prsHtml = (prs) => `<div class="fx-prs">` + prs.map((p) => pinPrHtml(p).replace(/<\/a>$/, (p.ci ? `<span class="ci ${esc(p.ci)}">${CI_WORD[p.ci] || ""}</span>` : "") + "</a>")).join("") + `</div>`;
+// One hand-off's body. `prs` are the live pins for the one on top; an earlier one lists its own links.
+function outcomeBody(o, prs) {
+  const shots = o.shots?.length
     ? `<div class="fx-sub">Screenshots</div><div class="fx-shots">` + o.shots.map((x) => `<figure data-shotzoom><img data-shot="${esc(x.name)}" alt="${esc(x.label)}"><figcaption>${esc(x.label)}</figcaption></figure>`).join("") + `</div>`
     : "";
-  const body = o
-    ? `<div class="fx-sum">${md(o.summary)}</div>`
-      + (o.changes.length ? `<div class="fx-sub">What changed</div><ul class="fx-list">${o.changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : "")
-      + (o.proof.length ? `<div class="fx-sub">Proof</div><ul class="fx-proof">${o.proof.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : "")
-      + shots + prHtml
-      + (o.shipped?.length ? `<div class="fx-shipped">Shipped: ${esc(o.shipped.join(" · "))}</div>` : "")
-    : inTalk ? `<div class="fx-wait">No hand-off filed — its last answer is open in Talk, above.</div>` + prHtml
-    : `<div class="fx-sum">${md(stripLead(fallback, "summary"))}</div>` + prHtml;
-  const ASKW = { merge: "approve the merge", deploy: "approve the deploy", "merge+deploy": "approve merge + deploy", review: "a read", none: "nothing" };
-  const acts = [];
-  if (s.live) {
-    if ((ask === "merge" || ask === "merge+deploy") && open.length) {
-      if (ask === "merge+deploy") acts.push(`<button type="button" class="fa primary" data-ok="merge+deploy">✓ Merge + deploy</button>`, `<button type="button" class="fa" data-ok="merge">Merge only</button>`);
-      else acts.push(`<button type="button" class="fa primary" data-ok="merge">✓ Approve merge</button>`, `<button type="button" class="fa" data-ok="merge+deploy">Merge + deploy</button>`);
-    } else if (ask === "deploy" || ask === "merge+deploy") acts.push(`<button type="button" class="fa primary" data-ok="deploy">✓ Approve deploy</button>`);
-    acts.push(`<button type="button" class="fa" data-ok="changes">✎ Ask for changes</button>`);
+  const links = prs || (o.prs || []).map((url) => { const m = url.match(/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/); return m ? { url, repo: m[1], num: Number(m[2]), state: null } : null; }).filter(Boolean);
+  return `<div class="fx-sum">${md(o.summary)}</div>`
+    + (o.changes?.length ? `<div class="fx-sub">What changed</div><ul class="fx-list">${o.changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : "")
+    + (o.proof?.length ? `<div class="fx-sub">Proof</div><ul class="fx-proof">${o.proof.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : "")
+    + shots
+    + (links.length ? `<div class="fx-sub">Pull request${links.length === 1 ? "" : "s"}</div>` + prsHtml(links) : "")
+    + (o.shipped?.length ? `<div class="fx-shipped">Shipped: ${esc(o.shipped.join(" · "))}</div>` : "");
+}
+const ASK_WORD = { merge: "approve the merge", deploy: "approve the deploy", "merge+deploy": "approve merge + deploy", review: "a read", none: "nothing" };
+function focusOutcome(s) {
+  const h = handoffOf(s);
+  const { o, prs } = h;
+  const u = s.usage || {};
+  const la = s.lines_added || u.lines_added, lr = s.lines_removed || u.lines_removed;
+  const diff = la || lr ? `<div class="drow" style="margin-top:8px"><span class="vchip diff"><b>+${la || 0}</b> <i>−${lr || 0}</i></span></div>` : "";
+  const prHtml = prs.length ? `<div class="fx-sub">Pull request${prs.length === 1 ? "" : "s"}</div>` + prsHtml(prs) + diff : diff;
+  const inTalk = !o && !!F.headline && T.id === s.id && norm(T.shows).includes(norm(stripLead(F.headline, "summary")));
+  if (!o && !(h.fallback && h.stopped)) {
+    if (!s.live) return "";
+    return `<section class="fx fx-out wait"><div class="fx-top"><span class="fx-lbl">Hand-off</span><span class="sp"></span><span class="n">not yet</span></div>`
+      + `<div class="fx-body" data-keep="out"><div class="fx-wait">${esc(EXPECT[s.goal_kind] || EXPECT.pr)}</div>${prHtml}</div></section>`;
   }
-  return `<section class="fx fx-out${o ? " ready" : ""}"><div class="fx-top"><span class="fx-lbl">${o ? "Hand-off" : "Result"}</span>`
+  const n = h.earlier.length + 1;
+  const body = o ? outcomeBody(o, prs) + diff
+    : inTalk ? `<div class="fx-wait">No hand-off filed — its last answer is open in Talk.</div>` + prHtml
+    : `<div class="fx-sum">${md(stripLead(h.fallback, "summary"))}</div>` + prHtml;
+  // The earlier hand-offs, newest first, each a line you can open.
+  const prev = h.earlier.length
+    ? `<div class="fx-prev"><div class="fx-sub" style="margin-top:2px">Earlier hand-off${h.earlier.length === 1 ? "" : "s"}</div>` + h.earlier.map((x, i) => ({ x, i })).reverse().map(({ x, i }) => {
+      const on = FX.hopen.has(i);
+      return `<div class="ho"><div class="ho-h" data-hopen="${i}" title="${on ? "fold" : "open it"}"><b>#${i + 1}</b><time>${esc(TermCompanion.hhmm(Date.parse(x.at) || 0))}</time><span>${esc(clip(plainLine(x.summary), 200))}</span></div>`
+        + (on ? `<div class="ho-b">${outcomeBody(x, null)}</div>` : "") + `</div>`;
+    }).join("") + `</div>`
+    : "";
+  return `<section class="fx fx-out${o ? " ready" : ""}${FX.exp === "out" ? " exp" : ""}"><div class="fx-top"><span class="fx-lbl">${o ? "Hand-off" : "Result"}</span>`
+    + (o && n > 1 ? `<span class="fx-chip" title="this terminal handed off ${n} times — the newest is on top">#${n} of ${n}</span>` : "")
     + (o ? `<time>${esc(TermCompanion.hhmm(Date.parse(o.at) || 0))}</time>` : `<span class="fx-chip">no hand-off filed</span>`)
-    + `<span class="sp"></span>` + (o && ask !== "none" ? `<span class="fx-chip ok">asks: ${esc(ASKW[ask] || ask)}</span>` : "") + `</div>`
-    + body + (acts.length ? `<div class="fx-act">${acts.join("")}</div>` : "") + `</section>`;
+    + `<span class="sp"></span>` + (o && h.ask !== "none" ? `<span class="fx-chip ok">asks: ${esc(ASK_WORD[h.ask] || h.ask)}</span>` : "")
+    + expBtn("out") + `</div>`
+    + `<div class="fx-body" data-keep="out">` + body + prev + `</div></section>`;
+}
+// The hand-off's buttons, in the dock: approve what it asks for, or ask for changes. Once approved,
+// the row turns into "Merging + deploying…" until it reports it shipped (shipState).
+function handoffDock(s) {
+  if (!s.live) return "";
+  const h = handoffOf(s);
+  const sh = shipState(s);
+  if (sh) {
+    const said = oneLiner(s).text || "";
+    return `<div class="fx-q ship approve"><div class="who"><b>Shipping</b> · you approved it <time data-clock="ago" data-at="${sh.at}" data-suffix=" ago">${esc(elapsedOf(sh.at))} ago</time></div>`
+      + `<div class="q">${sh.stale ? "⚠" : `<i class="spin" data-spin>◐</i>`}${esc(SHIP_KIND[sh.kind] || "Shipping")}${sh.stale ? " — no word back in 45 minutes" : "…"}${said ? `<span>${esc(clip(said, 160))}</span>` : ""}</div>`
+      + `<div class="fx-opts"><button type="button" data-fterm>Open the terminal (⌘E)</button><button type="button" data-shipclear>${sh.stale ? "Stop waiting" : "Hide"}</button></div></div>`;
+  }
+  if (!h.o && !(h.fallback && h.stopped)) return "";
+  const acts = [];
+  if ((h.ask === "merge" || h.ask === "merge+deploy") && h.open.length) {
+    if (h.ask === "merge+deploy") acts.push(`<button type="button" class="go" data-ok="merge+deploy">✓ Merge + deploy</button>`, `<button type="button" data-ok="merge">Merge only</button>`);
+    else acts.push(`<button type="button" class="go" data-ok="merge">✓ Approve merge</button>`, `<button type="button" data-ok="merge+deploy">Merge + deploy</button>`);
+  } else if (h.ask === "deploy" || h.ask === "merge+deploy") acts.push(`<button type="button" class="go" data-ok="deploy">✓ Approve deploy</button>`);
+  const asking = acts.length > 0;
+  acts.push(`<button type="button" data-ok="changes">✎ Ask for changes</button>`);
+  const what = h.o ? clip(plainLine(h.o.summary), 220) : clip(plainLine(stripLead(h.fallback, "summary")), 220);
+  return `<div class="fx-q approve"><div class="who"><b>${asking ? "Hand-off — asks you to " + esc(ASK_WORD[h.ask] || h.ask) : h.o?.shipped?.length ? "Shipped" : "Hand-off — for a read"}</b></div>`
+    + `<div class="q">${esc(what)}</div><div class="fx-opts">${acts.join("")}</div></div>`;
+}
+// The dock: every answer and every approval, always at the bottom of the board. Nothing waiting on you
+// and it says so in one quiet line — the place stays where it is.
+function focusDock(s) {
+  if (!s.live) return "";
+  const rows = openDecisions(s);
+  const ho = handoffDock(s);
+  const urgent = rows.length > 0 || needOf(s)?.k === "approve" || !!SHIPPING.get(s.id);
+  if (ho) rows.push(ho);
+  return `<section class="fx-dock${urgent ? " on" : ""}" data-keep="dock" style="--dk:${NEED_COLOR[needOf(s)?.k] || (SHIPPING.get(s.id) ? "var(--accent)" : "var(--p-decide)")}">`
+    + (rows.length ? rows.join("") : `<div class="dk-none">Nothing needs you right now${phaseOf(s) === "working" ? " — it's working" : ""}.</div>`)
+    + `</section>`;
 }
 
 // Screenshots come through the admin-gated route as blobs (an <img src> cannot carry the header).
@@ -3012,11 +3223,30 @@ function renderStory() {
   const act = document.activeElement;
   const typing = act?.matches?.("#story input[data-atext]") ? { sel: `input[data-atext="${CSS.escape(act.dataset.atext)}"]`, pos: act.selectionStart }
     : act?.matches?.("#story input[data-dtext]") ? { sel: "input[data-dtext]", pos: act.selectionStart } : null;
-  body.innerHTML = focusGoal(s) + focusDecisions(s) + focusTalk(s) + focusOutcome(s);
+  if (FX.id !== s.id) Object.assign(FX, { id: s.id, exp: null, hopen: new Set(), scroll: new Map() });
+  // Where each scrolling card was, and whether it sat at its bottom (Talk and Decided follow the newest).
+  for (const el of qsa("[data-keep]", body)) if (el.clientHeight) FX.scroll.set(el.dataset.keep, { top: el.scrollTop, end: el.scrollHeight - el.scrollTop - el.clientHeight < 24 });
+  const out = focusOutcome(s);
+  const grid = `<div class="fx-grid${out && !out.includes("fx-out wait") ? " has-out" : ""}${FX.exp ? " exp" : ""}">`
+    + `<div class="fx-col c1">${focusGoal(s)}${focusDecided(s)}</div>`
+    + `<div class="fx-col c2${FX.exp === "talk" ? " holds-exp" : ""}">${focusTalk(s)}</div>`
+    + `<div class="fx-col c3${FX.exp === "out" ? " holds-exp" : ""}">${out}</div></div>`;
+  body.innerHTML = focusStatus(s) + grid + focusDock(s);
+  // An expanded card that is not on the board any more (no Talk yet, no hand-off) gives the board back.
+  if (FX.exp && !qs(".fx.exp", body)) { FX.exp = null; return renderStory(); }
+  for (const el of qsa("[data-keep]", body)) {
+    const was = FX.scroll.get(el.dataset.keep);
+    if (!was) { if (el.hasAttribute("data-stick")) el.scrollTop = el.scrollHeight; continue; }
+    el.scrollTop = was.end && el.hasAttribute("data-stick") ? el.scrollHeight : was.top;
+  }
   tidyLinks(body);
   shotsHydrate(s, body);
   if (typing) { const el = body.querySelector(typing.sel); if (el) { el.focus(); el.setSelectionRange(typing.pos, typing.pos); } }
   talkFollow();
+}
+function focusExpand(k) {
+  FX.exp = FX.exp === k ? null : k;
+  renderStory();
 }
 // Answering an ask from its card: the same door Robert and `mc answer` use. An ask still with Robert
 // is answerable too — you deciding it yourself is faster than waiting for him to hand it up.
@@ -3069,16 +3299,32 @@ qs("#story").addEventListener("click", (e) => {
   if (to && !String(window.getSelection?.() || "")) { const k = Number(to.dataset.topen); if (T.open.has(k)) T.open.delete(k); else T.open.add(k); return renderStory(); }
   const sh = e.target.closest("[data-ship]"); if (sh) return setShip(s, sh.dataset.ship);
   if (e.target.closest("[data-fterm]")) return setMode("term");
-  if (e.target.closest("[data-dall]")) { D.all = !D.all; return renderStory(); }
+  const fx = e.target.closest("[data-fexp]"); if (fx) return focusExpand(fx.dataset.fexp);
+  if (e.target.closest("[data-fnext]")) return step(1, true);
+  if (e.target.closest("[data-shipclear]")) { shipEnd(s.id); return renderStory(); }
+  const ho = e.target.closest("[data-hopen]");
+  if (ho) { const i = Number(ho.dataset.hopen); if (FX.hopen.has(i)) FX.hopen.delete(i); else FX.hopen.add(i); return renderStory(); }
+  const ck = e.target.closest("[data-check]"); if (ck) return toggleCheck(s, Number(ck.dataset.check));
   const z = e.target.closest("[data-shotzoom]"); if (z) { z.classList.toggle("zoom"); return; }
   const ok = e.target.closest("[data-ok]");
   if (ok) {
     if (ok.dataset.ok === "changes") { say.value = "Changes needed: "; focusSay(); say.setSelectionRange(say.value.length, say.value.length); return; }
     const line = OK_LINE[ok.dataset.ok]; if (!line) return;
     answer(s.id, { text: line, enter: true });
+    // The click does not vanish into the pty: the dock turns into "Merging + deploying…" until it ships.
+    shipStart(s, ok.dataset.ok);
+    renderStory();
     toast("sent · " + ok.textContent.replace(/^✓\s*/, ""));
   }
 });
+// A finish-line check, ticked from the board: the same door `mc goal check` uses.
+async function toggleCheck(s, n) {
+  const was = Array.isArray(s.done_checked) ? s.done_checked[n - 1] : null;
+  try {
+    Object.assign(s, await api("/sessions/" + s.id, { method: "PATCH", body: JSON.stringify(was ? { uncheck: [n] } : { check: [n] }) }));
+    renderStory();
+  } catch (err) { toast(String(err.message).slice(0, 120)); }
+}
 // The Goal card is the one board card you can write on: click a queued goal to tick or untick it,
 // "+ another goal" to queue one more. Both go through the same doors `mc goal` uses, so a terminal
 // ticking its own goal and the operator ticking it from here are the same event.
@@ -3112,6 +3358,9 @@ qs("#story").addEventListener("click", async (e) => {
 function boardTick() {
   if (S.mode !== "focus") return;
   const s = S.active && byId(S.active); if (!s || F.id !== s.id) return;
+  // The ship spinner turns a quarter a tick — the same clock as everything else, no CSS animation.
+  const SPIN = "◐◓◑◒";
+  for (const el of qsa("#story [data-spin]")) el.textContent = SPIN[(SPIN.indexOf(el.textContent) + 1) % SPIN.length];
   for (const el of qsa("#story [data-clock]")) {
     const at = Number(el.dataset.at || 0);
     if (el.dataset.clock === "run") el.textContent = elapsedOf(runSince(s));
@@ -8089,6 +8338,7 @@ document.addEventListener("keydown", (e) => {
   if (modeKey(e)) { e.preventDefault(); return setMode(S.mode === "focus" ? "term" : "focus"); }
   if (jumpKey(e)) { e.preventDefault(); return step(e.shiftKey ? -1 : 1, true); }
   if (e.key === "Escape" && chatIsOpen() && e.target?.id === "chat-input") return chatOpen(false);
+  if (e.key === "Escape" && S.mode === "focus" && FX.exp && !qs("dialog[open]") && !chatIsOpen()) { e.preventDefault(); return focusExpand(FX.exp); }
   // ⌥N is the only alt chord on the page, and it belongs to the chips on the stage — so it is read
   // before the blanket "any modifier is not ours" below, and refused while a dialog owns the screen.
   const qk = qaKey(e);

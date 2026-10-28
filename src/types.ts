@@ -780,11 +780,15 @@ export interface Session {
   spawn_goal: string | null;
   /** The finish line: the checks that say the goal is met (`mc goal set --done-when`). [] = not defined yet. */
   done_when: string[];
+  /** Lined up with done_when: when each check was met (`mc goal check <n>`), or null. */
+  done_checked: (string | null)[];
   /** What the operator lets it do once the work is green (src/session-outcome.ts). Null = ask. */
   ship: Ship | null;
   /** The agent's hand-off (`mc outcome`) — what the operator decides from. Null = none filed yet. */
   outcome: Outcome | null;
   outcome_at: string | null;
+  /** The hand-offs before the one on top (a follow-up, a round of changes), oldest first. */
+  outcome_prev: Outcome[];
   /** How many goals this terminal was given, and how many are ticked. Both 0 = the single-goal
    *  terminal every surface already knows: `goal` is the whole story. Joined on read, not stored. */
   goals_total?: number;

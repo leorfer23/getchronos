@@ -548,13 +548,16 @@ function durMin(v) {
   return Math.round(unit === "h" ? n * 60 : unit === "d" ? n * 1440 : n) || null;
 }
 
+/** A terminal's finish line, numbered, ticked where met — what `mc goal check <N>` refers to. */
+const checksText = (s2) => (s2.done_when || []).map((c, i) => `   ${i + 1}. ${(s2.done_checked || [])[i] ? "☑" : "☐"} ${c}`).join("\n");
+
 /**
  * `mc hook claude|cursor|grok` — the command every Chronos terminal's CLI runs on its lifecycle hooks
  * (installed by the daemon, term-hooks.ts). Reads the hook's JSON on stdin, turns it into one of a
  * handful of card events and posts it. Outside a Chronos terminal (no MC_SESSION) it does nothing.
  * It must never get in the agent's way: no stderr, exit 0, and cursor gets the "allow" it expects.
  */
-async function hook(backend) {
+async function hook(backend, mode) {
   // Its own stdin read: readStdin()'s safety timer would hold every hook — and the agent's turn — open 250ms.
   const raw = await new Promise((resolve) => {
     if (process.stdin.isTTY) return resolve("");
@@ -579,6 +582,17 @@ async function hook(backend) {
   // A `claude -p` the agent runs from inside its terminal inherits MC_SESSION. Its turns are not the
   // card's: Chronos pins a Desk claude's session id to the terminal id, so anything else is a child.
   if (backend === "claude" && j.session_id && j.session_id !== sid) return reply();
+  // `mc hook claude nudge` (PostToolUse, throttled in the shell — term-hooks.ts): the board the operator
+  // reads, handed back as context when it has gone stale. stdout must be the one JSON object or nothing.
+  if (mode === "nudge") {
+    if (backend !== "claude" || name !== "posttooluse") return;
+    let t, r = null;
+    try { r = await Promise.race([req("GET", `/sessions/${sid}/board-nudge`), new Promise((ok) => { t = setTimeout(ok, 2000); })]); } catch {}
+    clearTimeout(t);
+    if (r && typeof r.context === "string" && r.context)
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: r.context } }));
+    return;
+  }
   const tool = String(j.tool_name || j.toolName || "");
   let input = j.tool_input || j.toolInput || {};
   if (typeof input === "string") { try { input = JSON.parse(input); } catch { input = {}; } }
@@ -849,7 +863,7 @@ function askCap(question) {
         || pos.includes("-h") || pos.includes("--help")) {
       return console.log(HELP);
     }
-    if (cmd === "hook") return await hook(pos[1] || "claude");
+    if (cmd === "hook") return await hook(pos[1] || "claude", pos[2]);
     if (cmd === "statusline") return await statusline();
     if (cmd === "usage") return await usage("json" in opt);
     if (cmd === "whoami") return await whoami("json" in opt);
@@ -893,6 +907,20 @@ function askCap(question) {
         parent_id: parent?.id,
       });
       return console.log(`created ${t.key} — ${t.title}${parent ? ` (under goal ${parent.key})` : ""}`);
+    }
+    // `mc goal check 2 [3…]` / `mc goal check all` — a finish-line check is met; the operator sees the
+    // box tick on Focus as it happens, not all at once at the end. `uncheck` takes it back.
+    if (cmd === "goal" && (pos[1] === "check" || pos[1] === "uncheck")) {
+      const sid = process.env.MC_SESSION || die(`no MC_SESSION — \`mc goal ${pos[1]}\` only works inside a terminal session`);
+      const USAGE = `mc goal ${pos[1]} <N>… | mc goal ${pos[1]} all — N is the number \`mc goal\` prints beside each check`;
+      const cur = await req("GET", "/sessions/" + sid);
+      const list = cur.done_when || [];
+      if (!list.length) die('no finish line yet — write it first: mc goal set "<goal>" --done-when "<check>"');
+      const ns = pos[2] === "all" ? list.map((_, i) => i + 1) : pos.slice(2).map(Number);
+      if (!ns.length || ns.some((n) => !Number.isInteger(n) || n < 1 || n > list.length)) die(USAGE + ` (1–${list.length})`);
+      const s2 = await req("PATCH", "/sessions/" + sid, { [pos[1]]: ns });
+      const done = (s2.done_checked || []).filter(Boolean).length;
+      return console.log(`🎯 ${done}/${(s2.done_when || []).length} checks met\n` + checksText(s2));
     }
     // A terminal may be given MORE THAN ONE finish line. The card still shows one at a time — the
     // first not ticked — and `mc goal done` walks the queue. `add` appends, `list` shows where you
@@ -959,7 +987,7 @@ function askCap(question) {
         : { goal_done: true };
       const s2 = await req("PATCH", "/sessions/" + sid, body);
       if (pos[1] !== "done")
-        return console.log(`🎯 ${s2.goal ?? "(cleared)"}` + ((s2.done_when || []).length ? "\n" + s2.done_when.map((c) => `   ☐ ${c}`).join("\n") : ""));
+        return console.log(`🎯 ${s2.goal ?? "(cleared)"}` + ((s2.done_when || []).length ? "\n" + checksText(s2) + "\n   (tick each one as it is met: mc goal check <N>)" : ""));
       // With a queue behind it, a tick is a step, not the end: say which one is now on the card so
       // the agent keeps going instead of writing its Summary three goals early.
       const left = (s2.goals_total ?? 0) - (s2.goals_done ?? 0);
@@ -983,7 +1011,7 @@ function askCap(question) {
       };
       return console.log([
         `🎯 ${s2.goal || "(no goal yet — define it with the operator first, then: mc goal set \"<outcome>\" --done-when \"<check>\")"}`,
-        (s2.done_when || []).length ? "Done when:\n" + s2.done_when.map((c) => `  ☐ ${c}`).join("\n") : "Done when: (not defined — add --done-when checks to `mc goal set`)",
+        (s2.done_when || []).length ? "Done when (mc goal check <N> as each is met):\n" + checksText(s2) : "Done when: (not defined — add --done-when checks to `mc goal set`)",
         `May ship: ${SHIP[ship] || ship}`,
         s2.outcome_at ? `Hand-off filed ${s2.outcome_at} (mc outcome show)` : "Hand-off: none yet (mc outcome)",
       ].join("\n"));
@@ -3060,12 +3088,13 @@ function askCap(question) {
     // always the right first stop. `--robert` is the explicit way over its head.
     // `mc outcome` — the hand-off. What the operator reads at the bottom of Focus and approves the
     // merge/deploy from: a plain summary, what changed, the proof (checks you ran, screenshots before
-    // and after), the PR, and what you ask him for. Filing a new one replaces the last.
+    // and after), the PR, and what you ask him for. A correction replaces the one on top; a follow-up
+    // (new work, a new PR, a round after he spoke) goes on top and keeps the earlier one under it.
     if (cmd === "outcome") {
       const sid = process.env.MC_SESSION || die("no MC_SESSION — `mc outcome` only works inside a terminal session");
       const USAGE =
         'mc outcome "<summary: one or two plain sentences>" [--change "…"]… [--proof "…"]… [--shot before=a.png --shot after=b.png]… ' +
-        "[--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped \"merged #12\"]… | mc outcome show | mc outcome clear";
+        "[--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped \"merged #12\"]… | mc outcome --shipped \"deployed\" | mc outcome show | mc outcome clear";
       if (pos[1] === "show") {
         const d = await req("GET", `/sessions/${sid}/decisions`);
         const o = d.outcome;
@@ -3081,8 +3110,9 @@ function askCap(question) {
         ].join("\n"));
       }
       if (pos[1] === "clear") { await req("DELETE", `/sessions/${sid}/outcome`); return console.log("hand-off cleared"); }
-      const summary = pos.slice(1).join(" ").trim() || die(USAGE);
       const vals = (k) => (multi[k] || []).map((x) => String(x).trim()).filter((x) => x && x !== "true");
+      // `mc outcome --shipped "merged #12"` alone: what you shipped goes on the hand-off already on top.
+      const summary = pos.slice(1).join(" ").trim() || (vals("shipped").length ? "" : die(USAGE));
       const ask = opt.ask && opt.ask !== "true" ? String(opt.ask) : "review";
       if (!["merge", "deploy", "merge+deploy", "review", "none"].includes(ask)) die("--ask is merge, deploy, merge+deploy, review or none");
       // Screenshots go up as bytes — the operator's Desk may be on another computer than this file.
@@ -3103,6 +3133,8 @@ function askCap(question) {
       return console.log(
         `📦 hand-off filed — ${o.changes.length} change${o.changes.length === 1 ? "" : "s"}, ${o.proof.length} proof line${o.proof.length === 1 ? "" : "s"}, ` +
         `${o.shots.length} screenshot${o.shots.length === 1 ? "" : "s"}, ${o.prs.length} PR${o.prs.length === 1 ? "" : "s"} · asks for: ${o.ask}` +
+        (o.shipped?.length ? ` · shipped: ${o.shipped.join(" · ")}` : "") +
+        (o.earlier ? ` · ${o.earlier} earlier hand-off${o.earlier === 1 ? "" : "s"} kept under it` : "") +
         (dropped > 0 ? `\n(${dropped} --pr value${dropped === 1 ? " was" : "s were"} not a full https://github.com/<owner>/<repo>/pull/<n> link and ${dropped === 1 ? "was" : "were"} left out)` : ""),
       );
     }

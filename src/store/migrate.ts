@@ -2150,6 +2150,18 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       ALTER TABLE sessions ADD COLUMN outcome_at TEXT;`),
   },
 
+  {
+    version: 149,
+    name: "sessions.done_ticks / outcome_prev — which checks are met, and the earlier hand-offs",
+    // The finish line is ticked off check by check (`mc goal check <n>`), so the operator sees it move
+    // instead of all-or-nothing at the end: `done_ticks` is check text → when it was met. A terminal can
+    // hand off more than once (a follow-up, a round of changes): `outcome` stays the one on top and
+    // `outcome_prev` keeps the earlier ones, oldest first (session-outcome.ts fileOutcome).
+    up: (db) => db.exec(`
+      ALTER TABLE sessions ADD COLUMN done_ticks TEXT;
+      ALTER TABLE sessions ADD COLUMN outcome_prev TEXT;`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

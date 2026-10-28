@@ -9,7 +9,7 @@ import path from "node:path";
 import { db, sessions, workspaces } from "./store.js";
 import { applyHook, declare, resolve, sessionGoalReached, signalsOf, HOOK_WORKING_SILENCE_MS, REACHED_GRACE_MS, type ResolveInput, type Signals } from "./term-status.js";
 import { SessionHookSchema } from "./validation.js";
-import { claudeStyleHooks, grokHooksToml, installClaudeHooks, installCursorHooks, installGrokHooks, mergeHooks, rtkCmd } from "./term-hooks.js";
+import { claudeStyleHooks, grokHooksToml, installClaudeHooks, installCursorHooks, installGrokHooks, mergeHooks, nudgeCmd, rtkCmd } from "./term-hooks.js";
 import { execFileSync, spawnSync } from "node:child_process";
 
 const NOW = 1_800_000_000_000;
@@ -251,6 +251,30 @@ test("rtk-rewrite.sh: auto-approves only inside a Desk terminal; the operator's 
   const operator = run({});
   assert.equal(operator.updatedInput.command, "rtk git status", "still compressed");
   assert.equal(operator.permissionDecision, undefined, "but never auto-approved");
+});
+
+test("claude: a PostToolUse on every tool hands the agent its stale board — node starts at most every 5 minutes", () => {
+  const dir = tmp();
+  installClaudeHooks(dir);
+  const post = JSON.parse(fs.readFileSync(path.join(dir, "settings.json"), "utf8")).hooks.PostToolUse;
+  assert.equal(post.length, 2);
+  assert.equal(post[1].matcher, undefined, "every tool");
+  assert.equal(post[1].hooks[0].command, nudgeCmd);
+  assert.equal(installClaudeHooks(dir), "noop", "a reinstall does not stack a second one");
+  assert.ok(!grokHooksToml().includes("nudge"), "grok gets no nudge: only claude reads additionalContext");
+  // The throttle itself, in a real shell: a stand-in mc writes one file per call.
+  const home = tmp(), tmpd = tmp(), calls = tmp();
+  fs.mkdirSync(path.join(home, ".mc", "bin"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".mc", "bin", "mc"), `#!/bin/sh\nmktemp "${calls}/call.XXXXXX" >/dev/null\n`, { mode: 0o755 });
+  const run = (env: Record<string, string>) => spawnSync("/bin/sh", ["-c", nudgeCmd], { env: { PATH: process.env.PATH ?? "", HOME: home, TMPDIR: tmpd, ...env }, encoding: "utf8" });
+  const n = () => fs.readdirSync(calls).length;
+  assert.equal(run({}).status, 0);
+  assert.equal(n(), 0, "outside a Chronos terminal nothing runs");
+  run({ MC_SESSION: "s1" });
+  run({ MC_SESSION: "s1" });
+  assert.equal(n(), 1, "the second call inside 5 minutes never starts mc");
+  run({ MC_SESSION: "s2" });
+  assert.equal(n(), 2, "the stamp is per terminal");
 });
 
 test("mergeHooks drops only our old entries", () => {

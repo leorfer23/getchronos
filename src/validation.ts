@@ -176,12 +176,16 @@ export const SessionPatchSchema = z.object({
   robert: z.boolean().optional(),
   /** The finish line: the checks that say the goal is met (`mc goal set --done-when`). Null clears. */
   done_when: z.array(z.string().max(200)).max(8).nullable().optional(),
+  /** Finish-line checks met (`mc goal check 2`) or not after all, by their 1-based number. */
+  check: z.array(z.number().int().min(1).max(8)).max(8).optional(),
+  uncheck: z.array(z.number().int().min(1).max(8)).max(8).optional(),
   /** What it may do once green — operator only (api.ts refuses it from any other caller). */
   ship: z.enum(["ask", "merge", "deploy"]).nullable().optional(),
 });
 /** `mc outcome` — the hand-off the operator approves from (src/session-outcome.ts clips it). */
 export const SessionOutcomeSchema = z.object({
-  summary: z.string().min(1).max(2000),
+  // Empty only on a `mc outcome --shipped "…"` re-file: it adds what shipped to the hand-off on top.
+  summary: z.string().max(2000).optional(),
   changes: z.array(z.string().max(1000)).max(20).optional(),
   proof: z.array(z.string().max(1000)).max(20).optional(),
   prs: z.array(z.string().max(400)).max(10).optional(),

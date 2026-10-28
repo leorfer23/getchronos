@@ -10,7 +10,8 @@ import path from "node:path";
 import http from "node:http";
 import { execFile } from "node:child_process";
 import { asks, db, sessions } from "./store.js";
-import { decodeDoneWhen, encodeDoneWhen, normalizeOutcome, saveShot, shipLine, shotFile, MAX_SHOT_BYTES } from "./session-outcome.js";
+import { boardNudge, decodeDoneWhen, encodeDoneWhen, fileOutcome, normalizeOutcome, saveShot, shipLine, shotFile, MAX_SHOT_BYTES, MAX_EARLIER, NUDGE_STALE_MS } from "./session-outcome.js";
+import type { Outcome } from "./types.js";
 import { deskSeed } from "./terminal.js";
 import { resolve, setProgress, statusOf } from "./term-status.js";
 
@@ -150,11 +151,13 @@ async function stub(answer: (h: Hit) => [number, unknown]) {
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const port = (server.address() as any).port;
-  const run = (args: string[]) =>
-    new Promise<{ code: number; stdout: string; stderr: string }>((done) =>
-      execFile(process.execPath, [MC, ...args], {
+  const run = (args: string[], input?: string) =>
+    new Promise<{ code: number; stdout: string; stderr: string }>((done) => {
+      const c = execFile(process.execPath, [MC, ...args], {
         env: { ...process.env, MC_API: `http://127.0.0.1:${port}/api`, MC_WORKSPACE: "ws-1", MC_WORKSPACE_TOKEN: "tok-1", MC_SESSION: "sess-1", MC_HOST_ID: "", MC_TICKET: "" },
-      }, (err, stdout, stderr) => done({ code: err ? Number((err as any).code) || 1 : 0, stdout, stderr })));
+      }, (err, stdout, stderr) => done({ code: err ? Number((err as any).code) || 1 : 0, stdout, stderr }));
+      if (input !== undefined) c.stdin!.end(input);
+    });
   return { hits, run, close: () => server.close() };
 }
 
@@ -205,4 +208,125 @@ test("mc outcome refuses an ask it does not know, and mc ask-robert --operator g
   const ask = s.hits.find((h) => h.url === "/api/asks")!;
   assert.equal(ask.body.route, "operator");
   assert.match(r.stdout, /asked the operator/);
+});
+
+// ── checks ticked one by one, hand-offs kept, the board kept moving (Leo 2026-10-28) ────────────
+test("finish-line checks tick one by one, by number, and keep their ticks when the list is rewritten", () => {
+  const s = sessions.create({ cwd: "/tmp", goal: "ship the board" });
+  sessions.setFinish(s.id, { done_when: ["timeline gone", "npm test green", "screenshot"] });
+  assert.deepEqual(sessions.get(s.id)!.done_checked, [null, null, null]);
+  sessions.setChecks(s.id, [2, 9], true);
+  const got = sessions.get(s.id)!.done_checked;
+  assert.equal(got[0], null);
+  assert.match(String(got[1]), /^\d{4}-\d\d-\d\dT/, "a tick is the time it was met");
+  assert.equal(got.length, 3, "a number off the list is ignored");
+  // The agent rewrites its list: the check it kept keeps its tick, the one it dropped is gone.
+  sessions.setFinish(s.id, { done_when: ["npm test green", "PR open"] });
+  assert.deepEqual(sessions.get(s.id)!.done_checked.map(Boolean), [true, false]);
+  sessions.setChecks(s.id, [1], false);
+  assert.deepEqual(sessions.get(s.id)!.done_checked, [null, null]);
+  assert.equal((sessions.get(s.id) as any).done_ticks, undefined, "the raw column never rides a row");
+});
+
+const ho = (summary: string, more: Partial<Outcome> = {}, at = "2026-10-28T10:00:00.000Z"): Outcome =>
+  ({ summary, changes: [], proof: [], prs: [], shots: [], ask: "merge", shipped: [], at, ...more });
+const PR = "https://github.com/o/r/pull/12", PR2 = "https://github.com/o/r/pull/13";
+test("a correction replaces the hand-off on top; a follow-up goes on top and keeps the earlier one", () => {
+  const first = ho("Board shipped.", { prs: [PR], proof: ["npm test green"] });
+  // Re-filed with nothing new in between: a correction.
+  let r = fileOutcome(first, [], ho("Board shipped, with screenshots.", { prs: [PR] }, "2026-10-28T10:05:00.000Z"), null);
+  assert.equal(r.latest.summary, "Board shipped, with screenshots.");
+  assert.equal(r.earlier.length, 0);
+  // The operator typed to it after the hand-off: the next one is a follow-up.
+  r = fileOutcome(first, [], ho("Changes done.", { prs: [PR] }, "2026-10-28T11:00:00.000Z"), Date.parse("2026-10-28T10:30:00.000Z"));
+  assert.equal(r.latest.summary, "Changes done.");
+  assert.deepEqual(r.earlier.map((o) => o.summary), ["Board shipped."]);
+  // A PR the one on top did not have: new work.
+  r = fileOutcome(first, [], ho("Second PR.", { prs: [PR2] }), null);
+  assert.equal(r.earlier.length, 1);
+  // The one on top was shipped and this one was not: new work.
+  r = fileOutcome(ho("Merged.", { prs: [PR], shipped: ["merged #12"] }), [], ho("Follow-up.", { prs: [PR] }), null);
+  assert.equal(r.earlier.length, 1);
+  // Capped: the oldest fall off.
+  const many = Array.from({ length: MAX_EARLIER }, (_, i) => ho("old " + i));
+  r = fileOutcome(first, many, ho("newest", { prs: [PR2] }), null);
+  assert.equal(r.earlier.length, MAX_EARLIER);
+  assert.equal(r.earlier[r.earlier.length - 1].summary, "Board shipped.");
+});
+
+test("--shipped re-files land on the hand-off on top, even right after the operator's approval", () => {
+  const top = ho("Board shipped.", { prs: [PR], proof: ["npm test green"], changes: ["three cards"] });
+  const approvedAt = Date.parse("2026-10-28T10:10:00.000Z");
+  // `mc outcome --shipped "merged #12"` — no summary.
+  let r = fileOutcome(top, [], ho("", { shipped: ["merged #12"], ask: "review" }, "2026-10-28T10:20:00.000Z"), approvedAt);
+  assert.equal(r.latest.summary, "Board shipped.");
+  assert.deepEqual(r.latest.shipped, ["merged #12"]);
+  assert.equal(r.latest.ask, "merge", "what it asked for stays; shipped says it is done");
+  assert.equal(r.earlier.length, 0);
+  // The old way: the whole hand-off re-filed with --shipped and its lists left out — same hand-off, lists kept.
+  r = fileOutcome(top, [], ho("Board shipped and merged.", { prs: [PR], shipped: ["merged #12"], ask: "none" }, "2026-10-28T10:20:00.000Z"), approvedAt);
+  assert.equal(r.earlier.length, 0);
+  assert.deepEqual(r.latest.proof, ["npm test green"]);
+  assert.deepEqual(r.latest.changes, ["three cards"]);
+});
+
+test("POST /outcome refuses an empty summary unless it is a --shipped re-file onto a hand-off", () => {
+  assert.match(api, /if \(!o\.summary && !\(o\.shipped\.length && s\.outcome\)\) return res\.status\(400\)/);
+  assert.match(api, /const filed = fileOutcome\(s\.outcome, s\.outcome_prev, o, operatorSaidAt\(s\.id\)\);/);
+  assert.match(api, /earlier: s\.outcome_prev,/, "Focus reads the earlier ones with the rest of its decisions");
+  // The rail learns a hand-off waits for a yes without carrying hand-off bodies on every row.
+  assert.match(api, /handoff: s\.outcome && !s\.outcome\.shipped\?\.length && \["merge", "deploy", "merge\+deploy"\]\.includes\(s\.outcome\.ask\)/);
+  const s = sessions.create({ cwd: "/tmp" });
+  sessions.setOutcome(s.id, ho("two"), [ho("one")]);
+  assert.deepEqual(sessions.get(s.id)!.outcome_prev.map((o) => o.summary), ["one"]);
+  sessions.setOutcome(s.id, null);
+  assert.deepEqual(sessions.get(s.id)!.outcome_prev, [], "clearing clears them all");
+});
+
+test("the board nudge: only while working, only once it has gone stale, and it says what the operator sees", () => {
+  const now = Date.parse("2026-10-28T12:00:00.000Z");
+  const base = { phase: "working", goal: "ship the board", done_when: ["tests green", "PR open"], checked: ["2026-10-28T11:30:00.000Z", null], progress: { n: 2, of: 5, label: "tests", at: now - 15 * 60_000 }, since: now - 60 * 60_000 };
+  const t = boardNudge(base, now)!;
+  assert.match(t, /has not moved for 15 min/);
+  assert.match(t, /Progress: 2\/5 "tests" \(15 min ago\)/);
+  assert.match(t, /\[x\] 1\. tests green · \[ \] 2\. PR open/);
+  assert.match(t, /mc goal check <n>/);
+  assert.equal(boardNudge({ ...base, phase: "decide" }, now), null, "a terminal waiting on you is not nagged");
+  assert.equal(boardNudge({ ...base, progress: { ...base.progress, at: now - 60_000 } }, now), null, "moved a minute ago");
+  assert.equal(boardNudge({ ...base, progress: null, checked: [null, null], since: now - NUDGE_STALE_MS + 1000 }, now), null, "a fresh terminal gets its first minutes");
+  assert.match(boardNudge({ ...base, goal: null, done_when: [], checked: [], progress: null }, now)!, /Goal: none written[\s\S]*Done when: none written/);
+});
+
+test("mc goal check ticks by number and prints the list; out-of-range numbers are refused", async () => {
+  const s = await stub((h) => (h.method === "GET"
+    ? [200, { done_when: ["timeline gone", "npm test green"], done_checked: [null, null] }]
+    : [200, { done_when: ["timeline gone", "npm test green"], done_checked: [null, "2026-10-28T10:00:00Z"] }]));
+  const r = await s.run(["goal", "check", "2"]);
+  const bad = await s.run(["goal", "check", "5"]);
+  s.close();
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(s.hits[1].body, { check: [2] });
+  assert.match(r.stdout, /1\/2 checks met/);
+  assert.match(r.stdout, /2\. ☑ npm test green/);
+  assert.notEqual(bad.code, 0);
+});
+
+test("mc outcome --shipped alone files no summary; mc hook claude nudge prints one JSON object or nothing", async () => {
+  let ctx: string | null = "Your Focus board has not moved for 12 min.";
+  const s = await stub((h) => (h.url.endsWith("/board-nudge") ? [200, { context: ctx }] : [201, { ...h.body, changes: [], proof: [], shots: [], prs: [], earlier: 0 }]));
+  const r = await s.run(["outcome", "--shipped", "merged #12"]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(s.hits[0].body, { summary: "", changes: [], proof: [], prs: [], shots: [], ask: "review", shipped: ["merged #12"] });
+  const ev = JSON.stringify({ hook_event_name: "PostToolUse", session_id: "sess-1", tool_name: "Bash" });
+  const said = await s.run(["hook", "claude", "nudge"], ev);
+  assert.deepEqual(JSON.parse(said.stdout), { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: "Your Focus board has not moved for 12 min." } });
+  ctx = null;
+  const quiet = await s.run(["hook", "claude", "nudge"], ev);
+  // A child `claude -p` inside the terminal is not the card: no call, no output.
+  const child = await s.run(["hook", "claude", "nudge"], JSON.stringify({ hook_event_name: "PostToolUse", session_id: "other", tool_name: "Bash" }));
+  s.close();
+  assert.equal(quiet.stdout, "");
+  assert.equal(child.stdout, "");
+  assert.equal(s.hits.filter((h) => h.url.endsWith("/board-nudge")).length, 2);
+  assert.ok(!s.hits.some((h) => h.url.endsWith("/hook")), "the nudge call never posts a card event");
 });
