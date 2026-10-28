@@ -428,6 +428,15 @@ const workspaceFields = {
     .array(z.object({ name: z.string().min(1), available: z.boolean(), note: z.string().optional() }))
     .nullable()
     .optional(),
+  // The one VPN `mc vpn` may switch for this workspace (vpn.ts). A Tunnelblick name only ever reaches
+  // osascript as an argv item, but keep it a plain one-line label all the same.
+  vpn_config: z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("tailscale") }),
+      z.object({ kind: z.literal("tunnelblick"), name: z.string().trim().min(1).max(200).regex(/^[^\x00-\x1f\x7f]+$/, "no control characters") }),
+    ])
+    .nullable()
+    .optional(),
   default_backend: z.string().optional(),
   default_model: z.string().nullable().optional(),
   sandbox_mode: z.enum(["off", "guard", "strict"]).optional(),

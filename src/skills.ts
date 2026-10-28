@@ -8,6 +8,7 @@ import { bus } from "./bus.js";
 import { guard } from "./guard.js";
 import { contextBlock } from "./notes.js";
 import { memoryBlock } from "./recall.js";
+import { vpnPromptLine } from "./vpn.js";
 import type { Skill, NewSkill, SkillStatus } from "./types.js";
 import { inRepo } from "./repo-root.js";
 
@@ -170,7 +171,8 @@ export function skillIndexBlock(workspace_id: string): string {
 }
 
 // The full standing context injected into every agent's system prompt for a workspace:
-// operator-curated notes (contextBlock) + the L0 skill index + the workspace's voice page. All
+// operator-curated notes (contextBlock) + the L0 skill index + the workspace's voice page, and —
+// only for a workspace with a VPN set — the one line that says how to get it (vpn.ts). All
 // guarded internally.
 //
 // How he wants to be talked to rides here ONCE, as the voice page (prose.ts): one capped page,
@@ -183,6 +185,7 @@ export function agentContext(workspace_id: string, repo_id?: string | null): str
     memoryBlock(workspace_id),
     skillIndexBlock(workspace_id),
     proseBlock(workspace_id),
+    vpnPromptLine(workspaces.get(workspace_id)),
   ]
     .filter(Boolean)
     .join("\n\n");
