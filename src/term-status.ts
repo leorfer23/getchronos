@@ -46,8 +46,14 @@ export type Signals = {
    * question (AskUserQuestion/ExitPlanMode, or Claude's own permission_prompt Notification) has no
    * kind and only clears on an explicit "answered"/"prompt"/"stop"/"session_end".
    */
-  asking?: { question: string; options: string[]; at: number; kind?: "permission" } | null;
+  asking?: { question: string; options: string[]; at: number; kind?: "permission"; questions?: AskQuestion[] } | null;
 };
+/**
+ * One question of a CLI's own question dialog (Claude Code's AskUserQuestion), as its PreToolUse hook
+ * handed it over: the whole text, every option with its description. The screen only shows what fits
+ * in the pty; Focus draws the question from this and answers it through the screen's menu.
+ */
+export type AskQuestion = { question: string; header?: string; multi?: boolean; options: { label: string; description?: string }[] };
 
 export type TermStatus = {
   phase: Phase;
@@ -222,7 +228,11 @@ export function resolve(inp: ResolveInput): Omit<TermStatus, "since"> {
     const tally = new Map<string, number>();
     for (const s of subs) if (s.label) tally.set(s.label, (tally.get(s.label) ?? 0) + 1);
     const names = [...tally].map(([l, c]) => (c > 1 ? `${l} ×${c}` : l));
-    return out("waiting", `${subs.length} subagent${subs.length === 1 ? "" : "s"}${names.length ? ": " + names.join(", ") : ""}`, { on: "subagents" });
+    // Its turn is over: what runs now is in the BACKGROUND (a subagent, or a shell the CLI keeps — a CI
+    // watch, a long test), and the agent is free to talk. "1 subagent: Wait for Jenkins" read as busy,
+    // and the operator waited instead of asking it something (Leo, 2026-10-28).
+    const what = names.length ? names.join(", ") : `${subs.length} task${subs.length === 1 ? "" : "s"}`;
+    return out("waiting", `free to talk · in the background: ${what}`, { on: "subagents" });
   }
   if (working) {
     const p = sig.progress;
@@ -436,7 +446,7 @@ export type HookEvent =
   | { event: "stop"; error?: string | null; tasks?: { key: string; label: string }[] }
   | { event: "subagent_start"; key: string; label?: string | null }
   | { event: "subagent_stop"; key?: string | null; label?: string | null }
-  | { event: "ask"; question: string; options?: string[]; kind?: "permission" }
+  | { event: "ask"; question: string; options?: string[]; kind?: "permission"; questions?: AskQuestion[] }
   | { event: "answered" }
   | { event: "session_end" };
 
@@ -476,9 +486,20 @@ export function applyHook(id: string, h: HookEvent, now = Date.now()): TermStatu
       if (sig.turn?.state === "stopped") sig.turn = { state: "working", at: now };
       break;
     }
-    case "ask":
-      sig.asking = { question: clip(h.question, 300), options: (h.options ?? []).map((o) => clip(o, 60)).slice(0, 6), at: now, ...(h.kind ? { kind: h.kind } : {}) };
+    case "ask": {
+      // Claude follows an AskUserQuestion with its generic "Claude needs your permission" Notification.
+      // The question it already handed over, with its options, is still the one on screen: keep it, or
+      // the card says "needs your permission" and nobody can tell what to decide.
+      const prev = sig.asking;
+      const bare = !h.kind && !h.options?.length && !h.questions?.length;
+      if (bare && prev && !prev.kind && (prev.options.length || prev.questions?.length)) break;
+      sig.asking = {
+        question: clip(h.question, 300), options: (h.options ?? []).map((o) => clip(o, 60)).slice(0, 6), at: now,
+        ...(h.kind ? { kind: h.kind } : {}),
+        ...(h.questions?.length ? { questions: h.questions } : {}),
+      };
       break;
+    }
     case "answered":
       sig.asking = null;
       sig.turn = { state: "working", at: now };

@@ -133,6 +133,16 @@ export const SessionHookSchema = z.object({
   label: z.string().max(400).nullable().optional(),
   question: z.string().max(2000).optional(),
   options: z.array(z.string().max(200)).max(12).optional(),
+  // grok's PermissionRequest: a per-tool gate that self-clears (term-status.ts). Without it in the
+  // schema the tag was stripped here and the gate parked the card on "decide" until the turn ended.
+  kind: z.enum(["permission"]).optional(),
+  // An AskUserQuestion's full questions (term-status.ts AskQuestion).
+  questions: z.array(z.object({
+    question: z.string().max(2000),
+    header: z.string().max(80).optional(),
+    multi: z.boolean().optional(),
+    options: z.array(z.object({ label: z.string().max(200), description: z.string().max(600).optional() })).max(8),
+  })).max(4).optional(),
   error: z.string().max(400).nullable().optional(),
   tasks: z.array(z.object({ key: z.string().max(200), label: z.string().max(400) })).max(50).optional(),
 });

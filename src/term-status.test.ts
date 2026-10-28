@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { db, sessions, workspaces } from "./store.js";
 import { applyHook, declare, resolve, sessionGoalReached, signalsOf, HOOK_WORKING_SILENCE_MS, REACHED_GRACE_MS, type ResolveInput, type Signals } from "./term-status.js";
+import { SessionHookSchema } from "./validation.js";
 import { claudeStyleHooks, grokHooksToml, installClaudeHooks, installCursorHooks, installGrokHooks, mergeHooks, rtkCmd } from "./term-hooks.js";
 import { execFileSync, spawnSync } from "node:child_process";
 
@@ -28,7 +29,7 @@ test("pty only (no hooks): bytes = working with its narration, silence = your tu
   assert.equal(t.word, "your turn");
 });
 
-test("a turn that ended with background subagents still running is waiting, not your turn", () => {
+test("a turn that ended with background work still running is waiting, not your turn — and says it is free to talk", () => {
   const sig: Signals = {
     turn: { state: "stopped", at: NOW - 5000 },
     subagents: { a: { label: "parse invoices", at: NOW - 9000 }, b: { label: "map vendors", at: NOW - 9000 }, c: { label: "map vendors", at: NOW - 9000 } },
@@ -38,7 +39,8 @@ test("a turn that ended with background subagents still running is waiting, not 
   assert.equal(r.phase, "waiting");
   assert.equal(r.on, "subagents");
   assert.equal(r.subagents, 3);
-  assert.equal(r.line, "3 subagents: parse invoices, map vendors ×2");
+  assert.equal(r.line, "free to talk · in the background: parse invoices, map vendors ×2");
+  assert.equal(resolve(base({ quiet: true }, { ...sig, subagents: { a: { label: "", at: NOW - 9000 } } })).line, "free to talk · in the background: 1 task");
 });
 
 test("hooks own the turn: working until Stop, and a missed Stop does not stay green forever", () => {
@@ -167,6 +169,29 @@ test("grok's PermissionRequest never becomes a stuck decide: it self-clears on t
   assert.equal(signalsOf(s.id).asking?.question, "Which schema?", "a real ask must not be cleared by an unrelated hook");
   applyHook(s.id, { event: "answered" }, NOW + 5000);
   assert.equal(signalsOf(s.id).asking, null);
+});
+
+test("an AskUserQuestion keeps its question when Claude's generic permission Notification follows it", () => {
+  const s = mk();
+  const questions = [{ question: "What should this terminal cover?", header: "Scope", options: [{ label: "All three (Recommended)", description: "one PR each" }, { label: "One first" }] }];
+  applyHook(s.id, { event: "prompt" }, NOW);
+  applyHook(s.id, { event: "ask", question: "What should this terminal cover?", options: ["All three (Recommended)", "One first"], questions }, NOW + 1000);
+  // Claude then fires Notification(permission_prompt) with no options: it must not replace the question.
+  applyHook(s.id, { event: "ask", question: "Claude needs your permission" }, NOW + 2000);
+  assert.equal(signalsOf(s.id).asking?.question, "What should this terminal cover?");
+  assert.deepEqual(signalsOf(s.id).asking?.questions, questions);
+  assert.equal(resolve(base({}, signalsOf(s.id))).line, "What should this terminal cover? (All three (Recommended) / One first)");
+  applyHook(s.id, { event: "answered" }, NOW + 3000);
+  assert.equal(signalsOf(s.id).asking, null);
+  // With nothing richer open, the bare Notification is still a question — a real permission prompt.
+  applyHook(s.id, { event: "ask", question: "Claude needs your permission to use Bash" }, NOW + 4000);
+  assert.equal(signalsOf(s.id).asking?.question, "Claude needs your permission to use Bash");
+});
+
+test("the hook route keeps grok's permission tag and an AskUserQuestion's questions", () => {
+  const body = SessionHookSchema.parse({ event: "ask", question: "allow Bash?", options: ["yes", "no"], kind: "permission", questions: [{ question: "q?", options: [{ label: "a", description: "d" }] }] });
+  assert.equal(body.kind, "permission");
+  assert.equal(body.questions?.[0].options[0].description, "d");
 });
 
 // ── installers ─────────────────────────────────────────────────────────────────────────────────

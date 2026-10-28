@@ -33,6 +33,8 @@ export type PromptOption = {
   label: string;
   /** Position relative to the highlighted option: 0 = Enter takes it, 1 = down once then Enter. */
   offset: number;
+  /** The description printed under the option (AskUserQuestion), as one line. */
+  detail?: string;
 };
 
 export type DeskPrompt = {
@@ -83,6 +85,11 @@ const YN_RE = /\((?:y\/n|Y\/n|y\/N|yes\/no)\)|\[(?:y\/n|Y\/n|y\/N|yes\/no)\]|\b(
 // TUI chrome that sits under a prompt and must not be mistaken for its question.
 const CHROME_RE = /^(?:[─━═┄╌\-_=]{3,}|[│┃╭╮╰╯└┘┌┐├┤]+.*|\s*(?:esc|enter|↑|↓|tab|shift\+tab|ctrl\+c)\b.*(?:cancel|select|confirm|toggle|interrupt|to\s).*|\?\s*for shortcuts.*|.*\bctrl\+[a-z]\b.*)$/i;
 
+// Inside a menu: an option's description (indented under its label) and a horizontal rule.
+const DETAIL_RE = /^\s{4,}\S/;
+const RULE_RE = /^[─━═┄╌\-_=]{3,}$/;
+const TABS_RE = /^[←\s]*[☐☒✔]\s/;
+
 const ARROW_RE = /^(\s*)→\s/;
 const KEY_HINT_RE = /\s+\((?:[a-z]|esc|tab|enter|shift\+tab|ctrl\+[a-z])(?:\s+or\s+[a-z]+)?\)\s*$/i;
 // Status lines under a composer: cursor's "→ Add a follow-up", its "Auto · 7.5%" model/context line,
@@ -99,23 +106,33 @@ export function detectPrompt(screen: string | string[]): DeskPrompt | null {
   const lines = Array.isArray(screen) ? tidy(screen) : screenLines(screen);
   if (!lines.length) return null;
 
-  // Select: read the option rows up from the bottom, skipping chrome under them.
-  const opts: Array<{ n: number; label: string; cursor: boolean }> = [];
+  // Select: read the option rows up from the bottom, skipping chrome under them. Claude Code's
+  // AskUserQuestion prints each option's description on the rows under it and a rule above its last
+  // option ("Chat about this"); both sit INSIDE the menu, so neither ends it.
+  const opts: Array<{ n: number; label: string; cursor: boolean; detail: string }> = [];
   let i = lines.length - 1;
+  let detail: string[] = [];
   while (i >= 0 && CHROME_RE.test(lines[i].trim())) i--;
   while (i >= 0) {
     const m = OPTION_RE.exec(lines[i]);
-    if (!m) break;
-    opts.unshift({ n: Number(m[1]), label: m[2], cursor: CURSOR_RE.test(lines[i]) });
-    i--;
+    if (m) {
+      opts.unshift({ n: Number(m[1]), label: m[2], cursor: CURSOR_RE.test(lines[i]), detail: detail.join(" ") });
+      detail = [];
+      i--;
+      continue;
+    }
+    if (opts.length && !detail.length && RULE_RE.test(lines[i].trim())) { i--; continue; }
+    if (DETAIL_RE.test(lines[i])) { detail.unshift(lines[i].trim()); i--; continue; }
+    break;
   }
+  if (detail.length) i += detail.length; // indented rows above the menu are not an option's — give them back
   // Two or more consecutive ordinals starting at 1 is a menu; a lone "1." is a list item in prose.
   if (opts.length >= 2 && opts[0].n === 1 && opts.every((o, k) => o.n === k + 1)) {
     const cur = Math.max(0, opts.findIndex((o) => o.cursor));
     return {
       kind: "select",
-      question: questionAbove(lines, i),
-      options: opts.map((o, k) => ({ label: o.label, offset: k - cur })),
+      question: questionAbove(lines, i, opts.some((o) => o.detail) ? 6 : 3),
+      options: opts.map((o, k) => ({ label: o.label, offset: k - cur, ...(o.detail ? { detail: o.detail.slice(0, 400) } : {}) })),
     };
   }
 
@@ -159,13 +176,16 @@ function arrowMenu(lines: string[]): DeskPrompt | null {
   };
 }
 
-/** The sentence(s) directly above an option list — up to three lines, skipping borders. */
-function questionAbove(lines: string[], from: number): string {
+/**
+ * The sentence(s) directly above an option list — up to `max` lines, skipping borders. An
+ * AskUserQuestion's tab bar ("☐ Scope  ☐ Detail  ✔ Submit") sits above its question and is not part of it.
+ */
+function questionAbove(lines: string[], from: number, max = 3): string {
   const out: string[] = [];
-  for (let k = from; k >= 0 && out.length < 3; k--) {
+  for (let k = from; k >= 0 && out.length < max; k--) {
     const t = lines[k].trim();
-    if (!t || CHROME_RE.test(t)) { if (out.length) break; else continue; }
+    if (!t || CHROME_RE.test(t) || TABS_RE.test(t)) { if (out.length) break; else continue; }
     out.unshift(t);
   }
-  return out.join(" ").replace(/\s+/g, " ").slice(0, 300);
+  return out.join(" ").replace(/\s+/g, " ").slice(0, max > 3 ? 600 : 300);
 }

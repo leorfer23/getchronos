@@ -74,7 +74,7 @@ import { getBackend, listBackends, workspaceBackends } from "./backends/index.js
 import { cloudRunFor, cloudSessionState, cloudVisibleRepos, followUpCloudSession, openCloudSession, wantsCloudBackend } from "./desk-cloud.js";
 import { openSession, resumeOpts, promoteToLead, leadPromotionError, attach, refreshClient, writeTo, resize, killSession, closeOutSession, focusEvents, isLive, sendInput, sessionActivity, sessionPrompt, sessionScreen, setClientRate, continueFromRun } from "./terminal.js";
 import { sessionUsage, snapshotUsage } from "./session-usage.js";
-import { applyHook, declare as declareStatus, sessionGoalReached, setProgress, statusOf } from "./term-status.js";
+import { applyHook, declare as declareStatus, sessionGoalReached, setProgress, signalsOf, statusOf } from "./term-status.js";
 import { parseEvery, watchView } from "./desk-watch.js";
 import { clipboardEnabled, readClipboard, writeClipboard } from "./clipboard.js";
 import { hostJobPin } from "./hosts/job-cwd.js";
@@ -752,6 +752,8 @@ export function startServer() {
         route: a.route, escalated: !!a.escalated_at, triage: a.escalated_at ? a.triage : null, for_operator: isOperatorsAsk(a),
       })),
       outcome: s.outcome,
+      // A question dialog open in its CLI (AskUserQuestion): the whole questions, which the screen cuts.
+      dialog: isLive(s.id) ? (signalsOf(s.id).asking?.questions ?? null) : null,
     });
   });
   // The terminal's goal LIST. One terminal, several finish lines, worked in order — `mc goal add`,
