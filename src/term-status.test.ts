@@ -7,7 +7,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { db, sessions, workspaces } from "./store.js";
-import { applyHook, declare, resolve, sessionGoalReached, signalsOf, HOOK_WORKING_SILENCE_MS, REACHED_GRACE_MS, type ResolveInput, type Signals } from "./term-status.js";
+import { applyHook, declare, menuTick, permissionOf, resolve, sessionGoalReached, setMenuProbe, signalsOf, HOOK_WORKING_SILENCE_MS, MENU_GRACE_MS, REACHED_GRACE_MS, type ResolveInput, type Signals } from "./term-status.js";
+import type { DeskPrompt } from "./desk-prompt.js";
 import { SessionHookSchema } from "./validation.js";
 import { claudeStyleHooks, grokHooksToml, installClaudeHooks, installCursorHooks, installGrokHooks, mergeHooks, nudgeCmd, rtkCmd } from "./term-hooks.js";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -188,10 +189,58 @@ test("an AskUserQuestion keeps its question when Claude's generic permission Not
   assert.equal(signalsOf(s.id).asking?.question, "Claude needs your permission to use Bash");
 });
 
+// Leo 2026-10-28: an agent asked for permission and Focus had no button to approve it. The menu was on
+// its screen, but the pending tool's ⏺ blinks every ~600ms, so the pty never went quiet and the
+// screen-read prompt never came; the Notification ~6s later said only "Claude needs your permission".
+test("claude's permission menu: decide while its menu is on screen, the menu rides the status, gone = over", () => {
+  const s = mk();
+  const menu: DeskPrompt = { kind: "select", question: "Do you want to proceed?", options: [{ label: "Yes", offset: 0 }, { label: "Yes, and don't ask again", offset: 1 }, { label: "No", offset: 2 }] };
+  let screen: DeskPrompt | null = null;
+  setMenuProbe(() => ({ live: true, menu: screen }));
+  try {
+    applyHook(s.id, { event: "prompt" }, NOW);
+    applyHook(s.id, { event: "ask", kind: "tool", question: "Allow Bash: Create probe-dir?", options: [], tool: { name: "Bash", input: "mkdir -p probe-dir", about: "Create probe-dir" } }, NOW + 1000);
+    assert.equal(resolve(base({}, signalsOf(s.id))).phase, "decide");
+    assert.equal(resolve(base({}, signalsOf(s.id))).line, "Allow Bash: Create probe-dir?");
+    // Before the menu is painted there is nothing safe to press: no options yet.
+    assert.deepEqual(permissionOf(s.id, signalsOf(s.id)), { tool: "Bash", input: "mkdir -p probe-dir", about: "Create probe-dir", question: null, options: null });
+    // Claude's own Notification follows ~6s later and names nothing: it must not replace the request.
+    applyHook(s.id, { event: "ask", question: "Claude needs your permission" }, NOW + 7000);
+    assert.equal(signalsOf(s.id).asking?.kind, "tool");
+    // A background subagent finishing is not an answer.
+    applyHook(s.id, { event: "subagent_stop", key: "x" }, NOW + 7500);
+    assert.equal(signalsOf(s.id).asking?.kind, "tool");
+    screen = menu;
+    assert.equal(menuTick(s.id, NOW + 8000), true);
+    assert.deepEqual(permissionOf(s.id, signalsOf(s.id))?.options, menu.options);
+    // Answered (anywhere — Focus, the terminal, Robert): the menu leaves the screen. One empty look
+    // can be a half-painted frame; two in a row and it is over.
+    screen = null;
+    assert.equal(menuTick(s.id, NOW + 9000), true);
+    assert.equal(signalsOf(s.id).asking?.kind, "tool");
+    assert.equal(menuTick(s.id, NOW + 10_000), false);
+    assert.equal(signalsOf(s.id).asking, null);
+    assert.equal(permissionOf(s.id, signalsOf(s.id)), null);
+    // A request whose menu never shows (a background subagent's, which claude denies on its own) lapses.
+    applyHook(s.id, { event: "ask", kind: "tool", question: "Allow Write?", tool: { name: "Write" } }, NOW + 20_000);
+    assert.equal(menuTick(s.id, NOW + 21_000), true, "still inside the grace");
+    assert.equal(menuTick(s.id, NOW + 20_000 + MENU_GRACE_MS + 1), false);
+    assert.equal(signalsOf(s.id).asking, null);
+    // A submitted prompt clears it too, like any question.
+    applyHook(s.id, { event: "ask", kind: "tool", question: "Allow Edit?", tool: { name: "Edit" } }, NOW + 30_000);
+    applyHook(s.id, { event: "prompt" }, NOW + 31_000);
+    assert.equal(signalsOf(s.id).asking, null);
+  } finally {
+    setMenuProbe(null);
+  }
+});
+
 test("the hook route keeps grok's permission tag and an AskUserQuestion's questions", () => {
   const body = SessionHookSchema.parse({ event: "ask", question: "allow Bash?", options: ["yes", "no"], kind: "permission", questions: [{ question: "q?", options: [{ label: "a", description: "d" }] }] });
   assert.equal(body.kind, "permission");
   assert.equal(body.questions?.[0].options[0].description, "d");
+  const tool = SessionHookSchema.parse({ event: "ask", question: "Allow Bash?", kind: "tool", tool: { name: "Bash", input: "npm test", about: "Run tests" } });
+  assert.deepEqual(tool.tool, { name: "Bash", input: "npm test", about: "Run tests" });
 });
 
 // ── installers ─────────────────────────────────────────────────────────────────────────────────
@@ -212,6 +261,8 @@ test("claude: merged beside the operator's own hooks, reinstall does not stack c
   assert.match(cfg.hooks.PreToolUse[2].hooks[0].command, /rtk-rewrite\.sh/);
   assert.doesNotMatch(cfg.hooks.PreToolUse[2].hooks[0].command, /MC_SESSION/, "rtk runs in the operator's own sessions too");
   assert.match(cfg.hooks.Stop[0].hooks[0].command, /MC_SESSION.*mc" hook claude/);
+  assert.match(cfg.hooks.PermissionRequest[0].hooks[0].command, /MC_SESSION.*mc" hook claude/, "claude says when its permission menu opens");
+  assert.equal(cfg.hooks.PermissionRequest[0].matcher, undefined, "every tool");
   // A settings file someone is halfway through editing is left alone.
   fs.writeFileSync(path.join(dir, "settings.json"), "{ nope");
   assert.equal(installClaudeHooks(dir), "skipped");
@@ -303,6 +354,7 @@ test("grok: one marked block appended to config.toml, replaced in place, skipped
   assert.ok(toml.startsWith('[models]\ndefault = "grok-4.5"\n\n# BEGIN chronos'));
   assert.equal(toml.split("# BEGIN chronos").length, 2);
   assert.match(grokHooksToml(), /\[\[hooks\.PreToolUse\]\]\nmatcher = "AskUserQuestion\|ExitPlanMode\|ask_user_question\|ask_user"/);
+  assert.doesNotMatch(grokHooksToml(), /PermissionRequest/, "grok's per-tool gate stays the self-clearing one");
   fs.writeFileSync(file, 'hooks = { }\n');
   assert.equal(installGrokHooks(home), "skipped");
 });

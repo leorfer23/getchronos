@@ -135,7 +135,10 @@ export const SessionHookSchema = z.object({
   options: z.array(z.string().max(200)).max(12).optional(),
   // grok's PermissionRequest: a per-tool gate that self-clears (term-status.ts). Without it in the
   // schema the tag was stripped here and the gate parked the card on "decide" until the turn ended.
-  kind: z.enum(["permission"]).optional(),
+  // "tool": claude's PermissionRequest — its menu is on screen until someone answers it.
+  kind: z.enum(["permission", "tool"]).optional(),
+  // The tool claude wants to use and what it would run (`tool`-kind asks only).
+  tool: z.object({ name: z.string().max(200), input: z.string().max(2000).optional(), about: z.string().max(400).optional() }).optional(),
   // An AskUserQuestion's full questions (term-status.ts AskQuestion).
   questions: z.array(z.object({
     question: z.string().max(2000),
