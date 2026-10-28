@@ -334,6 +334,9 @@ const HELP = `mc — Mission Control backlog CLI
   mc outcome "<summary>" [--change "…"]… [--proof "…"]… [--shot before=a.png]… [--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped "…"]…
                              the hand-off on Focus: what changed, the proof, the PR — the operator approves
                              merge/deploy from it. mc outcome show | mc outcome clear
+  mc show <image|dir>… [--caption "what to look at"]
+                             show the operator images NOW (screenshots, charts): Focus draws them in Talk under
+                             your reply. A path in your reply shows nothing. name=file.png labels one; ≤12 a call
   mc hook claude|cursor|grok  (run by the CLI's lifecycle hooks — not by hand)
   mc statusline claude        (Claude's statusLine — reports usage-limit %, prints "5h 34% · week 71%")
   mc usage                    subscription usage per CLI/profile (Claude 5h/week, Grok week, Cursor —)
@@ -3086,6 +3089,42 @@ function askCap(question) {
     // long-poll — routed to the one agent that already knows this goal, because it wrote the brief.
     // `mc ask-robert` inside a Lead's worker lands here too: one habit for agents, and the Lead is
     // always the right first stop. `--robert` is the explicit way over its head.
+    // `mc show` — put images in front of the operator NOW, mid-work: a screenshot of what you found, a
+    // chart, the page as it renders. A terminal cannot display one and a path in a reply shows him
+    // nothing, so this uploads the bytes (his Desk may be on another computer) and Focus draws them in
+    // Talk, under the reply they came with. A directory means every image in it.
+    if (cmd === "show") {
+      const sid = process.env.MC_SESSION || die("no MC_SESSION — `mc show` only works inside a terminal session");
+      const specs = pos.slice(1);
+      if (!specs.length) die('mc show <image|dir>… [--caption "what to look at"]   (name=file.png labels one · png/jpg/webp/gif ≤6 MB · ≤12 per call)');
+      const IMG = /\.(png|jpe?g|webp|gif)$/i;
+      const files = [];
+      for (const spec of specs) {
+        // `name=file.png` labels one image — unless that `=` is part of a real path.
+        const eq = spec.indexOf("=");
+        const labeled = eq > 0 && !fs.existsSync(spec);
+        const p = path.resolve(labeled ? spec.slice(eq + 1) : spec);
+        let st; try { st = fs.statSync(p); } catch { die(`no such file: ${p}`); }
+        if (st.isDirectory()) {
+          const inDir = fs.readdirSync(p).filter((n) => IMG.test(n) && !n.startsWith(".")).sort();
+          if (!inDir.length) die(`no png/jpg/webp/gif in ${p}`);
+          for (const n of inDir) files.push({ file: path.join(p, n), label: "" });
+        } else if (!IMG.test(p)) die(`${path.basename(p)}: mc show takes png, jpg, webp or gif — convert it first (macOS: sips -s format png <in> --out <out>.png)`);
+        else files.push({ file: p, label: labeled ? spec.slice(0, eq) : "" });
+      }
+      if (files.length > 12) die(`${files.length} images — one mc show takes up to 12. Split them into groups, each with its own --caption.`);
+      for (const f of files) if (fs.statSync(f.file).size > 6 * 1024 * 1024) die(`${path.basename(f.file)} is over 6 MB — shrink it first (macOS: sips -Z 2000 <file>)`);
+      const shots = [];
+      for (const f of files) {
+        const label = (f.label || path.basename(f.file).replace(/\.[^.]+$/, "")).slice(0, 80);
+        const r = await req("POST", `/sessions/${sid}/outcome/shot`, { label, ext: path.extname(f.file).slice(1).toLowerCase(), data_base64: fs.readFileSync(f.file).toString("base64") });
+        if (!r?.name) die("the Desk did not take the image (brain unreachable?) — run mc show again in a minute");
+        shots.push({ name: r.name, label });
+      }
+      const caption = opt.caption && opt.caption !== "true" ? String(opt.caption).trim() : "";
+      await req("POST", `/sessions/${sid}/show`, { caption, shots });
+      return console.log(`🖼 on Focus — ${shots.length} image${shots.length === 1 ? "" : "s"} in Talk, under your reply${caption ? `: "${caption.length > 60 ? caption.slice(0, 59) + "…" : caption}"` : ""}`);
+    }
     // `mc outcome` — the hand-off. What the operator reads at the bottom of Focus and approves the
     // merge/deploy from: a plain summary, what changed, the proof (checks you ran, screenshots before
     // and after), the PR, and what you ask him for. A correction replaces the one on top; a follow-up

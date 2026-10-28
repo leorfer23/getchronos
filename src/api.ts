@@ -178,8 +178,8 @@ import {
   QuickActionsSchema, HeavySlotSchema,
   ReportSchema, LeadBroadcastSchema, LeadAdoptSchema, BoardAddSchema, BoardPatchSchema, PatchAccelSchema,
   BuildGraphifySchema, QueryGraphifySchema,
-  NewArtifactSchema, UpdateArtifactSchema, ArtifactEventSchema, ArtifactStateSchema, SessionOutcomeSchema, SessionShotSchema } from "./validation.js";
-import { boardNudge, fileOutcome, normalizeOutcome, saveShot, shotFile, shipLine, NUDGE_STALE_MS } from "./session-outcome.js";
+  NewArtifactSchema, UpdateArtifactSchema, ArtifactEventSchema, ArtifactStateSchema, SessionOutcomeSchema, SessionShotSchema, SessionShowSchema } from "./validation.js";
+import { boardNudge, fileOutcome, normalizeOutcome, normalizeShow, saveShot, shotFile, shipLine, NUDGE_STALE_MS } from "./session-outcome.js";
 import { pressureWord, swapPctOf } from "./machine.js";
 import { machineBrowserBlock, mountBrowserRoutes } from "./resources/browser-routes.js";
 import { procsView } from "./resources/brain.js";
@@ -745,6 +745,20 @@ export function startServer() {
     if ("error" in r) return res.status(400).json(r);
     res.status(201).json(r);
   });
+  // `mc show`: images put in front of the operator mid-work — a terminal cannot display one, and a path
+  // in its reply shows him nothing. The bytes went up through /outcome/shot; this names them, with a
+  // caption, and Focus draws them in Talk under the reply they came with (normalizeShow keeps only
+  // names this terminal uploaded).
+  api.post("/sessions/:id/show", validate(SessionShowSchema), (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, s.workspace_id)) return;
+    const show = normalizeShow(s.id, req.body);
+    if (!show) return res.status(400).json({ error: "none of those images were uploaded by this terminal" });
+    sessions.addShown(s.id, show);
+    bus.publish({ topic: "session.updated", session_id: s.id });
+    res.status(201).json(show);
+  });
   // Admin-gated like /media/file: only names saveShot() wrote are ever opened (shotFile).
   api.get("/sessions/:id/outcome/shot/:name", requireAdmin, (req, res) => {
     const s = sessions.get(req.params.id);
@@ -778,6 +792,8 @@ export function startServer() {
       outcome: s.outcome,
       // The hand-offs before it (a follow-up, a round of changes), oldest first.
       earlier: s.outcome_prev,
+      // What it `mc show`ed along the way, oldest first — Talk draws each under its turn.
+      shown: s.shown,
       // A question dialog open in its CLI (AskUserQuestion): the whole questions, which the screen cuts.
       dialog: isLive(s.id) ? (signalsOf(s.id).asking?.questions ?? null) : null,
     });
@@ -1459,6 +1475,8 @@ export function startServer() {
           // stage (/sessions/:id/decisions), not for every row of the wall on every refresh.
           outcome: null,
           outcome_prev: null,
+          // Same for what it showed: `shown_at` tells Focus to read /decisions again.
+          shown: null,
           // …except what the rail needs to flag it: a hand-off still waiting for his yes. Shipped, or
           // asking for nothing but a read, it is not waiting on him.
           handoff: s.outcome && !s.outcome.shipped?.length && ["merge", "deploy", "merge+deploy"].includes(s.outcome.ask)

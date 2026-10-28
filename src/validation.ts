@@ -199,6 +199,11 @@ export const SessionShotSchema = z.object({
   ext: z.string().max(5),
   data_base64: z.string().max(9_000_000),
 });
+// `mc show`: images already uploaded through /outcome/shot, named, with a line on what to look at.
+export const SessionShowSchema = z.object({
+  caption: z.string().max(2000).optional(),
+  shots: z.array(z.object({ name: z.string().max(80), label: z.string().max(80).optional() })).min(1).max(12),
+});
 
 // Typing into someone else's terminal. `text` is a line (Enter follows unless enter:false); `key` is
 // one named keystroke, so callers never hand-roll escape sequences.

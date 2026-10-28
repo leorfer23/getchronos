@@ -29,14 +29,15 @@ finishes or blocks, and opens the next one himself.
 
 ## Focus — the three things the operator reads
 
-Focus has no timeline, no commands and no narration. It has three cards, each fed by an `mc` call
-only you can make. If you skip the call, the card is empty — and the operator opens the raw terminal,
-which is exactly what this board exists to avoid.
+Focus has no timeline, no commands and no narration. Its cards are each fed by an `mc` call only you
+can make (Talk also carries your replies). If you skip the call, the card is empty — and the operator
+opens the raw terminal, which is exactly what this board exists to avoid.
 
 | card | what they see | you feed it with |
 |---|---|---|
 | **① Goal** | the outcome, **Done when** checks, a progress bar, the running timer, time left, what it may ship | `mc goal set "…" --done-when "…"`, `mc progress n/N "step" --eta 20m` |
 | **② Decisions** | every open question with a button per option; then what was decided, your steering included | `mc ask-robert "…" --options "a,b"` (or your CLI's question tool) |
+| **Talk** | each message they send you, your reply under it — and the **images you show** under that | your reply, and `mc show <file\|dir>… --caption "…"` |
 | **③ Hand-off** | your summary, what changed, proof, before/after screenshots, the PR — and **Approve merge / deploy** buttons | `mc outcome "…" --change … --proof … --shot … --pr … --ask …` |
 
 Work in this order:
@@ -241,6 +242,28 @@ mc outcome clear       # drop it (a new `mc outcome` replaces the last one anywa
   that, and run `mc outcome --shipped "<what you shipped>"`.
 - Already allowed to ship (`mc goal` says merge/deploy)? Ship, then file the hand-off with
   `--shipped "merged #24" --shipped "deployed"` and `--ask none` (or `deploy` if you may only merge).
+
+## Showing images — `mc show`
+
+Your terminal cannot display an image, and the operator never reads it anyway. A path in your reply,
+a folder, or a Finder window you opened shows them **nothing**. When they should *see* something — a
+screenshot of what you found, before/after of a page, a chart, a mockup — put it on Focus:
+
+```bash
+mc show /tmp/shots/report-old.png /tmp/shots/report-new.png --caption "Old vs new report — the totals row moved to the top"
+mc show /tmp/shots/ --caption "Every page of the export, in order"        # a directory = every image in it
+mc show before=/tmp/a.png after=/tmp/b.png                                # name=file labels one
+```
+
+- It shows in **Talk, under your reply** of that turn, with the caption on top. Click = full size.
+- **One call per group**, each with its own `--caption` saying what to look at ("these two are for
+  the support team: the new Reports menu"). Up to 12 images a call; png, jpg, webp or gif, ≤6 MB each
+  (convert HEIC/shrink first — macOS: `sips -s format png in.heic --out out.png`, `sips -Z 2000 big.png`).
+- The bytes are uploaded, so it works from any computer. Take the screenshots with
+  `mc browser run -- …` (never launch your own browser).
+- Asked "did you add the screenshots?" / "show me" → `mc show` them, then answer. Don't offer to
+  open Finder or post them somewhere else instead.
+- Proof for a hand-off still goes on `mc outcome --shot` — `mc show` is for along the way.
 
 ## Showing and asking with a page — `mc artifact`
 

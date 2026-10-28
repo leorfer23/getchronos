@@ -736,6 +736,12 @@ export interface Outcome {
   shipped: string[];
   at: string;
 }
+/** Images a terminal put in front of the operator mid-work (`mc show`): one call, one caption. */
+export interface Shown {
+  caption: string;
+  shots: { name: string; label: string }[];
+  at: string;
+}
 /** Who last wrote a session's goal. The Desk title deriver only overwrites 'seed' and 'auto'. */
 export type GoalSource = "seed" | "auto" | "agent" | "human";
 /**
@@ -789,6 +795,10 @@ export interface Session {
   outcome_at: string | null;
   /** The hand-offs before the one on top (a follow-up, a round of changes), oldest first. */
   outcome_prev: Outcome[];
+  /** Images it showed the operator along the way (`mc show`), oldest first; Focus puts each under the
+   *  Talk turn it arrived in. `shown_at` is the newest one's time — all a /desk row carries of them. */
+  shown: Shown[];
+  shown_at: string | null;
   /** How many goals this terminal was given, and how many are ticked. Both 0 = the single-goal
    *  terminal every surface already knows: `goal` is the whole story. Joined on read, not stored. */
   goals_total?: number;

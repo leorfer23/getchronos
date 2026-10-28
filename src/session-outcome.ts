@@ -11,12 +11,14 @@
  *               screenshots, its PRs, and what it asks him for. Screenshots are bytes on this disk under
  *               outcomeRoot(), never a path the agent names: a host's paths mean nothing here, and a
  *               path the page could ask for is a file read the agent chose.
+ *   shown     — images it put in front of him along the way (`mc show`): same bytes, same store, drawn
+ *               in Talk under the reply they came with.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import type { Outcome, Ship } from "./types.js";
+import type { Outcome, Ship, Shown } from "./types.js";
 
 export const SHIPS: readonly Ship[] = ["ask", "merge", "deploy"];
 export const OUTCOME_ASKS: readonly Outcome["ask"][] = ["merge", "deploy", "merge+deploy", "review", "none"];
@@ -25,6 +27,11 @@ export const OUTCOME_ASKS: readonly Outcome["ask"][] = ["merge", "deploy", "merg
 export const outcomeRoot = () => process.env.CHRONOS_OUTCOMES ?? path.join(os.homedir(), ".mc", "outcomes");
 export const MAX_SHOT_BYTES = 6 * 1024 * 1024;
 const MAX_SHOTS = 8;
+// A terminal's whole store of images: hand-off screenshots and everything it `mc show`ed.
+const MAX_FILES = 120;
+/** Images in one `mc show`, and how many shows a terminal keeps (the oldest fall off). */
+export const MAX_SHOW_SHOTS = 12;
+export const MAX_SHOWN = 30;
 const SHOT_EXT: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
 // The only names a shot route will open: what saveShot() writes, nothing a caller could steer.
 const SHOT_NAME = /^[a-z0-9-]{1,40}-[0-9a-f]{12}\.(png|jpe?g|webp|gif)$/;
@@ -125,16 +132,37 @@ export function fileOutcome(
   return { latest: next, earlier: [...earlier, latest].slice(-MAX_EARLIER) };
 }
 
+export function decodeShown(raw: unknown): Shown[] {
+  if (Array.isArray(raw)) return raw as Shown[];
+  if (typeof raw !== "string" || !raw) return [];
+  try { const v = JSON.parse(raw); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+
+// Only names saveShot() wrote for THIS terminal, and only files still on disk.
+const ownShots = (sessionId: string, v: unknown, max: number) =>
+  (Array.isArray(v) ? v : [])
+    .map((x: any) => ({ name: String(x?.name ?? ""), label: clip(x?.label || "screenshot", 40) }))
+    .filter((x: { name: string }) => SHOT_NAME.test(x.name) && fs.existsSync(shotDir(sessionId) + "/" + x.name))
+    .slice(0, max);
+
+/**
+ * One `mc show` as the agent sent it → the entry Focus draws under its reply, or null when not one
+ * image in it is a file this terminal uploaded (nothing to show is not a show).
+ */
+export function normalizeShow(sessionId: string, body: any, now = new Date()): Shown | null {
+  const shots = ownShots(sessionId, body?.shots, MAX_SHOW_SHOTS);
+  return shots.length ? { caption: clip(body?.caption, 600), shots, at: now.toISOString() } : null;
+}
+/** The list with the new show on the end, oldest dropped past MAX_SHOWN. */
+export const addShown = (list: Shown[], next: Shown): Shown[] => [...list, next].slice(-MAX_SHOWN);
+
 /**
  * A hand-off as the agent sent it → the row we keep. Everything is clipped (the Desk renders it on
  * every look at this terminal), PRs must be real PR links, and a shot must name a file this terminal
  * uploaded — anything else is dropped rather than refused, so one bad line never loses the hand-off.
  */
 export function normalizeOutcome(sessionId: string, body: any, now = new Date()): Outcome {
-  const shots = (Array.isArray(body?.shots) ? body.shots : [])
-    .map((x: any) => ({ name: String(x?.name ?? ""), label: clip(x?.label || "screenshot", 40) }))
-    .filter((x: { name: string }) => SHOT_NAME.test(x.name) && fs.existsSync(shotDir(sessionId) + "/" + x.name))
-    .slice(0, MAX_SHOTS);
+  const shots = ownShots(sessionId, body?.shots, MAX_SHOTS);
   const ask = OUTCOME_ASKS.includes(body?.ask) ? body.ask : "review";
   return {
     // Empty only for a `--shipped`-only re-file, which fileOutcome() folds into the hand-off on top.
@@ -161,7 +189,7 @@ export function saveShot(sessionId: string, label: string, ext: string, bytes: B
   if (bytes.length > MAX_SHOT_BYTES) return { error: `image over ${MAX_SHOT_BYTES / 1048576} MB` };
   const dir = shotDir(sessionId);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (fs.readdirSync(dir).length >= 40) return { error: "this terminal already has 40 screenshots" };
+  if (fs.readdirSync(dir).length >= MAX_FILES) return { error: `this terminal already has ${MAX_FILES} images` };
   const slug = String(label || "shot").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "shot";
   const name = `${slug}-${randomBytes(6).toString("hex")}.${e}`;
   fs.writeFileSync(path.join(dir, name), bytes, { mode: 0o600 });

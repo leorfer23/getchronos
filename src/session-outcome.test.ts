@@ -10,7 +10,7 @@ import path from "node:path";
 import http from "node:http";
 import { execFile } from "node:child_process";
 import { asks, db, sessions } from "./store.js";
-import { boardNudge, decodeDoneWhen, encodeDoneWhen, fileOutcome, normalizeOutcome, saveShot, shipLine, shotFile, MAX_SHOT_BYTES, MAX_EARLIER, NUDGE_STALE_MS } from "./session-outcome.js";
+import { addShown, boardNudge, decodeDoneWhen, encodeDoneWhen, fileOutcome, normalizeOutcome, normalizeShow, saveShot, shipLine, shotFile, MAX_SHOT_BYTES, MAX_EARLIER, MAX_SHOWN, NUDGE_STALE_MS } from "./session-outcome.js";
 import type { Outcome } from "./types.js";
 import { deskSeed } from "./terminal.js";
 import { resolve, setProgress, statusOf } from "./term-status.js";
@@ -329,4 +329,87 @@ test("mc outcome --shipped alone files no summary; mc hook claude nudge prints o
   assert.equal(child.stdout, "");
   assert.equal(s.hits.filter((h) => h.url.endsWith("/board-nudge")).length, 2);
   assert.ok(!s.hits.some((h) => h.url.endsWith("/hook")), "the nudge call never posts a card event");
+});
+
+// ── mc show: images on Focus mid-work (Leo 2026-10-28: an agent listed screenshot paths and opened Finder) ──
+
+test("a show keeps only images this terminal uploaded, rides the row, and the oldest fall off", () => {
+  const s = sessions.create({ cwd: "/tmp" });
+  const a = saveShot(s.id, "menu", "png", PNG) as { name: string };
+  const other = sessions.create({ cwd: "/tmp" });
+  const theirs = saveShot(other.id, "theirs", "png", PNG) as { name: string };
+  assert.equal(normalizeShow(s.id, { caption: "x", shots: [{ name: theirs.name }] }), null, "another terminal's upload is not this one's to show");
+  assert.equal(normalizeShow(s.id, { caption: "x", shots: [{ name: "../../etc/passwd" }] }), null);
+  const show = normalizeShow(s.id, { caption: "The new menu", shots: [{ name: a.name, label: "menu" }, { name: "after-0123456789ab.png" }] })!;
+  assert.deepEqual(show.shots, [{ name: a.name, label: "menu" }]);
+  assert.equal(show.caption, "The new menu");
+  assert.deepEqual(sessions.get(s.id)!.shown, [], "none yet reads as an empty list");
+  assert.equal(sessions.get(s.id)!.shown_at, null);
+  sessions.addShown(s.id, show);
+  const back = sessions.get(s.id)!;
+  assert.equal(back.shown.length, 1);
+  assert.equal(back.shown_at, show.at);
+  let list = [show];
+  for (let i = 0; i < MAX_SHOWN + 5; i++) list = addShown(list, { ...show, caption: "c" + i });
+  assert.equal(list.length, MAX_SHOWN);
+  assert.equal(list[list.length - 1].caption, "c" + (MAX_SHOWN + 4), "the newest is kept");
+});
+
+test("the show route is workspace-scoped, Focus reads the list from /decisions, and /desk rows carry only its time", () => {
+  const at = api.indexOf('api.post("/sessions/:id/show"');
+  assert.ok(at > 0);
+  const body = api.slice(at, api.indexOf("\n  });", at));
+  assert.match(body, /validate\(SessionShowSchema\)/);
+  assert.match(body, /checkScope\(req, res, s\.workspace_id\)/);
+  assert.match(body, /normalizeShow\(s\.id, req\.body\)/);
+  assert.match(api, /shown: s\.shown,/);
+  assert.match(api, /outcome_prev: null,\s*\/\/[^\n]*\n\s*shown: null,/);
+});
+
+test("mc show uploads every image as bytes — a directory's in order, name=file labelled — then files one show", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-show-"));
+  fs.writeFileSync(path.join(dir, "b-actions.png"), PNG);
+  fs.writeFileSync(path.join(dir, "a-menu.jpg"), PNG);
+  fs.writeFileSync(path.join(dir, "notes.txt"), "not an image");
+  const one = path.join(os.tmpdir(), `mc-show-one-${process.pid}.webp`);
+  fs.writeFileSync(one, PNG);
+  let n = 0;
+  const s = await stub((h) => (h.url.endsWith("/outcome/shot") ? [201, { name: `shot-${String(++n).padStart(12, "0")}.png` }] : [201, { ...h.body, at: "now" }]));
+  const r = await s.run(["show", dir, `production=${one}`, "--caption", "For the kitchen team: the new menu"]);
+  assert.equal(r.code, 0, r.stderr);
+  const ups = s.hits.filter((h) => h.url === "/api/sessions/sess-1/outcome/shot");
+  assert.deepEqual(ups.map((h) => [h.body.label, h.body.ext]), [["a-menu", "jpg"], ["b-actions", "png"], ["production", "webp"]]);
+  assert.equal(Buffer.from(ups[0].body.data_base64, "base64").toString("hex"), PNG.toString("hex"));
+  assert.ok(ups.every((h) => h.body.path === undefined), "no path travels — the Desk may be on another computer");
+  const filed = s.hits[s.hits.length - 1];
+  assert.equal(filed.url, "/api/sessions/sess-1/show");
+  assert.deepEqual(filed.body, {
+    caption: "For the kitchen team: the new menu",
+    shots: [{ name: "shot-000000000001.png", label: "a-menu" }, { name: "shot-000000000002.png", label: "b-actions" }, { name: "shot-000000000003.png", label: "production" }],
+  });
+  assert.match(r.stdout, /3 images in Talk/);
+  // Refused before anything is uploaded: a non-image, more than 12, nothing at all.
+  const before = s.hits.length;
+  const svg = path.join(dir, "x.svg"); fs.writeFileSync(svg, "<svg/>");
+  for (let i = 0; i < 13; i++) fs.writeFileSync(path.join(dir, `p${i}.png`), PNG);
+  const bad = await s.run(["show", svg]);
+  const many = await s.run(["show", dir]);
+  const none = await s.run(["show"]);
+  s.close();
+  assert.notEqual(bad.code, 0);
+  assert.match(bad.stderr, /png, jpg, webp or gif/);
+  assert.notEqual(many.code, 0);
+  assert.match(many.stderr, /up to 12/);
+  assert.notEqual(none.code, 0);
+  assert.equal(s.hits.length, before, "a refused show uploads nothing");
+});
+
+test("every terminal is told to show images with mc show, and the skill says how", () => {
+  const term = fs.readFileSync(path.join(import.meta.dirname, "terminal.ts"), "utf8");
+  const contract = term.slice(term.indexOf("const FOCUS_CONTRACT"), term.indexOf("## Checkout + load"));
+  assert.match(contract, /mc show <file\|dir>/);
+  assert.match(contract, /shows them nothing/);
+  const skill = fs.readFileSync(path.join(import.meta.dirname, "..", "skills", "mission-control", "SKILL.md"), "utf8");
+  assert.match(skill, /## Showing images — `mc show`/);
+  assert.match(skill, /\| \*\*Talk\*\* \|/);
 });
