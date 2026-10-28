@@ -30,6 +30,12 @@ defineSetting({
   default: () => (process.env.CHRONOS_DESK_SKILLS_FULL ?? "mission-control").split(",").map((s) => s.trim()).filter(Boolean),
 });
 defineSetting({
+  key: "desk.mcp_deny", group: "Limits", level: "both", type: "list", env: "CHRONOS_DESK_MCP_DENY",
+  label: "MCP servers kept out of terminals",
+  help: "Server names a claude terminal here never loads — its own (`slack`) or a claude.ai connector by display name (`claude.ai Gmail`). Each loaded server's tool names ride on every request.",
+  default: () => (process.env.CHRONOS_DESK_MCP_DENY ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+});
+defineSetting({
   key: "desk.artifact_tool", group: "Limits", level: "both", type: "bool", env: "CHRONOS_DESK_ARTIFACT_TOOL",
   label: "claude.ai Artifact tool",
   help: "Off: claude terminals here have no Artifact tool (its description is ~13k tokens on every request) and publish pages with `mc artifact` only.",
@@ -72,11 +78,17 @@ export function skillOverrides(names: string[], full: string[]): Record<string, 
   return Object.fromEntries(names.filter((n) => !keep.has(n)).map((n) => [n, "name-only" as const]));
 }
 
-/** Extra argv for a claude Desk terminal. */
+/** Extra argv for a claude Desk terminal: one `--settings` carrying the skill listing and the MCP denylist. */
 export function leanClaudeArgs(configDir: string, workspaceId: string | null): string[] {
-  if (!setting<boolean>("desk.lean_skills", workspaceId)) return [];
-  const o = skillOverrides(skillNames(configDir), setting<string[]>("desk.skills_full", workspaceId) ?? []);
-  return Object.keys(o).length ? ["--settings", JSON.stringify({ skillOverrides: o })] : [];
+  const settings: Record<string, unknown> = {};
+  if (setting<boolean>("desk.lean_skills", workspaceId)) {
+    const o = skillOverrides(skillNames(configDir), setting<string[]>("desk.skills_full", workspaceId) ?? []);
+    if (Object.keys(o).length) settings.skillOverrides = o;
+  }
+  // A denylist merges with any the profile has and nothing overrides a match (Claude Code's managed-mcp rules).
+  const deny = setting<string[]>("desk.mcp_deny", workspaceId) ?? [];
+  if (deny.length) settings.deniedMcpServers = deny.map((serverName) => ({ serverName }));
+  return Object.keys(settings).length ? ["--settings", JSON.stringify(settings)] : [];
 }
 
 /** Extra env for a claude Desk terminal. CLAUDE_CODE_DISABLE_ARTIFACT wins over the backend's CLAUDE_CODE_ARTIFACT=1. */

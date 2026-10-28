@@ -12,7 +12,7 @@ import { _resetSettingsCache, writeSetting } from "./settings.js";
 import { leanClaudeArgs, leanClaudeEnv, SHIPPED_SKILLS, skillNames, skillOverrides } from "./lean-prompt.js";
 
 beforeEach(() => {
-  for (const k of ["desk.lean_skills", "desk.artifact_tool", "desk.lean_tools", "desk.skills_full"]) writeSetting(k, null);
+  for (const k of ["desk.lean_skills", "desk.artifact_tool", "desk.lean_tools", "desk.skills_full", "desk.mcp_deny"]) writeSetting(k, null);
   _resetSettingsCache();
 });
 
@@ -53,4 +53,14 @@ test("env: workflows and /loop off by default, the Artifact tool only when switc
   assert.deepEqual(leanClaudeEnv(null), { CLAUDE_CODE_DISABLE_WORKFLOWS: "1", CLAUDE_CODE_DISABLE_CRON: "1" });
   writeSetting("desk.artifact_tool", false);
   assert.equal(leanClaudeEnv(null).CLAUDE_CODE_DISABLE_ARTIFACT, "1");
+});
+
+test("mcp deny: server names, a connector by its display name included, go out as deniedMcpServers beside the skill overrides", () => {
+  const dir = profile();
+  writeSetting("desk.mcp_deny", ["mixpanel", "claude.ai Gmail"]);
+  const s = JSON.parse(leanClaudeArgs(dir, null)[1]);
+  assert.deepEqual(s.deniedMcpServers, [{ serverName: "mixpanel" }, { serverName: "claude.ai Gmail" }]);
+  assert.equal(s.skillOverrides.airflow, "name-only");
+  writeSetting("desk.lean_skills", false);
+  assert.deepEqual(JSON.parse(leanClaudeArgs(dir, null)[1]), { deniedMcpServers: [{ serverName: "mixpanel" }, { serverName: "claude.ai Gmail" }] });
 });
