@@ -382,6 +382,23 @@ processes behind. In order:
 3. **Never launch your own** Chrome, Chromium or Puppeteer/Playwright browser (`puppeteer.launch`,
    `chromium.launch`, wrangler's local Browser Rendering).
 
+## A workspace VPN — `mc vpn`
+
+Some workspaces reach their private hosts (databases, internal APIs) only over a VPN the operator
+set for them; your context says so under **Network** when yours does. It may be off. When a
+connection to one of those hosts fails, or you know you are about to need it:
+
+```bash
+mc vpn up        # turns it on if it is off and holds it for you — waits until it is up
+mc vpn status    # state, whether Chronos turned it on, who holds it
+mc vpn down      # when you are done (optional: your hold also ends with your terminal/run)
+```
+
+The VPN is the whole Mac's, not yours: **never run `tailscale up/down` or script the VPN app
+yourself** — that cuts every other workspace's traffic. The daemon turns it off a minute after the
+last hold ends, and never one the operator turned on by hand. Not available from a terminal on
+another computer (the VPN switched is the brain's).
+
 ## The operator's clipboard — `mc clip`
 
 When the operator says "use the token I just copied" / "paste that error" — they mean their Mac

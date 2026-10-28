@@ -527,6 +527,34 @@ own pool and a local auth story first. A host older than this PR answers "unknow
 | `CHRONOS_BROWSER_DATA_DIR` | `<state>/.browser-pool` | Where the throwaway profile lives (brain; hostd uses `~/.chronos-host/browser-pool`). |
 | `PUPPETEER_CACHE_DIR` | `~/.cache/puppeteer` | Also searched for engines. |
 
+## VPN on demand — `mc vpn` (built)
+
+A VPN is a machine-wide resource like the browser: one agent switching it switches it for every
+workspace and for the operator. So agents do not run the VPN client themselves; they ask the daemon
+(`src/vpn.ts`, routes in `src/vpn-routes.ts`).
+
+- **Which VPN:** `workspaces.vpn_config` (migration 151), set by the operator —
+  `{"kind":"tailscale"}` (the Tailscale CLI, a bare `tailscale up` / `tailscale down`, so settings
+  made in the app are kept) or `{"kind":"tunnelblick","name":"<configuration>"}` (Tunnelblick's
+  AppleScript `connect` / `disconnect` / `state`; the name travels as an `osascript` argv item, never
+  inside the script). A workspace's token switches only that one VPN. NULL = `mc vpn` refuses.
+- **Holds:** `mc vpn up` holds it for the calling terminal (`MC_SESSION`) or run (`MC_RUN`), which
+  must be live and in the token's workspace; it answers once the VPN is up. A hold ends on
+  `mc vpn down`, on `session.ended` / `run.ended`, or at the minute sweep when its terminal/run is
+  gone. Keyed by VPN, so two workspaces naming the same VPN share it (each sees only its own holds).
+- **Off:** only a VPN the daemon itself turned on, 60 s after the last hold ends (a new hold in that
+  window cancels it). A VPN that was already up when the first hold arrived is the operator's and
+  stays up. Holds and that debt live in kv (`vpn.holds`), so a restart neither forgets to turn it
+  off nor drops the holds of terminals that come back.
+- **Operator:** `mc vpn status` (every workspace with a VPN), `mc vpn up|down --workspace <slug>`
+  — up with no hold (never turned off by Chronos), down right now with every hold dropped.
+- **Agents learn it** from one line in their context (`vpnPromptLine`, only when `vpn_config` is
+  set) and the mission-control skill.
+- **Not covered:** a terminal on another host (refused — the VPN switched is the brain's); a
+  Tunnelblick configuration that asks for a password or code (times out after 60 s with that
+  reason); two VPNs whose routes conflict (the operator's call when setting them). The first
+  Tunnelblick switch triggers macOS's Automation consent for the daemon — answered once.
+
 ## Out of scope
 
 - Changing `~/.claude/bin/idle-reaper.py` (personal, not Chronos).

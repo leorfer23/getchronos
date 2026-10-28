@@ -518,6 +518,12 @@ const HELP = `mc — Mission Control backlog CLI
   mc browser status                  the shared browser: engine, running, contexts in use / cap, your leases
   mc browser lease [--label x]       lease by hand (prints JSON); expires in 90s unless kept alive with
                                      mc browser beat <id>; give it back with mc browser release <id>
+  mc vpn up                          turn on this workspace's VPN (the one the operator set) and hold it
+                                     for this terminal/run; waits until it is up. Never run tailscale or
+                                     Tunnelblick yourself — the VPN is the whole Mac's
+  mc vpn down                        drop your hold; the daemon turns it off a minute after the last
+                                     hold ends (and never one the operator turned on by hand)
+  mc vpn [status] [--json]           state, whether Chronos turned it on, who holds it
   mc hosts [list]                    every computer (HOSTS.md): status, load, live terminals, version,
                                      what is wrong. Without the admin token: names, room, and whether
                                      your workspace may run there. Placement is automatic; --host pins
@@ -3712,6 +3718,42 @@ function askCap(question) {
         return console.log(`${h.name}: update ${out.update?.state || "requested"} → ${(out.update?.target?.commit || out.update?.target?.version || "").slice(0, 8)} (its terminals restart and resume there)`);
       }
       die("mc hosts [list] | show <name> | drain <name> | resume <name> | update <name|all>");
+    }
+    // The workspace's VPN (src/vpn.ts): on while a terminal/run holds it, off after the last hold.
+    if (cmd === "vpn") {
+      const sub = pos[1] || "status";
+      const ws = opt.workspace && opt.workspace !== "true" ? opt.workspace : undefined;
+      // An agent is scoped by its workspace token. The operator by hand on the brain has none; the
+      // admin token (when readable) lets them name any workspace with --workspace.
+      const tok = process.env.MC_WORKSPACE_TOKEN ? null : adminToken();
+      const H = tok ? { "x-mc-admin": tok } : undefined;
+      const at = (iso) => new Date(iso).toLocaleTimeString();
+      const line = (v) => {
+        const held = (v.holders?.length ?? 0) + (v.other_holders ?? 0);
+        return `${v.workspace}: ${v.vpn} ${v.state}${v.error ? ` (${v.error})` : ""}` +
+          `${v.turned_on ? " · just turned on" : ""}${v.turned_on_by_chronos ? " · Chronos turned it on" : ""}` +
+          `${v.turns_off_at ? ` · turns off at ${at(v.turns_off_at)}` : ""} · ${held ? `held by ${held}` : "no holds"}`;
+      };
+      if (sub === "up" || sub === "down") {
+        const body = { workspace: ws, session_id: process.env.MC_SESSION || null, run_id: process.env.MC_RUN || null, label: opt.label && opt.label !== "true" ? opt.label : undefined };
+        if (sub === "up" && !opt.json) console.error("turning the VPN on if it is off — waits until it is up…");
+        const out = await req("POST", "/vpn/" + sub, body, H);
+        if (opt.json) return console.log(JSON.stringify(out, null, 2));
+        if (sub === "down" && body.session_id === null && body.run_id === null) return console.log(line(out));
+        return console.log(sub === "down" ? `${out.released ? "hold dropped" : "you held no hold"} — ${line(out)}` : line(out));
+      }
+      if (sub === "status") {
+        const out = await req("GET", "/vpn" + (ws ? "?workspace=" + encodeURIComponent(ws) : ""), undefined, H);
+        if (opt.json) return console.log(JSON.stringify(out, null, 2));
+        const all = Array.isArray(out) ? out : [out];
+        if (!all.length) return console.log("no workspace has a VPN set");
+        for (const v of all) {
+          console.log(line(v));
+          for (const h of v.holders ?? []) console.log(`  ${h.kind} ${h.id.slice(0, 8)}  ${String(h.label).slice(0, 40)}  since ${at(h.since)}`);
+        }
+        return;
+      }
+      die("mc vpn [status] | up | down  [--workspace <slug>] [--label x] [--json]");
     }
     // The shared headless browser (`mc browser run` is handled before parse()).
     if (cmd === "browser") {

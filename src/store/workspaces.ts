@@ -80,6 +80,7 @@ export const workspaces = {
       created_at: ts,
       updated_at: ts,
     });
+    if (w.vpn_config) db.prepare("UPDATE workspaces SET vpn_config = ? WHERE id = ?").run(JSON.stringify(w.vpn_config), id);
     return this.get(id)!;
   },
   update(id: string, patch: Partial<NewWorkspace>): Workspace | undefined {
@@ -156,6 +157,9 @@ export const workspaces = {
     ).run(next as any);
     // Kept out of the statement above on purpose: one column, set on its own (migration 137).
     if (patch.placement !== undefined) db.prepare("UPDATE workspaces SET placement = ? WHERE id = ?").run(patch.placement ?? null, id);
+    // Same for the VPN (migration 151): `next` spreads the patch's object over the row's text, so it
+    // is written here as JSON and never through the statement above (which does not name it).
+    if (patch.vpn_config !== undefined) db.prepare("UPDATE workspaces SET vpn_config = ? WHERE id = ?").run(patch.vpn_config ? JSON.stringify(patch.vpn_config) : null, id);
     return this.get(id);
   },
   remove(id: string): void {

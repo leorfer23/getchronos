@@ -2172,6 +2172,17 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     up: (db) => db.exec(`ALTER TABLE sessions ADD COLUMN shown TEXT;`),
   },
 
+  {
+    version: 151,
+    name: "workspaces.vpn_config — the one VPN this workspace's agents may turn on (`mc vpn`)",
+    // A VPN is machine-wide, so an agent switching one itself (`tailscale down`, scripting a client
+    // app) cuts every other workspace's traffic and can flip a VPN that belongs to another client.
+    // This names the ONE VPN a workspace may ask the daemon for: JSON {kind:"tailscale"} or
+    // {kind:"tunnelblick", name:"<configuration>"}. Set by the operator (PATCH is admin-gated);
+    // NULL = no VPN, and `mc vpn` refuses. See src/vpn.ts.
+    up: (db) => db.exec(`ALTER TABLE workspaces ADD COLUMN vpn_config TEXT;`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

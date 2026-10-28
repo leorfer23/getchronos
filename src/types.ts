@@ -70,6 +70,7 @@ export interface Workspace {
   ask_remind_hours: number | null; // per-ws ask-reminder threshold; null = global CONFIG.askRemindHours, 0 = off
   ask_policy: "robert" | "escalate" | null; // null/"robert" = Robert may auto-answer routine asks; "escalate" = human-only
   capabilities: string | null;   // JSON [{name,available,note}] — only the UNAVAILABLE ones reach agent goals (PER-28)
+  vpn_config: string | null;     // JSON {kind:"tailscale"} | {kind:"tunnelblick",name} — the one VPN `mc vpn` may turn on (vpn.ts)
   default_backend: string;
   default_model: string | null;
   sandbox_mode: "off" | "guard" | "strict";
@@ -139,6 +140,7 @@ export interface NewWorkspace {
   ask_remind_hours?: number | null;
   ask_policy?: "robert" | "escalate" | null;
   capabilities?: string | null;
+  vpn_config?: { kind: "tailscale" } | { kind: "tunnelblick"; name: string } | null;
   default_backend?: string;
   default_model?: string | null;
   sandbox_mode?: "off" | "guard" | "strict";
