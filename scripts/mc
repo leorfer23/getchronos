@@ -3228,7 +3228,7 @@ function askCap(question) {
       if (toLead && a.route !== "lead")
         console.log("(your Lead cannot take this one — it ended, or this client requires a human answer)");
       const id8 = a.id.slice(0, 8);
-      if (waitMin <= 0) return console.log(`asked (${id8}) — not waiting (--wait 0)`);
+      if (waitMin <= 0) return console.log(`asked (${id8}) — not waiting (--wait 0); the answer is typed into this terminal when it comes`);
       console.log(`asked ${a.route === "lead" ? "your Lead" : a.route === "operator" ? "the operator" : "Robert"} (${id8}) — waiting up to ${waitMin}m…`);
       const deadline = Date.now() + waitMin * 60_000;
       for (;;) {
@@ -3240,8 +3240,10 @@ function askCap(question) {
       }
       // Unlike `mc ask`, nothing parks and resumes a terminal — you are still sitting here. Say what
       // is true: it is out of your hands now, so do something useful that does not depend on the answer.
+      // The daemon types a later answer into this terminal (src/asks.ts deliverToAsker).
       return console.log(
-        `⏸ no answer yet (${id8}) — it has moved on to whoever can settle it. Do not guess and do not sit idle: say in your ` +
+        `⏸ no answer yet (${id8}) — it has moved on to whoever can settle it, and the answer is typed into this terminal ` +
+        `when it comes. Do not guess and do not sit idle: say in your ` +
         `Focus feed what you are blocked on, then either work on something that does not depend on it, ` +
         `or run \`mc state blocked "<what you need>"\` and stop. Re-check with: mc asks`
       );

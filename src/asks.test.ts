@@ -1,10 +1,10 @@
 import { test, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { db, asks, jobs, runs, tickets, workspaces } from "./store.js";
+import { db, asks, continuations, jobs, runs, sessions, tickets, workspaces } from "./store.js";
 import { deriveRunState, getAgent, listAgents } from "./agent-lifecycle.js";
 import { shouldPark, isReadOnlyRun } from "./runner.js";
-import { answerAsk, waitForAskAnswer } from "./asks.js";
+import { POLL_GRACE_MS, answerAsk, askerAnswerLine, setHolderDelivery, waitForAskAnswer } from "./asks.js";
 import { bus } from "./bus.js";
 import { dispatch, setExecutor } from "./dispatcher.js";
 import type { Job, RunStatus } from "./types.js";
@@ -435,4 +435,86 @@ test("waitForAskAnswer times out with the still-open row when nothing answers", 
   mock.timers.tick(5000);
   const got = await waited;
   assert.equal(got.status, "open");
+});
+
+// ── a terminal's own ask answered after its `mc ask-robert` stopped waiting ──────────────────────
+
+/** A live terminal's `mc ask-robert`, and what the daemon typed into which terminal. */
+function terminalAsk(deliver: (id: string, text: string) => string | null = () => null) {
+  db.exec("DELETE FROM sessions; DELETE FROM continuations;");
+  const ws = mkWs();
+  const s = sessions.create({ backend: "claude-code", cwd: "/tmp", workspace_id: ws.id } as any);
+  const a = asks.create({ session_id: s.id, asked_by: "acme terminal", route: "robert", workspace_id: ws.id, question: "Keep the old view?" });
+  const typed: { id: string; text: string }[] = [];
+  setHolderDelivery(async (id, text) => { typed.push({ id, text }); return deliver(id, text); });
+  return { ws, s, a, typed };
+}
+const afterGrace = async () => { mock.timers.tick(POLL_GRACE_MS); await flushMicro(); };
+
+test("answered after mc ask-robert gave up: the answer is typed into the asking terminal once", async () => {
+  const { s, a, typed } = terminalAsk();
+  assert.ok((await answerAsk(a.id, "drop it", "robert")).ok);
+  assert.equal((await answerAsk(a.id, "keep it", "operator")).ok, false, "a second answer is refused");
+  await flushMicro();
+  assert.deepEqual(typed, [], "not before the asker had its grace to poll");
+  await afterGrace();
+  assert.equal(typed.length, 1, "typed once");
+  assert.equal(typed[0].id, s.id);
+  assert.equal(typed[0].text, askerAnswerLine(asks.get(a.id)!));
+  assert.match(typed[0].text, /answered by robert after you stopped waiting on it\. Q: Keep the old view\? — A: drop it$/);
+});
+
+test("a live long-poll takes the answer: nothing is typed", async () => {
+  const { a, typed } = terminalAsk();
+  const waited = waitForAskAnswer(a.id, 55_000);
+  await flushMicro();
+  assert.ok((await answerAsk(a.id, "drop it", "operator")).ok);
+  assert.equal((await waited).answer, "drop it");
+  await afterGrace();
+  assert.deepEqual(typed, []);
+});
+
+test("answered between two polls: the next poll gets it and nothing is typed", async () => {
+  const { a, typed } = terminalAsk();
+  assert.ok((await answerAsk(a.id, "drop it", "operator")).ok);
+  assert.equal((await waitForAskAnswer(a.id, 55_000)).answer, "drop it", "the CLI's next poll returns it at once");
+  await afterGrace();
+  assert.deepEqual(typed, []);
+});
+
+test("the poll's client hung up (its shell killed mc): the answer is typed", async () => {
+  const { s, a, typed } = terminalAsk();
+  const gone = new AbortController();
+  const waited = waitForAskAnswer(a.id, 55_000, gone.signal);
+  gone.abort();
+  assert.equal((await waited).status, "open", "the poll ends with the still-open row");
+  assert.ok((await answerAsk(a.id, "drop it", "operator")).ok);
+  await afterGrace();
+  assert.deepEqual(typed.map((t) => t.id), [s.id]);
+});
+
+test("typed into the asking terminal itself, or parked on with mc when ask: nothing is typed again", async () => {
+  const one = terminalAsk();
+  assert.ok((await answerAsk(one.a.id, "drop it", "operator", { typedIn: one.s.id })).ok);
+  await afterGrace();
+  assert.deepEqual(one.typed, [], "it is already on that terminal's screen");
+
+  const two = terminalAsk();
+  continuations.create({ workspace_id: two.ws.id, session_id: two.s.id, kind: "ask", target: two.a.id, label: "ask is answered" });
+  assert.ok((await answerAsk(two.a.id, "drop it", "operator")).ok);
+  await afterGrace();
+  assert.deepEqual(two.typed, [], "the continuation types its own news in");
+});
+
+test("a late answer whose terminal is gone is logged, not thrown", async () => {
+  const { a, typed } = terminalAsk(() => "terminal is not live");
+  const warn = mock.method(console, "warn", () => {});
+  try {
+    assert.ok((await answerAsk(a.id, "drop it", "operator")).ok);
+    await afterGrace();
+    assert.equal(typed.length, 1, "it tried");
+    assert.match(String(warn.mock.calls.at(-1)?.arguments[0]), /late answer to .+ not typed into .+: terminal is not live/);
+  } finally {
+    warn.mock.restore();
+  }
 });

@@ -8,7 +8,7 @@
  * trigger context, resuming the prior conversation when the backend supports it.
  */
 import type { Job, Run, Ticket } from "./types.js";
-import { asks, jobs, runs, sessions, tickets, workspaces, type Ask } from "./store.js";
+import { asks, continuations, jobs, runs, sessions, tickets, workspaces, type Ask } from "./store.js";
 import { bus } from "./bus.js";
 import { dispatch } from "./dispatcher.js";
 import { isReadOnlyRun } from "./runner.js";
@@ -194,13 +194,17 @@ export async function answerAsk(
   const updated = asks.answer(cur.id, answerText, by);
   if (!updated) return { ok: false, error: `ask already ${cur.status}` };
 
-  // A terminal's ask has no run behind it — its `mc ask-robert` is sitting on the long-poll and the
-  // bus event below is the whole delivery. Everything from here that touches a run is run-only.
+  // A terminal's ask has no run behind it — while its `mc ask-robert` is sitting on the long-poll, the
+  // bus event below is the whole delivery (deliverToAsker covers after). Everything from here that
+  // touches a run is run-only.
   const run = updated.run_id ? runs.get(updated.run_id) : undefined;
   const job = run ? jobs.get(run.job_id) : undefined;
   const tk = updated.ticket_id ? tickets.get(updated.ticket_id) : undefined;
   // Capture before we clear `paused` below — resume still needs "was ended, not live".
   const askingRunEnded = !!run && run.status !== "running";
+  // Read before the event: `mc when ask` fires on it, and its own delivery types the news in.
+  const parked = !!updated.session_id &&
+    continuations.armedFor("ask", updated.id).some((c) => c.session_id === updated.session_id);
 
   bus.publish({
     topic: "ask.answered",
@@ -224,6 +228,8 @@ export async function answerAsk(
   // The terminal that asked is unblocked by the same token — its card goes green again on the wall.
   if (updated.session_id) {
     reportAgentState(updated.session_id, { state: "working", state_label: null, blocked_reason: null, ttl_ms: null });
+    if (updated.session_id === opts.typedIn || parked) handed.delete(updated.id);
+    else void deliverToAsker(updated);
   }
 
   // Robert asked it himself, in a turn that is long over: the answer reaches him as a queued wake.
@@ -305,28 +311,65 @@ async function tellRobertAnswered(ask: Ask, typedIn: string | null): Promise<voi
 }
 
 /**
+ * Terminal asks whose answer a long-poll handed back. `mc ask-robert` stops waiting after its --wait
+ * (15m by default), or dies with the shell that ran it; an answer after that reaches nobody unless
+ * it is typed into the terminal that asked.
+ */
+const handed = new Set<string>();
+/** How long an answer waits for the asker's next poll — `mc` re-polls every ≤55s, at once. */
+export const POLL_GRACE_MS = 5_000;
+let pollGraceMs = POLL_GRACE_MS;
+export function setPollGrace(ms: number): void { pollGraceMs = ms; }
+
+/** The line a terminal's agent reads when the answer to its own question came after it stopped waiting. */
+export const askerAnswerLine = (ask: Ask): string =>
+  `Your question (ask ${ask.id.slice(0, 8)}) was answered by ${ask.answered_by} after you stopped waiting on it. ` +
+  `Q: ${ask.question.slice(0, 300)} — A: ${ask.answer}`;
+
+/**
+ * An answer to a terminal's own question that no long-poll took: typed into that terminal, once.
+ * The grace covers the gap between two polls of a CLI that is still waiting.
+ */
+async function deliverToAsker(ask: Ask): Promise<void> {
+  const sid = ask.session_id!;
+  if (!handed.has(ask.id)) await new Promise((r) => setTimeout(r, pollGraceMs).unref?.());
+  if (handed.delete(ask.id)) return;
+  const why = await deliverToHolder(sid, askerAnswerLine(ask)).catch((e) => String(e?.message ?? e));
+  if (why) console.warn(`[asks] late answer to ${ask.id.slice(0, 8)} not typed into ${sid.slice(0, 8)}: ${why}`);
+}
+
+/**
  * Event-driven long-poll: resolves as soon as `ask.answered` fires for this id, else after
  * `timeoutMs` with the ask's current (still-open) row. No sleep loop — one bus listener + one timer.
+ * `signal`: the client hung up — stop waiting, so an answer after that counts as nobody's.
  */
-export function waitForAskAnswer(id: string, timeoutMs: number): Promise<Ask> {
+export function waitForAskAnswer(id: string, timeoutMs: number, signal?: AbortSignal): Promise<Ask> {
+  const handOver = (a: Ask): Ask => {
+    if (a.status === "answered" && a.session_id) handed.add(a.id);
+    return a;
+  };
   const cur = asks.get(id);
-  if (!cur || cur.status !== "open") return Promise.resolve(cur!);
+  if (!cur || cur.status !== "open") return Promise.resolve(cur ? handOver(cur) : cur!);
   return new Promise((resolve) => {
     let settled = false;
-    const onEvent = (e: { topic: string; ask_id?: string }) => {
-      if (settled || e.topic !== "ask.answered" || e.ask_id !== id) return;
+    const settle = (a: Ask) => {
       settled = true;
       clearTimeout(timer);
       bus.off("event", onEvent);
-      resolve(asks.get(id)!);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(a);
     };
+    const onEvent = (e: { topic: string; ask_id?: string }) => {
+      if (settled || e.topic !== "ask.answered" || e.ask_id !== id) return;
+      settle(handOver(asks.get(id)!));
+    };
+    const onAbort = () => { if (!settled) settle(asks.get(id) ?? cur); };
     const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      bus.off("event", onEvent);
-      resolve(asks.get(id) ?? cur);
+      if (!settled) settle(asks.get(id) ?? cur);
     }, timeoutMs);
     timer.unref?.();
     bus.on("event", onEvent);
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
