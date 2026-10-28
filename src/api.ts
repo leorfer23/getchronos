@@ -230,6 +230,23 @@ export function activeDeskSessions(workspaceId: string | null): Session[] {
 }
 
 /**
+ * GET /activity as this caller may see it. A workspace token reads its own workspace's trail and
+ * nothing else, whatever `?workspace=` says: rows carry what was typed into a terminal
+ * (`session.input`) and what its agent said (`focus.event`), and a client's agent reading another
+ * client's was the leak. Admin (`ws: null`) still filters by any workspace, or none.
+ */
+export function scopedActivity(scope: { ws: string | null }, q: Record<string, unknown>): any[] {
+  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+  return activity.list({
+    workspace_id: scope.ws ?? str(q.workspace),
+    topic: str(q.topic),
+    actor: str(q.actor),
+    entity: str(q.entity),
+    limit: q.limit ? Number(q.limit) : undefined,
+  });
+}
+
+/**
  * GET /desk's Lead fields (LEADS.md Desk spec): for every row, the live Lead that opened it
  * (`lead_id`, null if none or that Lead has since ended) and, for a Lead row, its live worker
  * count. `live` is the live-session list, computed once per request by the caller — never per row.
@@ -2405,15 +2422,9 @@ export function startServer() {
 
   // Durable activity/decision trail (bus events). Newest first; filter by workspace/topic/actor.
   api.get("/activity", (req, res) => {
-    res.json(
-      activity.list({
-        workspace_id: req.query.workspace as string | undefined,
-        topic: req.query.topic as string | undefined,
-        actor: req.query.actor as string | undefined,
-        entity: req.query.entity as string | undefined,
-        limit: req.query.limit ? Number(req.query.limit) : undefined,
-      })
-    );
+    const scope = callerScope(req);
+    if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    res.json(scopedActivity(scope, req.query));
   });
 
   api.get("/jobs", (req, res) => {
