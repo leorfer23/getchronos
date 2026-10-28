@@ -135,3 +135,46 @@ test("a finished cursor turn quotes the agent, not the follow-up composer, statu
   assert.equal(p.kind, "turn");
   assert.equal(p.question, "PAPAYA");
 });
+
+// Claude Code's AskUserQuestion, as the rendered frame reads (shape copied from a live terminal):
+// a tab bar, the question in a bordered block, options with their descriptions under them, then a
+// rule and "Chat about this" below "Type something.".
+const ASK_USER_QUESTION = [
+  "⏺ Two of the three reports are already on main. I'll ask before scoping the rest.",
+  "────────────────────────────────────────────────────────────────────────────────",
+  " ☐ Scope ",
+  "",
+  "│ The notes doc has 3 reports left to build: Ending AR, Fee Accrual and Payouts ",
+  "│ (the other two are already on main). What should this terminal cover?",
+  "  ",
+  "❯ 1. 3 PRs, one per report (Recommended)",
+  "     One PR per report with every agreed change. Open decisions get a safe default",
+  "     and are listed back for review. ~3-4h.",
+  "  2. Fee Accrual only first",
+  "     The only one with a gap in the totals.",
+  "  3. Reply first",
+  "     No code. Send the list of decisions that need a call before building.",
+  "  4. Type something.",
+  "────────────────────────────────────────────────────────────────────────────────",
+  "  5. Chat about this",
+  "",
+  "Enter to select · ↑/↓ to navigate · Esc to cancel",
+];
+
+test("an AskUserQuestion dialog is a select: descriptions and the rule above 'Chat about this' stay inside the menu", () => {
+  const p = detectPrompt(ASK_USER_QUESTION)!;
+  assert.equal(p.kind, "select");
+  assert.deepEqual(p.options!.map((o) => o.label), ["3 PRs, one per report (Recommended)", "Fee Accrual only first", "Reply first", "Type something.", "Chat about this"]);
+  assert.deepEqual(p.options!.map((o) => o.offset), [0, 1, 2, 3, 4]);
+  assert.match(p.options![0].detail!, /^One PR per report .* ~3-4h\.$/);
+  assert.equal(p.options![3].detail, undefined);
+  // The whole question, not its last three rows — and not the tab bar above it.
+  assert.match(p.question, /^The notes doc has 3 reports left .* What should this terminal cover\?$/);
+});
+
+test("indented rows above a menu are the question's, not an option's", () => {
+  const p = detectPrompt(["Pick a target", "     (staging is down today)", "❯ 1. prod", "  2. staging"])!;
+  assert.equal(p.kind, "select");
+  assert.equal(p.options![0].detail, undefined);
+  assert.match(p.question, /staging is down today/);
+});

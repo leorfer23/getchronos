@@ -597,6 +597,14 @@ async function hook(backend) {
     const q = Array.isArray(input.questions) ? input.questions[0] || {} : input;
     const opts = (q.options || []).map((o) => (typeof o === "string" ? o : o?.label)).filter(Boolean);
     ev = { event: "ask", question: String(q.question || q.header || "asked you"), options: opts };
+    // Every question whole, with each option's description: Focus draws the dialog from these.
+    const all = (Array.isArray(input.questions) ? input.questions : [input]).slice(0, 4).map((x) => ({
+      question: String(x?.question || x?.header || "").slice(0, 2000),
+      ...(x?.header ? { header: String(x.header).slice(0, 80) } : {}),
+      ...(x?.multiSelect ? { multi: true } : {}),
+      options: (x?.options || []).slice(0, 8).map((o) => (typeof o === "string" ? { label: o.slice(0, 200) } : { label: String(o?.label || "").slice(0, 200), ...(o?.description ? { description: String(o.description).slice(0, 600) } : {}) })).filter((o) => o.label),
+    })).filter((x) => x.question);
+    if (all.length) ev.questions = all;
   } else if (name === "pretooluse" && /^ExitPlanMode$/i.test(tool)) ev = { event: "ask", question: "approve the plan?", options: ["yes", "no"] };
   else if (name === "posttooluse" && /^(AskUserQuestion|ask_user_question|ask_user|ExitPlanMode)$/i.test(tool)) ev = { event: "answered" };
   // Grok fires this per tool even when always-approve auto-answers it — no PostToolUse/answered

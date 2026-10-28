@@ -515,9 +515,40 @@
   .fx-hist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:7px; }
   .fx-hist li { display:grid; grid-template-columns:44px 1fr; column-gap:8px; font-size:14.5px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere; }
   .fx-hist time { font:12px ui-monospace,Menlo,monospace; color:var(--faint); padding-top:2px; }
-  .fx-hist .you { color:var(--accent); }
   .fx-hist .a { color:var(--ink); font-weight:600; }
   .fx-more { border:0; background:none; color:var(--accent); font:inherit; font-size:12.5px; font-weight:650; padding:6px 0 0; cursor:pointer; }
+  /* A question dialog open in its CLI: one big button per answer, its description under it. */
+  .fx-choices { display:flex; flex-direction:column; gap:8px; margin-top:12px; }
+  .fx-choice { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--surface);
+    color:var(--ink); font:inherit; text-align:left; cursor:pointer; }
+  .fx-choice b { font-size:15.5px; font-weight:650; }
+  .fx-choice em { font-style:normal; font-size:11.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); }
+  .fx-choice span { flex-basis:100%; font-size:14px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere; }
+  .fx-choice:hover:not([disabled]) { border-color:var(--accent); background:var(--accent-soft); }
+  .fx-choice.best { border-color:var(--accent); }
+  .fx-choice[disabled] { cursor:default; opacity:.6; }
+  /* Talk: your line, then what it said back. The newest answer reads in full. */
+  .fx-talk .turn { padding:10px 0; border-top:1px solid var(--line); }
+  .fx-talk .turn:first-of-type { border-top:0; padding-top:0; }
+  .fx-talk .turn.foldable { cursor:pointer; }
+  .fx-talk .tq { display:grid; grid-template-columns:44px 1fr; column-gap:8px; font-size:15px; line-height:1.45; color:var(--accent); font-weight:600; overflow-wrap:anywhere; white-space:pre-wrap; }
+  .fx-talk .tq time { font:12px ui-monospace,Menlo,monospace; color:var(--faint); font-weight:400; padding-top:3px; }
+  .fx-talk .tq.opening { display:block; font-size:11.5px; font-weight:750; letter-spacing:.09em; text-transform:uppercase; color:var(--faint); }
+  .fx-talk .ta { margin:6px 0 0 52px; }
+  .fx-talk .tq.opening + .ta, .fx-talk .tq.opening + .fx-more { margin-left:0; }
+  .fx-talk .fx-more { margin-left:52px; padding:4px 0 0; }
+  .fx-talk .ta.fx-sum { font-size:16px; }
+  .fx-talk .ta.folded { font-size:14px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .fx-talk .ta.wait { font-size:14px; color:var(--faint); }
+  /* Is it working: printing now (the dot blinks off the page's 1Hz clock) or quiet since when. */
+  .fx-pulse { display:flex; align-items:baseline; gap:8px; margin-top:8px; font-size:13.5px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:0; }
+  .fx-pulse i { flex:none; width:8px; height:8px; border-radius:50%; background:var(--faint); align-self:center; }
+  .fx-pulse.on i { background:var(--p-work,var(--accent)); }
+  body.blink .fx-pulse.on i { opacity:.3; }
+  .fx-pulse b { flex:none; font-weight:650; color:var(--ink); }
+  .fx-pulse:not(.on) b { color:var(--muted); }
+  .fx-pulse .what { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
+  .fx-pulse time { flex:none; font:12px ui-monospace,Menlo,monospace; color:var(--faint); }
   /* The hand-off: everything needed to say yes, and the yes. */
   .fx-out.ready { border-color:var(--accent); }
   .fx-sum { font-size:17.5px; line-height:1.5; color:var(--ink); overflow-wrap:anywhere; }
@@ -2427,7 +2458,7 @@ function renderStage() {
   const bits = [
     s.live ? `${phChip(ph).outerHTML}<span title="in this state for">${esc(age(new Date(phaseSince(s)).toISOString()))}</span>` : `<b>ended</b> ${esc(age(s.ended_at || s.created_at))}`,
   ].filter(Boolean);
-  if (s.live && s.status?.subagents) bits.push(`⧗ ${s.status.subagents} subagent${s.status.subagents === 1 ? "" : "s"}`);
+  if (s.live && s.status?.subagents) bits.push(`<span title="Running in the background — you can still talk to it">⧗ ${s.status.subagents} in the background</span>`);
   if (s.live && s.status?.progress) bits.push(`${s.status.progress.n}/${s.status.progress.of}`);
   // A Lead (LEADS.md): its own worker count, or a link back to the Lead that opened this terminal —
   // clickable only while that Lead is still on the rail.
@@ -2552,12 +2583,13 @@ function tidyLinks(root) {
     a.target = "_blank"; a.rel = "noopener";
   }
 }
-// ── Focus: goal → decisions → hand-off ───────────────────────────────────────────────────────
-// Three cards, read top down (Leo, 2026-10-28): what this terminal is for and how we will know it is
-// done — with how far along it is and how long it has run — then every decision it needs from you,
-// then the hand-off you approve the merge/deploy from. Each part is fed by an `mc` call the agent
-// makes (FOCUS_CONTRACT in src/terminal.ts says which and when): `mc goal set --done-when`,
-// `mc progress --eta`, `mc ask-robert`, `mc outcome`.
+// ── Focus: goal → decisions → talk → hand-off ────────────────────────────────────────────────
+// Four cards, read top down (Leo, 2026-10-28): what this terminal is for and how we will know it is
+// done — with how far along it is, how long it has run, and whether it is printing right now — then
+// every decision it needs from you, then Talk (each line you sent it beside what it answered: a
+// question mid-run, a brainstorm), then the hand-off you approve the merge/deploy from. The agent
+// feeds them with `mc` calls (FOCUS_CONTRACT in src/terminal.ts says which and when): `mc goal set
+// --done-when`, `mc progress --eta`, `mc ask-robert` or its CLI's question tool, `mc outcome`.
 //
 // What is NOT here any more: the timeline, the commands, the files it touched, the narration. "I
 // don't need the raw terminal to see what the agent is doing" — the raw terminal is ⌘E away.
@@ -2610,17 +2642,17 @@ async function goalsLoad(id, total) {
 
 // Its questions (open and answered) and its hand-off: one read for the terminal on stage, again when
 // anything it would change moves — a phase, an ask count, a new hand-off — and at most every 15s.
-const D = { id: null, asks: [], outcome: null, at: 0, busy: false, sig: "", all: false, armShip: 0, drafts: new Map() };
-const decisionsSig = (s) => [s.id, s.status?.phase, s.status?.asks || 0, s.status?.line || "", s.outcome_at || "", s.state].join("|");
+const D = { id: null, asks: [], outcome: null, dialog: null, at: 0, busy: false, sig: "", all: false, armShip: 0, drafts: new Map() };
+const decisionsSig = (s) => [s.id, s.status?.phase, s.status?.asks || 0, s.status?.line || "", s.outcome_at || "", s.state, s.prompt?.question || ""].join("|");
 async function decisionsLoad(s, force) {
   if (!s) return;
-  if (D.id !== s.id) Object.assign(D, { id: s.id, asks: [], outcome: null, at: 0, sig: "", all: false, armShip: 0 });
+  if (D.id !== s.id) Object.assign(D, { id: s.id, asks: [], outcome: null, dialog: null, at: 0, sig: "", all: false, armShip: 0 });
   const sig = decisionsSig(s);
   if (D.busy || (!force && sig === D.sig && Date.now() - D.at < 15000)) return;
   D.busy = true; D.sig = sig;
   try {
     const r = await api("/sessions/" + s.id + "/decisions");
-    if (D.id === s.id) { D.asks = r.asks || []; D.outcome = r.outcome || null; }
+    if (D.id === s.id) { D.asks = r.asks || []; D.outcome = r.outcome || null; D.dialog = r.dialog || null; }
   } catch {
     // An older daemon, or the terminal just closed: the cards fall back to what the row carries.
   } finally {
@@ -2679,7 +2711,7 @@ function focusGoal(s) {
   // right below carries that, with its buttons, and saying it twice is how a board gets skimmed.
   const asking = ph === "decide" || ph === "blocked" || st.on === "robert" || (D.id === s.id && D.asks.some((a) => a.status === "open"));
   const line = s.live ? (asking ? "" : oneLiner(s).text || "") : s.end_reason ? "↪ " + s.end_reason : "";
-  const now = line && !reached ? `<div class="fx-now">${esc(line)}</div>` : "";
+  const now = (line && !reached ? `<div class="fx-now">${esc(line)}</div>` : "") + pulseHtml(s);
   const cur = s.ship || "ask";
   const armed = Date.now() - D.armShip < 2500;
   const ship = s.live
@@ -2694,8 +2726,156 @@ function focusGoal(s) {
 }
 
 const DAEMON_LINE = /^\s*(?:\/[a-z]|\[chronos\b)/i;
+
+// Is it working? The phase chip is the daemon's reading; this line is the evidence under it: whether
+// its terminal is printing right now (any pty byte; quiet after 6s of silence) and the last thing it
+// did, with how long ago. A chip that says "working" over "quiet 9m" is a reading to distrust.
+function pulseHtml(s) {
+  if (!s.live || s.cloud_agent_id || s.focus_only) return "";
+  const printing = s.quiet === false;
+  let last = null;
+  // Its last tool call, not its words: those are in Talk, and the call is what it is doing.
+  if (F.id === s.id) for (let i = F.events.length - 1; i >= 0; i--) { const e = F.events[i]; if (e.kind === "act" && e.ts) { last = e; break; } }
+  const what = last ? cleanAct(last.text) : "";
+  const quietAt = !printing && s.last_out ? s.last_out : 0;
+  const state = printing ? `<b>printing now</b>` : quietAt ? `<b>quiet <time data-clock="ago" data-at="${quietAt}">${esc(elapsedOf(quietAt))}</time></b>` : `<b>quiet</b>`;
+  const step = what ? `<span class="what" title="${esc(what)}">${esc(clip(what, 160))}</span><time data-clock="ago" data-at="${last.ts}" data-suffix=" ago">${esc(elapsedOf(last.ts))} ago</time>` : "";
+  return `<div class="fx-pulse${printing ? " on" : ""}" title="Is it working? Whether its terminal is printing right now, and the last thing it did."><i></i>${state}${step}</div>`;
+}
+const plainLine = (t) => String(t || "").replace(/[*_`#>]/g, "").replace(/\s+/g, " ").trim();
+
+// A question dialog open in its CLI — Claude Code's AskUserQuestion. Its words come from the hook
+// (D.dialog: each question whole, every option with its description); the menu read off its screen
+// (s.prompt) says which question is showing and which keys pick each answer — the same keys a
+// person would press. "Type something." is that menu's free-text row; "Chat about this" closes it.
+const TYPE_RE = /^type something\.?$/i, CHAT_RE = /^chat about this\.?$/i, REC_RE = /\s*\(recommended\)\s*$/i;
+function dialogOf(s, p, ph) {
+  const menu = p && p.kind === "select" ? p.options || [] : [];
+  const all = D.id === s.id && Array.isArray(D.dialog) ? D.dialog : [];
+  if (!menu.length && !(all.length && ph === "decide")) return null;
+  if (!all.length && !menu.some((o) => o.detail || TYPE_RE.test(o.label) || CHAT_RE.test(o.label))) return null;
+  const sq = norm(p?.question || "");
+  let at = all.findIndex((q) => { const a = norm(q.question); return !!sq && (a.includes(sq.slice(-80)) || sq.includes(a.slice(0, 80))); });
+  if (at < 0 && all.length === 1 && (!menu.length || all[0].options.some((o) => menu.some((m) => norm(m.label).slice(0, 28) === norm(o.label).slice(0, 28))))) at = 0;
+  const q = at >= 0 ? all[at] : null;
+  const find = (label) => menu.findIndex((m) => norm(m.label).slice(0, 28) === norm(label).slice(0, 28));
+  const choices = q
+    ? q.options.map((o) => ({ label: o.label, detail: o.description || "", i: find(o.label) }))
+    : menu.map((o, i) => ({ label: o.label, detail: o.detail || "", i })).filter((c) => !TYPE_RE.test(c.label) && !CHAT_RE.test(c.label));
+  return {
+    question: q ? q.question : p?.question || "", header: q?.header || "", multi: !!q?.multi,
+    n: at + 1, of: all.length, choices, onScreen: menu.length > 0,
+    type: menu.findIndex((o) => TYPE_RE.test(o.label)), chat: menu.findIndex((o) => CHAT_RE.test(o.label)),
+  };
+}
+function dialogHtml(d) {
+  const more = d.of > 1 && d.n > 0 && d.n < d.of;
+  const btns = d.choices.map((c) => {
+    const rec = REC_RE.test(c.label), ok = c.i >= 0 && !d.multi;
+    return `<button type="button" class="fx-choice${rec ? " best" : ""}" ${ok ? `data-dopt="${c.i}"${more ? " data-dmore" : ""}` : `disabled title="not on its screen yet — open the terminal (⌘E)"`}>`
+      + `<b>${esc(c.label.replace(REC_RE, ""))}</b>${rec ? `<em>recommended</em>` : ""}${c.detail ? `<span>${esc(c.detail)}</span>` : ""}</button>`;
+  }).join("");
+  const extra = [];
+  if (d.type >= 0 && !d.multi) extra.push(`<input data-dtext="${d.type}"${more ? " data-dmore" : ""} value="${esc(D.drafts.get("dialog") || "")}" placeholder="or answer in your own words · ⏎" autocomplete="off">`);
+  if (d.chat >= 0) extra.push(`<button type="button" data-dopt="${d.chat}" data-dmore title="Close the question and talk it through">Talk it over first</button>`);
+  if (d.multi || !d.onScreen) extra.push(`<button type="button" data-fterm>Open the terminal (⌘E)</button>`);
+  const who = [`<b>It asked you</b>`, d.header ? esc(d.header) : "", d.of > 1 && d.n > 0 ? `question ${d.n} of ${d.of}` : "", d.multi ? "several can be picked — pick them in the terminal" : ""].filter(Boolean).join(" · ");
+  return `<div class="fx-q dialog"><div class="who">${who}</div><div class="q">${esc(d.question)}</div>`
+    + (btns ? `<div class="fx-choices">${btns}</div>` : "") + (extra.length ? `<div class="fx-opts">${extra.join("")}</div>` : "") + `</div>`;
+}
+// Answering it: the keys that move its menu's cursor to the row, then Enter. Free text moves to
+// "Type something.", types the line and presses Enter (Claude Code 2.1: verified in a live TUI).
+const arrowsTo = (o) => Array(Math.abs(o.offset)).fill(o.offset > 0 ? "down" : "up");
+async function answerDialog(s, i, text, more) {
+  const p = s.prompt && typeof s.prompt === "object" ? s.prompt : null;
+  const o = p?.options?.[i]; if (!o) return toast("that question is gone from its screen");
+  if (text == null) await answer(s.id, optionBody(o));
+  else {
+    const keys = arrowsTo(o);
+    if (keys.length) await answer(s.id, { keys });
+    await new Promise((r) => setTimeout(r, 120 * keys.length + 300));
+    await answer(s.id, { text, enter: true });
+    D.drafts.delete("dialog");
+  }
+  // One answer of several: stay on it for the next question. The last one: on to whatever needs you next.
+  if (more) { s.prompt = null; renderStory(); toast("answered"); } else advance(s.id, "answered");
+}
+
+// ③ Talk: what you said to it along the way and what it said back, paired — a question asked mid-run
+// and its answer, or a brainstorm. The newest exchange is open in full; older ones fold to a line.
+const T = { id: null, open: new Set(), all: false, pending: null, follow: false, sig: "", shows: "" };
+function talkTurns(s) {
+  const turns = [];
+  let cur = null;
+  const firstUser = F.events.find((e) => e.kind === "user");
+  for (const e of F.events) {
+    if (e.kind === "user") {
+      // The daemon types too — the cache keeper's `/compact`, a `[chronos budget]` notice — and neither is
+      // you talking. Slash commands are mechanics.
+      if (SYS_LINE.test(e.text) || DAEMON_LINE.test(e.text)) continue;
+      const t = cleanUser(e.text); if (!t) continue;
+      if (cur && !cur.says.length && norm(cur.you) === norm(t)) continue;
+      // The first line of a terminal opened WITH a goal is the daemon's seed (goal + contract), not you
+      // talking. A blank terminal's first line is yours, and shows like any other.
+      cur = { seq: e.seq, at: e.ts || 0, you: t, opening: e === firstUser && !!s.spawn_goal, says: [], cut: 0 };
+      turns.push(cur);
+    } else if (e.kind === "act" || e.kind === "say" || e.kind === "understanding" || e.kind === "result") {
+      if (!cur) { cur = { seq: e.seq, at: e.ts || 0, you: "", opening: true, says: [], cut: 0 }; turns.push(cur); }
+      // Its answer is what it wrote after its last tool call (a reply and its Summary are two events
+      // of one message); what it said between calls is narration, folded above the answer.
+      if (e.kind === "act") cur.cut = cur.says.length;
+      else cur.says.push(e);
+    }
+  }
+  return turns.filter((t) => t.says.length || !t.opening);
+}
+const sayText = (e) => stripLead(stripLead(stripLead(e.text, "understanding"), "result"), "summary");
+function focusTalk(s) {
+  if (T.id !== s.id) Object.assign(T, { id: s.id, open: new Set(), all: false, pending: null, follow: false, sig: "", shows: "" });
+  T.shows = "";
+  if (F.id !== s.id) return "";
+  const turns = talkTurns(s);
+  // Your line from the composer, until its own record lands in the transcript.
+  if (T.pending && turns.some((t) => !t.opening && norm(t.you) === norm(T.pending.text) && (!t.at || t.at >= T.pending.at - 10000))) T.pending = null;
+  if (!turns.length && !T.pending) return "";
+  const working = s.live && s.quiet === false;
+  const last = turns[turns.length - 1];
+  const shown = T.all ? turns : turns.slice(-6);
+  const qLine = (t) => t.opening ? `<div class="tq opening">from the start</div>`
+    : `<div class="tq"><time>${esc(t.at ? TermCompanion.hhmm(t.at) : "")}</time><span>${esc(clip(t.you, 600))}</span></div>`;
+  const rows = shown.map((t) => {
+    const newest = t === last && !T.pending;
+    let a;
+    if (!t.says.length) a = `<div class="ta wait">${newest && working ? "working on it…" : "nothing said back yet"}</div>`;
+    else if (newest || T.open.has(t.seq)) {
+      const words = t.says.map(sayText);
+      const from = t.cut < words.length ? t.cut : words.length - 1;
+      const every = T.open.has("w" + t.seq);
+      const body = (every ? words : words.slice(from)).join("\n\n");
+      if (newest) T.shows = words.slice(from).join("\n\n");
+      a = (from > 0 ? `<button type="button" class="fx-more" data-tw="${t.seq}">${every ? "only its answer" : `+ ${from} earlier note${from === 1 ? "" : "s"}`}</button>` : "")
+        + `<div class="ta fx-sum">${md(body)}</div>`;
+    } else a = `<div class="ta folded">${esc(clip(plainLine(sayText(t.says[t.says.length - 1])), 220))}</div>`;
+    const fold = !newest && t.says.length ? ` data-topen="${t.seq}" title="${T.open.has(t.seq) ? "fold" : "open the whole answer"}"` : "";
+    return `<div class="turn${newest ? " last" : ""}${fold ? " foldable" : ""}"${fold}>${qLine(t)}${a}</div>`;
+  });
+  if (T.pending) rows.push(`<div class="turn last"><div class="tq"><time>${esc(TermCompanion.hhmm(T.pending.at))}</time><span>${esc(clip(T.pending.text, 600))}</span></div><div class="ta wait">sent — waiting for it to answer…</div></div>`);
+  return `<section class="fx fx-talk"><div class="fx-top"><span class="fx-lbl">Talk</span><span class="sp"></span>`
+    + (turns.length > 6 ? `<button type="button" class="fx-more" data-tall>${T.all ? "only the last 6" : "all " + turns.length}</button>` : "")
+    + `</div>${rows.join("")}</section>`;
+}
+// You just sent it something from Focus: bring the exchange into view, and again when its answer starts.
+function talkFollow() {
+  if (!T.follow) return;
+  const el = qs("#story .fx-talk .turn.last"); if (!el) return;
+  const sig = (T.pending ? "p" : "r") + el.textContent.length;
+  if (sig === T.sig) return;
+  const first = !T.sig || T.sig[0] !== sig[0];
+  T.sig = sig;
+  if (first) el.scrollIntoView({ block: "start", behavior: "smooth" });
+}
 // ② Decisions: what it needs from you now — its asks (answerable here even while Robert still has
-// them), the question on its screen, a wall — then everything decided so far, your steering included.
+// them), the question dialog or menu on its screen, a wall — then the questions decided so far.
 function focusDecisions(s) {
   const p = s.prompt && typeof s.prompt === "object" ? s.prompt : null;
   const ph = phaseOf(s);
@@ -2713,7 +2893,9 @@ function focusDecisions(s) {
         + `<div class="fx-opts">${(a.options || []).map((o, i) => `<button type="button" data-aans="${esc(a.id)}" data-v="${esc(o)}" class="${i === 0 ? "go" : ""}">${esc(o)}</button>`).join("")}`
         + `<input data-atext="${esc(a.id)}" value="${esc(draft)}" placeholder="${(a.options || []).length ? "or say something else" : "your answer"} · ⏎" autocomplete="off"></div></div>`);
     }
-    if ((s.state === "waiting" || s.state === "blocked") && p?.question && p.kind !== "turn") {
+    const dlg = s.state !== "working" ? dialogOf(s, p, ph) : null;
+    if (dlg) open.push(dialogHtml(dlg));
+    else if ((s.state === "waiting" || s.state === "blocked") && p?.question && p.kind !== "turn") {
       let opts = "";
       if (p.kind === "select" && p.options?.length) opts = p.options.map((o, i) => `<button type="button" data-fopt="${i}" class="${i === 0 ? "go" : i === p.options.length - 1 && p.options.length > 1 ? "no" : ""}"><kbd>${i === 0 ? "y" : i === 1 ? "a" : i === p.options.length - 1 ? "n" : ""}</kbd>${esc(o.label)}</button>`).join("");
       else if (p.kind === "yn") opts = `<button type="button" data-fyn="y" class="go"><kbd>y</kbd>Yes</button><button type="button" data-fyn="n" class="no"><kbd>n</kbd>No</button>`;
@@ -2723,23 +2905,16 @@ function focusDecisions(s) {
       const why = s.status?.line || s.state_label || REASON[s.blocked_reason] || String(s.blocked_reason || "blocked").replace(/_/g, " ");
       open.push(`<div class="fx-q blocked"><div class="who"><b>Blocked</b></div><div class="q">${esc(why)}</div><div class="fx-opts"><button type="button" data-ftype class="go">Reply ⌨</button><button type="button" data-fterm>Open the terminal (⌘E)</button></div></div>`);
     }
+    // Never "decide" with nothing on the card to decide: whatever it stopped on that this page could
+    // not read (a dialog shape it does not know yet) still gets its line and a way in.
+    if (!open.length && ph === "decide")
+      open.push(`<div class="fx-q"><div class="who"><b>Waiting on you</b></div><div class="q">${esc(s.status?.line || "It stopped for you, but its question did not reach this card.")}</div><div class="fx-opts"><button type="button" data-ftype class="go">Reply ⌨</button><button type="button" data-fterm>Open the terminal (⌘E)</button></div></div>`);
   }
-  // What was decided: answered asks and the lines you typed into it, oldest first.
+  // What was decided: answered asks, oldest first. The lines you typed into it are in Talk, below,
+  // each beside what it said back.
   const hist = [];
   for (const a of asks) if (a.status === "answered")
     hist.push({ at: Date.parse(a.answered_at || a.created_at) || 0, html: `${esc(clip(a.question, 220))} → <span class="a">${esc(clip(a.answer || "", 220))}</span>${a.answered_by && a.answered_by !== "operator" && a.answered_by !== "human" ? ` <span>(${esc(a.answered_by)})</span>` : ""}` });
-  if (F.id === s.id) {
-    const firstUser = F.events.find((e) => e.kind === "user");
-    let prev = "";
-    for (const e of F.events) {
-      // The daemon types too — the cache keeper's `/compact`, a `[chronos budget]` notice — and neither is
-      // you steering. Slash commands are mechanics, not decisions.
-      if (e.kind !== "user" || (e === firstUser && (s.spawn_goal || s.first_prompt)) || SYS_LINE.test(e.text) || DAEMON_LINE.test(e.text)) continue;
-      const t = cleanUser(e.text); if (!t || norm(t) === prev) continue;
-      prev = norm(t);
-      hist.push({ at: e.ts || 0, html: `<span class="you">you · ${esc(clip(t, 260))}</span>` });
-    }
-  }
   hist.sort((a, b) => a.at - b.at);
   if (!open.length && !hist.length) return "";
   const shown = D.all ? hist : hist.slice(-5);
@@ -2772,6 +2947,7 @@ function focusOutcome(s) {
   const prHtml = prs.length
     ? `<div class="fx-sub">Pull request${prs.length === 1 ? "" : "s"}</div><div class="fx-prs">` + prs.map((p) => pinPrHtml(p).replace(/<\/a>$/, (p.ci ? `<span class="ci ${esc(p.ci)}">${CI[p.ci] || ""}</span>` : "") + "</a>")).join("") + `</div>` + (diff ? `<div class="drow" style="margin-top:6px">${diff}</div>` : "")
     : diff ? `<div class="drow" style="margin-top:10px">${diff}</div>` : "";
+  const inTalk = !o && !!F.headline && T.id === s.id && norm(T.shows).includes(norm(stripLead(F.headline, "summary")));
   const fallback = !o && (F.headline || s.summary || "");
   const stopped = !s.live || ["review", "your_turn", "decide", "blocked"].includes(ph) || !!s.goal_done_at;
   if (!o && !(fallback && stopped)) {
@@ -2790,6 +2966,7 @@ function focusOutcome(s) {
       + (o.proof.length ? `<div class="fx-sub">Proof</div><ul class="fx-proof">${o.proof.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : "")
       + shots + prHtml
       + (o.shipped?.length ? `<div class="fx-shipped">Shipped: ${esc(o.shipped.join(" · "))}</div>` : "")
+    : inTalk ? `<div class="fx-wait">No hand-off filed — its last answer is open in Talk, above.</div>` + prHtml
     : `<div class="fx-sum">${md(stripLead(fallback, "summary"))}</div>` + prHtml;
   const ASKW = { merge: "approve the merge", deploy: "approve the deploy", "merge+deploy": "approve merge + deploy", review: "a read", none: "nothing" };
   const acts = [];
@@ -2832,11 +3009,14 @@ function renderStory() {
   for (let i = evs.length - 1; i >= 0; i--) if (evs[i].kind === "result") { res = evs[i]; break; }
   F.headline = res ? stripLead(res.text, "result") : "";
   const body = qs("#story");
-  const typing = document.activeElement?.matches?.("#story input[data-atext]") ? { id: document.activeElement.dataset.atext, pos: document.activeElement.selectionStart } : null;
-  body.innerHTML = focusGoal(s) + focusDecisions(s) + focusOutcome(s);
+  const act = document.activeElement;
+  const typing = act?.matches?.("#story input[data-atext]") ? { sel: `input[data-atext="${CSS.escape(act.dataset.atext)}"]`, pos: act.selectionStart }
+    : act?.matches?.("#story input[data-dtext]") ? { sel: "input[data-dtext]", pos: act.selectionStart } : null;
+  body.innerHTML = focusGoal(s) + focusDecisions(s) + focusTalk(s) + focusOutcome(s);
   tidyLinks(body);
   shotsHydrate(s, body);
-  if (typing) { const el = body.querySelector(`input[data-atext="${CSS.escape(typing.id)}"]`); if (el) { el.focus(); el.setSelectionRange(typing.pos, typing.pos); } }
+  if (typing) { const el = body.querySelector(typing.sel); if (el) { el.focus(); el.setSelectionRange(typing.pos, typing.pos); } }
+  talkFollow();
 }
 // Answering an ask from its card: the same door Robert and `mc answer` use. An ask still with Robert
 // is answerable too — you deciding it yourself is faster than waiting for him to hand it up.
@@ -2861,15 +3041,32 @@ async function setShip(s, k) {
   } catch (err) { toast(String(err.message).slice(0, 120)); }
   renderStory();
 }
-qs("#story").addEventListener("input", (e) => { const t = e.target.closest("input[data-atext]"); if (t) D.drafts.set(t.dataset.atext, t.value); });
+qs("#story").addEventListener("input", (e) => {
+  const t = e.target.closest("input[data-atext]"); if (t) D.drafts.set(t.dataset.atext, t.value);
+  const d = e.target.closest("input[data-dtext]"); if (d) D.drafts.set("dialog", d.value);
+});
 qs("#story").addEventListener("keydown", (e) => {
-  const t = e.target.closest("input[data-atext]"); if (!t || e.key !== "Enter") return;
+  if (e.key !== "Enter") return;
+  const d = e.target.closest("input[data-dtext]");
+  if (d) {
+    e.preventDefault(); e.stopPropagation();
+    const s = S.active && byId(S.active), text = d.value.trim();
+    if (s && text) answerDialog(s, Number(d.dataset.dtext), text, d.hasAttribute("data-dmore"));
+    return;
+  }
+  const t = e.target.closest("input[data-atext]"); if (!t) return;
   e.preventDefault(); e.stopPropagation();
   const s = S.active && byId(S.active); if (s) answerAskFromFocus(s, t.dataset.atext, t.value.trim());
 });
 qs("#story").addEventListener("click", (e) => {
   const s = S.active && byId(S.active); if (!s) return;
   const a = e.target.closest("[data-aans]"); if (a) return answerAskFromFocus(s, a.dataset.aans, a.dataset.v);
+  const dq = e.target.closest("[data-dopt]"); if (dq) return answerDialog(s, Number(dq.dataset.dopt), null, dq.hasAttribute("data-dmore"));
+  if (e.target.closest("a")) return;
+  const tw = e.target.closest("[data-tw]"); if (tw) { const k = "w" + tw.dataset.tw; if (T.open.has(k)) T.open.delete(k); else T.open.add(k); return renderStory(); }
+  if (e.target.closest("[data-tall]")) { T.all = !T.all; return renderStory(); }
+  const to = e.target.closest("[data-topen]");
+  if (to && !String(window.getSelection?.() || "")) { const k = Number(to.dataset.topen); if (T.open.has(k)) T.open.delete(k); else T.open.add(k); return renderStory(); }
   const sh = e.target.closest("[data-ship]"); if (sh) return setShip(s, sh.dataset.ship);
   if (e.target.closest("[data-fterm]")) return setMode("term");
   if (e.target.closest("[data-dall]")) { D.all = !D.all; return renderStory(); }
@@ -2920,6 +3117,7 @@ function boardTick() {
     if (el.dataset.clock === "run") el.textContent = elapsedOf(runSince(s));
     else if (el.dataset.clock === "phase") el.textContent = elapsedOf(at);
     else if (el.dataset.clock === "eta" && at) { el.textContent = etaWord(at); el.classList.toggle("over", at < Date.now()); }
+    else if (el.dataset.clock === "ago" && at) el.textContent = elapsedOf(at) + (el.dataset.suffix || "");
   }
   if (s.id === C.id) compPinsLoad(s.id);
   decisionsLoad(s);
@@ -3714,6 +3912,11 @@ qs("#composer").addEventListener("submit", (e) => {
   const text = say.value.trim(); if (!text || !S.active) return;
   say.value = ""; say.style.height = "auto";
   answer(S.active, { text, enter: true });
+  if (S.mode === "focus" && byId(S.active)?.live) {
+    if (T.id !== S.active) Object.assign(T, { id: S.active, open: new Set(), all: false, shows: "" });
+    Object.assign(T, { pending: { text, at: Date.now() }, follow: true, sig: "" });
+    renderStory();
+  }
 });
 
 // ── dropping a file on a terminal ────────────────────────────────────────────────────────────

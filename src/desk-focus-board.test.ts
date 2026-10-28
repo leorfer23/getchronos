@@ -1,5 +1,5 @@
 /**
- * Focus: the stage as three cards — goal, decisions, hand-off — and nothing else.
+ * Focus: the stage as four cards — goal, decisions, talk, hand-off — and nothing else.
  *
  * Leo, 2026-10-28: "I only want to see 1) the initial goal, 2) the questions and guidance I can provide
  * to steer when the agent needs, 3) the end goal to make the decision." Plus a progress bar and a timer,
@@ -16,8 +16,8 @@ import path from "node:path";
 const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
 const css = html.slice(0, html.indexOf("</style>"));
 
-test("Focus is three cards, top down, and nothing else", () => {
-  assert.match(html, /body\.innerHTML = focusGoal\(s\) \+ focusDecisions\(s\) \+ focusOutcome\(s\);/);
+test("Focus is four cards, top down, and nothing else", () => {
+  assert.match(html, /body\.innerHTML = focusGoal\(s\) \+ focusDecisions\(s\) \+ focusTalk\(s\) \+ focusOutcome\(s\);/);
   // What was there before and is not any more.
   for (const gone of ["boardTimeline", "boardNow", "boardTouched", "boardHead", 'class="btl"', "bcols"])
     assert.doesNotMatch(html, new RegExp(gone.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${gone} is gone from Focus`);
@@ -54,12 +54,43 @@ test("decisions: every open ask with a button per option, answerable before Robe
   // The question on its screen (a CLI menu) and a wall are decisions too, with the old answer doors.
   assert.match(html, /data-fopt="\$\{i\}"/);
   assert.match(html, /<button type="button" data-fterm>Open the terminal \(⌘E\)<\/button>/);
-  // What was decided — answered asks and your own steering — stays on the card underneath.
-  assert.match(html, /hist\.push\(\{ at: e\.ts \|\| 0, html: `<span class="you">you · /);
-  // …but not the daemon's own typing: the cache keeper's /compact, a budget notice.
+  // What was decided stays on the card underneath; your own lines moved to Talk, beside the answers.
+  assert.match(html, /for \(const a of asks\) if \(a\.status === "answered"\)/);
+  assert.doesNotMatch(html, /<span class="you">you · /);
+  // Never "decide" with nothing to decide on: the line and a way in, whatever it stopped on.
+  assert.match(html, /if \(!open\.length && ph === "decide"\)/);
+  // Talk leaves out the daemon's own typing: the cache keeper's /compact, a budget notice.
   const re = new Function("return " + html.match(/const DAEMON_LINE = (\/.+\/i);/)![1])() as RegExp;
   assert.ok(re.test("/compact Chronos cache keeper: idle 46 min") && re.test("[chronos budget] this workspace is over its share"));
   assert.ok(!re.test("keep it friendly, Thomas is new") && !re.test("Permission update: you may merge"));
+});
+
+test("a CLI question dialog (AskUserQuestion): its whole question, a button per answer, free text through its menu", () => {
+  // The words come from the hook (D.dialog), the keys from the menu read off its screen.
+  assert.match(html, /D\.dialog = r\.dialog \|\| null;/);
+  assert.match(html, /const TYPE_RE = \/\^type something\\\.\?\$\/i, CHAT_RE = \/\^chat about this\\\.\?\$\/i/);
+  assert.match(html, /data-dopt="\$\{c\.i\}"/);
+  assert.match(html, /<input data-dtext="\$\{d\.type\}"/);
+  // Free text: arrows to "Type something.", then the line and Enter — never Enter on the row first.
+  assert.match(html, /if \(keys\.length\) await answer\(s\.id, \{ keys \}\);/);
+  assert.match(html, /await answer\(s\.id, \{ text, enter: true \}\);/);
+});
+
+test("talk: each line you sent beside what it said back, the newest open in full", () => {
+  assert.match(html, /function talkTurns\(s\)/);
+  assert.match(html, /if \(SYS_LINE\.test\(e\.text\) \|\| DAEMON_LINE\.test\(e\.text\)\) continue;/);
+  assert.match(html, /<span class="fx-lbl">Talk<\/span>/);
+  // A line sent from the Focus composer shows at once and the page follows it to the answer.
+  assert.match(html, /Object\.assign\(T, \{ pending: \{ text, at: Date\.now\(\) \}, follow: true, sig: "" \}\);/);
+  // The last answer is not printed twice: a Result card without a hand-off points up at it.
+  assert.match(html, /No hand-off filed — its last answer is open in Talk, above\./);
+});
+
+test("is it working: the evidence under the phase — printing now or quiet since, and the last thing it did", () => {
+  assert.match(html, /\+ pulseHtml\(s\);/);
+  assert.match(html, /const printing = s\.quiet === false;/);
+  assert.match(html, /else if \(el\.dataset\.clock === "ago" && at\)/, "the quiet clock ticks off the page clock");
+  assert.match(css, /body\.blink \.fx-pulse\.on i \{ opacity:\.3; \}/, "the dot blinks off the 1Hz class, no animation");
 });
 
 test("the hand-off: summary, changes, proof, screenshots, PRs — and the buttons to approve", () => {
