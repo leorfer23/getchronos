@@ -1092,7 +1092,7 @@ export const InboxSnoozeSchema = z.object({ until: z.string().trim().min(1).max(
 // ⚙ Settings: one knob at a time. value null = clear the override (inherit); the registry checks the type.
 export const PutSettingSchema = z.object({
   key: z.string().min(1).max(80),
-  value: z.union([z.boolean(), z.number(), z.string().max(500), z.array(z.string().max(100)).max(20), z.null()]),
+  value: z.union([z.boolean(), z.number(), z.string().max(500), z.array(z.string().max(100)).max(100), z.null()]),
   workspace_id: z.string().min(1).nullable().optional(),
   /** id or slug; same as workspace_id. */
   workspace: z.string().min(1).nullable().optional(),

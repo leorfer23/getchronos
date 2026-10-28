@@ -22,6 +22,7 @@ import { sanitizeCwd } from "./spawn-guard.js";
 import { ensureTicketWorktree, cleanupWorktree, cleanupRemoteWorktree } from "./worktrees.js";
 import { egressBrokered, egressEnforced, egressEnv, egressLocked, egressPolicy } from "./egress.js";
 import { niceWrap } from "./machine.js";
+import { leanClaudeArgs, leanClaudeEnv } from "./lean-prompt.js";
 import { findHost, hostFor, LOCAL_HOST_ID, type PtyHandle } from "./hosts/index.js";
 import { brainPathsIn, buildRemoteSpawnSpec, profileNameFor } from "./hosts/spawn-spec.js";
 import { hostProfiles, placeTerminal } from "./hosts/candidates.js";
@@ -103,8 +104,10 @@ export function leadWorkerBlock(row: Pick<Session, "lead_id">): string {
  * unasked, so it was silently winning over `mc artifact`: the agent now asks the operator which one.
  * Never throws into a spawn, like leadWorkerBlock.
  */
-export function artifactChoiceBlock(backendName: string): string {
+export function artifactChoiceBlock(backendName: string, workspaceId?: string | null): string {
   if (backendName !== "claude-code") return "";
+  // No claude.ai Artifact tool in this workspace (lean-prompt.ts): there is no choice to ask about.
+  if (!setting<boolean>("desk.artifact_tool", workspaceId ?? null)) return "";
   try {
     return agentBlock("artifact-choice");
   } catch (e) {
@@ -788,7 +791,7 @@ export async function openSession(
   // and dev servers all mean THAT machine (agents/_blocks/on-host.md). Nothing on the brain.
   const hostBlock = onHostBlock(targetHost);
   const sysArg = backend.appendsSystem
-    ? ([row.role === "lead" ? agentPrompt("lead") : null, leadBlock, isInboxAuto(row) ? INBOX_AUTO_RULES : null, FOCUS_CONTRACT, hostBlock, browserBlock(), artifactChoiceBlock(backend.name), ctx, rel].filter(Boolean).join("\n\n") || null)
+    ? ([row.role === "lead" ? agentPrompt("lead") : null, leadBlock, isInboxAuto(row) ? INBOX_AUTO_RULES : null, FOCUS_CONTRACT, hostBlock, browserBlock(), artifactChoiceBlock(backend.name, opts.workspace_id), ctx, rel].filter(Boolean).join("\n\n") || null)
     : null;
   // Seed the conversation: the ticket context (or a passed seed) is typed in once the CLI has booted.
   // Defined here (a remote spec carries it) but, for a local terminal, still EVALUATED after the spawn
@@ -887,6 +890,8 @@ export async function openSession(
       : [];
     // An auto-opened inbox terminal: the CLI itself refuses merges, deploys and messaging (inbox-guard.ts).
     if (isInboxAuto(row) && backend.name === "claude-code") iArgs.push(...inboxAutoDenyArgs());
+    // What every request of this terminal re-sends before it has done anything (lean-prompt.ts).
+    if (backend.name === "claude-code") iArgs.push(...leanClaudeArgs(configDir, opts.workspace_id ?? null));
     // Credential stores this client is trusted with (Globex ↔ ~/.config/gcloud, so `bq` can auth).
     // Empty for every workspace that hasn't been given one explicitly.
     const allowSecrets = workspaceSandboxAllow(ws?.sandbox_allow);
@@ -899,6 +904,7 @@ export async function openSession(
     env = {
       ...childEnv(ws),
       ...backend.env({} as any, configDir),
+      ...(backend.name === "claude-code" ? leanClaudeEnv(opts.workspace_id ?? null) : {}),
       ...mcEnv(opts.workspace_id, opts.repo_id, row.ticket_id),
       // Lets the agent talk about ITSELF: `mc state working|blocked|done`, `mc goal set "…"`.
       MC_SESSION: row.id,

@@ -70,7 +70,7 @@ test("agentBlock reads agents/_blocks, fills what the closed var list cannot, an
 test("terminal.ts folds it in ahead of the reporting contract, and exports the Lead's id to the worker", () => {
   const src = fs.readFileSync(path.join(process.cwd(), "src/terminal.ts"), "utf8");
   // Persona (a Lead) → the Lead block (a worker) → the inbox box (auto-opened) → FOCUS_CONTRACT: who you are before how you report.
-  assert.match(src, /\[row\.role === "lead" \? agentPrompt\("lead"\) : null, leadBlock, isInboxAuto\(row\) \? INBOX_AUTO_RULES : null, FOCUS_CONTRACT, hostBlock, browserBlock\(\), artifactChoiceBlock\(backend\.name\), ctx, rel\]/);
+  assert.match(src, /\[row\.role === "lead" \? agentPrompt\("lead"\) : null, leadBlock, isInboxAuto\(row\) \? INBOX_AUTO_RULES : null, FOCUS_CONTRACT, hostBlock, browserBlock\(\), artifactChoiceBlock\(backend\.name, opts\.workspace_id\), ctx, rel\]/);
   // Backends with no system-prompt channel (cursor) get it in the seed, or their workers would be
   // the only ones never told they have a Lead.
   assert.match(src, /const pre = \[leadBlock, isInboxAuto\(row\) \? INBOX_AUTO_RULES : null, FOCUS_CONTRACT, hostBlock, browserBlock\(\), ctx\]\.filter\(Boolean\)\.join\("\\n\\n"\);/);
