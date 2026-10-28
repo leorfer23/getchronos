@@ -195,7 +195,7 @@ test("the ask bar answers through the one door, and does not move the stage", ()
   assert.match(html, /const COMP_ASK_PHASES = new Set\(\["decide", "your_turn", "blocked"\]\);/);
   assert.match(html, /return !!p && p\.kind !== "turn" && COMP_ASK_PHASES\.has\(phaseOf\(s\)\);/);
   // One question on screen: while this bar owns the ask, #sbar draws the three moves and nothing else.
-  assert.match(html, /const ask = compAskOwns\(s\) \? null : askOf\(s\);/);
+  assert.match(html, /const ask = compAskOwns\(s\) \|\| inFocus \? null : askOf\(s\);/);
   assert.doesNotMatch(html, /data-aopt[\s\S]{0,200}advance\(/, "answering here does not walk to the next terminal");
 });
 
@@ -216,7 +216,7 @@ test("one render per frame, appended not rebuilt", () => {
   assert.match(html, /const sig = F\.events\.length \+ ":" \+ C\.chapters\.length \+ ":" \+ C\.open\.size[\s\S]{0,60}if \(sig === C\.sig\) return;/);
   assert.match(html, /const setTxt = \(el, t\) => \{ if \(el && el\.textContent !== t\) el\.textContent = t; \};/);
   // The story feed is loaded in Terminal mode too — openStory runs on every select, whatever the mode.
-  assert.match(html, /compOpen\(id\);\s*const req = \+\+F\.req;/);
+  assert.match(html, /compOpen\(id\);\s*decisionsLoad\(byId\(id\), true\);\s*const req = \+\+F\.req;/);
   assert.match(html, /if \(e\.session_id === C\.id\) compChapter\(e\.status\.phase, e\.status\.line, e\.status\.since\);/);
 });
 

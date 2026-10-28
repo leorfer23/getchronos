@@ -315,9 +315,10 @@ const HELP = `mc — Mission Control backlog CLI
   mc repo patch <id> [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr]   edit a repo (admin-gated)
   mc repo remove <id>                unregister a repo (admin-gated)
   mc desk                    open the Desk wall — every terminal as a card, grouped by client
-  mc goal set "<what this terminal is for>" [--kind pr|investigation|qa]
-                             set THIS terminal's objective (the title on its Desk card). Yours from
-                             then on — the daemon stops deriving the title from your Understanding.
+  mc goal set "<what this terminal is for>" [--kind pr|investigation|qa] [--done-when "<check>"]…
+                             set THIS terminal's objective (the title on its Desk card) and its finish
+                             line — the checks the operator verifies it by. Yours from then on.
+  mc goal                    the goal, its Done-when checks, what you may ship (ask|merge|deploy), hand-off filed?
   mc goal done | mc goal clear                  tick the objective off / drop it
   mc goal add "<the next thing>" [--kind k]     queue another finish line behind this one
   mc goal list                                  the whole queue: 2/4 done, and which one you are on
@@ -329,7 +330,10 @@ const HELP = `mc — Mission Control backlog CLI
                              what your card says. working = colour for your line · waiting = on something that
                              is not the operator (--on, --eta) · blocked = a wall you can't pass · decide = a
                              decision only the operator can make · review = finished, read the Result · idle = clear
-  mc progress <n>/<of> ["step"] | mc progress clear   a step counter on your card
+  mc progress <n>/<of> ["step"] [--eta 20m] | mc progress clear   the operator's progress bar + time left
+  mc outcome "<summary>" [--change "…"]… [--proof "…"]… [--shot before=a.png]… [--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped "…"]…
+                             the hand-off on Focus: what changed, the proof, the PR — the operator approves
+                             merge/deploy from it. mc outcome show | mc outcome clear
   mc hook claude|cursor|grok  (run by the CLI's lifecycle hooks — not by hand)
   mc statusline claude        (Claude's statusLine — reports usage-limit %, prints "5h 34% · week 71%")
   mc usage                    subscription usage per CLI/profile (Claude 5h/week, Grok week, Cursor —)
@@ -428,7 +432,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc ask "question" [--options "a,b,c"] [--wait <min>]   ask the operator a question (≤1000 chars), wait for an answer
                                      (min 5, 0 = fire-and-forget; on timeout, follow the printed parking
                                      instructions — you'll be resumed automatically once it's answered)
-  mc ask-robert "question" [--options "a,b"] [--wait <min>]   (in a Desk TERMINAL; ≤1000 chars) ask Robert; he
+  mc ask-robert "question" [--options "a,b"] [--operator] [--wait <min>]   (in a Desk TERMINAL; ≤1000 chars) ask Robert; he
                                      answers what is routine and puts the rest on the operator's phone with his
                                      recommendation. Blocks until answered (default --wait 15)
                                      Inside a Lead's worker this behaves as 'mc ask-lead' — pass
@@ -932,17 +936,22 @@ function askCap(question) {
       // "Understanding:" line. Your words win from here on.
       const kind = opt.kind ? String(opt.kind).toLowerCase() : null;
       if (kind && !["pr", "investigation", "qa"].includes(kind)) die("--kind must be pr, investigation or qa");
+      // `--done-when` (repeatable): the finish line — the checks that will say the goal is met. The
+      // operator reads them under the goal and approves against them, so write what he can verify.
+      const doneWhen = (multi["done-when"] || []).map((x) => String(x).trim()).filter((x) => x && x !== "true");
       const body =
         pos[1] === "set"
           ? {
-              goal: pos.slice(2).join(" ") || die('mc goal set "<what this terminal is for>" [--kind pr|investigation|qa]'),
+              goal: pos.slice(2).join(" ") || die('mc goal set "<what this terminal is for>" [--kind pr|investigation|qa] [--done-when "<check>" …]'),
               goal_source: "agent",
               ...(kind ? { goal_kind: kind } : {}),
+              ...(doneWhen.length ? { done_when: doneWhen } : {}),
             }
         : pos[1] === "clear" ? { goal: null, goal_source: "agent" }
         : { goal_done: true };
       const s2 = await req("PATCH", "/sessions/" + sid, body);
-      if (pos[1] !== "done") return console.log(`🎯 ${s2.goal ?? "(cleared)"}`);
+      if (pos[1] !== "done")
+        return console.log(`🎯 ${s2.goal ?? "(cleared)"}` + ((s2.done_when || []).length ? "\n" + s2.done_when.map((c) => `   ☐ ${c}`).join("\n") : ""));
       // With a queue behind it, a tick is a step, not the end: say which one is now on the card so
       // the agent keeps going instead of writing its Summary three goals early.
       const left = (s2.goals_total ?? 0) - (s2.goals_done ?? 0);
@@ -951,6 +960,25 @@ function askCap(question) {
           ? `✅ ticked — ${s2.goals_done}/${s2.goals_total} done. Next: ${s2.goal ?? ""}`
           : `✅ goal reached — ${s2.goal ?? ""}`,
       );
+    }
+    // `mc goal` alone, in a terminal: what the operator sees on Focus — the goal, its finish line, and
+    // what you may do at the end. Re-read it before you ship: the operator can change the permission
+    // after you started (it is also typed into you when he does).
+    if (cmd === "goal" && (pos[1] === "show" || (!pos[1] && process.env.MC_SESSION && !process.env.MC_TICKET))) {
+      const sid = process.env.MC_SESSION || die("no MC_SESSION — `mc goal show` only works inside a terminal session");
+      const s2 = await req("GET", "/sessions/" + sid);
+      const ship = s2.ship || "ask";
+      const SHIP = {
+        ask: "ask — open the PR, then stop: the operator approves the merge/deploy from your `mc outcome`",
+        merge: "merge — once checks are green you may merge without asking; ask before any deploy",
+        deploy: "deploy — once checks are green you may merge AND deploy without asking",
+      };
+      return console.log([
+        `🎯 ${s2.goal || "(no goal yet — define it with the operator first, then: mc goal set \"<outcome>\" --done-when \"<check>\")"}`,
+        (s2.done_when || []).length ? "Done when:\n" + s2.done_when.map((c) => `  ☐ ${c}`).join("\n") : "Done when: (not defined — add --done-when checks to `mc goal set`)",
+        `May ship: ${SHIP[ship] || ship}`,
+        s2.outcome_at ? `Hand-off filed ${s2.outcome_at} (mc outcome show)` : "Hand-off: none yet (mc outcome)",
+      ].join("\n"));
     }
     if (cmd === "goal") {
       const t = await findByKey(pos[1] || process.env.MC_TICKET || die("goal needs a KEY"));
@@ -1021,8 +1049,13 @@ function askCap(question) {
       const arg = pos[1] || die('mc progress <n>/<of> ["what this step is"] | mc progress clear');
       if (arg === "clear") { await req("POST", `/sessions/${sid}/progress`, { n: null }); return console.log("progress cleared"); }
       const m = /^(\d+)\/(\d+)$/.exec(arg) || die("progress is n/of, e.g. 2/5");
-      const r = await req("POST", `/sessions/${sid}/progress`, { n: Number(m[1]), of: Number(m[2]), label: pos.slice(2).join(" ") || null });
-      return console.log(`${r.word} · ${r.line}`);
+      // `--eta 20m`: your honest guess of the time LEFT — the "~20m left" beside the operator's bar.
+      const etaMin = opt.eta ? durMin(opt.eta) : null;
+      if (opt.eta && !etaMin) die('--eta takes minutes: 10, "10m", "2h"');
+      const r = await req("POST", `/sessions/${sid}/progress`, {
+        n: Number(m[1]), of: Number(m[2]), label: pos.slice(2).join(" ") || null, ...(etaMin ? { eta_min: etaMin } : {}),
+      });
+      return console.log(`${r.word} · ${r.line}${etaMin ? ` · ~${etaMin}m left` : ""}`);
     }
     if (cmd === "ticket" && pos[1] === "list") {
       const qs = new URLSearchParams();
@@ -3017,6 +3050,54 @@ function askCap(question) {
     // long-poll — routed to the one agent that already knows this goal, because it wrote the brief.
     // `mc ask-robert` inside a Lead's worker lands here too: one habit for agents, and the Lead is
     // always the right first stop. `--robert` is the explicit way over its head.
+    // `mc outcome` — the hand-off. What the operator reads at the bottom of Focus and approves the
+    // merge/deploy from: a plain summary, what changed, the proof (checks you ran, screenshots before
+    // and after), the PR, and what you ask him for. Filing a new one replaces the last.
+    if (cmd === "outcome") {
+      const sid = process.env.MC_SESSION || die("no MC_SESSION — `mc outcome` only works inside a terminal session");
+      const USAGE =
+        'mc outcome "<summary: one or two plain sentences>" [--change "…"]… [--proof "…"]… [--shot before=a.png --shot after=b.png]… ' +
+        "[--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped \"merged #12\"]… | mc outcome show | mc outcome clear";
+      if (pos[1] === "show") {
+        const d = await req("GET", `/sessions/${sid}/decisions`);
+        const o = d.outcome;
+        if (!o) return console.log("(no hand-off filed yet)");
+        return console.log([
+          `Summary: ${o.summary}`,
+          ...(o.changes.length ? ["Changed:", ...o.changes.map((c) => "  - " + c)] : []),
+          ...(o.proof.length ? ["Proof:", ...o.proof.map((c) => "  ✓ " + c)] : []),
+          ...o.shots.map((x) => `  🖼 ${x.label}`),
+          ...o.prs.map((u) => "PR: " + u),
+          ...(o.shipped.length ? ["Shipped: " + o.shipped.join(" · ")] : []),
+          `Asks for: ${o.ask}`,
+        ].join("\n"));
+      }
+      if (pos[1] === "clear") { await req("DELETE", `/sessions/${sid}/outcome`); return console.log("hand-off cleared"); }
+      const summary = pos.slice(1).join(" ").trim() || die(USAGE);
+      const vals = (k) => (multi[k] || []).map((x) => String(x).trim()).filter((x) => x && x !== "true");
+      const ask = opt.ask && opt.ask !== "true" ? String(opt.ask) : "review";
+      if (!["merge", "deploy", "merge+deploy", "review", "none"].includes(ask)) die("--ask is merge, deploy, merge+deploy, review or none");
+      // Screenshots go up as bytes — the operator's Desk may be on another computer than this file.
+      const shots = [];
+      for (const spec of vals("shot")) {
+        const eq = spec.indexOf("=");
+        const label = eq > 0 ? spec.slice(0, eq) : "screenshot";
+        const file = eq > 0 ? spec.slice(eq + 1) : spec;
+        let bytes; try { bytes = fs.readFileSync(file); } catch { die(`no such screenshot: ${file}`); }
+        const ext = path.extname(file).slice(1).toLowerCase();
+        const r = await req("POST", `/sessions/${sid}/outcome/shot`, { label, ext, data_base64: bytes.toString("base64") });
+        shots.push({ name: r.name, label });
+      }
+      const o = await req("POST", `/sessions/${sid}/outcome`, {
+        summary, changes: vals("change"), proof: vals("proof"), prs: vals("pr"), shots, ask, shipped: vals("shipped"),
+      });
+      const dropped = vals("pr").length - o.prs.length;
+      return console.log(
+        `📦 hand-off filed — ${o.changes.length} change${o.changes.length === 1 ? "" : "s"}, ${o.proof.length} proof line${o.proof.length === 1 ? "" : "s"}, ` +
+        `${o.shots.length} screenshot${o.shots.length === 1 ? "" : "s"}, ${o.prs.length} PR${o.prs.length === 1 ? "" : "s"} · asks for: ${o.ask}` +
+        (dropped > 0 ? `\n(${dropped} --pr value${dropped === 1 ? " was" : "s were"} not a full https://github.com/<owner>/<repo>/pull/<n> link and ${dropped === 1 ? "was" : "were"} left out)` : ""),
+      );
+    }
     if (cmd === "ask-robert" || cmd === "askrobert" || cmd === "ask-lead" || cmd === "asklead") {
       const asLead = cmd === "ask-lead" || cmd === "asklead";
       const sessionId =
@@ -3028,11 +3109,14 @@ function askCap(question) {
       const options = opt.options ? opt.options.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
       // A Lead answers from the brief it wrote, so it answers fast: 10m is plenty, and the daemon
       // hands the question to Robert by itself if it does not (CHRONOS_LEAD_ASK_FALLBACK_MIN).
-      const toLead = (asLead || !!process.env.MC_LEAD_ID) && !opt.robert;
+      // `--operator`: straight to the operator, past Robert — for what only he can know, above all
+      // what the goal is and how he will judge it done. Robert cannot answer intent.
+      const toOperator = !!opt.operator && !asLead;
+      const toLead = (asLead || !!process.env.MC_LEAD_ID) && !opt.robert && !toOperator;
       const waitMin = opt.wait != null ? Number(opt.wait) : toLead ? 10 : 15;
       const a = await req("POST", "/asks", {
         session_id: sessionId, question, options, wait_min: waitMin,
-        ...(toLead ? { route: "lead" } : {}),
+        ...(toOperator ? { route: "operator" } : toLead ? { route: "lead" } : {}),
       });
       // The daemon decides the route, not this flag: MC_LEAD_ID goes stale when the Lead ends, and a
       // workspace that requires human answers lets no agent decide. Say so in one line when what we
@@ -3042,7 +3126,7 @@ function askCap(question) {
         console.log("(your Lead cannot take this one — it ended, or this client requires a human answer)");
       const id8 = a.id.slice(0, 8);
       if (waitMin <= 0) return console.log(`asked (${id8}) — not waiting (--wait 0)`);
-      console.log(`asked ${a.route === "lead" ? "your Lead" : "Robert"} (${id8}) — waiting up to ${waitMin}m…`);
+      console.log(`asked ${a.route === "lead" ? "your Lead" : a.route === "operator" ? "the operator" : "Robert"} (${id8}) — waiting up to ${waitMin}m…`);
       const deadline = Date.now() + waitMin * 60_000;
       for (;;) {
         const remainingMs = deadline - Date.now();

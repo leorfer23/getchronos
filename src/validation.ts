@@ -73,6 +73,8 @@ export const OpenSessionSchema = z.object({
   role: z.enum(["human", "worker", "reviewer", "lead"]).optional(),
   /** Desk spawn: keep this session on Focus (story + composer) and never mount its live terminal. */
   focus_only: z.boolean().optional(),
+  /** What it may do once green: ask | merge | deploy. Kept only from the operator (api.ts). */
+  ship: z.enum(["ask", "merge", "deploy"]).nullable().optional(),
   /**
    * `mc session new --slice 3` from a Lead: the board slice this worker is being opened for. Read
    * ONLY when the caller presented that Lead's credential, and never stored on the session row — it
@@ -121,6 +123,8 @@ export const SessionProgressSchema = z.object({
   n: z.number().int().min(0).max(10000).nullable(),
   of: z.number().int().min(1).max(10000).nullable().optional(),
   label: z.string().max(200).nullable().optional(),
+  /** Minutes the agent thinks are left — the "~8m left" beside the operator's progress bar. */
+  eta_min: z.number().positive().max(7 * 24 * 60).nullable().optional(),
 });
 /** One lifecycle hook from a terminal's CLI, normalized by `mc hook`. */
 export const SessionHookSchema = z.object({
@@ -160,6 +164,26 @@ export const SessionPatchSchema = z.object({
   title: z.string().max(200).optional(),
   /** Opt Robert into (or out of) driving this terminal — stops and orange prompts. */
   robert: z.boolean().optional(),
+  /** The finish line: the checks that say the goal is met (`mc goal set --done-when`). Null clears. */
+  done_when: z.array(z.string().max(200)).max(8).nullable().optional(),
+  /** What it may do once green — operator only (api.ts refuses it from any other caller). */
+  ship: z.enum(["ask", "merge", "deploy"]).nullable().optional(),
+});
+/** `mc outcome` — the hand-off the operator approves from (src/session-outcome.ts clips it). */
+export const SessionOutcomeSchema = z.object({
+  summary: z.string().min(1).max(2000),
+  changes: z.array(z.string().max(1000)).max(20).optional(),
+  proof: z.array(z.string().max(1000)).max(20).optional(),
+  prs: z.array(z.string().max(400)).max(10).optional(),
+  shots: z.array(z.object({ name: z.string().max(80), label: z.string().max(80).optional() })).max(8).optional(),
+  ask: z.enum(["merge", "deploy", "merge+deploy", "review", "none"]).optional(),
+  shipped: z.array(z.string().max(400)).max(6).optional(),
+});
+/** One screenshot for a hand-off, as base64 (≤6 MB decoded — the app-wide JSON limit is 16 MB). */
+export const SessionShotSchema = z.object({
+  label: z.string().max(80).optional(),
+  ext: z.string().max(5),
+  data_base64: z.string().max(9_000_000),
 });
 
 // Typing into someone else's terminal. `text` is a line (Enter follows unless enter:false); `key` is

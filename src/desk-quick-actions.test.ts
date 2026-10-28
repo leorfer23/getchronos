@@ -199,7 +199,7 @@ test("the chips sit on the left of #sbar and go through the composer's own door"
   assert.match(html, /<script src="\/desk-quick-actions\.js"><\/script>/);
   // Left of the bar, before the spacer that pushes Close/Next right.
   assert.match(html, /if \(!ask\) bar\.push\(\.\.\.qaChips\(\)\);/);
-  assert.match(html, /const ask = compAskOwns\(s\) \? null : askOf\(s\);\n\s+const last = qaLastLine\(s\);/);
+  assert.match(html, /const ask = compAskOwns\(s\) \|\| inFocus \? null : askOf\(s\);\n\s+const last = inFocus \? null : qaLastLine\(s\);/);
   assert.match(html, /if \(!ask\) bar\.push\(\.\.\.qaChips\(\)\);\n\s+if \(ask\) \{/);
   assert.match(html, /bar\.push\(`<span class="sp"><\/span>`\);/);
   // The same route and body as the composer — nothing here is a second way to talk to an agent.

@@ -43,7 +43,7 @@ import { resolveGrokResumeId } from "./grok-resume.js";
 import { snapshotUsage } from "./session-usage.js";
 import { installClaudeHooks, installCursorHooks, installGrokHooks } from "./term-hooks.js";
 import { agentBlock, agentPrompt } from "./agent-defs.js";
-import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, type SessionGoal, type Workspace } from "./types.js";
+import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, type SessionGoal, type Ship, type Workspace } from "./types.js";
 import { goalLines, setGoals, splitGoalText } from "./goals.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "./agent-prep.js";
 import { routeConfigDir, routeProfileForHost } from "./profile-route.js";
@@ -53,22 +53,20 @@ import { setting, settingOn } from "./settings.js";
 export { excludeChronosArtifacts, gitExcludePath, gitTrackedSync, insideGitRepo, mcSystemText, syncAgentsMd } from "./agent-prep.js";
 
 // Standing instruction folded into every session (via system prompt where the CLI supports it, else the
-// seed): the operator watches a plain-English "Focus" feed (Understanding → narration → Summary), not the
-// raw output. This shapes each CLI's transcript so focus.ts can render that story across all backends.
-// Raw terminal stays one toggle away for detail.
+// seed): the operator reads Focus — goal + finish line + progress, decisions, hand-off — not the raw
+// output (Leo 2026-10-28). Each part is fed by an `mc` call the agent makes, so this says which, when.
+// Raw terminal stays one key away for detail.
 //
 // Keep this SHORT — it rides every turn. Card / worktree / heavy detail lives in the mission-control
 // skill (Claude) and AGENTS.md (Cursor); duplicate prose here was a standing ~2–3k-token tax.
-const FOCUS_CONTRACT = `## How to report your work to your operator
-Your operator watches a Focus board, not your raw output: your status, how long you have been running, what you are doing right now, the links you produced, and a timeline of the lines you wrote. Commands are not on it. Shape every task as a story:
-1. START with one short paragraph beginning "Understanding:" — restate the task, scope, and plan. Prose only.
-2. AS YOU WORK, write one plain-English line per MILESTONE — what changed and what it means, not which command you ran ("tests green except the sandbox one", not "ran npm test"). Each line is a row on their timeline; a line that says nothing costs them a row.
-3. SAY EVERY LINK on its own line, in full, the moment you have it — PR, doc, dashboard, artifact. That line is what pins it to their board.
-4. END every finished turn: short detail bullets → "**Next steps**" (omit if none) → one paragraph beginning "**Summary:**" (its first sentence is your card's line).
-Write for a human on a phone. No filler, no code dumps. Open the raw terminal for detail.
-
-## Your card (mc)
-Hooks report turns/subagents; say what only you know: \`mc state waiting "…" --on ci --eta 10m\` before waiting on non-operator work; blocked for hours or days on a PR review, CI, someone's reply or another terminal → \`mc when pr <url> --until approved --note "what you will do then"\` (or terminal/ask/at/script/check — see the mission-control skill), then finish your turn: Chronos continues this work, even reopening you, when it happens; \`mc ask-robert "…"\` for a decision; \`mc state blocked "…" --reason auth\` for a wall; \`mc state working "…"\` while grinding. On anything with more than two steps, call \`mc progress <n>/<total> "<the step>"\` as you cross each one — it is the only progress bar the operator has. Finish with Summary then \`mc goal done\`. That ticks off the goal you were GIVEN: if the operator then asks for more, name the new one (\`mc goal set "…"\`) before you start — their board shows the goal you are ON, not the one you finished.
+const FOCUS_CONTRACT = `## How your operator reads your work
+They read a Focus board, never your raw output. It has three parts: the GOAL (the outcome, its finish line, a progress bar and a timer), the DECISIONS (every question you ask, with a button per option), and the HAND-OFF (your summary and proof, which they approve the merge/deploy from). Work in this order:
+1. DEFINE FIRST, before any work. Open with one line "Understanding: …". If the goal or how we will know it is done is unclear — no goal, a vague one, two readings, unknown scope — ASK before you start: one question, 2–4 concrete options, your recommendation first (your CLI's question tool, or \`mc ask-robert "…" --options "a,b" --operator\`). Then write it down: \`mc goal set "<one outcome>" --kind pr|investigation|qa --done-when "<a check they can verify>"\` (2–4 checks) and \`mc progress 0/<steps> "plan" --eta 30m\`. A clear prompt needs no question — set both in your first minute.
+2. PROGRESS: \`mc progress <n>/<total> "<step>" --eta <time left>\` as you cross each step. It is their only progress bar and countdown.
+3. ASK, DON'T GUESS: a call only they can make → \`mc ask-robert "<question + what you'd do>" --options "a,b"\`. Waiting on non-operator work → \`mc state waiting "…" --on ci --eta 10m\`; a wall → \`mc state blocked "…" --reason auth\`; hours or days → \`mc when pr <url> --until approved --note "…"\` and finish your turn. Never stop silently.
+4. HAND-OFF when the finish line is met: \`mc outcome "<1–2 plain sentences>" --change "<what changed, in human words>" --proof "<check you ran → result>" --pr <url> --ask merge|deploy|merge+deploy|review|none\`; a visible change also gets \`--shot before=a.png --shot after=b.png\`. The proof answers each --done-when check. Then ship only as far as \`mc goal\` says you may (ask = stop at the open PR · merge = merge once green · deploy = merge and deploy) and re-file the outcome with \`--shipped "merged #12"\`.
+5. END every turn: short bullets → "**Next steps**" (omit if none) → "**Summary:**" (one or two sentences; the first is your card's line). Then \`mc goal done\`. More work after that? \`mc goal set\` the new goal first.
+Say every link (PR, doc) in full on its own line. Write for a human on a phone: plain words, no filler, no code dumps.
 
 ## Checkout + load
 Main checkouts are read-only — \`mc worktree <repo>\`, cd there, push before you finish. Full test/typecheck/build: \`mc heavy -- <cmd>\`. Prefer fff MCP tools for repo search when available; shell via RTK when installed (transparent).`;
@@ -154,6 +152,14 @@ const KIND_CONTRACT: Record<GoalKind, string> = {
   qa: "Shape of work: QA. Done means a verdict: what you exercised, what passed, what failed, and the exact steps to reproduce each failure.",
 };
 
+// What it may do at the end, said once in the first prompt. `mc goal` re-reads it (the operator can
+// change it later; the change is also typed in — api.ts PATCH /sessions/:id).
+const SHIP_SEED: Record<Ship, string> = {
+  ask: "When the work is green: open the PR (if it is code), file `mc outcome`, and stop — he approves the merge and any deploy.",
+  merge: "When the work is green: you may merge the PR once its checks pass, without asking. Do not deploy — ask for that in `mc outcome`.",
+  deploy: "When the work is green: you may merge the PR once its checks pass AND deploy it, without asking. Then file `mc outcome` with what you shipped.",
+};
+
 // A goal is optional (the Desk's Blank terminal has none). With one, the seed opens with it and the
 // card contract explains that the title is a guess to sharpen; without one, the brief IS the task and
 // the card has no title yet — so the same paragraph asks for the name instead of a correction.
@@ -165,6 +171,8 @@ export function deskSeed(
    *  The agent is told all of them so it can plan the work, and told to tick them off ONE at a
    *  time — the card only ever shows the one it is on. */
   goals?: SessionGoal[] | null,
+  /** What the operator lets it do once the work is green (src/session-outcome.ts). */
+  ship?: Ship | null,
 ): string {
   const brief = (description ?? "").trim();
   const g = (goal ?? "").trim();
@@ -181,16 +189,18 @@ export function deskSeed(
         "than inventing work to fill it."
       : null,
     brief ? (g ? `Brief from your operator:\n${brief}` : brief) : null,
+    SHIP_SEED[ship ?? "ask"],
     g
-      ? "You are one card on your operator's Desk wall, and the goal above is the card's title — the label he " +
-        "reads to decide which terminal needs him. It was typed before the work started, so treat it as a " +
-        "starting label: as soon as you understand the real task, run `mc goal set \"<sharper goal>\"` to " +
-        "retitle your own card (one short outcome, not a plan), and `mc goal done` when it is met. Run " +
-        "`mc state blocked \"<what you need>\" --reason question` the moment you need a decision from him."
-      : "You are one card on your operator's Desk wall and your card has no title yet — he opened this " +
-        "terminal without one. As soon as you understand what the work is, run `mc goal set \"<goal>\"` to " +
-        "name your own card (one short outcome, not a plan), and `mc goal done` when it is met. Run " +
-        "`mc state blocked \"<what you need>\" --reason question` the moment you need a decision from him.",
+      ? "You are one card on your operator's Desk, and the goal above is its title. It was typed before " +
+        "the work started, so treat it as a starting label. Before any work, make sure the goal AND how we " +
+        "will know it is done are clear — if either is not, ask him first (one question, 2–4 options, your " +
+        "recommendation). Then run `mc goal set \"<sharper goal>\" --done-when \"<check>\"` (one short outcome, " +
+        "2–4 checks he can verify) and `mc progress 0/<steps> \"plan\" --eta <time>`, and `mc goal done` when it is met."
+      : "You are one card on your operator's Desk and your card has no title yet — he opened this " +
+        "terminal without one. Before any work, make sure you know the goal AND how we will know it is " +
+        "done — if not, ask him first (one question, 2–4 options, your recommendation). Then run " +
+        "`mc goal set \"<goal>\" --done-when \"<check>\"` to name your own card (one short outcome, 2–4 checks " +
+        "he can verify) and `mc progress 0/<steps> \"plan\" --eta <time>`, and `mc goal done` when it is met.",
     "Start now.",
   ]
     .filter(Boolean)
@@ -795,8 +805,8 @@ export async function openSession(
         : (row.goal || opts.description?.trim()) && !opts.resumeId
           ? (row.role === "lead"
               ? `You are the LEAD for this goal in ${ws?.name ?? "this workspace"}. Read your instructions above, then start.\n\n` +
-                deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id))
-              : deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id)))
+                deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id), row.ship)
+              : deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id), row.ship))
           : null);
     // Backends without a system-prompt channel (cursor) get the standing notes + Focus contract folded
     // into the seed instead — but only when there's an actual task/context to run (never paste the

@@ -2135,6 +2135,21 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       CREATE INDEX idx_search_refs_kind ON search_refs(kind, ref_id);`),
   },
 
+  {
+    version: 148,
+    name: "sessions.done_when / ship / outcome — the finish line, what it may do at the end, and its hand-off",
+    // Focus is three things (Leo 2026-10-28): the goal and how we will know it is met, the decisions
+    // along the way, and the hand-off he approves from. `done_when` is the finish line as a JSON list
+    // of checks the agent writes (`mc goal set --done-when`). `ship` is what the operator lets it do
+    // once the work is green — ask | merge | deploy — and only the operator writes it. `outcome` is the
+    // agent's hand-off (`mc outcome`): summary, changes, proof, screenshots, PRs, what it asks for.
+    up: (db) => db.exec(`
+      ALTER TABLE sessions ADD COLUMN done_when TEXT;
+      ALTER TABLE sessions ADD COLUMN ship TEXT;
+      ALTER TABLE sessions ADD COLUMN outcome TEXT;
+      ALTER TABLE sessions ADD COLUMN outcome_at TEXT;`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

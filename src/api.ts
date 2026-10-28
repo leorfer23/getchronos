@@ -17,7 +17,7 @@ import { buildGraphify, queryGraphify, GraphifyError } from "./accel/graphify.js
 import { postToBoard } from "./board.js";
 import { nameError as varNameError, expiryFromHours } from "./store/workspace-vars.js";
 import { answerAsk, notifyAskCreated, resolveAsk, waitForAskAnswer } from "./asks.js";
-import { isOperatorsAsk } from "./robert-asks.js";
+import { holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { operatorAnswered, operatorKeys } from "./ask-in-terminal.js";
 import { deliverPending, resolveMessageTarget, sendMessage } from "./messages.js";
 import { egressCfg, egressPort, syncEgress } from "./egress.js";
@@ -178,7 +178,8 @@ import {
   QuickActionsSchema, HeavySlotSchema,
   ReportSchema, LeadBroadcastSchema, LeadAdoptSchema, BoardAddSchema, BoardPatchSchema, PatchAccelSchema,
   BuildGraphifySchema, QueryGraphifySchema,
-  NewArtifactSchema, UpdateArtifactSchema, ArtifactEventSchema, ArtifactStateSchema } from "./validation.js";
+  NewArtifactSchema, UpdateArtifactSchema, ArtifactEventSchema, ArtifactStateSchema, SessionOutcomeSchema, SessionShotSchema } from "./validation.js";
+import { normalizeOutcome, saveShot, shotFile, shipLine } from "./session-outcome.js";
 import { pressureWord, swapPctOf } from "./machine.js";
 import { machineBrowserBlock, mountBrowserRoutes } from "./resources/browser-routes.js";
 import { procsView } from "./resources/brain.js";
@@ -599,6 +600,9 @@ export function startServer() {
       // ownership is spawnLeadFields' `lead_id`, and OpenSessionSchema has no `lead_id` for zod to
       // let through from the body in the first place.
       const { slice, ...body } = req.body || {};
+      // What it may do once green is the operator's to grant — never a Lead's, a worker's or Robert's
+      // own `mc session new`: an agent that could open a terminal allowed to deploy could deploy.
+      if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) delete body.ship;
       const openOpts = {
         ...body,
         created_by: req.body?.created_by || "operator",
@@ -645,7 +649,11 @@ export function startServer() {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
-    const { goal, goal_done, goal_done_all, goal_kind, goal_source, title, robert } = req.body ?? {};
+    const { goal, goal_done, goal_done_all, goal_kind, goal_source, title, robert, done_when, ship } = req.body ?? {};
+    // An agent writes its own finish line; only the operator says what it may do once it is green.
+    // Checked before anything is written, so a refused permission change leaves the whole patch unapplied.
+    const admin = tokenOk(req.get("x-mc-admin"), CONFIG.adminToken);
+    if (ship !== undefined && !admin) return res.status(403).json({ error: "only the operator sets what a terminal may ship (x-mc-admin)" });
     const current = sessionGoals.current(s.id);
     if (goal !== undefined || goal_kind !== undefined) {
       if (current && goal !== null) {
@@ -675,8 +683,76 @@ export function startServer() {
     }
     if (title !== undefined) sessions.setMeta(s.id, { title });
     if (robert !== undefined) sessions.setRobert(s.id, !!robert);
+    if (done_when !== undefined || ship !== undefined) sessions.setFinish(s.id, { done_when, ship });
+    // A permission change reaches the agent the way every other word from him does: typed into it.
+    // Its env and its first prompt were written before this, so without the line it would not know.
+    if (ship !== undefined && (ship ?? "ask") !== (s.ship ?? "ask") && isLive(s.id) && !s.cloud_agent_id)
+      sendInput(s.id, { text: shipLine(ship ?? "ask"), enter: true }, "operator");
     bus.publish({ topic: "session.updated", session_id: s.id });
     res.json(sessions.get(s.id));
+  });
+  // The hand-off (`mc outcome`): what the operator approves the merge/deploy from. Scoped like
+  // /status — a terminal speaking about its own work. Replaces the previous one whole: the newest
+  // hand-off is the one he decides on, and a stale proof beside a new summary is worse than none.
+  api.post("/sessions/:id/outcome", validate(SessionOutcomeSchema), (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, s.workspace_id)) return;
+    const o = normalizeOutcome(s.id, req.body);
+    sessions.setOutcome(s.id, o);
+    bus.publish({ topic: "session.updated", session_id: s.id });
+    res.status(201).json(o);
+  });
+  api.delete("/sessions/:id/outcome", (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, s.workspace_id)) return;
+    sessions.setOutcome(s.id, null);
+    bus.publish({ topic: "session.updated", session_id: s.id });
+    res.json({ ok: true });
+  });
+  // One screenshot for the hand-off — before/after proof. Bytes, not a path: a path on a host means
+  // nothing here, and a path the page could ask for is a file read the agent chose.
+  api.post("/sessions/:id/outcome/shot", validate(SessionShotSchema), (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, s.workspace_id)) return;
+    const r = saveShot(s.id, req.body.label ?? "shot", req.body.ext, Buffer.from(req.body.data_base64, "base64"));
+    if ("error" in r) return res.status(400).json(r);
+    res.status(201).json(r);
+  });
+  // Admin-gated like /media/file: only names saveShot() wrote are ever opened (shotFile).
+  api.get("/sessions/:id/outcome/shot/:name", requireAdmin, (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    const f = shotFile(s.id, req.params.name);
+    if (!f) return res.status(404).json({ error: "not found" });
+    res.setHeader("Content-Type", f.mime);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    fs.createReadStream(f.path).pipe(res);
+  });
+  const parseAskOptions = (o: string | null): string[] => {
+    if (!o) return [];
+    try { const v = JSON.parse(o); return Array.isArray(v) ? v.map(String) : []; } catch { return o.split(",").map((x) => x.trim()).filter(Boolean); }
+  };
+  // What Focus draws under the goal: every question this terminal asked (open and answered, oldest
+  // first) and its hand-off. One read for the terminal on stage — never for the whole rail.
+  api.get("/sessions/:id/decisions", (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, s.workspace_id)) return;
+    const own = asks.forSession(s.id);
+    const held = holderAsks(s.id).filter((a) => !own.some((o) => o.id === a.id));
+    const rows = [...own, ...held].sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(-40);
+    res.json({
+      asks: rows.map((a) => ({
+        id: a.id, question: a.question, options: parseAskOptions(a.options), status: a.status,
+        answer: a.answer, answered_by: a.answered_by, answered_at: a.answered_at, created_at: a.created_at,
+        route: a.route, escalated: !!a.escalated_at, triage: a.escalated_at ? a.triage : null, for_operator: isOperatorsAsk(a),
+      })),
+      outcome: s.outcome,
+    });
   });
   // The terminal's goal LIST. One terminal, several finish lines, worked in order — `mc goal add`,
   // the spawn dialog's extra lines, a Lead handing its worker the three things it needs done.
@@ -764,9 +840,9 @@ export function startServer() {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
-    const { n, of, label } = req.body;
+    const { n, of, label, eta_min } = req.body;
     if (n != null && (of == null || n > of)) return res.status(400).json({ error: "progress needs n <= of" });
-    res.json(setProgress(s.id, n == null ? null : { n, of: of!, label: label ?? null }));
+    res.json(setProgress(s.id, n == null ? null : { n, of: of!, label: label ?? null, eta_min: eta_min ?? null }));
   });
   api.post("/sessions/:id/hook", validate(SessionHookSchema), (req, res) => {
     const s = sessions.get(req.params.id);
@@ -1351,6 +1427,9 @@ export function startServer() {
           prompt: !s.cloud_agent_id && (state === "waiting" || state === "blocked") ? sessionPrompt(s.id) : null,
           // The card, resolved once (term-status.ts): phase, one-liner, subagents, progress.
           status: statusOf(s.id),
+          // The hand-off rides only as its timestamp: Focus reads the body for the one terminal on
+          // stage (/sessions/:id/decisions), not for every row of the wall on every refresh.
+          outcome: null,
           // The PR the run opened, once it lands — the terminal card's other cloud link (cloud_url,
           // the ☁ page itself, already rides on the row via sessions.setCloud).
           pr_url: s.ticket_id ? tickets.get(s.ticket_id)?.pr_url ?? null : null,

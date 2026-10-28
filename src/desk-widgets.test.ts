@@ -136,7 +136,7 @@ test("Fleet is the third view of the stage: a segment button, ⌘⇧F, and the s
   assert.match(html, /<div class="fleet" id="fleet"><\/div>/);
   assert.match(html, /e\.key\.toLowerCase\(\) === "f"\) \{ e\.preventDefault\(\); return setMode\(S\.mode === "fleet" \? S\.preFleet : "fleet"\); \}/);
   assert.match(html, /localStorage\.setItem\("desk-mode", S\.mode\)/);
-  assert.match(html, /mode: \["term", "fleet"\]\.includes\(localStorage\.getItem\("desk-mode"\)\)/);
+  assert.match(html, /mode: localStorage\.getItem\("desk-mode"\) === "fleet" \? "fleet" : "focus",/);
   assert.match(html, /document\.body\.classList\.toggle\("mode-fleet", S\.mode === "fleet"\)/);
   assert.match(html, /body\.mode-fleet \.fleet \{ display:block; \}/);
 });

@@ -2,7 +2,8 @@ import { randomUUID, randomBytes } from "node:crypto";
 import { db } from "./db.js";
 import { now } from "./util.js";
 import { sessionSearchHook } from "./session-search-hook.js";
-import type { GoalKind, GoalSource, NewSession, Session, WatchReport } from "../types.js";
+import { decodeDoneWhen, decodeOutcome, encodeDoneWhen } from "../session-outcome.js";
+import type { GoalKind, GoalSource, NewSession, Outcome, Session, Ship, WatchReport } from "../types.js";
 
 // The Lead's credential never rides a row out of the store: every session-returning endpoint (GET
 // /sessions, /desk, …) is readable with a plain workspace token, and a worker that could read its
@@ -12,6 +13,8 @@ const pub = <T>(r: T): T => {
     delete (r as any).lead_token;
     (r as any).focus_only = !!(r as any).focus_only;
     (r as any).robert = !!(r as any).robert;
+    (r as any).done_when = decodeDoneWhen((r as any).done_when);
+    (r as any).outcome = decodeOutcome((r as any).outcome);
   }
   return r;
 };
@@ -53,8 +56,8 @@ export const sessions = {
   create(s: NewSession & { id?: string }): Session {
     const id = s.id || randomUUID();
     db.prepare(
-      `INSERT INTO sessions (id,ticket_id,workspace_id,repo_id,title,goal,goal_kind,goal_source,spawn_goal,created_by,lead_id,agent_name,lead_token,backend,model,role,focus_only,cwd,host_id,status,robert,created_at)
-       VALUES (@id,@ticket_id,@workspace_id,@repo_id,@title,@goal,@goal_kind,@goal_source,@spawn_goal,@created_by,@lead_id,@agent_name,@lead_token,@backend,@model,@role,@focus_only,@cwd,@host_id,'live',@robert,@created_at)`
+      `INSERT INTO sessions (id,ticket_id,workspace_id,repo_id,title,goal,goal_kind,goal_source,spawn_goal,created_by,lead_id,agent_name,lead_token,backend,model,role,focus_only,cwd,host_id,status,robert,ship,created_at)
+       VALUES (@id,@ticket_id,@workspace_id,@repo_id,@title,@goal,@goal_kind,@goal_source,@spawn_goal,@created_by,@lead_id,@agent_name,@lead_token,@backend,@model,@role,@focus_only,@cwd,@host_id,'live',@robert,@ship,@created_at)`
     ).run({
       id,
       ticket_id: s.ticket_id ?? null,
@@ -88,9 +91,19 @@ export const sessions = {
       // the operator's "Let Robert drive this". Standing watch is a separate opt-in.
       robert: s.robert != null ? (s.robert ? 1 : 0)
         : ((s.created_by ?? "operator") === "robert" || s.role === "lead" ? 1 : 0),
+      ship: s.ship ?? null,
       created_at: now(),
     });
     return this.get(id)!;
+  },
+  /** The finish line (`mc goal set --done-when`) and what it may do once green (operator only). */
+  setFinish(id: string, f: { done_when?: string[] | null; ship?: Ship | null }) {
+    if (f.done_when !== undefined) db.prepare("UPDATE sessions SET done_when=? WHERE id=?").run(encodeDoneWhen(f.done_when), id);
+    if (f.ship !== undefined) db.prepare("UPDATE sessions SET ship=? WHERE id=?").run(f.ship, id);
+  },
+  /** The agent's hand-off (`mc outcome`). Null clears it. */
+  setOutcome(id: string, o: Outcome | null) {
+    db.prepare("UPDATE sessions SET outcome=?, outcome_at=? WHERE id=?").run(o ? JSON.stringify(o) : null, o ? o.at : null, id);
   },
   /** Hand this terminal to Robert (or take it back). Drives stops + orange prompts; not the standing watch. */
   setRobert(id: string, on: boolean) {

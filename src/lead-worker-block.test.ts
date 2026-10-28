@@ -80,6 +80,6 @@ test("terminal.ts folds it in ahead of the reporting contract, and exports the L
 
 test("`mc` routes a worker's ask-robert to its Lead off that env var, and --robert goes over its head", () => {
   const mc = fs.readFileSync(path.join(process.cwd(), "scripts/mc"), "utf8");
-  assert.match(mc, /const toLead = \(asLead \|\| !!process\.env\.MC_LEAD_ID\) && !opt\.robert;/);
-  assert.match(mc, /\.\.\.\(toLead \? \{ route: "lead" \} : \{\}\)/);
+  assert.match(mc, /const toLead = \(asLead \|\| !!process\.env\.MC_LEAD_ID\) && !opt\.robert && !toOperator;/);
+  assert.match(mc, /\.\.\.\(toOperator \? \{ route: "operator" \} : toLead \? \{ route: "lead" \} : \{\}\)/);
 });
