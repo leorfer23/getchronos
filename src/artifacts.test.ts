@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import vm from "node:vm";
 import { artifacts, asks, db, sessions, workspaces } from "./store.js";
 import { CONFIG } from "./config.js";
 import { answerAsk } from "./asks.js";
@@ -230,6 +231,37 @@ test("the printed link is the public Desk, never another host's loopback", () =>
   assert.equal(deskBase({ CHRONOS_HOST_PUBLIC_URL: "not a url", CHRONOS_PORT: "7788" }), "http://localhost:7788");
   assert.equal(deskBase({}), "http://localhost:7777");
   assert.equal(artifactUrl("abc", { CHRONOS_DESK_URL: "https://d.example.com" }), "https://d.example.com/desk#artifact=abc");
+});
+
+test("clicking the printed link on the Desk opens the page in place, not in a browser, whichever host it names", () => {
+  // static/artifact-view.js run in a vm, the way term-links.js is: the page and this test read one source.
+  // The DOM absorbs whatever the viewer builds; only the clicks and the frame read are watched.
+  const any: any = new Proxy(function () {}, { get: (_t, k) => (k === Symbol.toPrimitive ? () => "" : any), apply: () => any, set: () => true });
+  const listeners: { type: string; fn: (e: any) => void; capture: boolean }[] = [];
+  const document = { createElement: () => any, head: any, body: any, addEventListener: (type: string, fn: any, capture?: boolean) => listeners.push({ type, fn, capture: !!capture }) };
+  const ctx: any = { document, location: { hash: "" }, window: { addEventListener() {} } };
+  vm.runInNewContext(fs.readFileSync(path.join(process.cwd(), "static/artifact-view.js"), "utf8"), ctx);
+  const AV = ctx.window.ArtifactView;
+
+  const id = "a5348531-f1d5-4373-9047-b74ce54a02e2";
+  const tunnel = artifactUrl(id, { CHRONOS_HOST_PUBLIC_URL: "wss://desk.example.com/host" });
+  for (const u of [tunnel, artifactUrl(id, { CHRONOS_DESK_URL: "https://d.example.com" }), artifactUrl(id, {})]) assert.equal(AV.linkId(u), id);
+  assert.equal(AV.linkId("https://github.com/o/r/pull/7"), null);
+  assert.equal(AV.linkId("https://desk.example.com/desk#reopen=" + id), null);
+
+  const asked: string[] = [];
+  AV.init({ api: async (p: string) => { asked.push(p); throw { status: 404 }; }, toast() {} });
+  const click = listeners.find((l) => l.type === "click" && l.capture);
+  assert.ok(click, "caught on the way down, so no card's own click handler can swallow it");
+  const fire = (href: string, mods = {}) => {
+    let stopped = false;
+    click.fn({ button: 0, ...mods, target: { closest: (s: string) => (s === "a[href]" ? { href } : null) }, preventDefault: () => { stopped = true; }, stopPropagation() {} });
+    return stopped;
+  };
+  assert.equal(fire(tunnel), true);
+  assert.equal(fire("https://github.com/o/r/pull/7"), false, "every other link still goes to the browser");
+  assert.equal(fire(tunnel, { metaKey: true }), false, "⌘-click is the way out to the browser");
+  assert.deepEqual(asked, ["/artifacts/" + id + "/frame"]);
 });
 
 test("every artifact the API hands back carries its link", async () => {
