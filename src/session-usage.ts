@@ -36,7 +36,36 @@ export interface SessionUsage {
   models: string[];
   lines_added: number;
   lines_removed: number;
+  /** The main conversation's prompt cache, as the API's own usage fields report it (cache-keeper.ts). */
+  cache: CacheState;
 }
+
+/**
+ * Whether the next prompt re-reads this terminal's context from cache or pays to write all of it
+ * again. On Opus 5.5 a cache read bills at 0.05x input and a one-hour cache write at 2x: one cold
+ * turn on a 400k context costs what 40 warm ones do.
+ */
+export interface CacheState {
+  /**
+   * TTL of the main conversation's latest cache write. A subscription within its plan gets "1h";
+   * past the plan, on usage credits, Claude Code drops the main conversation to "5m".
+   */
+  ttl: "1h" | "5m" | null;
+  /** When the main conversation last answered (ms). Its cache is warm until about this + ttl. */
+  last_request_at: number | null;
+  /** Requests that wrote back most of a context the cache already held: it expired, or the prefix changed. */
+  misses: number;
+  /** Tokens those misses wrote again. */
+  rewritten: number;
+  last_miss_at: number | null;
+  /** The latest compaction, Claude Code's own or the keeper's. The full write after one is expected, not a miss. */
+  compacted_at: number | null;
+}
+
+/** A write under this share of the context before it is ordinary growth, not a rebuild. */
+const MISS_SHARE = 0.5;
+/** Below this the whole prompt is the system prompt and tools: a rebuild of it is noise. */
+const MISS_MIN_CTX = 20_000;
 
 function estimate(a: Acc): number {
   return (
@@ -54,13 +83,17 @@ interface Acc extends SessionUsage {
   file: string | null;
   offset: number;
   buf: string;
+  /** Claude writes one line per content block of a message, each repeating the message's usage. */
+  msgId: string | null;
+  prevCtx: number;
 }
 
 const state = new Map<string, Acc>();
 const blank = (): Acc => ({
-  file: null, offset: 0, buf: "",
+  file: null, offset: 0, buf: "", msgId: null, prevCtx: 0,
   turns: 0, model_ms: 0, cost_usd: null, cost_estimated: false, context_tokens: 0, tokens_in: 0, tokens_out: 0,
   cache_read: 0, cache_write: 0, models: [], lines_added: 0, lines_removed: 0,
+  cache: { ttl: null, last_request_at: null, misses: 0, rewritten: 0, last_miss_at: null, compacted_at: null },
 });
 
 /** Where a session's own config profile keeps its transcripts. Ended sessions resolve off the row. */
@@ -106,6 +139,11 @@ function absorb(a: Acc, line: string) {
     if (typeof d.totalLinesRemoved === "number") a.lines_removed = d.totalLinesRemoved;
     return;
   }
+  if (d.type === "system" && d.subtype === "compact_boundary") {
+    const at = Date.parse(d.timestamp ?? "");
+    a.cache.compacted_at = Number.isFinite(at) ? at : Date.now();
+    return;
+  }
   if (d.type === "user") {
     const c = d.message?.content;
     // A tool result is the conversation talking to itself — only a real prompt is a turn.
@@ -117,15 +155,35 @@ function absorb(a: Acc, line: string) {
     const u = d.message?.usage;
     const model = d.message?.model;
     if (model && model !== "<synthetic>" && !a.models.includes(model)) a.models.push(model);
-    if (!u) return;
+    if (!u || model === "<synthetic>") return;
+    // A message with thinking + text + a tool call is three lines carrying the same usage: count it once.
+    const id = typeof d.message?.id === "string" ? d.message.id : null;
+    if (id && id === a.msgId) return;
+    a.msgId = id;
+    const write = u.cache_creation_input_tokens ?? 0;
     a.tokens_in += u.input_tokens ?? 0;
     a.tokens_out += u.output_tokens ?? 0;
     a.cache_read += u.cache_read_input_tokens ?? 0;
-    a.cache_write += u.cache_creation_input_tokens ?? 0;
+    a.cache_write += write;
     // Not a sum: what the model was handed on its LAST turn is what the window currently holds.
-    a.context_tokens =
-      (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+    a.context_tokens = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + write;
+    absorbCache(a.cache, u, write, a.prevCtx, Date.parse(d.timestamp ?? ""));
+    a.prevCtx = a.context_tokens;
   }
+}
+
+function absorbCache(c: CacheState, u: any, write: number, prevCtx: number, at: number) {
+  const split = u.cache_creation ?? {};
+  if ((split.ephemeral_1h_input_tokens ?? 0) > 0) c.ttl = "1h";
+  else if ((split.ephemeral_5m_input_tokens ?? 0) > 0) c.ttl = "5m";
+  const when = Number.isFinite(at) ? at : null;
+  const afterCompact = c.compacted_at != null && (c.last_request_at == null || c.compacted_at >= c.last_request_at);
+  if (prevCtx >= MISS_MIN_CTX && write > prevCtx * MISS_SHARE && !afterCompact) {
+    c.misses++;
+    c.rewritten += write;
+    c.last_miss_at = when;
+  }
+  if (when != null) c.last_request_at = when;
 }
 
 /** Current usage for a session, reading only what the transcript has grown by since last time. */
@@ -159,11 +217,12 @@ export function sessionUsage(id: string): SessionUsage | null {
 }
 
 function snapshot(a: Acc): SessionUsage {
-  const { file, offset, buf, ...u } = a;
+  const { file, offset, buf, msgId, prevCtx, ...u } = a;
   const priced = u.cost_usd != null && !u.cost_estimated;
   return {
     ...u,
     models: [...u.models],
+    cache: { ...u.cache },
     // The CLI's own total wins the moment it exists; until then, say what it's costing, marked.
     cost_usd: priced ? u.cost_usd : u.tokens_out || u.cache_read ? estimate(a) : null,
     cost_estimated: !priced,
@@ -214,7 +273,7 @@ function gitBranch(cwd: string): string | null {
 }
 
 const TICK_MS = 10_000;
-const fingerprint = (u: SessionUsage) => `${u.turns}:${u.context_tokens}:${u.cost_usd ?? ""}`;
+const fingerprint = (u: SessionUsage) => `${u.turns}:${u.context_tokens}:${u.cost_usd ?? ""}:${u.cache.ttl}:${u.cache.misses}`;
 const lastSeen = new Map<string, string>();
 
 /** Push usage to the wall as it moves — a card that has been running an hour should say what it cost. */

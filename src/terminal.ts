@@ -1453,10 +1453,12 @@ export function refreshClient(id: string, ws: WebSocket) {
   if (e) resync(e, ws);
 }
 
-export function writeTo(id: string, data: string) {
+/** `machine`: the daemon typing on its own (cache-keeper.ts) — not "someone typed to it", so a goal it
+ * reached stays reached and nothing reads it as the operator's hand. */
+export function writeTo(id: string, data: string, machine = false) {
   const e = live.get(id);
   if (!e) return;
-  if (!isTerminalReply(data)) e.lastIn = Date.now();
+  if (!machine && !isTerminalReply(data)) e.lastIn = Date.now();
   try { e.pty.write(data); } catch {}
   captureFirstPrompt(e, id, data);
 }
@@ -1498,7 +1500,7 @@ export function noteInput(id: string, at = Date.now()): void {
 /** Returns null on success, or a human-readable reason it did not happen. */
 export function sendInput(
   id: string,
-  req: { text?: string | null; key?: NamedKey | null; keys?: NamedKey[] | null; enter?: boolean },
+  req: { text?: string | null; key?: NamedKey | null; keys?: NamedKey[] | null; enter?: boolean; machine?: boolean },
   by = "operator",
 ): string | null {
   if (!live.has(id)) return "terminal is not live";
@@ -1523,8 +1525,8 @@ export function sendInput(
     // one, so it lands whole instead of by the CLI's guess at how fast it was typed. A short answer
     // stays keystrokes: a menu reads "1" as a key, not as pasted text.
     const e = live.get(id)!;
-    writeTo(id, pasteOf(line, line.length >= PASTE_MIN && e.modes.isOn(2004)));
-    if (req.enter !== false) setTimeout(() => writeTo(id, "\r"), 200).unref?.();
+    writeTo(id, pasteOf(line, line.length >= PASTE_MIN && e.modes.isOn(2004)), req.machine);
+    if (req.enter !== false) setTimeout(() => writeTo(id, "\r", req.machine), 200).unref?.();
   }
   // Persisted by activity.ts like every other bus event — who typed what into whose terminal is
   // exactly the trail you want the day an agent says something you didn't.

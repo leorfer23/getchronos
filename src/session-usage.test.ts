@@ -98,3 +98,50 @@ test("a session with no transcript reports nothing rather than zeroes", () => {
   forgetUsage(s.id);
   assert.equal(sessionUsage(s.id), null);
 });
+
+// The prompt cache, read off the API's own usage fields — what cache-keeper.ts and the rail's ❄ act on.
+const at = (iso: string) => ({ timestamp: iso });
+const turn = (id: string, iso: string, usage: any) => ({ type: "assistant", ...at(iso), message: { id, model: "claude-opus-5-5", usage } });
+const w1h = (n: number) => ({ cache_creation_input_tokens: n, cache_creation: { ephemeral_1h_input_tokens: n, ephemeral_5m_input_tokens: 0 } });
+const w5m = (n: number) => ({ cache_creation_input_tokens: n, cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: n } });
+
+test("cache: ttl from the write split, a rewrite of most of a cached context is a miss, the write after a compaction is not", () => {
+  const { id } = mkSessionWithTranscript([
+    turn("m1", "2026-10-28T10:00:00Z", { input_tokens: 2, ...w1h(80_000) }),
+    turn("m2", "2026-10-28T10:01:00Z", { input_tokens: 2, cache_read_input_tokens: 80_000, ...w1h(4_000) }),
+    // two hours later: the cache is gone and the whole context is written again
+    turn("m3", "2026-10-28T12:01:00Z", { input_tokens: 2, cache_read_input_tokens: 0, ...w1h(84_500) }),
+    { type: "system", subtype: "compact_boundary", timestamp: "2026-10-28T12:30:00Z" },
+    turn("m4", "2026-10-28T12:31:00Z", { input_tokens: 2, cache_read_input_tokens: 0, ...w1h(30_000) }),
+  ]);
+  const c = sessionUsage(id)!.cache;
+  assert.equal(c.ttl, "1h");
+  assert.equal(c.misses, 1);
+  assert.equal(c.rewritten, 84_500);
+  assert.equal(c.last_miss_at, Date.parse("2026-10-28T12:01:00Z"));
+  assert.equal(c.compacted_at, Date.parse("2026-10-28T12:30:00Z"));
+  assert.equal(c.last_request_at, Date.parse("2026-10-28T12:31:00Z"));
+});
+
+test("cache: on usage credits the main conversation drops to 5m — the ttl follows the latest write, a pure read keeps it", () => {
+  const { id } = mkSessionWithTranscript([
+    turn("m1", "2026-10-28T10:00:00Z", { input_tokens: 2, ...w1h(50_000) }),
+    turn("m2", "2026-10-28T10:02:00Z", { input_tokens: 2, cache_read_input_tokens: 50_000, ...w5m(3_000) }),
+    turn("m3", "2026-10-28T10:03:00Z", { input_tokens: 2, cache_read_input_tokens: 53_000, cache_creation_input_tokens: 0 }),
+  ]);
+  assert.equal(sessionUsage(id)!.cache.ttl, "5m");
+});
+
+test("one message written as several lines (thinking, text, tool call) counts its usage once", () => {
+  const u = { input_tokens: 2, output_tokens: 300, cache_read_input_tokens: 40_000, ...w1h(1_000) };
+  const { id } = mkSessionWithTranscript([
+    turn("m1", "2026-10-28T10:00:00Z", u),
+    turn("m1", "2026-10-28T10:00:00Z", u),
+    turn("m1", "2026-10-28T10:00:01Z", u),
+  ]);
+  const s = sessionUsage(id)!;
+  assert.equal(s.tokens_out, 300);
+  assert.equal(s.cache_read, 40_000);
+  assert.equal(s.cache_write, 1_000);
+  assert.equal(s.cache.misses, 0);
+});

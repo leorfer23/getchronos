@@ -204,6 +204,12 @@ export type LadderDeps = {
   setNice(pids: number[], n: number): Promise<Set<number>>;
   /** Deliver one line to a live owner (terminal: typed in; run: mailbox). null = delivered, else why not. */
   tell(owner: Owner, text: string): string | null;
+  /**
+   * A terminal sitting at its prompt with nothing running. Typing into one is a whole turn — its
+   * context re-read, or re-written at the cache-write price once its prompt cache went cold — so it
+   * is told only when one of the heaviest processes is its own. Absent: every owner is told.
+   */
+  idle?(owner: Owner): boolean;
   publish?(e: LadderEvent): void;
   /** Mirror of the paused list (brain.ts writes the state file). */
   save?(paused: PausedRec[]): void;
@@ -519,7 +525,8 @@ export class Ladder {
     const b = m.budgets.get(k)!;
     const s = m.shares.get(k)!;
     const heavy = heaviest(this.ledger, k, this.deps.reaper, 3);
-    const owners = [...this.ledger.owners.values()].filter((o) => !o.ended && key(o.workspaceId) === k && (!retry || this.pendingTell.has(o.key)));
+    const owners = [...this.ledger.owners.values()].filter((o) => !o.ended && key(o.workspaceId) === k && (!retry || this.pendingTell.has(o.key)))
+      .filter((o) => !this.deps.idle?.(o) || heavy.some((h) => h.owner === o.key));
     const mode = this.mode();
     const next =
       mode === "warn" ? "This Mac only warns for now." :
