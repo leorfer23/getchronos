@@ -59,16 +59,23 @@ Work in this order:
    **Done when** checks are things the operator can verify by looking — a behaviour, a screenshot, a
    test result — not your plan. 2–4 of them. A clear prompt needs no question: set the goal and the
    checks in your first minute and start.
-2. **Keep the bar honest.** `mc progress <n>/<N> "<step>" --eta <time left>` as you cross each step.
-   The bar and the countdown are the only "how far along" the operator has. Re-plan? Change N.
+2. **Keep the board moving.** `mc progress <n>/<N> "<step>" --eta <time left>` as you cross each step,
+   and `mc goal check <N>` the moment a **Done when** check is met (`mc goal` prints the numbers;
+   `mc goal uncheck <N>` takes one back). The bar, the ticks and the countdown are the only "how far
+   along" the operator has — tick as you go, not all at the end. Re-plan? Change N. A Claude terminal
+   that leaves its board untouched for 10 minutes while working is handed its board as a reminder.
 3. **Ask, don't guess** (below). Every ask lands on ② with a button per option. Keep options short
    (≤80 chars), put your recommendation first, say what you would do in the question.
 4. **Hand off with proof** (see *The hand-off*). Your proof answers each **Done when** check.
 5. **Ship only as far as you are allowed.** `mc goal` prints what the operator lets you do once the
    work is green — **ask** (open the PR and stop), **merge** (merge it once checks pass), **deploy**
    (merge and deploy). They set it when they open you or from the Goal card; a change is typed into you
-   as a `Permission update:` line. Never go past it. When you ship, re-file `mc outcome` with
-   `--shipped "merged #12"` / `--shipped "deployed to prod"`.
+   as a `Permission update:` line. Never go past it. When you ship, say so with
+   `mc outcome --shipped "merged #12" --shipped "deployed to prod"` — no summary needed, it is added to
+   the hand-off on top.
+6. **Follow-ups get their own hand-off.** After the operator asks for changes or gives you more work,
+   file a new `mc outcome` when that is done: it goes on top and the earlier one stays on the board,
+   folded. A plain correction of the hand-off you just filed (nothing new happened) replaces it.
 
 ## Your card — goal, state, done
 
@@ -231,7 +238,7 @@ mc outcome clear       # drop it (a new `mc outcome` replaces the last one anywa
 - **`--pr`**: the full PR link(s). The card shows its state and checks live.
 - **`--ask`**: what you need from the operator — `merge`, `deploy`, `merge+deploy`, `review` (just read
   it) or `none`. The card turns it into buttons; a click types `Approved: …` into you. Then do exactly
-  that, and re-file with `--shipped`.
+  that, and run `mc outcome --shipped "<what you shipped>"`.
 - Already allowed to ship (`mc goal` says merge/deploy)? Ship, then file the hand-off with
   `--shipped "merged #24" --shipped "deployed"` and `--ask none` (or `deploy` if you may only merge).
 

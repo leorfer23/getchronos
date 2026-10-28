@@ -29,6 +29,13 @@ const MC = `"$HOME/.mc/bin/mc"`;
 const RTK = `"$HOME/.mc/bin/rtk-rewrite.sh"`;
 
 const claudeCmd = `[ -z "$MC_SESSION" ] || ${MC} hook claude 2>/dev/null || true`;
+/**
+ * After any tool call: hand the agent its board when it has gone stale (session-outcome.ts boardNudge).
+ * It fires on every tool call, so the shell answers first — a stamp file younger than 5 minutes and it
+ * exits without starting node. The daemon still decides whether anything is said (and rate-limits too).
+ */
+export const nudgeCmd =
+  `[ -z "$MC_SESSION" ] || { f="\${TMPDIR:-/tmp}/mc-board-$MC_SESSION"; [ -n "$(find "$f" -mmin -5 2>/dev/null)" ] || { touch "$f" 2>/dev/null; ${MC} hook claude nudge; }; } 2>/dev/null || true`;
 const grokCmd = `[ -z "$MC_SESSION" ] || ${MC} hook grok 2>/dev/null || true`;
 /** Cursor wants a JSON verdict on some hooks even when we have nothing to say. */
 const cursorCmd = (fallback: string) => `if [ -n "$MC_SESSION" ]; then ${MC} hook cursor 2>/dev/null || echo '${fallback}'; else echo '${fallback}'; fi`;
@@ -40,7 +47,7 @@ const ASK_TOOLS = "AskUserQuestion|ExitPlanMode|ask_user_question|ask_user";
 const BASH_TOOLS = "Bash|bash|Shell|shell";
 
 /** Claude and grok share the event names and the { matcher, hooks: [{ type, command }] } shape. */
-export function claudeStyleHooks(cmd: string, opts: { notification: boolean; rtk?: boolean }): Record<string, any[]> {
+export function claudeStyleHooks(cmd: string, opts: { notification: boolean; rtk?: boolean; nudge?: string }): Record<string, any[]> {
   const h = (matcher?: string, command = cmd, timeout = 5) => ({
     ...(matcher ? { matcher } : {}),
     hooks: [{ type: "command", command, timeout }],
@@ -55,7 +62,7 @@ export function claudeStyleHooks(cmd: string, opts: { notification: boolean; rtk
     SubagentStop: [h()],
     SessionEnd: [h()],
     PreToolUse: preTool,
-    PostToolUse: [h(ASK_TOOLS)],
+    PostToolUse: opts.nudge ? [h(ASK_TOOLS), h(undefined, opts.nudge)] : [h(ASK_TOOLS)],
     ...(opts.notification ? { Notification: [h("permission_prompt|elicitation_dialog|elicitation_url_dialog")] } : {}),
   };
 }
@@ -116,7 +123,7 @@ export function installClaudeHooks(configDir: string): "written" | "noop" | "ski
   const file = path.join(configDir, "settings.json");
   const cur = readJson(file);
   if (cur === "unreadable") return "skipped";
-  const next: Record<string, any> = { ...(cur ?? {}), hooks: mergeHooks(cur?.hooks, claudeStyleHooks(claudeCmd, { notification: true })) };
+  const next: Record<string, any> = { ...(cur ?? {}), hooks: mergeHooks(cur?.hooks, claudeStyleHooks(claudeCmd, { notification: true, nudge: nudgeCmd })) };
   // The statusLine is the only place claude hands out its usage-limit percentages (usage-meter.ts).
   // One statusLine per profile: an operator's own is never replaced — that profile just goes unmeasured
   // from interactive sessions (headless runs and executives still report it over stream-json).

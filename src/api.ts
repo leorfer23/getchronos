@@ -72,7 +72,7 @@ import { recordSessionPrs } from "./terminal-automerge.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
 import { cloudRunFor, cloudSessionState, cloudVisibleRepos, followUpCloudSession, openCloudSession, wantsCloudBackend } from "./desk-cloud.js";
-import { openSession, resumeOpts, promoteToLead, leadPromotionError, attach, refreshClient, writeTo, resize, killSession, closeOutSession, focusEvents, isLive, sendInput, sessionActivity, sessionPrompt, sessionScreen, setClientRate, continueFromRun } from "./terminal.js";
+import { openSession, resumeOpts, promoteToLead, leadPromotionError, attach, refreshClient, writeTo, resize, killSession, closeOutSession, focusEvents, isLive, operatorSaidAt, sendInput, sessionActivity, sessionPrompt, sessionScreen, setClientRate, continueFromRun } from "./terminal.js";
 import { sessionUsage, snapshotUsage } from "./session-usage.js";
 import { applyHook, declare as declareStatus, sessionGoalReached, setProgress, signalsOf, statusOf } from "./term-status.js";
 import { parseEvery, watchView } from "./desk-watch.js";
@@ -179,7 +179,7 @@ import {
   ReportSchema, LeadBroadcastSchema, LeadAdoptSchema, BoardAddSchema, BoardPatchSchema, PatchAccelSchema,
   BuildGraphifySchema, QueryGraphifySchema,
   NewArtifactSchema, UpdateArtifactSchema, ArtifactEventSchema, ArtifactStateSchema, SessionOutcomeSchema, SessionShotSchema } from "./validation.js";
-import { normalizeOutcome, saveShot, shotFile, shipLine } from "./session-outcome.js";
+import { boardNudge, fileOutcome, normalizeOutcome, saveShot, shotFile, shipLine, NUDGE_STALE_MS } from "./session-outcome.js";
 import { pressureWord, swapPctOf } from "./machine.js";
 import { machineBrowserBlock, mountBrowserRoutes } from "./resources/browser-routes.js";
 import { procsView } from "./resources/brain.js";
@@ -201,6 +201,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * pending line — the same merge that made every keystroke to a Lead pace itself (LEAD_GAP_MS).
  */
 const BROADCAST_GAP_MS = 300;
+// When each terminal was last handed its stale-board context (GET /sessions/:id/board-nudge).
+const lastNudge = new Map<string, number>();
 
 /**
  * The Desk footer's quick actions as stored, or the shipped set when nothing is stored — and also
@@ -649,7 +651,7 @@ export function startServer() {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
-    const { goal, goal_done, goal_done_all, goal_kind, goal_source, title, robert, done_when, ship } = req.body ?? {};
+    const { goal, goal_done, goal_done_all, goal_kind, goal_source, title, robert, done_when, ship, check, uncheck } = req.body ?? {};
     // An agent writes its own finish line; only the operator says what it may do once it is green.
     // Checked before anything is written, so a refused permission change leaves the whole patch unapplied.
     const admin = tokenOk(req.get("x-mc-admin"), CONFIG.adminToken);
@@ -684,6 +686,9 @@ export function startServer() {
     if (title !== undefined) sessions.setMeta(s.id, { title });
     if (robert !== undefined) sessions.setRobert(s.id, !!robert);
     if (done_when !== undefined || ship !== undefined) sessions.setFinish(s.id, { done_when, ship });
+    // After a rewritten list, so `--done-when` + a tick in one patch ticks the new list.
+    if (check?.length) sessions.setChecks(s.id, check, true);
+    if (uncheck?.length) sessions.setChecks(s.id, uncheck, false);
     // A permission change reaches the agent the way every other word from him does: typed into it.
     // Its env and its first prompt were written before this, so without the line it would not know.
     if (ship !== undefined && (ship ?? "ask") !== (s.ship ?? "ask") && isLive(s.id) && !s.cloud_agent_id)
@@ -692,16 +697,35 @@ export function startServer() {
     res.json(sessions.get(s.id));
   });
   // The hand-off (`mc outcome`): what the operator approves the merge/deploy from. Scoped like
-  // /status — a terminal speaking about its own work. Replaces the previous one whole: the newest
-  // hand-off is the one he decides on, and a stale proof beside a new summary is worse than none.
+  // /status — a terminal speaking about its own work. A correction replaces the one on top whole (a
+  // stale proof beside a new summary is worse than none); a follow-up — new work, a new PR, a round
+  // after the operator spoke — goes on top and the earlier one is kept under it (fileOutcome).
   api.post("/sessions/:id/outcome", validate(SessionOutcomeSchema), (req, res) => {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
     const o = normalizeOutcome(s.id, req.body);
-    sessions.setOutcome(s.id, o);
+    if (!o.summary && !(o.shipped.length && s.outcome)) return res.status(400).json({ error: "a hand-off needs a summary (only a --shipped re-file may leave it out)" });
+    const filed = fileOutcome(s.outcome, s.outcome_prev, o, operatorSaidAt(s.id));
+    sessions.setOutcome(s.id, filed.latest, filed.earlier);
     bus.publish({ topic: "session.updated", session_id: s.id });
-    res.status(201).json(o);
+    res.status(201).json({ ...filed.latest, earlier: filed.earlier.length });
+  });
+  // What the agent's PostToolUse hook asks while it works (term-hooks.ts): its board, when it has gone
+  // stale, as context to hand back. At most once per NUDGE_STALE_MS a terminal, whatever the hook does.
+  api.get("/sessions/:id/board-nudge", (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    if (!checkScope(req, res, s.workspace_id)) return;
+    const st = statusOf(s.id);
+    const now = Date.now();
+    if (now - (lastNudge.get(s.id) ?? 0) < NUDGE_STALE_MS) return res.json({ context: null });
+    const context = boardNudge({
+      phase: st?.phase ?? null, goal: s.goal, done_when: s.done_when, checked: s.done_checked,
+      progress: st?.progress ?? null, since: Date.parse(s.created_at) || now,
+    }, now);
+    if (context) lastNudge.set(s.id, now);
+    res.json({ context });
   });
   api.delete("/sessions/:id/outcome", (req, res) => {
     const s = sessions.get(req.params.id);
@@ -752,6 +776,8 @@ export function startServer() {
         route: a.route, escalated: !!a.escalated_at, triage: a.escalated_at ? a.triage : null, for_operator: isOperatorsAsk(a),
       })),
       outcome: s.outcome,
+      // The hand-offs before it (a follow-up, a round of changes), oldest first.
+      earlier: s.outcome_prev,
       // A question dialog open in its CLI (AskUserQuestion): the whole questions, which the screen cuts.
       dialog: isLive(s.id) ? (signalsOf(s.id).asking?.questions ?? null) : null,
     });
@@ -1432,6 +1458,11 @@ export function startServer() {
           // The hand-off rides only as its timestamp: Focus reads the body for the one terminal on
           // stage (/sessions/:id/decisions), not for every row of the wall on every refresh.
           outcome: null,
+          outcome_prev: null,
+          // …except what the rail needs to flag it: a hand-off still waiting for his yes. Shipped, or
+          // asking for nothing but a read, it is not waiting on him.
+          handoff: s.outcome && !s.outcome.shipped?.length && ["merge", "deploy", "merge+deploy"].includes(s.outcome.ask)
+            ? { ask: s.outcome.ask, at: s.outcome.at } : null,
           // The PR the run opened, once it lands — the terminal card's other cloud link (cloud_url,
           // the ☁ page itself, already rides on the row via sessions.setCloud).
           pr_url: s.ticket_id ? tickets.get(s.ticket_id)?.pr_url ?? null : null,

@@ -2,7 +2,7 @@ import { randomUUID, randomBytes } from "node:crypto";
 import { db } from "./db.js";
 import { now } from "./util.js";
 import { sessionSearchHook } from "./session-search-hook.js";
-import { decodeDoneWhen, decodeOutcome, encodeDoneWhen } from "../session-outcome.js";
+import { checkedOf, decodeDoneWhen, decodeOutcome, decodeOutcomes, decodeTicks, encodeDoneWhen, pruneTicks, tickChecks } from "../session-outcome.js";
 import type { GoalKind, GoalSource, NewSession, Outcome, Session, Ship, WatchReport } from "../types.js";
 
 // The Lead's credential never rides a row out of the store: every session-returning endpoint (GET
@@ -14,7 +14,10 @@ const pub = <T>(r: T): T => {
     (r as any).focus_only = !!(r as any).focus_only;
     (r as any).robert = !!(r as any).robert;
     (r as any).done_when = decodeDoneWhen((r as any).done_when);
+    (r as any).done_checked = checkedOf((r as any).done_when, decodeTicks((r as any).done_ticks));
+    delete (r as any).done_ticks;
     (r as any).outcome = decodeOutcome((r as any).outcome);
+    (r as any).outcome_prev = decodeOutcomes((r as any).outcome_prev);
   }
   return r;
 };
@@ -98,12 +101,29 @@ export const sessions = {
   },
   /** The finish line (`mc goal set --done-when`) and what it may do once green (operator only). */
   setFinish(id: string, f: { done_when?: string[] | null; ship?: Ship | null }) {
-    if (f.done_when !== undefined) db.prepare("UPDATE sessions SET done_when=? WHERE id=?").run(encodeDoneWhen(f.done_when), id);
+    if (f.done_when !== undefined) {
+      const enc = encodeDoneWhen(f.done_when);
+      // A rewritten list keeps the ticks of the checks it kept, word for word.
+      const ticks = pruneTicks(decodeDoneWhen(enc), this.ticks(id));
+      db.prepare("UPDATE sessions SET done_when=?, done_ticks=? WHERE id=?").run(enc, Object.keys(ticks).length ? JSON.stringify(ticks) : null, id);
+    }
     if (f.ship !== undefined) db.prepare("UPDATE sessions SET ship=? WHERE id=?").run(f.ship, id);
   },
-  /** The agent's hand-off (`mc outcome`). Null clears it. */
-  setOutcome(id: string, o: Outcome | null) {
-    db.prepare("UPDATE sessions SET outcome=?, outcome_at=? WHERE id=?").run(o ? JSON.stringify(o) : null, o ? o.at : null, id);
+  ticks(id: string) {
+    const r = db.prepare("SELECT done_ticks FROM sessions WHERE id=?").get(id) as { done_ticks: string | null } | undefined;
+    return decodeTicks(r?.done_ticks);
+  },
+  /** Tick (or untick) finish-line checks by number (`mc goal check 2`, or a click on Focus). */
+  setChecks(id: string, ns: number[], done: boolean) {
+    const r = db.prepare("SELECT done_when, done_ticks FROM sessions WHERE id=?").get(id) as { done_when: string | null; done_ticks: string | null } | undefined;
+    if (!r) return;
+    const ticks = tickChecks(decodeDoneWhen(r.done_when), decodeTicks(r.done_ticks), ns, done);
+    db.prepare("UPDATE sessions SET done_ticks=? WHERE id=?").run(Object.keys(ticks).length ? JSON.stringify(ticks) : null, id);
+  },
+  /** The agent's hand-off (`mc outcome`) on top, and the earlier ones under it. Null clears them all. */
+  setOutcome(id: string, o: Outcome | null, earlier: Outcome[] = []) {
+    db.prepare("UPDATE sessions SET outcome=?, outcome_at=?, outcome_prev=? WHERE id=?")
+      .run(o ? JSON.stringify(o) : null, o ? o.at : null, o && earlier.length ? JSON.stringify(earlier) : null, id);
   },
   /** Hand this terminal to Robert (or take it back). Drives stops + orange prompts; not the standing watch. */
   setRobert(id: string, on: boolean) {

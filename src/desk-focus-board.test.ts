@@ -16,8 +16,16 @@ import path from "node:path";
 const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
 const css = html.slice(0, html.indexOf("</style>"));
 
-test("Focus is four cards, top down, and nothing else", () => {
-  assert.match(html, /body\.innerHTML = focusGoal\(s\) \+ focusDecisions\(s\) \+ focusTalk\(s\) \+ focusOutcome\(s\);/);
+test("Focus is one board that fits the stage: status on top, three columns, the dock at the bottom", () => {
+  // Leo, 2026-10-28: full width, no scrolling to reach a button, what it is doing always on top.
+  assert.match(html, /body\.innerHTML = focusStatus\(s\) \+ grid \+ focusDock\(s\);/);
+  assert.match(html, /<div class="fx-col c1">\$\{focusGoal\(s\)\}\$\{focusDecided\(s\)\}<\/div>/);
+  assert.match(html, /<div class="fx-col c2\$\{FX\.exp === "talk" \? " holds-exp" : ""\}">\$\{focusTalk\(s\)\}<\/div>/);
+  assert.match(css, /body\.mode-focus \.story \{ display:flex; flex-direction:column; gap:10px; \}/);
+  assert.doesNotMatch(css, /\.story > \* \{ max-width/, "no centred column: the board uses the whole width");
+  assert.match(css, /\.fx-grid \{ flex:1 1 0; min-height:0; display:grid;/, "the board takes what the strip and the dock leave, and no more");
+  assert.match(css, /\.fx-body \{ flex:1 1 auto; min-height:0; overflow-y:auto;/, "a long card scrolls inside itself, never the page");
+  assert.match(css, /@container \(max-width:1280px\)/);
   // What was there before and is not any more.
   for (const gone of ["boardTimeline", "boardNow", "boardTouched", "boardHead", 'class="btl"', "bcols"])
     assert.doesNotMatch(html, new RegExp(gone.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${gone} is gone from Focus`);
@@ -25,14 +33,19 @@ test("Focus is four cards, top down, and nothing else", () => {
 });
 
 test("the goal card: the outcome, the finish line, a progress bar, the clock and time left", () => {
-  assert.match(html, /<div class="fx-sub">Done when<\/div><ul class="fx-checks">/);
+  assert.match(html, /<div class="fx-sub">Done when · \$\{reached \? checks\.length : nMet\}\/\$\{checks\.length\}<\/div><ul class="fx-checks">/);
+  assert.match(html, /data-check="\$\{i \+ 1\}"/, "each check ticks on its own, and can be ticked from here");
+  assert.match(html, /api\("\/sessions\/" \+ s\.id, \{ method: "PATCH", body: JSON\.stringify\(was \? \{ uncheck: \[n\] \} : \{ check: \[n\] \}\) \}\)/);
   assert.match(html, /No finish line yet — the agent sets it with you before it starts\./, "an undefined finish line says so, loudly");
-  assert.match(html, /<div class="fx-bar\$\{p \|\| reached \? "" : " unknown"\}"/, "the bar is the agent's own mc progress");
+  assert.match(html, /<div class="fx-bar\$\{p \|\| reached \|\| nMet \? "" : " unknown"\}"/, "the bar is the agent's own mc progress, else its checks met");
   assert.match(html, /<b data-clock="run">/, "how long it has been running");
   assert.match(html, /data-clock="eta" data-at="\$\{p\.eta_at\}"/, "and how long it thinks is left");
+  // No steps reported: the bar is the share of the finish line met. And how long since it last moved.
+  assert.match(html, /: checks\.length \? Math\.round\(\(nMet \/ checks\.length\) \* 100\) : 0;/);
+  assert.match(html, /updated <time data-clock="ago" data-at="\$\{moved\}" data-suffix=" ago">/);
   assert.match(html, /const etaWord = \(at\) =>/);
   assert.match(css, /\.fx-bar \{ height:10px;/);
-  assert.match(css, /\.fx-title \{ margin:0; font-size:23px;/, "the goal is the biggest words on the stage");
+  assert.match(css, /\.fx-title \{ margin:0; font-size:21px;/, "the goal is the biggest words on the board");
 });
 
 test("the permission to ship lives on the goal card, and deploy has to be clicked twice", () => {
@@ -80,14 +93,17 @@ test("talk: each line you sent beside what it said back, the newest open in full
   assert.match(html, /function talkTurns\(s\)/);
   assert.match(html, /if \(SYS_LINE\.test\(e\.text\) \|\| DAEMON_LINE\.test\(e\.text\)\) continue;/);
   assert.match(html, /<span class="fx-lbl">Talk<\/span>/);
+  // It scrolls inside its card, newest at the bottom, and expands over the board.
+  assert.match(html, /<div class="fx-body" data-keep="talk" data-stick>/);
+  assert.match(html, /\+ expBtn\("talk"\)/);
   // A line sent from the Focus composer shows at once and the page follows it to the answer.
   assert.match(html, /Object\.assign\(T, \{ pending: \{ text, at: Date\.now\(\) \}, follow: true, sig: "" \}\);/);
   // The last answer is not printed twice: a Result card without a hand-off points up at it.
-  assert.match(html, /No hand-off filed — its last answer is open in Talk, above\./);
+  assert.match(html, /No hand-off filed — its last answer is open in Talk\./);
 });
 
 test("is it working: the evidence under the phase — printing now or quiet since, and the last thing it did", () => {
-  assert.match(html, /\+ pulseHtml\(s\);/);
+  assert.match(html, /<div class="st-line" title="\$\{esc\(line\)\}">\$\{esc\(line\)\}<\/div>\$\{pulseHtml\(s\)\}/, "the evidence sits under the status line");
   assert.match(html, /const printing = s\.quiet === false;/);
   assert.match(html, /else if \(el\.dataset\.clock === "ago" && at\)/, "the quiet clock ticks off the page clock");
   assert.match(css, /body\.blink \.fx-pulse\.on i \{ opacity:\.3; \}/, "the dot blinks off the 1Hz class, no animation");
@@ -126,7 +142,7 @@ test("Focus is home: no Terminal button, a reload never lands in the raw termina
 test("a reached goal keeps its ✓ and the time, while the phase says whether it is still done", () => {
   assert.match(html, /const done = s\.goal_done_at \? Date\.parse\(s\.goal_done_at\) \|\| 0 : 0;/);
   assert.match(html, /✓ reached \$\{esc\(TermCompanion\.hhmm\(done\)\)\}/);
-  assert.match(css, /\.fx-goal\.reached \.fx-checks li::before \{ content:"✓"; color:var\(--accent\); \}/);
+  assert.match(css, /\.fx-checks li\.ok::before, \.fx-goal\.reached \.fx-checks li::before \{ content:"✓"; color:var\(--accent\);/);
 });
 
 test("the phone shows the two things worth knowing without opening a terminal", () => {
@@ -134,4 +150,50 @@ test("the phone shows the two things worth knowing without opening a terminal", 
   assert.match(phone, /if \(e\.kind === "error"\) \{ flush\(\); items\.push\(\{ kind: "err"/, "a failed call is its own line");
   assert.match(phone, /const link = \/\^printed\\s\+\(\\S\+\)\$\/\.exec/, "a printed link is a link, not a folded tool call");
   assert.match(phone, /\.fl\.err \{ color:var\(--danger\); font-size:13\.5px; \}/);
+});
+
+test("the status strip: what it is doing now, in the need's colour when it needs you, and who else does", () => {
+  assert.match(html, /function focusStatus\(s\)/);
+  assert.match(html, /else if \(need\?\.k === "decide"\) line = "Waiting for you — "/);
+  assert.match(html, /else if \(need\?\.k === "approve"\) line = "Hand-off ready — approve it below  ↓";/);
+  assert.match(html, /const others = needsNow\(\)\.filter\(\(x\) => x\.id !== s\.id\)\.length;/);
+  assert.match(html, /data-fnext title="the next terminal that needs you \(⌘J\)"/);
+  assert.match(css, /\.fx-status \{ flex:none;/, "never scrolls away");
+});
+
+test("needs you: one reading for the rail's pill, ⌘J, the counts and Focus — a wall, a question, a hand-off to approve", () => {
+  assert.match(html, /function needOf\(s\) \{/);
+  assert.match(html, /if \(s\.handoff && !SHIPPING\.has\(s\.id\)\) return \{ k: "approve", word: "approve" \};/);
+  assert.match(html, /q\.className = "asks " \+ need\.k;/);
+  assert.match(html, /\(need \? " needs n-" \+ need\.k : ""\)/);
+  assert.match(css, /body\.blink \.row \.side \.asks i \{ opacity:\.25; \}/, "the pill's dot blinks off the page clock");
+  assert.match(css, /\.row \.side \.asks\[hidden\] \{ display:none; \}/, "a pill styled display:inline-flex must still hide");
+  assert.match(html, /const need = live\.filter\(\(s\) => needOf\(s\)\)\.length/);
+  assert.match(html, /\|\| needOf\(s\)\) && !\(S\.answered\.get/);
+});
+
+test("the dock: every answer and approval in one place at the bottom, and a ship you approved keeps showing", () => {
+  assert.match(html, /function focusDock\(s\)/);
+  assert.match(html, /const rows = openDecisions\(s\);/);
+  assert.match(html, /Nothing needs you right now/);
+  // Approve buttons live in the dock, not inside the hand-off card.
+  assert.match(html, /function handoffDock\(s\)/);
+  assert.match(html, /<button type="button" class="go" data-ok="merge\+deploy">✓ Merge \+ deploy<\/button>/);
+  // The click is tracked until the hand-off says it shipped, and turns on the 1Hz clock meanwhile.
+  assert.match(html, /shipStart\(s, ok\.dataset\.ok\);/);
+  assert.match(html, /if \(\(o && \(Date\.parse\(o\.at\) \|\| 0\) > x\.at && o\.shipped\?\.length\) \|\| \(x\.kind === "merge" && merged\)\)/);
+  assert.match(html, /<i class="spin" data-spin>◐<\/i>/);
+  assert.match(html, /for \(const el of qsa\("#story \[data-spin\]"\)\) el\.textContent = SPIN/);
+  assert.match(html, /localStorage\.setItem\("desk-shipping"/);
+});
+
+test("hand-offs: the newest in full, every earlier one kept and folded; Talk and the hand-off expand over the board", () => {
+  assert.match(html, /D\.earlier = r\.earlier \|\| \[\];/);
+  assert.match(html, /<div class="ho-h" data-hopen="\$\{i\}"/);
+  assert.match(html, /#\$\{n\} of \$\{n\}/);
+  assert.match(html, /\+ expBtn\("out"\)/);
+  assert.match(css, /\.fx-grid\.exp > \.fx-col:not\(\.holds-exp\), \.fx-grid\.exp \.fx-col > \.fx:not\(\.exp\) \{ display:none; \}/);
+  assert.match(html, /if \(e\.key === "Escape" && S\.mode === "focus" && FX\.exp/, "Esc gives the board back");
+  // A repaint keeps every card where it was scrolled (Talk follows the newest when it was at the end).
+  assert.match(html, /el\.scrollTop = was\.end && el\.hasAttribute\("data-stick"\) \? el\.scrollHeight : was\.top;/);
 });

@@ -63,9 +63,9 @@ export { excludeChronosArtifacts, gitExcludePath, gitTrackedSync, insideGitRepo,
 const FOCUS_CONTRACT = `## How your operator reads your work
 They read a Focus board, never your raw output. It has four parts: the GOAL (the outcome, its finish line, a progress bar and a timer), the DECISIONS (every question you ask, with a button per option), the TALK (each message they send you, under it your reply — so answer it first, plainly), and the HAND-OFF (your summary and proof, which they approve the merge/deploy from). Work in this order:
 1. DEFINE FIRST, before any work. Open with one line "Understanding: …". If the goal or how we will know it is done is unclear — no goal, a vague one, two readings, unknown scope — ASK before you start: one question, 2–4 concrete options, your recommendation first (your CLI's question tool, or \`mc ask-robert "…" --options "a,b" --operator\`). Then write it down: \`mc goal set "<one outcome>" --kind pr|investigation|qa --done-when "<a check they can verify>"\` (2–4 checks) and \`mc progress 0/<steps> "plan" --eta 30m\`. A clear prompt needs no question — set both in your first minute.
-2. PROGRESS: \`mc progress <n>/<total> "<step>" --eta <time left>\` as you cross each step. It is their only progress bar and countdown.
+2. KEEP THE BOARD MOVING: \`mc progress <n>/<total> "<step>" --eta <time left>\` as you cross each step, and \`mc goal check <n>\` the moment a done-when check is met — not all at the end. It is their only progress bar, checklist and countdown.
 3. ASK, DON'T GUESS: a call only they can make → \`mc ask-robert "<question + what you'd do>" --options "a,b"\`. Waiting on non-operator work → \`mc state waiting "…" --on ci --eta 10m\`; a wall → \`mc state blocked "…" --reason auth\`; hours or days → \`mc when pr <url> --until approved --note "…"\` and finish your turn. Never stop silently. Never block your turn on a wait (CI, Jenkins, a deploy, a long test): run it in the background (your shell's background mode or a background subagent) and end the turn, so they can talk to you while it runs.
-4. HAND-OFF when the finish line is met: \`mc outcome "<1–2 plain sentences>" --change "<what changed, in human words>" --proof "<check you ran → result>" --pr <url> --ask merge|deploy|merge+deploy|review|none\`; a visible change also gets \`--shot before=a.png --shot after=b.png\`. The proof answers each --done-when check. Then ship only as far as \`mc goal\` says you may (ask = stop at the open PR · merge = merge once green · deploy = merge and deploy) and re-file the outcome with \`--shipped "merged #12"\`.
+4. HAND-OFF when the finish line is met: \`mc outcome "<1–2 plain sentences>" --change "<what changed, in human words>" --proof "<check you ran → result>" --pr <url> --ask merge|deploy|merge+deploy|review|none\`; a visible change also gets \`--shot before=a.png --shot after=b.png\`. The proof answers each --done-when check. Then ship only as far as \`mc goal\` says you may (ask = stop at the open PR · merge = merge once green · deploy = merge and deploy) and say so with \`mc outcome --shipped "merged #12"\` (it adds to the hand-off on top). Follow-up work after that gets its own new \`mc outcome\`; earlier ones stay on the board.
 5. END every turn: short bullets → "**Next steps**" (omit if none) → "**Summary:**" (one or two sentences; the first is your card's line). Then \`mc goal done\`. More work after that? \`mc goal set\` the new goal first.
 Say every link (PR, doc) in full on its own line. Write for a human on a phone: plain words, no filler, no code dumps.
 
@@ -1513,6 +1513,10 @@ export function noteInput(id: string, at = Date.now()): void {
   inputLog.set(id, hits);
 }
 
+const operatorLines = new Map<string, number>();
+/** When the operator last typed a line into this terminal through the daemon, or null. */
+export const operatorSaidAt = (id: string): number | null => operatorLines.get(id) ?? null;
+
 /** Returns null on success, or a human-readable reason it did not happen. */
 export function sendInput(
   id: string,
@@ -1524,6 +1528,9 @@ export function sendInput(
   const at = Date.now();
   if (!inputAllowed(id, at)) return `rate limit — ${INPUT_MAX} inputs per minute per terminal`;
   noteInput(id, at);
+  // A line from the operator (not a menu key, not the daemon): the moment a later hand-off becomes a
+  // follow-up rather than a correction (session-outcome.ts fileOutcome).
+  if (by === "operator" && req.text) operatorLines.set(id, at);
 
   if (req.key) writeTo(id, KEYS[req.key]);
   // A sequence is one answer ("down, down, enter" = the third option), spaced so a TUI reads
