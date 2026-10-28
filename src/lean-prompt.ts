@@ -36,6 +36,12 @@ defineSetting({
   default: () => (process.env.CHRONOS_DESK_MCP_DENY ?? "").split(",").map((s) => s.trim()).filter(Boolean),
 });
 defineSetting({
+  key: "desk.claudeai_connectors", group: "Limits", level: "both", type: "bool", env: "CHRONOS_DESK_CLAUDEAI_CONNECTORS",
+  label: "claude.ai connectors",
+  help: "Off: claude terminals here load none of the account's claude.ai connectors (Gmail, Drive, …) — for a workspace that uses none of them. To drop only some, name them in MCP servers kept out.",
+  default: () => process.env.CHRONOS_DESK_CLAUDEAI_CONNECTORS !== "0",
+});
+defineSetting({
   key: "desk.artifact_tool", group: "Limits", level: "both", type: "bool", env: "CHRONOS_DESK_ARTIFACT_TOOL",
   label: "claude.ai Artifact tool",
   help: "Off: claude terminals here have no Artifact tool (its description is ~13k tokens on every request) and publish pages with `mc artifact` only.",
@@ -95,6 +101,7 @@ export function leanClaudeArgs(configDir: string, workspaceId: string | null): s
 export function leanClaudeEnv(workspaceId: string | null): Record<string, string> {
   return {
     ...(setting<boolean>("desk.artifact_tool", workspaceId) ? {} : { CLAUDE_CODE_DISABLE_ARTIFACT: "1" }),
+    ...(setting<boolean>("desk.claudeai_connectors", workspaceId) ? {} : { ENABLE_CLAUDEAI_MCP_SERVERS: "false" }),
     ...(setting<boolean>("desk.lean_tools", workspaceId) ? { CLAUDE_CODE_DISABLE_WORKFLOWS: "1", CLAUDE_CODE_DISABLE_CRON: "1" } : {}),
   };
 }
