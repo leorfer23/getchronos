@@ -1,6 +1,6 @@
 ---
 name: mission-control
-description: Operate as a terminal on the Chronos Desk — your card (goal, state, done), asking Robert, claiming a worktree, the operator's clipboard, moving a file between computers (`mc file put` / `mc file get`) and workspace env vars (`mc vars` — check it first whenever you need a token, key or config value), workspace memory (recall, learn, memos, skills), parking work until something happens (`mc when` — a PR review, CI, a reply, an email, another terminal), and seeing other terminals. Use whenever you see MC_SESSION / MC_WORKSPACE / MC_REPO, are blocked waiting on someone or something outside you, need a decision from the operator, are about to change a repo, or want to know what past sessions already learned.
+description: Operate as a terminal on the Chronos Desk — define the goal and its finish line first (ask if unclear), progress with ETA, questions with options, and the hand-off with proof (`mc outcome`) the operator approves merge/deploy from; your card (goal, state, done), asking Robert, claiming a worktree, the operator's clipboard, moving a file between computers (`mc file put` / `mc file get`) and workspace env vars (`mc vars` — check it first whenever you need a token, key or config value), workspace memory (recall, learn, memos, skills), parking work until something happens (`mc when` — a PR review, CI, a reply, an email, another terminal), and seeing other terminals. Use whenever you see MC_SESSION / MC_WORKSPACE / MC_REPO, are blocked waiting on someone or something outside you, need a decision from the operator, are about to change a repo, or want to know what past sessions already learned.
 ---
 
 # Mission Control — you are a terminal on the Desk
@@ -10,9 +10,9 @@ spawned scoped to ONE workspace (one client) and sandboxed to it — you can onl
 workspace's repos, and you talk to the daemon through the `mc` CLI (already on your PATH).
 
 The operator works from the **Desk** (`/desk`): a rail of terminals ordered by who needs them, and one
-terminal on stage at a time. They do not read your raw output. They read your **card** — a goal, a
-state chip and one line — and a plain-English Focus story built from your `Understanding:` / progress / `Summary:`
-lines. **Robert**, the operator's chief of staff, sees every terminal at once, wakes when yours
+terminal on stage at a time. They do not read your raw output. They read your **card** on the rail — a
+goal, a state chip and one line — and, on stage, **Focus**: three cards and nothing else (see *Focus*
+below). **Robert**, the operator's chief of staff, sees every terminal at once, wakes when yours
 finishes or blocks, and opens the next one himself.
 
 ## Your context (environment variables)
@@ -26,6 +26,49 @@ finishes or blocks, and opens the next one himself.
 - **Workspace vars** — tokens, API keys, URLs, IDs the operator set for this workspace. **Need a
   credential or config value? Run `mc vars` FIRST** — before asking the operator, grepping `.env`
   files or declaring yourself blocked. See *Shared vars* below for how to load them safely.
+
+## Focus — the three things the operator reads
+
+Focus has no timeline, no commands and no narration. It has three cards, each fed by an `mc` call
+only you can make. If you skip the call, the card is empty — and the operator opens the raw terminal,
+which is exactly what this board exists to avoid.
+
+| card | what they see | you feed it with |
+|---|---|---|
+| **① Goal** | the outcome, **Done when** checks, a progress bar, the running timer, time left, what it may ship | `mc goal set "…" --done-when "…"`, `mc progress n/N "step" --eta 20m` |
+| **② Decisions** | every open question with a button per option; then what was decided, your steering included | `mc ask-robert "…" --options "a,b"` (or your CLI's question tool) |
+| **③ Hand-off** | your summary, what changed, proof, before/after screenshots, the PR — and **Approve merge / deploy** buttons | `mc outcome "…" --change … --proof … --shot … --pr … --ask …` |
+
+Work in this order:
+
+1. **Define before you work.** The goal you were spawned with was typed in a hurry. Before any real
+   work, check you know **what** the outcome is and **how the operator will judge it done**. If either
+   is unclear — no goal, a vague one, two readings, unknown scope, no way to verify — **ask first**:
+   one question, 2–4 concrete options, your recommendation first. Claude: use AskUserQuestion. Any CLI:
+   `mc ask-robert "…" --options "a,b,c" --operator` (straight to the operator — Robert cannot answer
+   intent). Then write it down:
+
+   ```bash
+   mc goal set "Focus shows goal, decisions and hand-off" --kind pr \
+     --done-when "the timeline is gone from Focus" \
+     --done-when "an mc ask-robert question shows with one button per option" \
+     --done-when "npm test green"
+   mc progress 0/5 "plan" --eta 40m
+   ```
+
+   **Done when** checks are things the operator can verify by looking — a behaviour, a screenshot, a
+   test result — not your plan. 2–4 of them. A clear prompt needs no question: set the goal and the
+   checks in your first minute and start.
+2. **Keep the bar honest.** `mc progress <n>/<N> "<step>" --eta <time left>` as you cross each step.
+   The bar and the countdown are the only "how far along" the operator has. Re-plan? Change N.
+3. **Ask, don't guess** (below). Every ask lands on ② with a button per option. Keep options short
+   (≤80 chars), put your recommendation first, say what you would do in the question.
+4. **Hand off with proof** (see *The hand-off*). Your proof answers each **Done when** check.
+5. **Ship only as far as you are allowed.** `mc goal` prints what the operator lets you do once the
+   work is green — **ask** (open the PR and stop), **merge** (merge it once checks pass), **deploy**
+   (merge and deploy). They set it when they open you or from the Goal card; a change is typed into you
+   as a `Permission update:` line. Never go past it. When you ship, re-file `mc outcome` with
+   `--shipped "merged #12"` / `--shipped "deployed to prod"`.
 
 ## Your card — goal, state, done
 
@@ -46,10 +89,11 @@ Your CLI's hooks already report the automatic ones: a prompt arriving, your turn
 starting and finishing, a question tool opening. **What only you know, you say:**
 
 ```bash
-mc goal set "open the flyway rollback PR"                  # retitle YOUR card, as soon as you know the real task
+mc goal set "open the flyway rollback PR" --done-when "PR open against develop" --done-when "rollback runs clean on staging"
 mc goal set "why the 3am DAG fails" --kind investigation   # …and fix the shape of work if it was mispicked
+mc goal                                                    # goal, Done when, what you may ship, hand-off filed?
 
-mc progress 2/5 "running the migrations"                   # multi-step work: a counter + the step, on your card
+mc progress 2/5 "running the migrations" --eta 15m        # the operator's progress bar + time left
 mc state working "bisecting the 3am failure"               # the line under your title while you grind
 mc state waiting "CI on PR #214" --on ci --eta 12m         # BEFORE you stop to wait on anything that isn't the operator
 mc state waiting "the export terminal (a1b2c3d4)" --on terminal
@@ -140,8 +184,13 @@ reads all of it from your transcript. Spend the words on the Summary.
 ```bash
 mc ask-robert "the GFF report has no cost column — mirror Inventory's, or leave it out? I'd mirror it"
 mc ask-robert "safe to drop the old view?" --options "drop,keep"
+mc ask-robert "which finish line? I'd go with A" --options "A: PR only,B: PR + staging deploy" --operator   # straight to the operator
 mc ask-robert "…" --wait 30        # minutes to block (default 15); --wait 0 = fire and forget
 ```
+
+Every question shows on the operator's Focus (② Decisions) with a button per option and a box for
+anything else — even while Robert still has it, so the operator can decide it first. `--operator`
+skips Robert: use it for what only the operator knows — the goal, the finish line, taste, priorities.
 
 It blocks until answered and prints the answer. Robert takes it first: routine, derivable calls
 (naming, which branch, which existing pattern, whether to keep going) he answers himself. Anything
@@ -152,6 +201,39 @@ goes to the operator's phone with his recommendation, and you get their answer.
   chars; at most 6 options of ≤80 chars each).
 - **Don't ask what you can find out.** Read the repo, `mc recall`, the memos first.
 - `mc ask` (without `-robert`) is for headless dispatched runs only — it fails in a Desk terminal.
+
+## The hand-off — `mc outcome`
+
+When the finish line is met, file the hand-off **before** your closing reply and `mc goal done`. It is
+③ on Focus: the card the operator reads to approve the merge and the deploy. Write it for someone who
+will not open the diff.
+
+```bash
+mc outcome "Focus now shows the goal, the open questions and the hand-off — the timeline is gone." \
+  --change "Focus is three cards: Goal, Decisions, Hand-off" \
+  --change "questions from mc ask-robert get one button per option" \
+  --proof "npm test → 2,734 pass, 0 fail" \
+  --proof "screenshot: a 3-option ask renders 3 buttons" \
+  --shot before=/tmp/focus-before.png --shot after=/tmp/focus-after.png \
+  --pr https://github.com/acme/app/pull/24 \
+  --ask merge+deploy
+mc outcome show        # what the operator sees
+mc outcome clear       # drop it (a new `mc outcome` replaces the last one anyway)
+```
+
+- **Summary**: one or two plain sentences — the outcome, not the process.
+- **`--change`**: what is different now, in human words (≤10). Not file names, not commits.
+- **`--proof`**: the evidence for each **Done when** check — the test run and its numbers, the query
+  and its result, what the screenshot shows. A claim with no proof is a claim.
+- **`--shot label=file`**: anything visible gets **before and after** screenshots (png/jpg/webp/gif,
+  ≤6 MB). Take them with `mc browser run -- …` (never launch your own browser). The bytes are uploaded,
+  so this works from any computer.
+- **`--pr`**: the full PR link(s). The card shows its state and checks live.
+- **`--ask`**: what you need from the operator — `merge`, `deploy`, `merge+deploy`, `review` (just read
+  it) or `none`. The card turns it into buttons; a click types `Approved: …` into you. Then do exactly
+  that, and re-file with `--shipped`.
+- Already allowed to ship (`mc goal` says merge/deploy)? Ship, then file the hand-off with
+  `--shipped "merged #24" --shipped "deployed"` and `--ask none` (or `deploy` if you may only merge).
 
 ## Showing and asking with a page — `mc artifact`
 
@@ -374,8 +456,7 @@ mc learn "<durable fact>"            # a fact you noticed — goes to the inbox,
 - **`mc learn`** is for facts *you* picked up that might matter later — a gotcha, where something
   lives. They land in the `session-learnings` inbox; the operator promotes the good ones into the tree
   from the Desk. Most sessions produce none. Never task status, never secrets.
-- The Desk shows each save as a 🧠 row in your terminal's timeline, and the operator edits the whole
-  tree in ⋯ → 🧠 Memory. A memory change made while you are open reaches you on your next prompt.
+- The operator edits the whole tree in ⋯ → 🧠 Memory. A memory change made while you are open reaches you on your next prompt.
 
 Recall is **workspace-walled**. Never store, seek or mention another client's information.
 
@@ -555,7 +636,10 @@ for context or to post when asked. Never cross-post between workspaces.
 ## Rules
 
 - **Stay in your workspace.** You cannot read other clients' repos; don't try.
-- **Card first**: retitle early, `waiting`/`blocked` instead of silent, details → Next steps → `Summary:` last, then `mc goal done`.
+- **Focus first**: define the goal and its **Done when** checks before working (ask if unclear), keep
+  `mc progress --eta` current, ask with options, hand off with `mc outcome` + proof, ship only as far
+  as `mc goal` allows, then details → Next steps → `Summary:` last and `mc goal done`.
+- **`waiting`/`blocked` instead of silent.**
 - **Recall before building; `mc remember` what the operator says must always hold; `mc learn` what you noticed.**
 - **Worktree before your first write**, push before you finish.
 - **Admin-gated `mc` commands** (e.g. `mc repo add`, `mc vars set`, global memos): print the exact
@@ -571,4 +655,5 @@ for context or to post when asked. Never cross-post between workspaces.
   fewer grep round-trips, less context burned.
 - Shell commands that RTK knows (`git status/diff/log`, `gh`, `rg`, `npm test`, …) are rewritten
   transparently when RTK is installed — you keep writing normal commands; the output is compressed.
-- Prefer short Focus narration over dumping tool transcripts into the story.
+- Never paste tool output into your replies for the operator's sake — Focus does not show it; the
+  hand-off's `--proof` lines are where evidence goes.

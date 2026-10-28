@@ -721,6 +721,21 @@ export type SessionStatus = "live" | "ended";
 /** What a terminal is FOR, coarsely — the operator picks it in the spawn dialog and it sets the
  *  agent's finish line: a PR to open, a question to answer, a build to verify. */
 export type GoalKind = "pr" | "investigation" | "qa";
+/** What a terminal may do once its work is green: stop and ask, merge, or merge and deploy. */
+export type Ship = "ask" | "merge" | "deploy";
+/** A terminal's hand-off (`mc outcome`): everything the operator needs to approve, in one place. */
+export interface Outcome {
+  summary: string;
+  changes: string[];
+  proof: string[];
+  prs: string[];
+  shots: { name: string; label: string }[];
+  /** What it asks the operator for: approve the merge, the deploy, both, a read, or nothing. */
+  ask: "merge" | "deploy" | "merge+deploy" | "review" | "none";
+  /** What it already did on its own, under the permission it had (`ship`): merged, deployed. */
+  shipped: string[];
+  at: string;
+}
 /** Who last wrote a session's goal. The Desk title deriver only overwrites 'seed' and 'auto'. */
 export type GoalSource = "seed" | "auto" | "agent" | "human";
 /**
@@ -763,6 +778,13 @@ export interface Session {
   lead_id: string | null;
   /** The goal as TYPED at spawn, kept beside the one the agent sharpened. */
   spawn_goal: string | null;
+  /** The finish line: the checks that say the goal is met (`mc goal set --done-when`). [] = not defined yet. */
+  done_when: string[];
+  /** What the operator lets it do once the work is green (src/session-outcome.ts). Null = ask. */
+  ship: Ship | null;
+  /** The agent's hand-off (`mc outcome`) — what the operator decides from. Null = none filed yet. */
+  outcome: Outcome | null;
+  outcome_at: string | null;
   /** How many goals this terminal was given, and how many are ticked. Both 0 = the single-goal
    *  terminal every surface already knows: `goal` is the whole story. Joined on read, not stored. */
   goals_total?: number;
@@ -874,6 +896,8 @@ export interface NewSession {
   cwd: string;
   /** The host to run on (HOSTS.md). Unset = `local`. Validated by api.ts / openSession before use. */
   host_id?: string | null;
+  /** Set at spawn by the operator only (api.ts drops it from any other caller). */
+  ship?: Ship | null;
 }
 
 // 'workspace' = client-isolated (default). 'global' = operator profile, injected into every

@@ -120,6 +120,10 @@ export const asks = {
     return this.get(id);
   },
 
+  /** Every question one terminal asked, open or not, oldest first — Focus's Decisions card. */
+  forSession(session_id: string, limit = 40): Ask[] {
+    return (db.prepare("SELECT * FROM asks WHERE session_id = ? ORDER BY rowid DESC LIMIT ?").all(session_id, limit) as Ask[]).reverse();
+  },
   /** Open asks filed from one terminal — cancelled together when its pty dies. */
   openForSession(session_id: string): Ask[] {
     return db.prepare("SELECT * FROM asks WHERE session_id = ? AND status = 'open' ORDER BY rowid ASC").all(session_id) as Ask[];

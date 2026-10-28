@@ -35,7 +35,7 @@ export type Signals = {
   declared?: { state: Exclude<DeclaredState, "working">; label: string | null; reason?: string | null; on?: WaitOn | null; eta_at?: number | null; at: number } | null;
   /** `mc state working "label"` — colour for the working line, never a phase of its own. */
   work_label?: { text: string; at: number } | null;
-  progress?: { n: number; of: number; label: string | null; at: number } | null;
+  progress?: { n: number; of: number; label: string | null; at: number; eta_at?: number | null } | null;
   /** Turn boundaries from hooks. Absent = this CLI's hooks never fired; trust the pty. */
   turn?: { state: "working" | "stopped"; at: number; error?: string | null } | null;
   subagents?: Record<string, { label: string; at: number }>;
@@ -61,7 +61,8 @@ export type TermStatus = {
   on: WaitOn | null;
   eta_at: number | null;
   subagents: number;
-  progress: { n: number; of: number } | null;
+  /** The agent's own step count (`mc progress`), with the step's words and its guess of time left. */
+  progress: { n: number; of: number; label?: string | null; at?: number; eta_at?: number | null } | null;
   /** True once any hook has been seen from this terminal. */
   hooked: boolean;
   /** Open questions on this terminal that are the operator's to answer — the red count on its rail row. */
@@ -176,7 +177,10 @@ export function resolve(inp: ResolveInput): Omit<TermStatus, "since"> {
   const hooked = !!sig.turn;
   const base = {
     on: null as WaitOn | null, eta_at: null as number | null, subagents: subs.length,
-    progress: sig.progress ? { n: sig.progress.n, of: sig.progress.of } : null, hooked,
+    progress: sig.progress
+      ? { n: sig.progress.n, of: sig.progress.of, label: sig.progress.label ?? null, at: sig.progress.at, eta_at: sig.progress.eta_at ?? null }
+      : null,
+    hooked,
   };
   const out = (phase: Phase, line: string, extra: Partial<typeof base> = {}) =>
     ({ ...base, ...extra, phase, word: WORD[phase], needs_you: NEEDS_YOU.has(phase), line: clip(line) });
@@ -419,8 +423,9 @@ function mirror(id: string, sig: Signals) {
     else clearAgentOverlay(id);
   } catch {}
 }
-export function setProgress(id: string, p: { n: number; of: number; label?: string | null } | null, now = Date.now()): TermStatus | null {
-  const sig = { ...load(id), progress: p ? { n: p.n, of: p.of, label: p.label ? clip(p.label, 120) : null, at: now } : null };
+export function setProgress(id: string, p: { n: number; of: number; label?: string | null; eta_min?: number | null } | null, now = Date.now()): TermStatus | null {
+  const eta_at = p?.eta_min ? now + Math.round(p.eta_min * 60_000) : null;
+  const sig = { ...load(id), progress: p ? { n: p.n, of: p.of, label: p.label ? clip(p.label, 120) : null, at: now, eta_at } : null };
   save(id, sig);
   return refresh(id);
 }
