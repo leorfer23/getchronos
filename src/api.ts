@@ -2821,8 +2821,12 @@ export function startServer() {
     if (!ask) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, ask.workspace_id)) return;
     const timeoutMs = Math.max(0, Math.min(Number(req.query.timeout_ms) || 55_000, 55_000));
-    if (ask.status !== "open") return res.json(ask);
-    res.json(await waitForAskAnswer(ask.id, timeoutMs));
+    // A client that hung up (its `mc` killed by the shell's timeout) is no longer waiting: an answer
+    // after that is typed into its terminal instead (asks.ts deliverToAsker).
+    const gone = new AbortController();
+    res.on("close", () => gone.abort());
+    const row = await waitForAskAnswer(ask.id, timeoutMs, gone.signal);
+    if (!gone.signal.aborted) res.json(row);
   });
 
   api.post("/asks/:id/answer", validate(AnswerAskSchema), async (req, res) => {

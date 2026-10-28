@@ -200,10 +200,12 @@ Every question shows on the operator's Focus (② Decisions) with a button per o
 anything else — even while Robert still has it, so the operator can decide it first. `--operator`
 skips Robert: use it for what only the operator knows — the goal, the finish line, taste, priorities.
 
-It blocks until answered and prints the answer. Robert takes it first: routine, derivable calls
-(naming, which branch, which existing pattern, whether to keep going) he answers himself. Anything
-touching scope, money, deleting, production, an external side effect — or anything he's unsure of —
-goes to the operator's phone with his recommendation, and you get their answer.
+It blocks until answered and prints the answer; one that comes after it stopped waiting (`--wait`
+ran out, `--wait 0`, or your shell killed it) is typed into this terminal. Robert takes it first:
+routine, derivable calls (naming, which branch, which existing pattern, whether to keep going) he
+answers himself. Anything touching scope, money, deleting, production, an external side effect — or
+anything he's unsure of — goes to the operator's phone with his recommendation, and you get their
+answer.
 
 - **Ask a real question**: one sentence, the options, and what you'd do by default (question ≤1000
   chars; at most 6 options of ≤80 chars each).
