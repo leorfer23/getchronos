@@ -569,6 +569,9 @@
   .fx-q .who b { color:var(--p-decide,var(--warn)); font-weight:700; }
   .fx-q.blocked .who b { color:var(--danger); }
   .fx-q.approve .who b { color:var(--accent); }
+  /* Claude asking to use a tool: what it would run, as it would run it. */
+  .fx-q .cmd { margin-top:6px; padding:7px 10px; border-radius:8px; background:var(--surface-2); color:var(--ink); font-family:ui-monospace,"SF Mono",Menlo,monospace;
+    font-size:13.5px; line-height:1.45; white-space:pre-wrap; overflow-wrap:anywhere; max-height:9em; overflow-y:auto; }
   .fx-q .q { font-size:16.5px; line-height:1.4; font-weight:600; color:var(--ink); white-space:pre-wrap; overflow-wrap:anywhere; max-height:7.2em; overflow-y:auto; }
   .fx-q .rec { margin-top:5px; font-size:14px; color:var(--muted); overflow-wrap:anywhere; }
   .fx-q .rec::before { content:"Robert: "; font-weight:650; color:var(--ink); }
@@ -2134,7 +2137,13 @@ const KIND_TIP = {
   investigation: "Investigation — done when there's an answer with evidence, no code changes unless asked",
   qa: "QA — done when there's a verdict: what passed, what failed, how to reproduce",
 };
-const askOf = (s) => (s && s.live && (s.state === "waiting" || s.state === "blocked") && s.prompt && s.prompt.kind !== "turn") ? s.prompt : null;
+// Claude's permission menu, as the daemon reads it off the screen (status.permission). The terminal is
+// never quiet while that menu is up — the pending tool's ⏺ blinks — so s.prompt never carries it.
+const permMenu = (s) => {
+  const p = s && s.live ? s.status?.permission : null;
+  return p && p.options?.length ? { kind: "select", question: p.question || "Allow " + p.tool + "?", options: p.options } : null;
+};
+const askOf = (s) => permMenu(s) || ((s && s.live && (s.state === "waiting" || s.state === "blocked") && s.prompt && s.prompt.kind !== "turn") ? s.prompt : null);
 const optionBody = (o) => ({ keys: [...Array(Math.abs(o.offset)).fill(o.offset > 0 ? "down" : "up"), "enter"] });
 const title = (s) => s.goal || s.title || (s.backend ? s.backend.replace("-code", "") + " terminal" : "terminal");
 // The seven phases the daemon resolves for every terminal (src/term-status.ts), in triage order.
@@ -2945,6 +2954,21 @@ function dialogHtml(d) {
   return `<div class="fx-q dialog"><div class="who">${who}</div><div class="q">${esc(d.question)}</div>`
     + (btns ? `<div class="fx-choices">${btns}</div>` : "") + (extra.length ? `<div class="fx-opts">${extra.join("")}</div>` : "") + `</div>`;
 }
+// Claude asking to use a tool: what it would run, and a button per row of its menu in its own words —
+// answered with the menu's keys (optionBody), like any select. Until the daemon has read the menu off
+// the screen (a second at most) there is nothing safe to press, so it says so.
+function permissionHtml(p) {
+  const opts = p.options || [];
+  const btns = opts.map((o, i) => {
+    const label = o.label + (o.detail ? " " + o.detail : ""), no = /^no\b/i.test(o.label);
+    const key = i === 0 ? "y" : i === 1 ? "a" : i === opts.length - 1 ? "n" : "";
+    return `<button type="button" data-fopt="${i}" class="${i === 0 ? "go" : no ? "no" : ""}" title="${esc(label)}">${key ? `<kbd>${key}</kbd>` : ""}${esc(clip(label, 90))}</button>`;
+  }).join("");
+  return `<div class="fx-q perm"><div class="who"><b>Permission</b> · ${esc(p.tool)}</div>`
+    + `<div class="q">${esc(p.about || (p.input ? "It wants to run this." : "It wants to use " + p.tool + "."))}</div>`
+    + (p.input ? `<div class="cmd">${esc(p.input)}</div>` : "")
+    + `<div class="fx-opts">${btns || `<button type="button" disabled>Reading its screen…</button>`}<button type="button" data-fterm>Open the terminal (⌘E)</button></div></div>`;
+}
 // Answering it: the keys that move its menu's cursor to the row, then Enter. Free text moves to
 // "Type something.", types the line and presses Enter (Claude Code 2.1: verified in a live TUI).
 const arrowsTo = (o) => Array(Math.abs(o.offset)).fill(o.offset > 0 ? "down" : "up");
@@ -3081,8 +3105,10 @@ function openDecisions(s) {
       + `<div class="fx-opts">${(a.options || []).map((o, i) => `<button type="button" data-aans="${esc(a.id)}" data-v="${esc(o)}" class="${i === 0 ? "go" : ""}">${esc(o)}</button>`).join("")}`
       + `<input data-atext="${esc(a.id)}" value="${esc(draft)}" placeholder="${(a.options || []).length ? "or say something else" : "your answer"} · ⏎" autocomplete="off"></div></div>`);
   }
-  const dlg = s.state !== "working" ? dialogOf(s, p, ph) : null;
-  if (dlg) open.push(dialogHtml(dlg));
+  const perm = s.status?.permission;
+  const dlg = !perm && s.state !== "working" ? dialogOf(s, p, ph) : null;
+  if (perm) open.push(permissionHtml(perm));
+  else if (dlg) open.push(dialogHtml(dlg));
   else if ((s.state === "waiting" || s.state === "blocked") && p?.question && p.kind !== "turn") {
     let opts = "";
     if (p.kind === "select" && p.options?.length) opts = p.options.map((o, i) => `<button type="button" data-fopt="${i}" class="${i === 0 ? "go" : i === p.options.length - 1 && p.options.length > 1 ? "no" : ""}"><kbd>${i === 0 ? "y" : i === 1 ? "a" : i === p.options.length - 1 ? "n" : ""}</kbd>${esc(o.label)}</button>`).join("");
@@ -4152,7 +4178,7 @@ function stageClick(e) {
   }
   const t = e.target.closest("[data-fa],[data-fopt],[data-fyn],[data-ftype]"); if (!t) return;
   const s = S.active && byId(S.active); if (!s) return;
-  const p = s.prompt && typeof s.prompt === "object" ? s.prompt : null;
+  const p = permMenu(s) || (s.prompt && typeof s.prompt === "object" ? s.prompt : null);
   if (t.dataset.fa) return stageAction(t.dataset.fa);
   if (t.dataset.fopt !== undefined) { const o = p?.options?.[Number(t.dataset.fopt)]; if (o) { answer(s.id, optionBody(o)); advance(s.id, "answered"); } return; }
   if (t.dataset.fyn) { answer(s.id, { text: t.dataset.fyn, enter: true }); return advance(s.id, "answered"); }

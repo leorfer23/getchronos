@@ -331,6 +331,25 @@ test("mc outcome --shipped alone files no summary; mc hook claude nudge prints o
   assert.ok(!s.hits.some((h) => h.url.endsWith("/hook")), "the nudge call never posts a card event");
 });
 
+test("mc hook claude PermissionRequest posts a tool ask naming the command; grok's stays the self-clearing gate", async () => {
+  const s = await stub(() => [200, {}]);
+  const ev = (o: object) => JSON.stringify({ hook_event_name: "PermissionRequest", session_id: "sess-1", ...o });
+  const bash = await s.run(["hook", "claude"], ev({ tool_name: "Bash", tool_input: { command: "mkdir -p probe-dir && date > probe-dir/stamp.txt", description: "Create probe-dir and write date stamp" } }));
+  const edit = await s.run(["hook", "claude"], ev({ tool_name: "Edit", tool_input: { file_path: "/repo/src/a.ts", old_string: "a", new_string: "b" } }));
+  const grok = await s.run(["hook", "grok"], ev({ tool_name: "Bash", tool_input: { command: "ls" } }));
+  s.close();
+  assert.equal(bash.code, 0, bash.stderr);
+  assert.equal(bash.stdout, "", "no decision: claude shows its own menu");
+  const posts = s.hits.filter((h) => h.url.endsWith("/sessions/sess-1/hook")).map((h) => h.body);
+  assert.deepEqual(posts[0], {
+    event: "ask", kind: "tool", question: "Allow Bash: Create probe-dir and write date stamp?", options: [],
+    tool: { name: "Bash", input: "mkdir -p probe-dir && date > probe-dir/stamp.txt", about: "Create probe-dir and write date stamp" },
+  });
+  assert.deepEqual(posts[1].tool, { name: "Edit", input: "/repo/src/a.ts" });
+  assert.equal(posts[1].question, "Allow Edit: /repo/src/a.ts?");
+  assert.deepEqual(posts[2], { event: "ask", question: "allow Bash?", options: ["yes", "no"], kind: "permission" });
+});
+
 // ── mc show: images on Focus mid-work (Leo 2026-10-28: an agent listed screenshot paths and opened Finder) ──
 
 test("a show keeps only images this terminal uploaded, rides the row, and the oldest fall off", () => {

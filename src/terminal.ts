@@ -1317,6 +1317,17 @@ export function sessionPrompt(id: string): DeskPrompt | null {
   return e.prompt ?? null;
 }
 
+/**
+ * The numbered menu on a live terminal's frame right now, quiet or not — for a menu its CLI keeps
+ * painting under: claude's permission menu sits beside a pending tool whose ⏺ blinks every ~600ms,
+ * so sessionPrompt never gets it. Null when the frame shows no menu.
+ */
+export function sessionMenu(id: string): DeskPrompt | null {
+  const e = live.get(id);
+  if (!e) return null;
+  try { const p = detectPrompt(e.screen.snapshot().lines); return p?.kind === "select" ? p : null; } catch { return null; }
+}
+
 /** Turn state of a live pty. `quiet` = nothing written to the terminal for QUIET_MS. */
 export function sessionActivity(id: string): { live: boolean; quiet: boolean; last_out: number | null; last_in: number | null; started_at: number | null } {
   const e = live.get(id);

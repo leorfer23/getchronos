@@ -26,6 +26,42 @@ test("a Claude Code permission prompt is a select with the cursor on Yes", () =>
   assert.deepEqual(p.options!.map((o) => o.offset), [0, 1, 2]);
 });
 
+// Claude Code 2.1.312's permission menu as a 120×40 pty frame shows it (captured live, 2026-10-28): no
+// box any more, dashed rules round the command, a fourth row offering auto mode, and option 2's
+// path wrapped onto an indented line of its own.
+const CLAUDE_PERMISSION_2_1 = [
+  "⏺ Creating probe-dir and writing date stamp",
+  "  ⎿  $ mkdir -p probe-dir && date > probe-dir/stamp.txt",
+  "─".repeat(120),
+  " Bash command",
+  " Tip: auto mode handles these prompts for you — choose \"switch to auto mode\" below",
+  " Create probe-dir and write date stamp",
+  "╌".repeat(120),
+  " mkdir -p probe-dir && date > probe-dir/stamp.txt",
+  "╌".repeat(120),
+  " Do you want to proceed?",
+  " ❯ 1. Yes",
+  "   2. Yes, and don't ask again for mkdir -p probe-dir and date commands in",
+  "      /private/tmp/probe-work",
+  "   3. Yes, and switch to auto mode · auto mode handles these prompts for you",
+  "   4. No",
+  " Esc to cancel · Tab to amend",
+];
+
+test("Claude Code 2.1's permission menu reads as a select: every row, the wrapped path kept with its row", () => {
+  const p = detectPrompt(CLAUDE_PERMISSION_2_1)!;
+  assert.equal(p.kind, "select");
+  assert.equal(p.question, "Do you want to proceed?");
+  assert.deepEqual(p.options!.map((o) => o.label), [
+    "Yes",
+    "Yes, and don't ask again for mkdir -p probe-dir and date commands in",
+    "Yes, and switch to auto mode · auto mode handles these prompts for you",
+    "No",
+  ]);
+  assert.equal(p.options![1].detail, "/private/tmp/probe-work");
+  assert.deepEqual(p.options!.map((o) => o.offset), [0, 1, 2, 3]);
+});
+
 test("offsets are relative to the highlighted row, so Enter always takes what is highlighted", () => {
   const screen = [
     "Which branch should this land on?",

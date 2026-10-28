@@ -624,6 +624,13 @@ async function hook(backend, mode) {
     if (all.length) ev.questions = all;
   } else if (name === "pretooluse" && /^ExitPlanMode$/i.test(tool)) ev = { event: "ask", question: "approve the plan?", options: ["yes", "no"] };
   else if (name === "posttooluse" && /^(AskUserQuestion|ask_user_question|ask_user|ExitPlanMode)$/i.test(tool)) ev = { event: "answered" };
+  // Claude's fires only when it opens its "Do you want to proceed?" menu, and that menu stays until
+  // someone answers it. Its pending tool's ⏺ blinks the whole time, so the pty never goes quiet and
+  // the screen-read prompt never comes: this hook is how Focus learns there is something to approve.
+  else if (name === "permissionrequest" && backend === "claude") {
+    const t = permTool(tool, input);
+    ev = { event: "ask", kind: "tool", question: `Allow ${t.name}${t.about ? ": " + t.about : t.input ? ": " + t.input : ""}?`.slice(0, 300), options: [], tool: t };
+  }
   // Grok fires this per tool even when always-approve auto-answers it — no PostToolUse/answered
   // follows, so tag it "permission": term-status.ts self-clears it on the CLI's next hook call
   // instead of leaving the card parked on decide (chronos.err.log evidence: 4f3f3f5e, 6f2ad905).
@@ -643,6 +650,17 @@ async function hook(backend, mode) {
     if (backend === "claude" && name === "userpromptsubmit" && res && res.memory_notice) process.stdout.write(res.memory_notice + "\n");
   }
   reply();
+}
+
+/** What a permission request would do, in the words the operator decides on: the command, the file, the URL. */
+function permTool(tool, input) {
+  const name = String(tool || "a tool").slice(0, 200);
+  const str = (v) => (typeof v === "string" ? v : "");
+  const what = str(input.command) || str(input.file_path) || str(input.notebook_path) || str(input.url) || str(input.query) || str(input.pattern) || str(input.path);
+  let text = what;
+  if (!text && input && typeof input === "object" && Object.keys(input).length) { try { text = JSON.stringify(input); } catch {} }
+  const about = str(input.description) || str(input.prompt);
+  return { name, ...(text ? { input: text.slice(0, 2000) } : {}), ...(about ? { about: about.replace(/\s+/g, " ").slice(0, 400) } : {}) };
 }
 
 /**

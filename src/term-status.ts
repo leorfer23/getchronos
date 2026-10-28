@@ -21,8 +21,8 @@ import { bus } from "./bus.js";
 import { db, asks, sessions } from "./store.js";
 import { heldBy, holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { clearAgentOverlay, getAgent, reportAgentState } from "./agent-lifecycle.js";
-import { focusEvents, isLive, sessionActivity, sessionPrompt } from "./terminal.js";
-import type { DeskPrompt } from "./desk-prompt.js";
+import { focusEvents, isLive, sessionActivity, sessionMenu, sessionPrompt } from "./terminal.js";
+import type { DeskPrompt, PromptOption } from "./desk-prompt.js";
 
 export const PHASES = ["blocked", "decide", "review", "your_turn", "waiting", "working", "stalled"] as const;
 export type Phase = (typeof PHASES)[number] | "ended";
@@ -45,9 +45,13 @@ export type Signals = {
    * it). Self-clears on the very next hook call, since that proves the CLI moved on. A real
    * question (AskUserQuestion/ExitPlanMode, or Claude's own permission_prompt Notification) has no
    * kind and only clears on an explicit "answered"/"prompt"/"stop"/"session_end".
+   * kind "tool": claude's PermissionRequest — its menu is on screen until answered, and it closes
+   * when that menu leaves the screen (menuTick), since no hook says so.
    */
-  asking?: { question: string; options: string[]; at: number; kind?: "permission"; questions?: AskQuestion[] } | null;
+  asking?: { question: string; options: string[]; at: number; kind?: "permission" | "tool"; questions?: AskQuestion[]; tool?: ToolAsk } | null;
 };
+/** The tool claude asks to use, as its PermissionRequest hook named it: the command, file or URL, and why. */
+export type ToolAsk = { name: string; input?: string; about?: string };
 /**
  * One question of a CLI's own question dialog (Claude Code's AskUserQuestion), as its PreToolUse hook
  * handed it over: the whole text, every option with its description. The screen only shows what fits
@@ -73,6 +77,12 @@ export type TermStatus = {
   hooked: boolean;
   /** Open questions on this terminal that are the operator's to answer — the red count on its rail row. */
   asks?: number;
+  /**
+   * Claude asking to use a tool: what it would run, and its menu as the screen shows it now — each
+   * row with its offset from the cursor, which is how Focus answers it. `options` is null until the
+   * menu has been read off the screen.
+   */
+  permission?: { tool: string; input: string | null; about: string | null; question: string | null; options: PromptOption[] | null };
 };
 
 export const WORD: Record<Phase, string> = {
@@ -342,11 +352,12 @@ export function statusOf(id: string, now = Date.now()): TermStatus | null {
   const open = held[0] ?? own[0];
   const mine = held.length + own.filter((a) => isOperatorsAsk(a)).length;
   const n = narrationOf(id);
+  const sig = load(id);
   const r = resolve({
     live,
     goalDoneAt: Date.parse(s.goal_done_at ?? "") || null,
     goal: s.goal ?? null,
-    signals: load(id),
+    signals: sig,
     quiet: act.quiet,
     lastOut: act.last_out,
     lastIn: act.last_in,
@@ -370,12 +381,75 @@ export function statusOf(id: string, now = Date.now()): TermStatus | null {
   const prev = phaseAt.get(id);
   const since = prev && prev.phase === r.phase ? prev.at : r.phase === "your_turn" && act.last_out ? act.last_out : now;
   if (!prev || prev.phase !== r.phase) { phaseAt.set(id, { phase: r.phase, at: since }); recordPhase(id, r.phase, since); }
-  return { ...r, since, ...(mine ? { asks: mine } : {}) };
+  const permission = permissionOf(id, sig);
+  return { ...r, since, ...(mine ? { asks: mine } : {}), ...(permission ? { permission } : {}) };
 }
 function parseOptions(o: unknown): string[] {
   if (Array.isArray(o)) return o.map(String);
   if (typeof o === "string" && o) { try { const v = JSON.parse(o); if (Array.isArray(v)) return v.map(String); } catch { return o.split(",").map((x) => x.trim()).filter(Boolean); } }
   return [];
+}
+
+// ── claude's permission menu ────────────────────────────────────────────────────────────────────
+/**
+ * A `tool` ask (claude's PermissionRequest) is open exactly as long as its menu is on screen, and no
+ * hook says when that ends: an approved tool runs with nothing behind it, a refused one ends the turn
+ * without a Stop, and the answer may come from Focus, the terminal itself or Robert. So while one is
+ * open the screen is read once a second: the menu (its rows, its cursor) rides the status for Focus's
+ * buttons, and once it has left the screen the ask is over.
+ */
+export const MENU_TICK_MS = 1000;
+/** A menu that never appears — a background subagent's request, which claude denies without one. */
+export const MENU_GRACE_MS = 8000;
+type MenuProbe = (id: string) => { live: boolean; menu: DeskPrompt | null };
+let menuProbe: MenuProbe = (id) => ({ live: isLive(id), menu: sessionMenu(id) });
+/** Tests: a scripted screen instead of a live pty. null restores the real one. */
+export function setMenuProbe(p: MenuProbe | null) { menuProbe = p ?? ((id) => ({ live: isLive(id), menu: sessionMenu(id) })); }
+const menus = new Map<string, { menu: DeskPrompt | null; seen: boolean; misses: number; timer: NodeJS.Timeout | null }>();
+
+function watchMenu(id: string) {
+  const timer = menus.get(id)?.timer ?? null;
+  // A new request is a new menu: forget what the last one looked like.
+  menus.set(id, { menu: null, seen: false, misses: 0, timer });
+  if (timer) return;
+  const t = setInterval(() => { try { menuTick(id); } catch {} }, MENU_TICK_MS);
+  t.unref?.();
+  menus.get(id)!.timer = t;
+}
+function unwatchMenu(id: string) {
+  const w = menus.get(id);
+  if (w?.timer) clearInterval(w.timer);
+  menus.delete(id);
+}
+/** One look at the screen for an open `tool` ask. False once it is over (and the watch has stopped). */
+export function menuTick(id: string, now = Date.now()): boolean {
+  const sig = load(id);
+  const a = sig.asking;
+  const look = menuProbe(id);
+  if (a?.kind !== "tool" || !look.live) { unwatchMenu(id); return false; }
+  const w = menus.get(id) ?? { menu: null, seen: false, misses: 0, timer: null };
+  menus.set(id, w);
+  if (look.menu) {
+    w.seen = true;
+    w.misses = 0;
+    if (JSON.stringify(look.menu) !== JSON.stringify(w.menu)) { w.menu = look.menu; refresh(id); }
+    return true;
+  }
+  w.misses++;
+  // Gone for two looks running (one can land on a half-painted frame), or it never showed up at all.
+  if ((w.seen && w.misses >= 2) || (!w.seen && now - a.at > MENU_GRACE_MS)) {
+    save(id, { ...sig, asking: null });
+    unwatchMenu(id);
+    refresh(id);
+    return false;
+  }
+  return true;
+}
+export function permissionOf(id: string, sig: Signals): TermStatus["permission"] | null {
+  const a = sig.asking;
+  if (a?.kind !== "tool") return null;
+  const m = menus.get(id)?.menu ?? null;
+  return { tool: a.tool?.name ?? "a tool", input: a.tool?.input ?? null, about: a.tool?.about ?? null, question: m?.question ?? null, options: m?.options ?? null };
 }
 
 /** Recompute and publish if anything the operator would see changed. */
@@ -446,7 +520,7 @@ export type HookEvent =
   | { event: "stop"; error?: string | null; tasks?: { key: string; label: string }[] }
   | { event: "subagent_start"; key: string; label?: string | null }
   | { event: "subagent_stop"; key?: string | null; label?: string | null }
-  | { event: "ask"; question: string; options?: string[]; kind?: "permission"; questions?: AskQuestion[] }
+  | { event: "ask"; question: string; options?: string[]; kind?: "permission" | "tool"; questions?: AskQuestion[]; tool?: ToolAsk }
   | { event: "answered" }
   | { event: "session_end" };
 
@@ -487,17 +561,19 @@ export function applyHook(id: string, h: HookEvent, now = Date.now()): TermStatu
       break;
     }
     case "ask": {
-      // Claude follows an AskUserQuestion with its generic "Claude needs your permission" Notification.
-      // The question it already handed over, with its options, is still the one on screen: keep it, or
-      // the card says "needs your permission" and nobody can tell what to decide.
+      // Claude follows an AskUserQuestion — and a permission menu — with its generic "Claude needs your
+      // permission" Notification. The question it already handed over is still the one on screen: keep
+      // it, or the card says "needs your permission" and nobody can tell what to decide.
       const prev = sig.asking;
       const bare = !h.kind && !h.options?.length && !h.questions?.length;
-      if (bare && prev && !prev.kind && (prev.options.length || prev.questions?.length)) break;
+      if (bare && prev && (prev.kind === "tool" || (!prev.kind && (prev.options.length || prev.questions?.length)))) break;
       sig.asking = {
         question: clip(h.question, 300), options: (h.options ?? []).map((o) => clip(o, 60)).slice(0, 6), at: now,
         ...(h.kind ? { kind: h.kind } : {}),
         ...(h.questions?.length ? { questions: h.questions } : {}),
+        ...(h.kind === "tool" && h.tool ? { tool: h.tool } : {}),
       };
+      if (h.kind === "tool") watchMenu(id);
       break;
     }
     case "answered":
@@ -519,6 +595,7 @@ export function applyHook(id: string, h: HookEvent, now = Date.now()): TermStatu
 export function resetForRespawn(id: string) {
   const prev = load(id);
   save(id, { declared: prev.declared ?? null, progress: prev.progress ?? null });
+  unwatchMenu(id);
   // A reopened terminal is a new process: its history starts again, and the last thing written for
   // the old one was "ended", which must not swallow the first phase of the new one.
   wrote.delete(id);

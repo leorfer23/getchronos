@@ -47,7 +47,7 @@ const ASK_TOOLS = "AskUserQuestion|ExitPlanMode|ask_user_question|ask_user";
 const BASH_TOOLS = "Bash|bash|Shell|shell";
 
 /** Claude and grok share the event names and the { matcher, hooks: [{ type, command }] } shape. */
-export function claudeStyleHooks(cmd: string, opts: { notification: boolean; rtk?: boolean; nudge?: string }): Record<string, any[]> {
+export function claudeStyleHooks(cmd: string, opts: { notification: boolean; permission?: boolean; rtk?: boolean; nudge?: string }): Record<string, any[]> {
   const h = (matcher?: string, command = cmd, timeout = 5) => ({
     ...(matcher ? { matcher } : {}),
     hooks: [{ type: "command", command, timeout }],
@@ -64,6 +64,9 @@ export function claudeStyleHooks(cmd: string, opts: { notification: boolean; rtk
     PreToolUse: preTool,
     PostToolUse: opts.nudge ? [h(ASK_TOOLS), h(undefined, opts.nudge)] : [h(ASK_TOOLS)],
     ...(opts.notification ? { Notification: [h("permission_prompt|elicitation_dialog|elicitation_url_dialog")] } : {}),
+    // The moment claude opens a "Do you want to proceed?" menu, with the tool and what it would run.
+    // Its permission_prompt Notification only comes ~6s later and names nothing.
+    ...(opts.permission ? { PermissionRequest: [h()] } : {}),
   };
 }
 
@@ -123,7 +126,7 @@ export function installClaudeHooks(configDir: string): "written" | "noop" | "ski
   const file = path.join(configDir, "settings.json");
   const cur = readJson(file);
   if (cur === "unreadable") return "skipped";
-  const next: Record<string, any> = { ...(cur ?? {}), hooks: mergeHooks(cur?.hooks, claudeStyleHooks(claudeCmd, { notification: true, nudge: nudgeCmd })) };
+  const next: Record<string, any> = { ...(cur ?? {}), hooks: mergeHooks(cur?.hooks, claudeStyleHooks(claudeCmd, { notification: true, permission: true, nudge: nudgeCmd })) };
   // The statusLine is the only place claude hands out its usage-limit percentages (usage-meter.ts).
   // One statusLine per profile: an operator's own is never replaced — that profile just goes unmeasured
   // from interactive sessions (headless runs and executives still report it over stream-json).
