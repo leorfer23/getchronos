@@ -219,6 +219,16 @@
     if (m) open(m[1]);
   }
 
+  // The link an agent prints for its page (`mc artifact put` → <desk>/desk#artifact=<id>, on the public
+  // tunnel host or this one) is a page on THIS Desk, whichever host it names. Talk, the hand-off and the
+  // chat render it target=_blank, and the Mac window hands every _blank link to the default browser —
+  // so the page opened in Chrome, behind the tunnel's login. ⌘/⇧/⌥-click still goes out.
+  var LINK = /\/desk#artifact=([0-9a-f-]{8,36})$/;
+  function linkId(href) {
+    var m = LINK.exec(String(href || ""));
+    return m ? m[1] : null;
+  }
+
   function init(ctx) {
     C = ctx;
     var s = document.createElement("style");
@@ -231,9 +241,19 @@
       e.preventDefault();
       open(b.getAttribute("data-afopen"));
     });
+    // Capture, not bubble: a card's own click handler that stops propagation must not let it escape.
+    document.addEventListener("click", function (e) {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+      var id = a ? linkId(a.href) : null;
+      if (!id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      open(id);
+    }, true);
     window.addEventListener("hashchange", fromHash);
     fromHash();
   }
 
-  root.ArtifactView = { MARK: MARK, TOPICS: TOPICS, init: init, embed: embed, open: open, onEvent: onEvent };
+  root.ArtifactView = { MARK: MARK, TOPICS: TOPICS, init: init, embed: embed, open: open, onEvent: onEvent, linkId: linkId };
 })(typeof window !== "undefined" ? window : globalThis);
