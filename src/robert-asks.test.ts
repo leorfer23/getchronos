@@ -9,9 +9,10 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { db, asks, chat, robertWakes, sessions, workspaces } from "./store.js";
-import { answerAsk, notifyAskCreated } from "./asks.js";
+import { answerAsk, holderAnswerLine, notifyAskCreated, setHolderDelivery } from "./asks.js";
 import { escalateAsk } from "./ask-robert.js";
-import { ASK_MARKER_RE, ROBERT_ASKER, askMarker, isOperatorsAsk, isRobertAsk, liftRobertAsks, raiseRobertAsk } from "./robert-asks.js";
+import { operatorAnswered } from "./ask-in-terminal.js";
+import { ASK_MARKER_RE, ROBERT_ASKER, askMarker, holdOn, isOperatorsAsk, isRobertAsk, liftRobertAsks, raiseRobertAsk } from "./robert-asks.js";
 import { setWakeAsker, setWakePoster } from "./wake-queue.js";
 import { writeSetting } from "./settings.js";
 
@@ -22,6 +23,8 @@ beforeEach(() => {
   turns = [];
   setWakeAsker(async (p) => { turns.push(p); return ""; });
   setWakePoster(() => {});
+  // A held answer is never typed into a real pty from a test.
+  setHolderDelivery(async () => "no terminals in tests");
 });
 
 let n = 0;
@@ -150,6 +153,54 @@ test("Robert's own question is the operator's: an agent answer is refused, the o
   assert.match(JSON.parse(wake.payload).say, /Q: Deploy acme to prod\?\nA: Yes/);
   for (let i = 0; i < 100 && !turns.length; i++) await new Promise((r) => setTimeout(r, 10));
   assert.ok(turns.some((t) => t.includes("A: Yes")), "the drain handed it to Robert");
+});
+
+// ── a question riding on a terminal ───────────────────────────────────────────────────────────────
+
+/** Robert's question held by a live terminal, and what the holder delivery typed into it. */
+function heldAsk(deliver: (id: string, text: string) => string | null = () => null) {
+  const ws = mkWs();
+  const s = sessions.create({ backend: "claude-code", cwd: "/tmp", workspace_id: ws.id } as any);
+  const a = asks.create({ asked_by: ROBERT_ASKER, route: "operator", workspace_id: ws.id, question: "Merge #12?", options: ["Yes", "No"] });
+  holdOn(s.id, a.id);
+  const typed: { id: string; text: string }[] = [];
+  setHolderDelivery(async (id, text) => { typed.push({ id, text }); return deliver(id, text); });
+  const wake = async () => {
+    const row = () => db.prepare("SELECT * FROM robert_wakes WHERE key = ?").get(`robert-ask:${a.id}`) as any;
+    for (let i = 0; i < 200 && !row(); i++) await new Promise((r) => setTimeout(r, 10));
+    return JSON.parse(row().payload).say as string;
+  };
+  return { s, a, typed, wake };
+}
+
+test("a card answer to a question riding on a terminal is typed into that terminal once, and Robert is told so", async () => {
+  const { s, a, typed, wake } = heldAsk();
+  assert.equal((await answerAsk(a.id, "Yes", "operator")).ok, true);
+  assert.equal((await answerAsk(a.id, "No", "operator")).ok, false, "a second answer is refused");
+  assert.equal(typed.length, 1, "typed once");
+  assert.equal(typed[0].id, s.id);
+  assert.match(typed[0].text, /Merge #12\? — A: Yes$/);
+  assert.equal(typed[0].text, holderAnswerLine(asks.get(a.id)!));
+  const say = await wake();
+  assert.match(say, /answered from a card, not in terminal .+ so Chronos typed the answer into it — its agent has it now/);
+  assert.doesNotMatch(say, /by typing in terminal/);
+});
+
+test("typed into the holder terminal itself: nothing is typed again, and Robert hears it was typed there", async () => {
+  const { s, a, typed, wake } = heldAsk();
+  assert.equal(await operatorAnswered(s.id, "Yes"), 1);
+  assert.equal(asks.get(a.id)!.answer, "Yes");
+  assert.deepEqual(typed, [], "the terminal already has it on screen");
+  assert.match(await wake(), new RegExp(`He answered by typing in terminal ${s.id.slice(0, 8)}, so its agent got the answer too`));
+});
+
+test("a card answer whose holder terminal is gone: Robert is told its agent does NOT have it", async () => {
+  const { a, typed, wake } = heldAsk(() => "terminal is not live");
+  assert.equal((await answerAsk(a.id, "No", "telegram")).ok, true);
+  assert.equal(typed.length, 1, "it tried");
+  const say = await wake();
+  assert.match(say, /could not be typed there \(terminal is not live\) — its agent does NOT have it\. Act on it yourself\./);
+  assert.doesNotMatch(say, /its agent (got|has) (the answer|it)/);
 });
 
 test("an ordinary terminal ask answered from the card does not wake Robert", async () => {
