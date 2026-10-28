@@ -218,6 +218,7 @@ export function startProcReaper(): void {
     getNice: systemGetNice,
     setNice: systemSetNice,
     tell: tellOwner,
+    idle: (o) => o.kind === "session" && sessionActivity(o.id).quiet,
     publish: (e) => bus.publish(e),
     save: saveLadderState,
     wsName: (ws) => (ws ? workspaces.get(ws)?.name ?? ws.slice(0, 8) : "(no workspace)"),

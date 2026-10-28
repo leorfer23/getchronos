@@ -353,6 +353,16 @@ test("warn: a terminal someone is typing into is deferred, then told on a later 
   assert.match(w.told[1].text, /^\[chronos budget\] /);
 });
 
+test("warn: an idle terminal is told only when one of the heaviest is its own — typing into one costs it a whole turn", async () => {
+  const roots = [...ROOTS, { kind: "session" as const, id: "sa3-0000", pid: 500, startedAt: T0, workspaceId: "ws-a" }];
+  const procs = [...scene(), P({ pid: 500, ppid: SELF, pgid: 500, startMs: T0, comm: CLAUDE })];
+  const { w, ladder, tick } = harness({ roots, procs, argv: { 500: "claude" } });
+  (ladder as any).deps.idle = (o: { id: string }) => o.id !== "sa1-0000";
+  w.load = WARNING;
+  await tick();
+  assert.deepEqual(w.told.map((t) => t.to).sort(), ["sa1-0000", "sa2-0000"], "sa2 is idle but its tsc is among the heaviest; sa3 owns nothing heavy");
+});
+
 // ───────────────────────────── never pause ─────────────────────────────
 
 test("never paused: a CLI root, a shell, an agent CLI, a kept process and anything below it, a protected path, another user, a non-heavy process", async () => {

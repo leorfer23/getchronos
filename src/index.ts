@@ -39,6 +39,7 @@ import { startSelfDeploy } from "./self-deploy.js";
 import { startAgentLifecycleBridge } from "./agent-lifecycle.js";
 import { startDeskTitles } from "./desk-title.js";
 import { startUsageTicker } from "./session-usage.js";
+import { startCacheKeeper } from "./cache-keeper.js";
 import { startTermStatus, statusOf } from "./term-status.js";
 import { startBoardWatcher } from "./board.js";
 import { startRobertWake } from "./robert-wake.js";
@@ -104,6 +105,7 @@ startAgentLifecycleBridge();
 startDeskTitles();
 startWorklog();
 startUsageTicker();
+startCacheKeeper();
 startBoardWatcher();
 startRobertWake();
 // Durable wake queue: every decision event is a row before it is a turn, replayed on boot.

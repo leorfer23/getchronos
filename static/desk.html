@@ -2045,6 +2045,25 @@ function age(iso) {
 }
 const kTok = (n) => (n >= 1000 ? Math.round(n / 1000) + "k" : String(n || 0));
 const CTX_WARN = 160000;
+// A claude terminal's prompt cache (src/session-usage.ts → usage.cache). Warm: the next prompt re-reads
+// the context at the cache rate. Cold: it re-sends all of it at the write rate — unless the cache
+// keeper (src/cache-keeper.ts) compacted it while it was still warm, and then it reloads a summary.
+const CACHE_TTL_MS = { "1h": 3600000, "5m": 300000 };
+function cacheOf(s) {
+  const c = s.usage?.cache;
+  if (!s.live || !c?.ttl || !c.last_request_at) return null;
+  const left = c.last_request_at + CACHE_TTL_MS[c.ttl] - Date.now();
+  const compacted = c.compacted_at != null && c.compacted_at >= c.last_request_at;
+  const ctx = s.usage.context_tokens || 0;
+  return {
+    ttl: c.ttl, cold: left <= 0, compacted,
+    tip: left > 0
+      ? `Prompt cache warm (${c.ttl}) for ${Math.ceil(left / 60000)} more min — the next prompt re-reads ${kTok(ctx)} tokens at the cache rate.`
+      : compacted
+        ? `Cache expired ${Math.round(-left / 60000)} min ago — compacted while it was still warm, so the next prompt reloads a summary, not ${kTok(ctx)}.`
+        : `Cache expired ${Math.round(-left / 60000)} min ago — the next prompt re-sends all ${kTok(ctx)} tokens at the cache-write price.`,
+  };
+}
 const money = (n) => (n == null ? "—" : "$" + n.toFixed(2));
 // The one line under a title: the question it is sitting on, else its blocker, else what it last said.
 function oneLiner(s) {
@@ -2242,6 +2261,8 @@ function paintRow(el, s) {
   const age0 = qs(".age", el);
   age0.textContent = s.live ? age(new Date(phaseSince(s)).toISOString()) : age(s.ended_at || s.created_at);
   age0.title = s.live ? `${PH_WORD[ph] || ph} for ${age0.textContent}` : "";
+  const ca = cacheOf(s);
+  if (ca?.cold) { age0.textContent = "❄ " + age0.textContent; age0.title += "\n" + ca.tip; }
   const x = qs(".x", el);
   if (!x.dataset.armed) x.title = s.live ? "Close this terminal (click twice)" : "Remove from the list";
 }
@@ -2400,6 +2421,9 @@ function renderStage() {
   else if (s.focus_only) bits.push(`<span title="Opened without a live terminal — write in Focus">focus</span>`);
   if (u.turns) bits.push(`${u.turns} turn${u.turns === 1 ? "" : "s"}`);
   if (u.context_tokens) bits.push(`<span class="${u.context_tokens > CTX_WARN ? "full" : ""}" title="context now ${u.context_tokens.toLocaleString()} tokens">${kTok(u.context_tokens)} ctx</span>`);
+  const ca = cacheOf(s);
+  if (ca && (ca.cold || ca.ttl === "5m"))
+    bits.push(`<span class="${ca.cold && !ca.compacted ? "full" : ""}" title="${esc(ca.tip + (ca.ttl === "5m" ? " This account is on usage credits: Claude Code keeps its cache 5 minutes, not an hour." : ""))}">${ca.cold ? (ca.compacted ? "❄ compacted" : "❄ cold") : "5m cache"}</span>`);
   if (u.cost_usd != null) bits.push((u.cost_estimated ? "~" : "") + money(u.cost_usd));
   qs("#h-bits").innerHTML = bits.join('<span style="opacity:.4">·</span>');
   const w = s.live && s.watch?.active ? s.watch : null;
