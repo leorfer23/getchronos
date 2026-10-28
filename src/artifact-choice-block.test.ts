@@ -6,6 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { artifactChoiceBlock } from "./terminal.js";
+import { writeSetting } from "./settings.js";
 
 test("a Claude terminal is told to ask which artifact system before its first page", () => {
   const block = artifactChoiceBlock("claude-code");
@@ -21,4 +22,13 @@ test("a Claude terminal is told to ask which artifact system before its first pa
 
 test("other backends have no Artifact tool, so they get nothing", () => {
   for (const b of ["cursor", "codex", "grok", "opencode", "mock"]) assert.equal(artifactChoiceBlock(b), "");
+});
+
+test("a workspace without the claude.ai Artifact tool gets no choice to ask about", () => {
+  writeSetting("desk.artifact_tool", false);
+  try {
+    assert.equal(artifactChoiceBlock("claude-code"), "");
+  } finally {
+    writeSetting("desk.artifact_tool", null);
+  }
 });
