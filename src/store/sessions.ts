@@ -2,8 +2,8 @@ import { randomUUID, randomBytes } from "node:crypto";
 import { db } from "./db.js";
 import { now } from "./util.js";
 import { sessionSearchHook } from "./session-search-hook.js";
-import { checkedOf, decodeDoneWhen, decodeOutcome, decodeOutcomes, decodeTicks, encodeDoneWhen, pruneTicks, tickChecks } from "../session-outcome.js";
-import type { GoalKind, GoalSource, NewSession, Outcome, Session, Ship, WatchReport } from "../types.js";
+import { addShown, checkedOf, decodeDoneWhen, decodeOutcome, decodeOutcomes, decodeShown, decodeTicks, encodeDoneWhen, pruneTicks, tickChecks } from "../session-outcome.js";
+import type { GoalKind, GoalSource, NewSession, Outcome, Session, Ship, Shown, WatchReport } from "../types.js";
 
 // The Lead's credential never rides a row out of the store: every session-returning endpoint (GET
 // /sessions, /desk, …) is readable with a plain workspace token, and a worker that could read its
@@ -18,6 +18,9 @@ const pub = <T>(r: T): T => {
     delete (r as any).done_ticks;
     (r as any).outcome = decodeOutcome((r as any).outcome);
     (r as any).outcome_prev = decodeOutcomes((r as any).outcome_prev);
+    const shown = decodeShown((r as any).shown);
+    (r as any).shown = shown;
+    (r as any).shown_at = shown.length ? shown[shown.length - 1].at : null;
   }
   return r;
 };
@@ -124,6 +127,12 @@ export const sessions = {
   setOutcome(id: string, o: Outcome | null, earlier: Outcome[] = []) {
     db.prepare("UPDATE sessions SET outcome=?, outcome_at=?, outcome_prev=? WHERE id=?")
       .run(o ? JSON.stringify(o) : null, o ? o.at : null, o && earlier.length ? JSON.stringify(earlier) : null, id);
+  },
+  /** One more `mc show` on the end of its list (the oldest fall off past MAX_SHOWN). */
+  addShown(id: string, show: Shown) {
+    const r = db.prepare("SELECT shown FROM sessions WHERE id=?").get(id) as { shown: string | null } | undefined;
+    if (!r) return;
+    db.prepare("UPDATE sessions SET shown=? WHERE id=?").run(JSON.stringify(addShown(decodeShown(r.shown), show)), id);
   },
   /** Hand this terminal to Robert (or take it back). Drives stops + orange prompts; not the standing watch. */
   setRobert(id: string, on: boolean) {

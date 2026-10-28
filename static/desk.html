@@ -608,6 +608,11 @@
   .fx-talk .ta.fx-sum { font-size:15.5px; }
   .fx-talk .ta.folded { font-size:14px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .fx-talk .ta.wait { font-size:14px; color:var(--faint); }
+  .fx-talk .ta-show + .ta-show { margin-top:10px; }
+  .fx-talk .ta-show .cap { font-size:14.5px; margin-bottom:6px; }
+  .fx-talk .ta-show .fx-shots { grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); }
+  .fx-talk .ta-show figcaption { text-transform:none; }
+  .fx-talk .ta-n { font-size:12.5px; font-weight:650; color:var(--accent); margin-right:6px; }
   /* Is it working: printing now (the dot blinks off the page's 1Hz clock) or quiet since when. */
   .fx-pulse { display:flex; align-items:baseline; gap:8px; font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:0; }
   .fx-pulse i { flex:none; width:8px; height:8px; border-radius:50%; background:var(--faint); align-self:center; }
@@ -2729,20 +2734,20 @@ async function goalsLoad(id, total) {
 
 // Its questions (open and answered) and its hand-off: one read for the terminal on stage, again when
 // anything it would change moves — a phase, an ask count, a new hand-off — and at most every 15s.
-const D = { id: null, asks: [], outcome: null, earlier: [], dialog: null, at: 0, busy: false, sig: "", all: false, armShip: 0, drafts: new Map() };
+const D = { id: null, asks: [], outcome: null, earlier: [], shown: [], dialog: null, at: 0, busy: false, sig: "", all: false, armShip: 0, drafts: new Map() };
 // The board's layout: which card is expanded over it (null = the whole board), which earlier hand-offs
 // are open, and where each scrolling card was — a repaint rebuilds the cards and must not jump them.
-const FX = { id: null, exp: null, hopen: new Set(), scroll: new Map() };
-const decisionsSig = (s) => [s.id, s.status?.phase, s.status?.asks || 0, s.status?.line || "", s.outcome_at || "", s.state, s.prompt?.question || ""].join("|");
+const FX = { id: null, exp: null, hopen: new Set(), scroll: new Map(), zoom: new Set() };
+const decisionsSig = (s) => [s.id, s.status?.phase, s.status?.asks || 0, s.status?.line || "", s.outcome_at || "", s.shown_at || "", s.state, s.prompt?.question || ""].join("|");
 async function decisionsLoad(s, force) {
   if (!s) return;
-  if (D.id !== s.id) Object.assign(D, { id: s.id, asks: [], outcome: null, earlier: [], dialog: null, at: 0, sig: "", all: false, armShip: 0 });
+  if (D.id !== s.id) Object.assign(D, { id: s.id, asks: [], outcome: null, earlier: [], shown: [], dialog: null, at: 0, sig: "", all: false, armShip: 0 });
   const sig = decisionsSig(s);
   if (D.busy || (!force && sig === D.sig && Date.now() - D.at < 15000)) return;
   D.busy = true; D.sig = sig;
   try {
     const r = await api("/sessions/" + s.id + "/decisions");
-    if (D.id === s.id) { D.asks = r.asks || []; D.outcome = r.outcome || null; D.earlier = r.earlier || []; D.dialog = r.dialog || null; }
+    if (D.id === s.id) { D.asks = r.asks || []; D.outcome = r.outcome || null; D.earlier = r.earlier || []; D.shown = r.shown || []; D.dialog = r.dialog || null; }
   } catch {
     // An older daemon, or the terminal just closed: the cards fall back to what the row carries.
   } finally {
@@ -2960,6 +2965,7 @@ async function answerDialog(s, i, text, more) {
 
 // ③ Talk: what you said to it along the way and what it said back, paired — a question asked mid-run
 // and its answer, or a brainstorm. The newest exchange is open in full; older ones fold to a line.
+// Images it `mc show`ed sit under the answer of the turn they arrived in.
 const T = { id: null, open: new Set(), all: false, pending: null, follow: false, sig: "", shows: "" };
 function talkTurns(s) {
   const turns = [];
@@ -2984,8 +2990,22 @@ function talkTurns(s) {
       else cur.says.push(e);
     }
   }
-  return turns.filter((t) => t.says.length || !t.opening);
+  const out = turns.filter((t) => t.says.length || !t.opening);
+  // A show belongs to the last turn that began before it. One sent before you ever spoke opens the card.
+  const shown = D.id === s.id ? D.shown : [];
+  for (const sh of shown) {
+    const at = Date.parse(sh.at) || 0;
+    let t = null;
+    for (const x of out) if (!x.at || x.at <= at) t = x;
+    if (!t) { t = out[0]?.opening ? out[0] : { seq: -1, at, you: "", opening: true, says: [], cut: 0 }; if (t !== out[0]) out.unshift(t); }
+    (t.shows ||= []).push(sh);
+  }
+  return out;
 }
+// What it showed, as the hand-off draws its screenshots: click one to see it whole.
+const showsHtml = (list) => list.map((sh) => `<div class="ta-show">${sh.caption ? `<div class="cap">${md(sh.caption)}</div>` : ""}<div class="fx-shots">`
+  + sh.shots.map((x) => `<figure data-shotzoom="${esc(x.name)}"${FX.zoom.has(x.name) ? ` class="zoom"` : ""}><img data-shot="${esc(x.name)}" alt="${esc(x.label)}"><figcaption>${esc(x.label)}</figcaption></figure>`).join("")
+  + `</div></div>`).join("");
 const sayText = (e) => stripLead(stripLead(stripLead(e.text, "understanding"), "result"), "summary");
 function focusTalk(s) {
   if (T.id !== s.id) Object.assign(T, { id: s.id, open: new Set(), all: false, pending: null, follow: false, sig: "", shows: "" });
@@ -3005,7 +3025,9 @@ function focusTalk(s) {
   const rows = shown.map((t) => {
     const newest = t === last && !T.pending;
     let a;
-    if (!t.says.length) a = `<div class="ta wait">${newest && working ? "working on it…" : "nothing said back yet"}</div>`;
+    const shows = t.shows || [];
+    const nImg = shows.reduce((n, sh) => n + sh.shots.length, 0);
+    if (!t.says.length) a = shows.length ? "" : `<div class="ta wait">${newest && working ? "working on it…" : "nothing said back yet"}</div>`;
     else if (newest || T.open.has(t.seq)) {
       const words = t.says.map(sayText);
       const from = t.cut < words.length ? t.cut : words.length - 1;
@@ -3014,7 +3036,8 @@ function focusTalk(s) {
       if (newest) T.shows = words.slice(from).join("\n\n");
       a = (from > 0 ? `<button type="button" class="fx-more" data-tw="${t.seq}">${every ? "only its answer" : `+ ${from} earlier note${from === 1 ? "" : "s"}`}</button>` : "")
         + `<div class="ta fx-sum">${md(body)}</div>`;
-    } else a = `<div class="ta folded">${esc(clip(plainLine(sayText(t.says[t.says.length - 1])), 220))}</div>`;
+    } else a = `<div class="ta folded">${nImg ? `<span class="ta-n">🖼 ${nImg}</span>` : ""}${esc(clip(plainLine(sayText(t.says[t.says.length - 1])), 220))}</div>`;
+    if (shows.length && (newest || T.open.has(t.seq) || !t.says.length)) a += `<div class="ta">${showsHtml(shows)}</div>`;
     const fold = !newest && t.says.length ? ` data-topen="${t.seq}" title="${T.open.has(t.seq) ? "fold" : "open the whole answer"}"` : "";
     return `<div class="turn${newest ? " last" : ""}${fold ? " foldable" : ""}"${fold}>${qLine(t)}${a}</div>`;
   });
@@ -3114,7 +3137,7 @@ const prsHtml = (prs) => `<div class="fx-prs">` + prs.map((p) => pinPrHtml(p).re
 // One hand-off's body. `prs` are the live pins for the one on top; an earlier one lists its own links.
 function outcomeBody(o, prs) {
   const shots = o.shots?.length
-    ? `<div class="fx-sub">Screenshots</div><div class="fx-shots">` + o.shots.map((x) => `<figure data-shotzoom><img data-shot="${esc(x.name)}" alt="${esc(x.label)}"><figcaption>${esc(x.label)}</figcaption></figure>`).join("") + `</div>`
+    ? `<div class="fx-sub">Screenshots</div><div class="fx-shots">` + o.shots.map((x) => `<figure data-shotzoom="${esc(x.name)}"${FX.zoom.has(x.name) ? ` class="zoom"` : ""}><img data-shot="${esc(x.name)}" alt="${esc(x.label)}"><figcaption>${esc(x.label)}</figcaption></figure>`).join("") + `</div>`
     : "";
   const links = prs || (o.prs || []).map((url) => { const m = url.match(/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/); return m ? { url, repo: m[1], num: Number(m[2]), state: null } : null; }).filter(Boolean);
   return `<div class="fx-sum">${md(o.summary)}</div>`
@@ -3223,7 +3246,7 @@ function renderStory() {
   const act = document.activeElement;
   const typing = act?.matches?.("#story input[data-atext]") ? { sel: `input[data-atext="${CSS.escape(act.dataset.atext)}"]`, pos: act.selectionStart }
     : act?.matches?.("#story input[data-dtext]") ? { sel: "input[data-dtext]", pos: act.selectionStart } : null;
-  if (FX.id !== s.id) Object.assign(FX, { id: s.id, exp: null, hopen: new Set(), scroll: new Map() });
+  if (FX.id !== s.id) Object.assign(FX, { id: s.id, exp: null, hopen: new Set(), scroll: new Map(), zoom: new Set() });
   // Where each scrolling card was, and whether it sat at its bottom (Talk and Decided follow the newest).
   for (const el of qsa("[data-keep]", body)) if (el.clientHeight) FX.scroll.set(el.dataset.keep, { top: el.scrollTop, end: el.scrollHeight - el.scrollTop - el.clientHeight < 24 });
   const out = focusOutcome(s);
@@ -3295,6 +3318,9 @@ qs("#story").addEventListener("click", (e) => {
   if (e.target.closest("a")) return;
   const tw = e.target.closest("[data-tw]"); if (tw) { const k = "w" + tw.dataset.tw; if (T.open.has(k)) T.open.delete(k); else T.open.add(k); return renderStory(); }
   if (e.target.closest("[data-tall]")) { T.all = !T.all; return renderStory(); }
+  // An image zooms — inside an opened older turn too, which a click anywhere else folds.
+  const z = e.target.closest("[data-shotzoom]");
+  if (z) { const k = z.dataset.shotzoom; if (k && !FX.zoom.delete(k)) FX.zoom.add(k); z.classList.toggle("zoom"); return; }
   const to = e.target.closest("[data-topen]");
   if (to && !String(window.getSelection?.() || "")) { const k = Number(to.dataset.topen); if (T.open.has(k)) T.open.delete(k); else T.open.add(k); return renderStory(); }
   const sh = e.target.closest("[data-ship]"); if (sh) return setShip(s, sh.dataset.ship);
@@ -3305,7 +3331,6 @@ qs("#story").addEventListener("click", (e) => {
   const ho = e.target.closest("[data-hopen]");
   if (ho) { const i = Number(ho.dataset.hopen); if (FX.hopen.has(i)) FX.hopen.delete(i); else FX.hopen.add(i); return renderStory(); }
   const ck = e.target.closest("[data-check]"); if (ck) return toggleCheck(s, Number(ck.dataset.check));
-  const z = e.target.closest("[data-shotzoom]"); if (z) { z.classList.toggle("zoom"); return; }
   const ok = e.target.closest("[data-ok]");
   if (ok) {
     if (ok.dataset.ok === "changes") { say.value = "Changes needed: "; focusSay(); say.setSelectionRange(say.value.length, say.value.length); return; }

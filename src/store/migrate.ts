@@ -2162,6 +2162,16 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       ALTER TABLE sessions ADD COLUMN outcome_prev TEXT;`),
   },
 
+  {
+    version: 150,
+    name: "sessions.shown — images a terminal put in front of the operator (`mc show`)",
+    // A terminal cannot display an image, and a path in its reply shows the operator nothing (Leo
+    // 2026-10-28: an agent listed screenshot paths and opened Finder). `mc show` uploads the bytes the
+    // way a hand-off's screenshots go up, and this keeps the list — caption, shot names, when — that
+    // Focus draws inside Talk, under the reply it came with. JSON, oldest first, capped.
+    up: (db) => db.exec(`ALTER TABLE sessions ADD COLUMN shown TEXT;`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
