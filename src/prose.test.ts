@@ -8,7 +8,7 @@ import { decayLessons, publishLesson, recordLesson } from "./lessons.js";
 import { updateNote } from "./notes.js";
 import { CONFIG } from "./config.js";
 import {
-  GUIDE_CAP, GUIDE_SLUG, VOICE_HEADING, addSample, harvestComments, learnDue, learnGoal, markPushed, proseBlock, proseBrief, proseGuide, saveGuide,
+  GUIDE_CAP, GUIDE_SLUG, OUTGOING_RULE, VOICE_HEADING, addSample, harvestComments, learnDue, learnGoal, markPushed, proseBlock, proseBrief, proseGuide, saveGuide,
 } from "./prose.js";
 import type { ExternalTask } from "./connectors/types.js";
 
@@ -67,7 +67,7 @@ test("samples stay inside their workspace", () => {
   addSample(a.id, { body: MINE, channel: "slack" }, "operator");
   assert.equal(proseSamples.list(b.id).length, 0);
   assert.doesNotMatch(proseBrief(b.id), /Deploying tomorrow/);
-  assert.equal(proseBlock(b.id), "");
+  assert.equal(proseBlock(b.id), OUTGOING_RULE, "an empty workspace still carries the house rule, nothing of a's");
 });
 
 test("the guide is capped, and brief puts it first with the closest same-channel samples", () => {
@@ -102,6 +102,22 @@ test("relearn is due after enough new samples, at most once a day", () => {
   addSample(w.id, { body: `${MINE} after the pass, eleven` }, "operator");
   assert.equal(learnDue(w), false, "inside the 24h window");
   assert.equal(learnDue(w, Date.now() + 25 * 3600_000), false, "only 1 new since the pass");
+});
+
+test("every agent and every mc prose brief carries the short-message rule exactly once, in every workspace", () => {
+  const w = mkWs("prose-rule");
+  assert.match(OUTGOING_RULE, /Slack message \(draft or sent/);
+  assert.match(OUTGOING_RULE, /1–4 short lines/);
+  const once = (s: string) => s.split(OUTGOING_RULE).length - 1;
+  assert.equal(once(agentContext(w.id)), 1, "no prose at all");
+  assert.equal(once(proseBrief(w.id)), 1);
+  addSample(w.id, { body: MINE }, "operator");
+  assert.equal(once(agentContext(w.id)), 1, "samples, no page");
+  saveGuide(w.id, "# Voice\n\nAs him: no greeting.");
+  assert.equal(once(agentContext(w.id)), 1, "with a page");
+  assert.ok(agentContext(w.id).indexOf(OUTGOING_RULE) < agentContext(w.id).indexOf(VOICE_HEADING), "the rule comes before the page");
+  assert.equal(once(proseBrief(w.id, { channel: "slack" })), 1);
+  assert.match(learnGoal(w, false), /may ask for shorter, never longer/, "the learner never writes a page that loosens it");
 });
 
 test("the learner's goal asks for an English guide and names Slack only when connected", () => {
@@ -140,7 +156,7 @@ test("agentContext carries ONE voice section — the page itself — and no sepa
   assert.equal(lessons.list({ workspace_id: w.id }).length, 1, "the rule is still stored — it is the evidence");
 
   saveGuide(w.id, "x".repeat(GUIDE_CAP));
-  assert.ok(proseBlock(w.id).length <= GUIDE_CAP + VOICE_HEADING.length + 400, "section is the page plus a fixed heading and pointer");
+  assert.ok(proseBlock(w.id).length <= OUTGOING_RULE.length + GUIDE_CAP + VOICE_HEADING.length + 400, "section is the rule plus the page, a fixed heading and pointer");
 });
 
 test("a page saved before the cap came down is never truncated into the prompt, and is due for a rewrite", () => {

@@ -669,7 +669,11 @@ mc prose add --channel slack "<text he actually sent>"            # he pasted hi
 mc prose add --channel jira --draft "<your draft>" "<what he sent instead>"   # he rewrote you: save the pair
 ```
 
-- **Before drafting, run `mc prose`.** Match his length, openings, structure and words. Always English,
+- **Short, human, to the point — always, every workspace.** Every Slack message (draft or sent, DM or
+  channel), comment and email: the point in the first line, 1–4 short lines, no preamble, recap, headers,
+  bold labels or sign-off. Link the PR/doc instead of pasting it. Reads like a report? Cut it in half.
+  This wins over the voice page on length.
+- **Before drafting, run `mc prose`.** Match his openings, structure and words. Always English,
   even when his samples or his prompt to you are in another language.
 - **He rewrote your draft? Save the pair** with `--draft`. That gap is the best lesson there is.
 - Only his own words go in — never your draft alone, never a colleague's message, never Chronos output.
@@ -678,7 +682,8 @@ mc prose add --channel jira --draft "<your draft>" "<what he sent instead>"   # 
 ## Slack (when connected)
 
 If this workspace has Slack connected, you have Slack MCP tools scoped to THIS client only. Use them
-for context or to post when asked. Never cross-post between workspaces.
+for context or to post when asked. Never cross-post between workspaces. Every message follows the
+short-and-human rule above — a draft you show the operator too.
 
 ## Rules
 
