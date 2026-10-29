@@ -150,14 +150,14 @@ export function proseBrief(workspace_id: string, opts: { channel?: string; about
   const guide = proseGuide(workspace_id);
   const all = proseSamples.list(workspace_id);
   if (!guide && !all.length)
-    return "No prose learned for this workspace yet. Write plainly and briefly in English, and ask the operator for a message he sent to learn from (`mc prose add`).";
+    return `${OUTGOING_RULE}\n\nNo prose learned for this workspace yet. Write plainly and briefly in English, and ask the operator for a message he sent to learn from (\`mc prose add\`).`;
   const channel = opts.channel?.toLowerCase();
   const about = opts.about || "";
   const score = (s: ProseSample) =>
     (channel && s.channel === channel ? 2 : 0) + (s.draft ? 0.5 : 0) + (about ? similarity(about, s.body) * 3 : 0) + (s.origin === "agent" ? -0.25 : 0);
   const picks = [...all].sort((a, b) => score(b) - score(a) || b.created_at.localeCompare(a.created_at)).slice(0, opts.limit ?? 4);
   const clip = (s: string, n = 700) => (s.length > n ? s.slice(0, n) + "…" : s);
-  let out = "Write as the operator — in English, always, even when his samples are in another language.";
+  let out = `${OUTGOING_RULE}\n\nWrite as the operator — in English, always, even when his samples are in another language.`;
   out += guide
     ? `\n\n# ${guide.title} (${guide.slug})\n${guard(guide.body.trim(), "prose-guide", workspace_id)}`
     : "\n\n(No guide learned yet — go by the samples below.)";
@@ -180,17 +180,29 @@ export const VOICE_HEADING =
   "## Voice — how the operator writes, and how he wants to be talked to (one page, rewritten from his own writing and corrections; follow it)";
 
 /**
- * The voice section of every agent's system prompt — exactly one, the page (≤ GUIDE_CAP) plus a fixed
- * heading and pointer. Samples but no page yet: the pointer alone. A page over the cap (saved before the
- * cap came down) is never cut mid-rule: agents get the pointer and a note, and learnDue queues the
- * rewrite that brings it back to one page.
+ * The house rule for every message that leaves Chronos, in every workspace, with or without a voice
+ * page: models write too much. The page sets the voice; this caps the length, and wins on length.
+ */
+export const OUTGOING_RULE =
+  "## Outgoing messages — short, human, to the point (every workspace, always)\n" +
+  "Every Slack message (draft or sent, DM or channel), Jira/ClickUp comment and email:\n" +
+  "- The point in the first line. Then only what the reader needs to know or do.\n" +
+  "- 1–4 short lines. No preamble, no recap, no headers, no bold labels, no sign-off.\n" +
+  "- Plain words, like a person typing. Link the PR/doc instead of pasting it.\n" +
+  "- Reads like a report? Cut it in half. This wins over the voice page on length.";
+
+/**
+ * The voice section of every agent's system prompt — the house rule, then exactly one page
+ * (≤ GUIDE_CAP) plus a fixed heading and pointer. Samples but no page yet: the rule and the pointer.
+ * A page over the cap (saved before the cap came down) is never cut mid-rule: agents get the pointer
+ * and a note, and learnDue queues the rewrite that brings it back to one page.
  */
 export function proseBlock(workspace_id: string): string {
   const body = proseGuide(workspace_id)?.body.trim() ?? "";
-  if (!body) return proseSamples.countSince(workspace_id, null) > 0 ? POINTER : "";
+  if (!body) return proseSamples.countSince(workspace_id, null) > 0 ? `${OUTGOING_RULE}\n\n${POINTER}` : OUTGOING_RULE;
   if (body.length > GUIDE_CAP)
-    return `${POINTER}\nHis voice page is over its one-page cap and is being rewritten — read it with \`mc prose\` before you write to or as him.`;
-  return `${VOICE_HEADING}\n${guard(body, "prose-guide", workspace_id)}\n\n${POINTER}`;
+    return `${OUTGOING_RULE}\n\n${POINTER}\nHis voice page is over its one-page cap and is being rewritten — read it with \`mc prose\` before you write to or as him.`;
+  return `${OUTGOING_RULE}\n\n${VOICE_HEADING}\n${guard(body, "prose-guide", workspace_id)}\n\n${POINTER}`;
 }
 
 // ── corrections ──────────────────────────────────────────────────────────────────────────────────
@@ -251,6 +263,8 @@ export function learnGoal(ws: Workspace, withSlack: boolean): string {
     `- Writing AS him: register and length (quote numbers — "2–4 short sentences"), openings and closings, structure (bullets, emoji, ` +
     `capitalisation), how he asks, pushes back, gives status; phrases he uses, and model phrases he never does; per-channel differences only where real.\n` +
     `- Language: output is ALWAYS English. If he wrote in another language, carry over tone and rhythm, never the words.\n` +
+    `- Length: every agent already carries a fixed house rule — outgoing messages are 1–4 short lines, point first, no preamble, ` +
+    `recap, headers or sign-off. The page may ask for shorter, never longer; don't restate the rule.\n` +
     `- End with "## Exemplars": 1–2 SHORT verbatim English samples that best show the voice (trim, never rewrite). None if he has no English samples.\n\n` +
     `Never include secrets, customer data, names of people outside the team, or anything from another workspace. ` +
     `If there are fewer than 5 usable samples, write only what the evidence supports and say so in one line at the top.`
