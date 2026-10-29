@@ -393,6 +393,76 @@ web.navigationDelegate = nav
 web.load(URLRequest(url: targetURL))
 window.contentView!.addSubview(web)
 
+// The window can freeze with nothing crashing. 2026-10-29: the Desk sat frozen for minutes while the
+// daemon and every terminal were fine. `sample` on mc-app put the main thread in WebKit's
+// RemoteScrollingCoordinatorProxyMac::displayDidRefresh, parked on a semaphore for the scrolling
+// thread — and the scrolling thread in RemoteLayerTreeEventDispatcher::mainThreadDisplayDidRefresh,
+// waiting on the main thread (1542 of 1543 samples, both). That cycle is inside WebKit, and it gives
+// no crash, no log line and no way back short of killing the app. So a thread that is not the main
+// one keeps pinging the main queue; when a ping has gone unanswered for `limit`, it samples the hang
+// for next time and exits non-zero, and the plist's KeepAlive (SuccessfulExit=false) brings a fresh
+// window up. The terminals live in the daemon — a relaunch loses only the page's in-memory state.
+final class Watchdog {
+  let limit: UInt64 = 15 * 1_000_000_000
+  let keep = 20 // hang samples kept in ~/Library/Logs/Chronos
+  let queue = DispatchQueue(label: "sh.chronos.app.watchdog", qos: .userInteractive)
+  let lock = NSLock()
+  // When the unanswered ping went out, not when the last one came back: App Nap may stretch this
+  // timer's own period, and that is not the main thread being stuck. DispatchTime is
+  // mach_absolute_time, which stands still while the Mac sleeps — a closed lid is not silence.
+  var sentAt: UInt64?
+  var timer: DispatchSourceTimer?
+
+  func start() {
+    let t = DispatchSource.makeTimerSource(queue: queue)
+    t.schedule(deadline: .now() + 1, repeating: 1)
+    t.setEventHandler { [self] in
+      let now = DispatchTime.now().uptimeNanoseconds
+      lock.lock(); let pending = sentAt; if pending == nil { sentAt = now }; lock.unlock()
+      if let p = pending {
+        if now &- p >= limit { bail(seconds: (now &- p) / 1_000_000_000) }
+        return
+      }
+      DispatchQueue.main.async { self.lock.lock(); self.sentAt = nil; self.lock.unlock() }
+    }
+    t.resume()
+    timer = t
+  }
+
+  func bail(seconds: UInt64) {
+    let fm = FileManager.default
+    let dir = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Chronos")
+    try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    if let old = try? fm.contentsOfDirectory(atPath: dir.path).filter({ $0.hasPrefix("mc-app-hang-") }).sorted(),
+       old.count >= keep {
+      for f in old.prefix(old.count - keep + 1) { try? fm.removeItem(at: dir.appendingPathComponent(f)) }
+    }
+    let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
+    let out = dir.appendingPathComponent("mc-app-hang-\(stamp).txt").path
+    FileHandle.standardError.write(
+      "[mc-app] main thread silent \(seconds)s — sample in \(out), exiting so launchd relaunches\n".data(using: .utf8)!)
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+    p.arguments = [String(ProcessInfo.processInfo.processIdentifier), "2", "-file", out]
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    if (try? p.run()) != nil {
+      let deadline = Date().addingTimeInterval(15)
+      while p.isRunning && Date() < deadline { usleep(100_000) }
+      if p.isRunning { p.terminate() }
+    }
+    _exit(75) // not exit(): an atexit handler can need a lock the stuck main thread is holding
+  }
+}
+let watchdog = Watchdog()
+watchdog.start()
+
+// Proves the watchdog end to end: `MC_APP_TEST_WEDGE=3 mc-app http://127.0.0.1:9/` wedges the main
+// thread three seconds in, and the process should exit 75 about `limit` after that.
+if let s = ProcessInfo.processInfo.environment["MC_APP_TEST_WEDGE"], let secs = Double(s) {
+  DispatchQueue.main.asyncAfter(deadline: .now() + secs) { while true { sleep(60) } }
+}
+
 window.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
 app.run()
