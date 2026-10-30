@@ -5731,6 +5731,7 @@ async function spawn(body, onOpened) {
     await load();
     ph.remove();
     if (s?.id && byId(s.id)) select(s.id);
+    if (s?.duplicate_of) toast(s.duplicate_of.warning);
   } catch (err) { ph.remove(); renderRail(); toast("open failed: " + err.message); }
 }
 // Close every terminal whose goal is ticked: they are done, and the rail is for what is not.

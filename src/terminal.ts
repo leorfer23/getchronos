@@ -49,6 +49,7 @@ import { goalLines, setGoals, splitGoalText } from "./goals.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "./agent-prep.js";
 import { routeConfigDir, routeProfileForHost } from "./profile-route.js";
 import { setting, settingOn } from "./settings.js";
+import { dupGoal, tellRobertDup, type DupGoal } from "./dup-goal.js";
 
 // Moved to agent-prep.ts (store-free, so `chronos host` runs the same code); re-exported for callers.
 export { excludeChronosArtifacts, gitExcludePath, gitTrackedSync, insideGitRepo, mcSystemText, syncAgentsMd } from "./agent-prep.js";
@@ -585,7 +586,7 @@ export async function openSession(
      *  becomes the card's goal; `mc goal done` walks the rest. */
     goals?: Array<string | { text: string; kind?: GoalKind | null }> | null;
   },
-): Promise<Session> {
+): Promise<Session & { duplicate_of?: DupGoal }> {
   ensurePtyHelper();
   // A terminal opened with a list is still opened with a goal: the first one is what the card, the
   // day's log and `spawn_goal` carry. The rest are queued onto the row right after it is created.
@@ -1059,7 +1060,22 @@ export async function openSession(
 
   indexSession(row.id);
   bus.publish({ topic: "session.started", session_id: row.id });
-  return sessions.get(row.id)!;
+  const opened = sessions.get(row.id)!;
+  // Same job as a terminal already live in this workspace (src/dup-goal.ts)? Warn, never refuse: the
+  // opener reads it in the response, Robert on his queue. A reopen, stand-in or move is the same
+  // terminal's own work coming back, not a second copy of it.
+  // The pty is already up: a check that throws is logged, never turned into a failed open.
+  const fresh = !opts.resumeId && !opts.replaces && !opts.movedFrom && !(opts.agentSessionId && opts.resumeAgent);
+  let dup: DupGoal | null = null;
+  try {
+    dup = fresh ? dupGoal(opened) : null;
+  } catch (e: any) {
+    console.error("[dup-goal] check failed", e?.message ?? e);
+  }
+  if (!dup) return opened;
+  console.warn(`[dup-goal] ${row.id.slice(0, 8)} looks like ${dup.id.slice(0, 8)} (${dup.score.toFixed(2)})`);
+  void tellRobertDup(opened, dup).catch((e) => console.error("[dup-goal] Robert notice failed", e?.message ?? e));
+  return { ...opened, duplicate_of: dup };
 }
 
 /**

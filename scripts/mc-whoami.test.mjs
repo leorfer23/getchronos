@@ -16,6 +16,16 @@ const seen = [];
 const server = http.createServer((req, res) => {
   seen.push({ url: req.url, session: req.headers["x-mc-session"] });
   const send = (body, status = 200) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+  // `mc session new`: the brain flags a goal that reads like a live terminal's (src/dup-goal.ts).
+  if (req.method === "POST" && req.url === "/api/sessions") {
+    let raw = "";
+    req.on("data", (d) => (raw += d));
+    req.on("end", () => {
+      const again = JSON.parse(raw).goal === "fix the flyway rollback again";
+      send({ id: "cccccccc3333", backend: "claude-code", model: "opus", host_name: "m2", ...(again ? { duplicate_of: { id: "dddddddd4444", score: 0.8, warning: "same work? live terminal dddddddd has a goal 80% like this one." } } : {}) }, 201);
+    });
+    return;
+  }
   if (req.url === "/api/sessions/sess-old-1234") return send({ id: "sess-old-1234", host_id: "h_m5", host_name: "m5" });
   if (req.url?.startsWith("/api/sessions/")) return send({ id: "x", host_id: "h_m2", host_name: "m2" });
   if (req.url?.startsWith("/api/sessions?")) return send([
@@ -94,6 +104,15 @@ test("mc repo list from a host shows that host's checkout, or that it has none",
   assert.match(r.stdout, /\tweb\t\/Users\/op\/code\/web\t/);
   assert.match(r.stdout, /\tapi\t\(not on this host\)\t/);
   assert.doesNotMatch(r.stdout, /\/Users\/brain\//, "never the brain's path");
+});
+
+test("mc session new says where it opened, and warns under it when the brain flags the same work as a live terminal", async () => {
+  const r = await run(ON_M2, "session", "new", "--goal", "fix the flyway rollback again");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^spawned session cccccccc .* → m2\n⚠ same work\? live terminal dddddddd /m);
+  const plain = await run(ON_M2, "session", "new", "--goal", "something else");
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.doesNotMatch(plain.stdout, /⚠/);
 });
 
 test("mc help lists whoami", async () => {
