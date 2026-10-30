@@ -16,7 +16,7 @@ export type Launch = {
   workspace_id: string;
   name: string;
   goal: string | null;
-  goal_kind: "pr" | "investigation" | "qa" | null;
+  goal_kind: "pr" | "investigation" | "qa" | "chat" | null;
   /** Typed into the terminal as its first prompt, after the goal (deskSeed). */
   description: string | null;
   backend: string | null;

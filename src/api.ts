@@ -735,6 +735,8 @@ export function startServer() {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
+    // A chat has no board to keep moving: no finish line, no progress, nothing to hand off.
+    if (s.goal_kind === "chat") return res.json({ context: null });
     const st = statusOf(s.id);
     const now = Date.now();
     if (now - (lastNudge.get(s.id) ?? 0) < NUDGE_STALE_MS) return res.json({ context: null });

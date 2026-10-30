@@ -315,7 +315,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc repo patch <id> [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr]   edit a repo (admin-gated)
   mc repo remove <id>                unregister a repo (admin-gated)
   mc desk                    open the Desk wall — every terminal as a card, grouped by client
-  mc goal set "<what this terminal is for>" [--kind pr|investigation|qa] [--done-when "<check>"]…
+  mc goal set "<what this terminal is for>" [--kind pr|investigation|qa|chat] [--done-when "<check>"]…
                              set THIS terminal's objective (the title on its Desk card) and its finish
                              line — the checks the operator verifies it by. Yours from then on.
   mc goal                    the goal, its Done-when checks, what you may ship (ask|merge|deploy), hand-off filed?
@@ -344,7 +344,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc whoami [--json]                 where THIS terminal runs: computer (MC_HOST_NAME), workspace, repo,
                                      session, cwd, api — on another computer, localhost and files are its own
   mc session new [--ticket KEY] [--backend b] [--model m] [--workspace ID] [--cwd p] [--title t] [--host id|name]
-                 [--goal "what it's for"] [--kind pr|investigation|qa] [--description "the brief"]
+                 [--goal "what it's for"] [--kind pr|investigation|qa|chat] [--description "the brief"]
                  (--goal repeats: --goal "open the PR" --goal "update the runbook" = one terminal,
                   two finish lines, worked in order)
                  [--slice N]
@@ -398,7 +398,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc desk log [--since today|24h|7d] the day's ledger — every terminal worked on, what it cost,
                              what it left behind, and how to reopen it
   mc session reopen <ID>             reopen an ended terminal on its own transcript (context intact)
-  mc session goal <ID> "title" [--kind pr|investigation|qa]   retitle SOMEONE ELSE'S card
+  mc session goal <ID> "title" [--kind pr|investigation|qa|chat]   retitle SOMEONE ELSE'S card
   mc session done <ID>               tick that terminal's goal off — closes its row in the day's log
   mc session kill <ID>
   mc agents [--ws ID] [--all]        one line per agent: state icon, name, progress, blocked reason, ticket
@@ -955,7 +955,7 @@ function askCap(question) {
     if (cmd === "goal" && ["add", "list", "drop", "reopen"].includes(pos[1])) {
       const sid = process.env.MC_SESSION || die(`no MC_SESSION — \`mc goal ${pos[1]}\` only works inside a terminal session`);
       const kind = opt.kind ? String(opt.kind).toLowerCase() : null;
-      if (kind && !["pr", "investigation", "qa"].includes(kind)) die("--kind must be pr, investigation or qa");
+      if (kind && !["pr", "investigation", "qa", "chat"].includes(kind)) die("--kind must be pr, investigation, qa or chat");
       const show = (goals) => {
         if (!goals.length) return console.log("(no goal list — this terminal has one goal, see `mc goal set`)");
         const done = goals.filter((g) => g.done_at).length;
@@ -966,7 +966,7 @@ function askCap(question) {
       };
       if (pos[1] === "list") return show((await req("GET", "/sessions/" + sid + "/goals")).goals);
       if (pos[1] === "add") {
-        const text = pos.slice(2).join(" ") || die('mc goal add "<the next thing this terminal must finish>" [--kind pr|investigation|qa]');
+        const text = pos.slice(2).join(" ") || die('mc goal add "<the next thing this terminal must finish>" [--kind pr|investigation|qa|chat]');
         const out = await req("POST", "/sessions/" + sid + "/goals", {
           goals: [{ text, ...(kind ? { kind } : {}) }],
           source: "agent",
@@ -998,14 +998,14 @@ function askCap(question) {
       // stops the automatic title deriver (desk-title.ts) from renaming it from your next
       // "Understanding:" line. Your words win from here on.
       const kind = opt.kind ? String(opt.kind).toLowerCase() : null;
-      if (kind && !["pr", "investigation", "qa"].includes(kind)) die("--kind must be pr, investigation or qa");
+      if (kind && !["pr", "investigation", "qa", "chat"].includes(kind)) die("--kind must be pr, investigation, qa or chat");
       // `--done-when` (repeatable): the finish line — the checks that will say the goal is met. The
       // operator reads them under the goal and approves against them, so write what he can verify.
       const doneWhen = (multi["done-when"] || []).map((x) => String(x).trim()).filter((x) => x && x !== "true");
       const body =
         pos[1] === "set"
           ? {
-              goal: pos.slice(2).join(" ") || die('mc goal set "<what this terminal is for>" [--kind pr|investigation|qa] [--done-when "<check>" …]'),
+              goal: pos.slice(2).join(" ") || die('mc goal set "<what this terminal is for>" [--kind pr|investigation|qa|chat] [--done-when "<check>" …]'),
               goal_source: "agent",
               ...(kind ? { goal_kind: kind } : {}),
               ...(doneWhen.length ? { done_when: doneWhen } : {}),
@@ -2213,7 +2213,7 @@ function askCap(question) {
     if (cmd === "lead" && pos[1] === "new") {
       if (process.env.MC_LEAD) die("a lead may not open a lead");
       const goal = pos.slice(2).join(" ");
-      if (!goal) die('mc lead new "<goal>" [--workspace ID] [--description "..."] [--backend b] [--model m] [--kind pr|investigation|qa]');
+      if (!goal) die('mc lead new "<goal>" [--workspace ID] [--description "..."] [--backend b] [--model m] [--kind pr|investigation|qa|chat]');
       let ws = opt.workspace || process.env.MC_WORKSPACE;
       const own = process.env.MC_WORKSPACE;
       if (own) {
@@ -2613,14 +2613,14 @@ function askCap(question) {
       const s = all.find((x) => x.id === ref || x.id.startsWith(ref));
       if (!s) die(`no session matching ${ref}`);
       const kind = opt.kind ? String(opt.kind).toLowerCase() : null;
-      if (kind && !["pr", "investigation", "qa"].includes(kind)) die("--kind must be pr, investigation or qa");
+      if (kind && !["pr", "investigation", "qa", "chat"].includes(kind)) die("--kind must be pr, investigation, qa or chat");
       const body =
         pos[1] === "done"
           // The operator (or Robert) calling a terminal done means the TERMINAL is done — with a
           // queue behind the card that is every open goal, not only the one showing (§5d).
           ? { goal_done: true, goal_done_all: true }
           : {
-              goal: pos.slice(3).join(" ") || die('mc session goal <ID> "<title>" [--kind pr|investigation|qa]'),
+              goal: pos.slice(3).join(" ") || die('mc session goal <ID> "<title>" [--kind pr|investigation|qa|chat]'),
               goal_source: process.env.MC_AGENT_NAME ? "agent" : "human",
               ...(kind ? { goal_kind: kind } : {}),
             };

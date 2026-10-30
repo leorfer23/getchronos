@@ -61,10 +61,11 @@ export { excludeChronosArtifacts, gitExcludePath, gitTrackedSync, insideGitRepo,
 // Keep this SHORT — it rides every turn. Card / worktree / heavy detail lives in the mission-control
 // skill (Claude) and AGENTS.md (Cursor); duplicate prose here was a standing ~2–3k-token tax.
 const FOCUS_CONTRACT = `## How your operator reads your work
-They read a Focus board, never your raw output. It has four parts: the GOAL (the outcome, its finish line, a progress bar and a timer), the DECISIONS (every question you ask, with a button per option), the TALK (each message they send you, under it your reply and any image you show — so answer it first, plainly), and the HAND-OFF (your summary and proof, which they approve the merge/deploy from). Work in this order:
+They read a Focus board, never your raw output. It has four parts: the GOAL (the outcome, its finish line, a progress bar and a timer), the DECISIONS (every question you ask, with a button per option), the TALK (the conversation: every message they send you and everything you write back, with any image you show — so answer them first, plainly), and the HAND-OFF (your summary and proof, which they approve the merge/deploy from). Work in this order:
+0. JUST TALKING? Questions, exploring, brainstorming, "tell me about X" — no change or deliverable asked for — is a chat: \`mc goal set "<topic>" --kind chat\` (no --done-when, no progress, no hand-off unless they ask for one), then answer. Their board becomes the conversation. It turns into work? Set a real goal then (step 1).
 1. DEFINE FIRST, before any work. Open with one line "Understanding: …". If the goal or how we will know it is done is unclear — no goal, a vague one, two readings, unknown scope — ASK before you start: one question, 2–4 concrete options, your recommendation first (your CLI's question tool, or \`mc ask-robert "…" --options "a,b" --operator\`). Then write it down: \`mc goal set "<one outcome>" --kind pr|investigation|qa --done-when "<a check they can verify>"\` (2–4 checks) and \`mc progress 0/<steps> "plan" --eta 30m\`. A clear prompt needs no question — set both in your first minute.
 2. KEEP THE BOARD MOVING: \`mc progress <n>/<total> "<step>" --eta <time left>\` as you cross each step, and \`mc goal check <n>\` the moment a done-when check is met — not all at the end. It is their only progress bar, checklist and countdown.
-3. ASK, DON'T GUESS: a call only they can make → \`mc ask-robert "<question + what you'd do>" --options "a,b"\`. Waiting on non-operator work → \`mc state waiting "…" --on ci --eta 10m\`; a wall → \`mc state blocked "…" --reason auth\`; hours or days → \`mc when pr <url> --until approved --note "…"\` and finish your turn. Never stop silently. Never block your turn on a wait (CI, Jenkins, a deploy, a long test): run it in the background (your shell's background mode or a background subagent) and end the turn, so they can talk to you while it runs.
+3. ASK, DON'T GUESS: a call only they can make → \`mc ask-robert "<question + what you'd do>" --options "a,b"\`. Waiting on non-operator work → \`mc state waiting "…" --on ci --eta 10m\`; a wall → \`mc state blocked "…" --reason auth\`; hours or days → \`mc when pr <url> --until approved --note "…"\` and finish your turn. Never stop silently. Never block your turn on a wait (CI, Jenkins, a deploy, a long test): run it in the background (your shell's background mode or a background subagent) and end the turn, so they can talk to you while it runs. Their line can also land mid-step — what you were running moves to the background: answer them first, in a line or two, then pick the work back up from that task's output.
 4. HAND-OFF when the finish line is met: \`mc outcome "<1–2 plain sentences>" --change "<what changed, in human words>" --proof "<check you ran → result>" --pr <url> --ask merge|deploy|merge+deploy|review|none\`; a visible change also gets \`--shot before=a.png --shot after=b.png\`. The proof answers each --done-when check. Then ship only as far as \`mc goal\` says you may (ask = stop at the open PR · merge = merge once green · deploy = merge and deploy) and say so with \`mc outcome --shipped "merged #12"\` (it adds to the hand-off on top). Follow-up work after that gets its own new \`mc outcome\`; earlier ones stay on the board.
 5. END every turn: short bullets → "**Next steps**" (omit if none) → "**Summary:**" (one or two sentences; the first is your card's line). Then \`mc goal done\`. More work after that? \`mc goal set\` the new goal first.
 SHOW, DON'T LIST: an image they should see (a screenshot, a chart, a mockup) → \`mc show <file|dir>… --caption "<what to look at>"\` (≤12 a call; one call per group). It appears in TALK under your reply. A file path, a folder or a Finder window shows them nothing.
@@ -154,7 +155,12 @@ const KIND_CONTRACT: Record<GoalKind, string> = {
   pr: "Shape of work: PR. Done means a pull request is open against the right branch with its tests green — not a plan, not a local diff.",
   investigation: "Shape of work: INVESTIGATION. Done means an answer with the evidence behind it. Read, reproduce, measure; change code only if asked.",
   qa: "Shape of work: QA. Done means a verdict: what you exercised, what passed, what failed, and the exact steps to reproduce each failure.",
+  chat: "Shape of work: CHAT. Nothing to finish: answer, explore, think it through with him in plain words. No finish line, no progress bar, no hand-off unless he asks for one.",
 };
+// A chat has no finish line to agree on and nothing to ship, so its seed skips both paragraphs.
+const CHAT_CARD = "You are one card on your operator's Desk, opened to talk. Keep the card's title on the topic " +
+  "(`mc goal set \"<topic>\" --kind chat` when it shifts). If it turns into work, set a real goal then: " +
+  "`mc goal set \"<outcome>\" --kind pr|investigation|qa --done-when \"<check>\"`.";
 
 // What it may do at the end, said once in the first prompt. `mc goal` re-reads it (the operator can
 // change it later; the change is also typed in — api.ts PATCH /sessions/:id).
@@ -193,8 +199,8 @@ export function deskSeed(
         "than inventing work to fill it."
       : null,
     brief ? (g ? `Brief from your operator:\n${brief}` : brief) : null,
-    SHIP_SEED[ship ?? "ask"],
-    g
+    kind === "chat" ? null : SHIP_SEED[ship ?? "ask"],
+    kind === "chat" ? CHAT_CARD : g
       ? "You are one card on your operator's Desk, and the goal above is its title. It was typed before " +
         "the work started, so treat it as a starting label. Before any work, make sure the goal AND how we " +
         "will know it is done are clear — if either is not, ask him first (one question, 2–4 options, your " +
@@ -1506,6 +1512,17 @@ export type NamedKey = "enter" | "esc" | "tab" | "up" | "down" | "ctrl-c" | "ctr
 const KEYS: Record<NamedKey, string> = {
   enter: "\r", esc: "\x1b", tab: "\t", up: "\x1b[A", down: "\x1b[B", "ctrl-c": "\x03", "ctrl-d": "\x04",
 };
+/**
+ * The keystrokes that submit a typed line. Enter, except "send now" to a Claude terminal: Claude Code's
+ * Ctrl+X Ctrl+S, which moves what it is running — a long command, a subagent — to the background and
+ * reads the line in the same turn, where Enter queues it until that step ends. Measured on Claude Code
+ * 2.1.314: a question typed during a 100s foreground command was answered in ~5s with Ctrl+X Ctrl+S
+ * and in ~35s (once the command ended) with Enter; on an idle prompt both just send. Claude only: in
+ * another CLI those two bytes are an editor chord, not a send. Two writes, so the TUI reads a chord.
+ */
+export function submitKeys(now: boolean, backend: string | null | undefined): string[] {
+  return now && backend === "claude-code" ? ["\x18", "\x13"] : ["\r"];
+}
 export const INPUT_WINDOW_MS = 60_000;
 export const KEY_GAP_MS = 120;
 /** From here on sendInput's text is a paste, not typing (≈ a tty's MAX_INPUT; see term-seed.ts). */
@@ -1532,7 +1549,7 @@ export const operatorSaidAt = (id: string): number | null => operatorLines.get(i
 /** Returns null on success, or a human-readable reason it did not happen. */
 export function sendInput(
   id: string,
-  req: { text?: string | null; key?: NamedKey | null; keys?: NamedKey[] | null; enter?: boolean; machine?: boolean },
+  req: { text?: string | null; key?: NamedKey | null; keys?: NamedKey[] | null; enter?: boolean; now?: boolean; machine?: boolean },
   by = "operator",
 ): string | null {
   if (!live.has(id)) return "terminal is not live";
@@ -1561,7 +1578,9 @@ export function sendInput(
     // stays keystrokes: a menu reads "1" as a key, not as pasted text.
     const e = live.get(id)!;
     writeTo(id, pasteOf(line, line.length >= PASTE_MIN && e.modes.isOn(2004)), req.machine);
-    if (req.enter !== false) setTimeout(() => writeTo(id, "\r", req.machine), 200).unref?.();
+    if (req.enter !== false)
+      submitKeys(req.now === true, sessions.get(id)?.backend).forEach((k, i) =>
+        setTimeout(() => writeTo(id, k, req.machine), 200 + KEY_GAP_MS * i).unref?.());
   }
   // Persisted by activity.ts like every other bus event — who typed what into whose terminal is
   // exactly the trail you want the day an agent says something you didn't.
