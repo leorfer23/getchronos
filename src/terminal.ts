@@ -16,7 +16,7 @@ import { ensureDropDir } from "./drops.js";
 import { ensureBypassAccepted, ensureTrustedCwd } from "./claude-trust.js";
 import { ensureGrokTrustedCwd, grokHome } from "./grok-trust.js";
 import { isEarlyDeath, reportEarlyDeath } from "./desk-incidents.js";
-import { lastActivityState, reviveSeedFor } from "./revive.js";
+import { inFlightAtRestart, lastActivityState, reviveSeedFor } from "./revive.js";
 import { childEnv } from "./child-env.js";
 import { sanitizeCwd } from "./spawn-guard.js";
 import { ensureTicketWorktree, cleanupWorktree, cleanupRemoteWorktree } from "./worktrees.js";
@@ -1826,9 +1826,10 @@ export async function startTerminals() {
         cursorConfigDir: workspaceCursorDir(s.workspace_id ? workspaces.get(s.workspace_id) : undefined),
       }));
     if (!resumable) { skipped++; continue; }
-    // A resume restores the transcript, not the turn: one that was mid-work comes back at its prompt
-    // and stays there. Tell it to continue (revive.ts); one that was waiting or blocked is left alone.
-    const seed = reviveSeedFor(lastActivityState(s.id));
+    // A resume restores the transcript, not the turn: one that was mid-work — or that ended its turn
+    // waiting on its own background work, which died too — comes back at its prompt and stays there. Tell it to continue
+    // (revive.ts); one that finished its turn, or is waiting on the operator, is left alone.
+    const seed = reviveSeedFor(lastActivityState(s.id), inFlightAtRestart(s.id));
     try {
       await openSession({
         resumeId: s.id,
@@ -1837,7 +1838,7 @@ export async function startTerminals() {
         ...(seed ? { seed } : {}),
       });
       revived++;
-      if (seed) console.log(`[terminal] revived ${s.id.slice(0, 8)} was working when the daemon died — nudged to continue`);
+      if (seed) console.log(`[terminal] revived ${s.id.slice(0, 8)} had work in flight when the daemon died — nudged to continue`);
     } catch (e: any) {
       console.warn(`[terminal] revive ${s.id} failed (stays ended, resumable in UI):`, e?.message ?? e);
     }
