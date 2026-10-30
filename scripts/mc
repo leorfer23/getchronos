@@ -858,6 +858,8 @@ async function browserRun(argv) {
 // POST /sessions names a remote host in host_name; null is the brain itself. Always said, so whoever
 // opened it never has to go and look.
 const placedOn = (s) => ` → ${s.host_name || "the brain"}${s.placement ? ` (${s.placement})` : ""}`;
+// Same job as a terminal already live in the workspace (src/dup-goal.ts): opened anyway, said out loud.
+const dupLine = (s) => (s.duplicate_of ? `\n⚠ ${s.duplicate_of.warning}` : "");
 
 // The asks API caps a question at ASK_MAX (NewAskSchema in src/validation.ts). Said here in one plain
 // line, before anything is filed, instead of the schema's error dump.
@@ -2205,7 +2207,7 @@ function askCap(question) {
         // presented that Lead's credential — the daemon reads it from the header, not from here.
         slice: opt.slice ? Number(opt.slice) : undefined,
       }, LEAD_HEADERS);
-      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})${placedOn(s)}`);
+      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})${placedOn(s)}${dupLine(s)}`);
     }
     // A Lead (LEADS.md): Robert's deputy for one goal, in one workspace. Opened the same way as any
     // other terminal (POST /sessions, role "lead") — the daemon does the rest (its own lead_token,
@@ -2230,7 +2232,7 @@ function askCap(question) {
         model: opt.model,
         created_by: opt.by || process.env.MC_AGENT_NAME || "operator",
       });
-      return console.log(`spawned lead ${s.id.slice(0, 8)}${placedOn(s)} — ${goal}`);
+      return console.log(`spawned lead ${s.id.slice(0, 8)}${placedOn(s)} — ${goal}${dupLine(s)}`);
     }
     // Every live Lead + how many workers it currently has open (rows whose `lead_id` is that Lead),
     // plus cost/tokens of the Lead and its workers (same numbers /desk/log uses).
