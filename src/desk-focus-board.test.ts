@@ -98,7 +98,7 @@ test("talk: the whole conversation — every line you sent and everything it sai
   assert.match(html, /const actsWord = \(g\) => \(g\.acts\.length \? foldActs\(g\.acts\.map\(\(a\) => a\.text\)\)/);
   assert.match(html, /data-tacts="\$\{esc\(x\.key\)\}"/);
   // A terminal opened with a goal starts with the goal you gave it, never the daemon's seed.
-  assert.match(html, /const t = seed \? String\(s\.spawn_goal\)\.trim\(\) : cleanUser\(e\.text\);/);
+  assert.match(html, /const t = seed \? String\(s\.spawn_goal\)\.trim\(\) : youSaid\(cleanUser\(e\.text\)\);/);
   // While it works, what it is on right now is the last line — Talk never sits silent over a busy agent.
   assert.match(html, /function talkNow\(s, items\) \{/);
   assert.match(html, /<div class="tk live"><i><\/i>/);
@@ -233,8 +233,23 @@ test("a chat: no goal card, the talk is the board, and a way to make it a task",
 
 test("a line sent while a Claude terminal works goes as send-now, so it answers without waiting the step out", () => {
   assert.match(html, /const sendsNow = \(s\) => s\.backend === "claude-code" && phaseOf\(s\) === "working";/);
-  assert.match(html, /answer\(s\.id, \{ text, enter: true, \.\.\.\(now \? \{ now: true \} : \{\}\) \}\);/);
+  assert.match(html, /answer\(s\.id, \{ text, enter: true, \.\.\.\(now \? \{ now: true \} : \{\}\), \.\.\.\(by \? \{ by \} : \{\}\) \}\);/);
   // The composer goes through it in both modes.
   assert.match(html, /if \(!s\?\.live\) return answer\(S\.active, \{ text, enter: true \}\);\n  talkSend\(s, text\);/);
   assert.match(html, /queued — it reads this when “/, "a line still waiting on a step says so");
+});
+
+test("¿Cómo venimos?: one click on the status strip (or S) asks it where it stands, and Focus has no footer bar", () => {
+  // Leo, 2026-10-30: a button that makes the agent give a status summary; and the footer chips,
+  // Stop / Close / Next — "estos botones NUNCA los uso".
+  assert.match(html, /<button type="button" class="fx-exp fx-how" data-fhow title="[^"]*">💬 \$\{STATUS_ASK\}<\/button>/);
+  assert.match(html, /if \(e\.target\.closest\("\[data-fhow\]"\)\) return askStatus\(s\);/);
+  assert.match(html, /if \(k === "s"\) \{ e\.preventDefault\(\); return askStatus\(f\); \}/);
+  // It goes through the board's own door: send-now while it works, so it answers without finishing its step.
+  assert.match(html, /function askStatus\(s\) \{[\s\S]*?talkSend\(s, STATUS_LINE, "status"\);/);
+  // …and not as "operator", or it would close the terminal's open question as its answer.
+  assert.match(html, /body: JSON\.stringify\(\{ by: "operator", \.\.\.body \}\)/);
+  // Talk shows it by its short name, not the whole instruction.
+  assert.match(html, /const youSaid = \(t\) => \(norm\(t\) === norm\(STATUS_LINE\) \? STATUS_ASK : t\);/);
+  assert.match(css, /body\.mode-fleet \.sbar, body\.mode-focus \.sbar \{ display:none; \}/);
 });

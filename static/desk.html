@@ -387,7 +387,10 @@
   .fleet { position:absolute; inset:0; overflow-y:auto; padding:18px 22px 30px; display:none; }
   body.mode-fleet .fleet { display:block; }
   .fleet > * { max-width:1100px; margin:0 auto 12px; }
-  body.mode-fleet .sbar { display:none; }
+  /* Focus has no footer bar (Leo, 2026-10-30: "estos botones NUNCA los uso"): answers live in the dock,
+     "¿Cómo venimos?" on the status strip, and Stop / Close / Next / Continue are E / X / J / C. Terminal
+     mode keeps it — there it carries the menu answers beside the raw bytes. */
+  body.mode-fleet .sbar, body.mode-focus .sbar { display:none; }
   /* The header belongs to the terminal on stage; in Fleet it is the board's name and the segment. */
   body.mode-fleet .shead .ws, body.mode-fleet .shead .goal, body.mode-fleet .shead .bits,
   body.mode-fleet .shead #h-mic, body.mode-fleet .shead #h-more { display:none; }
@@ -655,6 +658,7 @@
   .fx-act li.ch { margin:6px 0 2px; }
   .fx-act li.ch span { font-size:11.5px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); }
   .fx-status .st-m { cursor:pointer; }
+  .fx-status .fx-how { white-space:nowrap; }
   /* Is it working: printing now (the dot blinks off the page's 1Hz clock) or quiet since when. */
   .fx-pulse { display:flex; align-items:baseline; gap:8px; font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:0; }
   .fx-pulse i { flex:none; width:8px; height:8px; border-radius:50%; background:var(--faint); align-self:center; }
@@ -1890,6 +1894,7 @@
       <div><kbd>T</kbd><span>into the terminal, keyboard and all</span></div>
       <div><kbd>⌘⇧T</kbd><span>the companion beside the terminal: goal, clock, everything since · <kbd>◨</kbd> collapses it</span></div>
       <div><kbd>Y</kbd> <kbd>A</kbd> <kbd>N</kbd><span>answer the open prompt: first / second / last option (or y / n)</span></div>
+      <div><kbd>S</kbd><span>¿Cómo venimos? — it sends you a status summary in Talk, even mid-step</span></div>
       <div><kbd>C</kbd><span>continue a finished turn · <kbd>E</kbd> Esc into it (interrupts the turn)</span></div>
       <div><kbd>N</kbd><span>new terminal: pick CLI + model, type what it should do, ⏎ · empty ⏎ = blank · <kbd>⇧N</kbd> the full dialog</span></div>
       <div><kbd>L</kbd><span>open loops: parked work, follow-ups, unanswered questions, what runs on a clock</span></div>
@@ -2989,6 +2994,7 @@ function focusStatus(s) {
     + `<div class="st-l">${chip}</div>`
     + `<div class="st-m" data-fexp="act" title="Everything it has done — live, by the second (click)"><div class="st-line" title="${esc(line)}">${esc(line)}</div>${pulseHtml(s)}</div>`
     + `<div class="st-r"><span title="how long this terminal has been running">⏱ ${s.live ? "" : "ran "}${ran}</span>${eta}`
+    + (s.live ? `<button type="button" class="fx-exp fx-how" data-fhow title="Ask it where it stands — it answers in Talk, even mid-step (S)">💬 ${STATUS_ASK}</button>` : "")
     + (F.id === s.id && F.events.length ? `<button type="button" class="fx-exp" data-fexp="act" title="${FX.exp === "act" ? "Back to the whole board (Esc)" : "Everything it has done — live, by the second"}">${FX.exp === "act" ? "⤡ Back to board" : "⤢ Activity"}</button>` : "")
     + (others ? `<button type="button" class="st-others" data-fnext title="the next terminal that needs you (⌘J)">${others} more need${others === 1 ? "s" : ""} you · ⌘J</button>` : "")
     + `</div></section>`;
@@ -3093,7 +3099,7 @@ function talkThread(s) {
       // A terminal opened WITH a goal starts with the daemon's seed (goal + contract): it shows as the
       // goal you gave it. A blank terminal's first line is yours, like any other.
       const seed = e === firstUser && !!s.spawn_goal;
-      const t = seed ? String(s.spawn_goal).trim() : cleanUser(e.text);
+      const t = seed ? String(s.spawn_goal).trim() : youSaid(cleanUser(e.text));
       if (!t || norm(t) === lastYou) continue;
       flush();
       lastYou = norm(t);
@@ -3133,7 +3139,7 @@ function focusTalk(s) {
   if (F.id !== s.id) return "";
   const items = talkThread(s);
   // Your line from the composer, until its own record lands in the transcript.
-  if (T.pending && items.some((x) => x.k === "you" && !x.seed && norm(x.text) === norm(T.pending.text) && (!x.at || x.at >= T.pending.at - 10000))) T.pending = null;
+  if (T.pending && items.some((x) => x.k === "you" && !x.seed && norm(x.text) === norm(youSaid(T.pending.text)) && (!x.at || x.at >= T.pending.at - 10000))) T.pending = null;
   // What it said since your last line — the hand-off card checks it so its Result is not printed twice.
   const lastYou = items.map((x) => x.k).lastIndexOf("you");
   T.shows = items.slice(lastYou + 1).filter((x) => x.k === "say").map((x) => x.text).join("\n\n");
@@ -3166,7 +3172,7 @@ function focusTalk(s) {
     // this turn. Any other CLI reads a line typed mid-turn only when its current tool call ends.
     const why = T.pending.now ? "sent now — what it was running moved to the background; it answers in a moment…"
       : now?.at ? `queued — it reads this when “${clip(now.text, 70)}” ends` : now ? "sent — it reads this in a moment…" : "sent — waiting for its answer…";
-    rows.push(`<div class="tk you">${`<div class="b">${esc(clip(T.pending.text, 4000))}</div>`}<time>${esc(TermCompanion.hhmm(T.pending.at))}</time></div><div class="tk wait">${esc(why)}</div>`);
+    rows.push(`<div class="tk you">${`<div class="b">${esc(clip(youSaid(T.pending.text), 4000))}</div>`}<time>${esc(TermCompanion.hhmm(T.pending.at))}</time></div><div class="tk wait">${esc(why)}</div>`);
   }
   if (now) {
     const last = items[items.length - 1];
@@ -3196,15 +3202,29 @@ function talkFollow() {
 // Claude Code 2.1.314: a question during a 100s command was answered in ~5s, not ~35s). Leo,
 // 2026-10-30: "agents never block the talk… it should run on the background so they can still answer".
 const sendsNow = (s) => s.backend === "claude-code" && phaseOf(s) === "working";
-function talkSend(s, text) {
+function talkSend(s, text, by) {
   if (!s?.live || !text) return;
   const now = sendsNow(s);
-  answer(s.id, { text, enter: true, ...(now ? { now: true } : {}) });
+  answer(s.id, { text, enter: true, ...(now ? { now: true } : {}), ...(by ? { by } : {}) });
   if (S.mode === "focus") {
     if (T.id !== s.id) Object.assign(T, { id: s.id, all: false, open: new Set(), shows: "" });
     Object.assign(T, { pending: { text, at: Date.now(), now }, follow: true, sig: "" });
     renderStory();
   }
+}
+// "¿Cómo venimos?" (Leo, 2026-10-30): one click asks the agent where it stands. It goes like any line
+// from the board — send-now while it works, so it answers in Talk without waiting its step out — and
+// Talk shows it by its short name, not the whole instruction.
+const STATUS_ASK = "¿Cómo venimos?";
+const STATUS_LINE = STATUS_ASK + " Resumen de status en 3–5 bullets: qué está hecho, en qué estás ahora, qué sigue y cuánto falta, y si necesitás algo de mí. Dejá `mc progress` al día y después seguí con lo que estabas haciendo.";
+const youSaid = (t) => (norm(t) === norm(STATUS_LINE) ? STATUS_ASK : t);
+function askStatus(s) {
+  if (!s?.live) return;
+  // From Activity, back to the board: the answer lands in Talk.
+  if (FX.exp === "act") FX.exp = null;
+  // Not "operator": a line the operator types into a terminal answers its open question (ask-in-
+  // terminal.ts), and asking for a status is not an answer to anything.
+  talkSend(s, STATUS_LINE, "status");
 }
 const TASK_LINE = "Let's turn this into a task: set the goal and its finish line with `mc goal set \"<outcome>\" --kind pr|investigation|qa --done-when \"<check>\"`, then work toward it and hand off with `mc outcome`.";
 
@@ -3239,7 +3259,7 @@ function focusActivity(s) {
     else if (e.kind === "user") {
       if (SYS_LINE.test(e.text) || DAEMON_LINE.test(e.text)) continue;
       const seed = e === firstUser && !!s.spawn_goal;
-      li("you", at, (seed ? "you opened it: " : "you: ") + esc(clip(seed ? s.spawn_goal : cleanUser(e.text), 300)), took);
+      li("you", at, (seed ? "you opened it: " : "you: ") + esc(clip(seed ? s.spawn_goal : youSaid(cleanUser(e.text)), 300)), took);
     } else li("say", at, esc(clip(TermCompanion.plainText(e.text), 400)), took);
   }
   for (; ci < chs.length; ci++) { const c = chs[ci]; li("ch", c.at, `${esc(PH_WORD[c.phase] || c.phase)}${c.line ? " — " + esc(clip(c.line, 160)) : ""}`); }
@@ -3520,6 +3540,7 @@ qs("#story").addEventListener("click", (e) => {
   if (e.target.closest("[data-tall]")) { T.all = !T.all; return renderStory(); }
   if (e.target.closest("[data-actall]")) { FX.actAll = !FX.actAll; return renderStory(); }
   if (e.target.closest("[data-ftask]")) return talkSend(s, TASK_LINE);
+  if (e.target.closest("[data-fhow]")) return askStatus(s);
   // An image zooms.
   const z = e.target.closest("[data-shotzoom]");
   if (z) { const k = z.dataset.shotzoom; if (k && !FX.zoom.delete(k)) FX.zoom.add(k); z.classList.toggle("zoom"); return; }
@@ -4767,7 +4788,7 @@ async function answer(id, body) {
   if (!s || !s.live) return toast("that terminal is gone");
   S.answered.set(id, Date.now()); S.notifyCount.delete(id);
   renderCounts(); syncBadge();
-  try { await api("/sessions/" + id + "/input", { method: "POST", body: JSON.stringify({ ...body, by: "operator" }) }); }
+  try { await api("/sessions/" + id + "/input", { method: "POST", body: JSON.stringify({ by: "operator", ...body }) }); }
   catch (e) { S.answered.delete(id); return toast(String(e.message).slice(0, 120)); }
 }
 async function saveGoal(id, goal) {
@@ -8682,7 +8703,7 @@ function connectBus() {
       if (OV.awaitTurn && (OV.awaitTurn === e.turn || OV.awaitTurn === "lost")) ovRelease(e.turn || null);
       return;
     }
-    if (e.topic === "session.input") { if (e.by && e.by !== "operator") toast(`${e.by} → ${e.session_id.slice(0, 8)}: ${e.text}`); return; }
+    if (e.topic === "session.input") { if (e.by && e.by !== "operator" && e.by !== "status") toast(`${e.by} → ${e.session_id.slice(0, 8)}: ${e.text}`); return; }
     if (e.topic === "agent.turn.done") return ovWork(OV.busy || OV.queue.length > 0, "wrapping up…");
     if (e.topic === "session.started" || e.topic === "session.ended" || e.topic === "session.updated") loadSoon();
     if (e.topic === "jot.updated" || e.topic === "jot.ran") loadSoon();
@@ -8759,6 +8780,7 @@ document.addEventListener("keydown", (e) => {
   if (k === "t") { e.preventDefault(); return setMode("term"); }
   if (k === "e") { e.preventDefault(); return input(f.id, { key: "esc" }); }
   if (k === "c") { e.preventDefault(); return stageAction("continue"); }
+  if (k === "s") { e.preventDefault(); return askStatus(f); }
   if (!ask) return;
   if (k === "y") { e.preventDefault(); pick("first"); }
   if (k === "a") { e.preventDefault(); pick("second"); }
