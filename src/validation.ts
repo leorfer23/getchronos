@@ -6,6 +6,9 @@ import { MAX_LABEL, MAX_QUICK_ACTIONS, MAX_TEXT, QA_KINDS, QA_PHASES } from "./q
 
 // Express body-validation middleware: parses req.body against `schema`, replies 400 with a readable
 // message on mismatch, else replaces req.body with the parsed (typed, defaulted) value and continues.
+/** The shape of a terminal's work. "chat" = talking it through: no finish line, no hand-off asked for. */
+export const GOAL_KINDS = ["pr", "investigation", "qa", "chat"] as const;
+
 export function validate(schema: z.ZodType) {
   return (req: Request, res: Response, next: NextFunction) => {
     const result = schema.safeParse(req.body ?? {});
@@ -29,7 +32,7 @@ export const GoalItemSchema = z.union([
   z.string().min(1).max(400),
   z.object({
     text: z.string().min(1).max(400),
-    kind: z.enum(["pr", "investigation", "qa"]).nullable().optional(),
+    kind: z.enum(GOAL_KINDS).nullable().optional(),
   }),
 ]);
 /** `POST /sessions/:id/goals` — append to the list, or replace it outright. */
@@ -43,7 +46,7 @@ export const SessionGoalsSchema = z.object({
 export const SessionGoalPatchSchema = z
   .object({
     text: z.string().min(1).max(400).optional(),
-    kind: z.enum(["pr", "investigation", "qa"]).nullable().optional(),
+    kind: z.enum(GOAL_KINDS).nullable().optional(),
     source: z.enum(["seed", "auto", "agent", "human"]).optional(),
     done: z.boolean().optional(),
   })
@@ -55,7 +58,7 @@ export const OpenSessionSchema = z.object({
   repo_id: nullableId.optional(),
   title: z.string().nullable().optional(),
   goal: z.string().max(400).nullable().optional(),
-  goal_kind: z.enum(["pr", "investigation", "qa"]).nullable().optional(),
+  goal_kind: z.enum(GOAL_KINDS).nullable().optional(),
   /** More than one finish line, in the order to work them (src/goals.ts). The first becomes the
    *  card's goal; the rest queue behind it. Capped so a spawn cannot queue a novel. */
   goals: z.array(GoalItemSchema).max(20).nullable().optional(),
@@ -170,7 +173,7 @@ export const SessionPatchSchema = z.object({
    *  one on the card. This is the operator closing the terminal ("done is done"), where the agent's
    *  own `mc goal done` only ever ticks the one it is on. */
   goal_done_all: z.boolean().optional(),
-  goal_kind: z.enum(["pr", "investigation", "qa"]).nullable().optional(),
+  goal_kind: z.enum(GOAL_KINDS).nullable().optional(),
   // Who is renaming this terminal. Omitted = the operator (the card's inline edit), which locks the
   // goal against the automatic deriver; agents pass "agent" via `mc goal set`.
   goal_source: z.enum(["seed", "auto", "agent", "human"]).optional(),
@@ -218,6 +221,9 @@ export const SessionInputSchema = z
     // so a TUI sees separate keystrokes. Counts as ONE input against the per-terminal cap.
     keys: z.array(z.enum(["enter", "esc", "tab", "up", "down", "ctrl-c", "ctrl-d"])).min(1).max(8).optional(),
     enter: z.boolean().optional(),
+    // "Send now" for a line typed while a Claude terminal is working: its running step moves to the
+    // background and it reads the line in the same turn (sendInput). Ignored by every other CLI.
+    now: z.boolean().optional(),
     by: z.string().max(60).optional(),
   })
   .refine((b) => !!b.text || !!b.key || !!b.keys?.length, { message: "pass text, key or keys" });
@@ -668,7 +674,7 @@ export const RunJotSchema = z.object({
   backend: z.string().optional(),
   model: z.string().nullable().optional(),
   cwd: z.string().optional(),
-  goal_kind: z.enum(["pr", "investigation", "qa"]).nullable().optional(),
+  goal_kind: z.enum(GOAL_KINDS).nullable().optional(),
   focus_only: z.boolean().optional(),
 });
 export const ReorderJotsSchema = z.object({ ids: z.array(id).min(1) });
@@ -686,7 +692,7 @@ export const PushUnsubscribeSchema = z.object({ endpoint: z.string().url().max(2
 export const NewLaunchSchema = z.object({
   name: z.string().min(1).max(80),
   goal: z.string().max(400).nullable().optional(),
-  goal_kind: z.enum(["pr", "investigation", "qa"]).nullable().optional(),
+  goal_kind: z.enum(GOAL_KINDS).nullable().optional(),
   description: z.string().max(20000).nullable().optional(),
   backend: z.string().max(40).nullable().optional(),
   model: z.string().max(80).nullable().optional(),

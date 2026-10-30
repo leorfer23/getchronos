@@ -19,8 +19,9 @@ const css = html.slice(0, html.indexOf("</style>"));
 test("Focus is one board that fits the stage: status on top, three columns, the dock at the bottom", () => {
   // Leo, 2026-10-28: full width, no scrolling to reach a button, what it is doing always on top.
   assert.match(html, /body\.innerHTML = focusStatus\(s\) \+ grid \+ focusDock\(s\);/);
-  assert.match(html, /<div class="fx-col c1">\$\{focusGoal\(s\)\}\$\{focusDecided\(s\)\}<\/div>/);
-  assert.match(html, /<div class="fx-col c2\$\{FX\.exp === "talk" \? " holds-exp" : ""\}">\$\{focusTalk\(s\)\}<\/div>/);
+  assert.match(html, /<div class="fx-col c1">\$\{focusGoal\(s\)\}\$\{focusDecided\(s\)\}\$\{ready \? "" : out\}<\/div>/, "no hand-off yet: its line sits under the goal");
+  assert.match(html, /const c2 = `<div class="fx-col c2\$\{FX\.exp === "talk" \? " holds-exp" : ""\}">\$\{focusTalk\(s\)\}<\/div>`;/);
+  assert.match(css, /\.fx-grid:not\(\.has-out\) > \.c2 \{ grid-column:2 \/ -1; \}/, "…and Talk takes the hand-off's column until there is one");
   assert.match(css, /body\.mode-focus \.story \{ display:flex; flex-direction:column; gap:10px; \}/);
   assert.doesNotMatch(css, /\.story > \* \{ max-width/, "no centred column: the board uses the whole width");
   assert.match(css, /\.fx-grid \{ flex:1 1 0; min-height:0; display:grid;/, "the board takes what the strip and the dock leave, and no more");
@@ -89,15 +90,26 @@ test("a CLI question dialog (AskUserQuestion): its whole question, a button per 
   assert.match(html, /await answer\(s\.id, \{ text, enter: true \}\);/);
 });
 
-test("talk: each line you sent beside what it said back, the newest open in full", () => {
-  assert.match(html, /function talkTurns\(s\)/);
+test("talk: the whole conversation — every line you sent and everything it said, in order", () => {
+  assert.match(html, /function talkThread\(s\)/);
+  // Every message it writes is a row, not only the answer after its last tool call (Leo, 2026-10-30).
+  assert.match(html, /items\.push\(\{ k: "say", text: sayText\(e\), at: e\.ts \|\| 0, seq: e\.seq \}\);/);
+  // What it ran between two messages folds to one line; a click lists it.
+  assert.match(html, /const actsWord = \(g\) => \(g\.acts\.length \? foldActs\(g\.acts\.map\(\(a\) => a\.text\)\)/);
+  assert.match(html, /data-tacts="\$\{esc\(x\.key\)\}"/);
+  // A terminal opened with a goal starts with the goal you gave it, never the daemon's seed.
+  assert.match(html, /const t = seed \? String\(s\.spawn_goal\)\.trim\(\) : cleanUser\(e\.text\);/);
+  // While it works, what it is on right now is the last line — Talk never sits silent over a busy agent.
+  assert.match(html, /function talkNow\(s, items\) \{/);
+  assert.match(html, /<div class="tk live"><i><\/i>/);
+  assert.match(css, /body\.blink \.tk\.live i \{ opacity:\.3; \}/);
   assert.match(html, /if \(SYS_LINE\.test\(e\.text\) \|\| DAEMON_LINE\.test\(e\.text\)\) continue;/);
-  assert.match(html, /<span class="fx-lbl">Talk<\/span>/);
+  assert.match(html, /<span class="fx-lbl">\$\{chat \? "Chat" : "Talk"\}<\/span>/);
   // It scrolls inside its card, newest at the bottom, and expands over the board.
   assert.match(html, /<div class="fx-body" data-keep="talk" data-stick>/);
-  assert.match(html, /\+ expBtn\("talk"\)/);
+  assert.match(html, /\+ \(chat \? "" : expBtn\("talk"\)\)/, "a chat's Talk is already the board");
   // A line sent from the Focus composer shows at once and the page follows it to the answer.
-  assert.match(html, /Object\.assign\(T, \{ pending: \{ text, at: Date\.now\(\) \}, follow: true, sig: "" \}\);/);
+  assert.match(html, /Object\.assign\(T, \{ pending: \{ text, at: Date\.now\(\), now \}, follow: true, sig: "" \}\);/);
   // The last answer is not printed twice: a Result card without a hand-off points up at it.
   assert.match(html, /No hand-off filed — its last answer is open in Talk\./);
 });
@@ -196,4 +208,33 @@ test("hand-offs: the newest in full, every earlier one kept and folded; Talk and
   assert.match(html, /if \(e\.key === "Escape" && S\.mode === "focus" && FX\.exp/, "Esc gives the board back");
   // A repaint keeps every card where it was scrolled (Talk follows the newest when it was at the end).
   assert.match(html, /el\.scrollTop = was\.end && el\.hasAttribute\("data-stick"\) \? el\.scrollHeight : was\.top;/);
+});
+
+test("activity: the status strip expands into every step, stamped to the second, live", () => {
+  // Leo, 2026-10-30: "see live what it is doing, and by timestamp what it was doing before".
+  assert.match(html, /<div class="st-m" data-fexp="act"/, "the strip itself opens it");
+  assert.match(html, /\? "⤡ Back to board" : "⤢ Activity"/);
+  assert.match(html, /const grid = FX\.exp === "act"\s+\? `<div class="fx-grid exp"><div class="fx-col c1 holds-exp">\$\{focusActivity\(s\)\}<\/div><\/div>`/);
+  assert.match(html, /function focusActivity\(s\) \{/);
+  // How long each step took, and a running clock on the one it is on now (the page's 1Hz clock).
+  assert.match(html, /<em class="now" data-clock="ago" data-at="\$\{at\}">/);
+  assert.match(html, /next && at && next - at >= 3000 \? `<em>\$\{esc\(TermCompanion\.elapsed\(next - at\)\)\}<\/em>`/);
+  // It stays open while you walk the rail, so J/K shows each terminal's activity.
+  assert.match(html, /exp: FX\.exp === "act" \? "act" : null/);
+});
+
+test("a chat: no goal card, the talk is the board, and a way to make it a task", () => {
+  assert.match(html, /const chat = s\.goal_kind === "chat";/);
+  assert.match(html, /\+ \(chat \? "" : `<div class="fx-col c1">/, "no goal card in a chat");
+  assert.match(css, /\.fx-grid\.fx-chat \{ grid-template-columns:minmax\(0,1fr\); grid-template-rows:minmax\(0,1fr\); \}/);
+  assert.match(html, /<option value="chat">Chat — just talk<\/option>/, "the New dialog can open one");
+  assert.match(html, /if \(e\.target\.closest\("\[data-ftask\]"\)\) return talkSend\(s, TASK_LINE\);/);
+});
+
+test("a line sent while a Claude terminal works goes as send-now, so it answers without waiting the step out", () => {
+  assert.match(html, /const sendsNow = \(s\) => s\.backend === "claude-code" && phaseOf\(s\) === "working";/);
+  assert.match(html, /answer\(s\.id, \{ text, enter: true, \.\.\.\(now \? \{ now: true \} : \{\}\) \}\);/);
+  // The composer goes through it in both modes.
+  assert.match(html, /if \(!s\?\.live\) return answer\(S\.active, \{ text, enter: true \}\);\n  talkSend\(s, text\);/);
+  assert.match(html, /queued — it reads this when “/, "a line still waiting on a step says so");
 });

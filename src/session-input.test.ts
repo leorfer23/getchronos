@@ -4,7 +4,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "./store.js";
-import { INPUT_MAX, INPUT_WINDOW_MS, inputAllowed, noteInput, sendInput } from "./terminal.js";
+import { INPUT_MAX, INPUT_WINDOW_MS, inputAllowed, noteInput, sendInput, submitKeys } from "./terminal.js";
 import { isSafeProposal } from "./telegram/agent.js";
 
 beforeEach(() => {
@@ -43,4 +43,12 @@ test("typing into a terminal is never a safe-tier Telegram proposal", () => {
     isSafeProposal({ label: "type", method: "POST", path: "/api/sessions/abc/input?x=1", body: {} } as any),
     false,
   );
+});
+
+test("send now: Ctrl+X Ctrl+S to a Claude terminal, Enter to every other CLI and to a plain line", () => {
+  // Claude Code moves its running step to the background and reads the line in the same turn.
+  assert.deepEqual(submitKeys(true, "claude-code"), ["\x18", "\x13"]);
+  assert.deepEqual(submitKeys(false, "claude-code"), ["\r"]);
+  // In another CLI those bytes are an editor chord (readline's C-x C-s), never a send.
+  for (const b of ["grok", "cursor-agent", "codex", null, undefined]) assert.deepEqual(submitKeys(true, b), ["\r"]);
 });

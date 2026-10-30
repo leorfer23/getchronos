@@ -721,8 +721,8 @@ export interface NewJob {
 export type SessionRole = "human" | "worker" | "reviewer" | "lead";
 export type SessionStatus = "live" | "ended";
 /** What a terminal is FOR, coarsely — the operator picks it in the spawn dialog and it sets the
- *  agent's finish line: a PR to open, a question to answer, a build to verify. */
-export type GoalKind = "pr" | "investigation" | "qa";
+ *  agent's finish line: a PR to open, a question to answer, a build to verify — or none: a chat. */
+export type GoalKind = "pr" | "investigation" | "qa" | "chat";
 /** What a terminal may do once its work is green: stop and ask, merge, or merge and deploy. */
 export type Ship = "ask" | "merge" | "deploy";
 /** A terminal's hand-off (`mc outcome`): everything the operator needs to approve, in one place. */

@@ -484,9 +484,11 @@
   .fx-col > .fx { flex:0 1 auto; }
   .fx-col > .fx-talk, .fx-col > .fx-out { flex:1 1 0; }
   .fx-col > .fx-out.wait { flex:0 1 auto; }
+  .fx-grid:not(.has-out) > .c2 { grid-column:2 / -1; }
   @container (max-width:1280px) {
     .fx-grid { grid-template-columns:minmax(280px,.8fr) minmax(0,1.2fr); grid-template-rows:minmax(0,1fr) minmax(0,1fr); }
-    .fx-grid:not(.has-out) { grid-template-rows:minmax(0,1fr) auto; }
+    .fx-grid:not(.has-out) { grid-template-rows:minmax(0,1fr); }
+    .fx-grid:not(.has-out) > .c1 { grid-row:1; }
     .fx-grid > .c1 { grid-column:1; grid-row:1 / span 2; }
     .fx-grid > .c2 { grid-column:2; grid-row:1; }
     .fx-grid > .c3 { grid-column:2; grid-row:2; }
@@ -497,6 +499,12 @@
     .fx-col > .fx-talk .fx-body, .fx-col > .fx-out .fx-body { max-height:60vh; overflow-y:auto; }
     .fx-dock { position:sticky; bottom:0; }
   }
+  /* A chat: nothing to finish, so no goal card — the talk is the board, a filed hand-off beside it. */
+  .fx-grid.fx-chat { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
+  .fx-grid.fx-chat.has-out { grid-template-columns:minmax(0,1.7fr) minmax(0,1fr); }
+  .fx-grid.fx-chat > .c2 { grid-column:1; grid-row:1; }
+  .fx-grid.fx-chat > .c3 { grid-column:2; grid-row:1; }
+  .fx-grid.fx-chat:not(.has-out) .fx-talk .fx-body { padding-inline:max(0px, calc((100% - 960px) / 2)); }
   /* One card expanded: it takes the whole board; the status strip and the dock stay where they are. */
   .fx-grid.exp { display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); flex:1 1 0; }
   .fx-grid.exp > .fx-col { grid-column:1; grid-row:1; }
@@ -598,24 +606,55 @@
   .fx-q.ship .q { display:flex; align-items:baseline; gap:10px; font-size:16px; }
   .fx-q.ship .spin { font-style:normal; color:var(--accent); font-size:18px; width:18px; text-align:center; }
   .fx-q.ship .q span { font-weight:500; color:var(--muted); font-size:14px; }
-  /* Talk: your line, then what it said back. The newest answer reads in full, at the bottom. */
-  .fx-talk .turn { padding:10px 0; border-top:1px solid var(--line); }
-  .fx-talk .turn:first-child { border-top:0; padding-top:0; }
-  .fx-talk .turn.foldable { cursor:pointer; }
-  .fx-talk .tq { display:grid; grid-template-columns:44px 1fr; column-gap:8px; font-size:15px; line-height:1.45; color:var(--accent); font-weight:600; overflow-wrap:anywhere; white-space:pre-wrap; }
-  .fx-talk .tq time { font:12px ui-monospace,Menlo,monospace; color:var(--faint); font-weight:400; padding-top:3px; }
-  .fx-talk .tq.opening { display:block; font-size:11.5px; font-weight:750; letter-spacing:.09em; text-transform:uppercase; color:var(--faint); }
-  .fx-talk .ta { margin:6px 0 0 52px; }
-  .fx-talk .tq.opening + .ta, .fx-talk .tq.opening + .fx-more { margin-left:0; }
-  .fx-talk .fx-more { margin-left:52px; padding:4px 0 0; }
-  .fx-talk .ta.fx-sum { font-size:15.5px; }
-  .fx-talk .ta.folded { font-size:14px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .fx-talk .ta.wait { font-size:14px; color:var(--faint); }
+  /* Talk: a chat — your lines on the right, everything it says on the left, each with its time; what it
+     ran between two messages is one quiet line; while it works, what it is on now is the last line. */
+  .fx-talk .fx-body { display:flex; flex-direction:column; gap:12px; }
+  .tk { flex:none; min-width:0; }
+  .tk time { font:11.5px ui-monospace,Menlo,monospace; color:var(--faint); font-weight:400; }
+  .tk.you { align-self:flex-end; max-width:min(82%, 760px); display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
+  .tk.you .b { background:var(--accent-soft); color:var(--ink); border-radius:14px 14px 4px 14px; padding:8px 13px; font-size:15px; line-height:1.45; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .tk.you.seed .b { background:var(--surface-2); max-height:8.8em; overflow-y:auto; }
+  .tk.you .cap { font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); }
+  .tk.say { display:grid; grid-template-columns:44px minmax(0,1fr); column-gap:8px; }
+  .tk.say time { padding-top:4px; }
+  .tk.say .b { font-size:15.5px; line-height:1.5; }
+  .tk.say .b ul, .tk.say .b ol { margin:0 0 6px; padding-left:20px; }
+  .tk.say .b pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; }
+  .tk.acts { margin-left:52px; font-size:12.5px; color:var(--faint); cursor:pointer; }
+  .tk.acts:hover { color:var(--accent); }
+  .tk.acts ul { list-style:none; margin:5px 0 0; padding:0; display:flex; flex-direction:column; gap:2px; cursor:default; }
+  .tk.acts li { display:grid; grid-template-columns:44px minmax(0,1fr); column-gap:8px; font:12.5px ui-monospace,Menlo,monospace; color:var(--muted); }
+  .tk.acts li span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tk.live { margin-left:52px; display:flex; align-items:baseline; gap:8px; font-size:13px; color:var(--muted); min-width:0; }
+  .tk.live i { flex:none; width:8px; height:8px; border-radius:50%; background:var(--p-work,var(--accent)); align-self:center; }
+  body.blink .tk.live i { opacity:.3; }
+  .tk.live b { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:600 12.5px ui-monospace,Menlo,monospace; color:var(--ink); }
+  .tk.live .n { flex:none; color:var(--faint); cursor:pointer; }
+  .tk.live .n:hover { color:var(--accent); }
+  .tk.wait { align-self:flex-end; margin-top:-8px; font-size:12.5px; color:var(--faint); }
+  .tk-earlier { align-self:center; padding:0; }
+  .tk-topic { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:650; color:var(--ink); }
   .fx-talk .ta-show + .ta-show { margin-top:10px; }
   .fx-talk .ta-show .cap { font-size:14.5px; margin-bottom:6px; }
   .fx-talk .ta-show .fx-shots { grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); }
   .fx-talk .ta-show figcaption { text-transform:none; }
-  .fx-talk .ta-n { font-size:12.5px; font-weight:650; color:var(--accent); margin-right:6px; }
+  .tk.show { margin-left:52px; }
+  /* Activity: the status strip expanded — every step, stamped to the second, how long each took. */
+  .fx-act { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; }
+  .fx-act li { display:grid; grid-template-columns:70px minmax(0,1fr) auto; column-gap:10px; padding:3px 4px; border-radius:5px; font-size:14px; line-height:1.45; color:var(--ink); }
+  .fx-act li:hover { background:var(--surface-2); }
+  .fx-act time { font:12px ui-monospace,Menlo,monospace; color:var(--faint); padding-top:2px; }
+  .fx-act li span { min-width:0; overflow-wrap:anywhere; }
+  .fx-act li em { font:12px ui-monospace,Menlo,monospace; font-style:normal; color:var(--faint); padding-top:2px; }
+  .fx-act li em.now { color:var(--p-work,var(--accent)); font-weight:700; }
+  .fx-act li.act span { font:13px ui-monospace,Menlo,monospace; color:var(--muted); }
+  .fx-act li.act.live span { color:var(--ink); font-weight:650; }
+  .fx-act li.say span { color:var(--ink); }
+  .fx-act li.you span { color:var(--accent); font-weight:600; }
+  .fx-act li.err span { color:var(--danger); }
+  .fx-act li.ch { margin:6px 0 2px; }
+  .fx-act li.ch span { font-size:11.5px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); }
+  .fx-status .st-m { cursor:pointer; }
   /* Is it working: printing now (the dot blinks off the page's 1Hz clock) or quiet since when. */
   .fx-pulse { display:flex; align-items:baseline; gap:8px; font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:0; }
   .fx-pulse i { flex:none; width:8px; height:8px; border-radius:50%; background:var(--faint); align-self:center; }
@@ -902,6 +941,34 @@
   .log-asked, .log-sum { font-size:13px; color:var(--muted); margin-top:3px; }
   .log-right { display:flex; align-items:center; gap:8px; }
   .log-cost { font-size:13px; color:var(--faint); font-variant-numeric:tabular-nums; }
+  /* Open loops (⏰ in the bar): what is still open that no live terminal is asking about — parked work,
+     booked follow-ups, unanswered questions, then what runs on a clock (folded). One list, soonest first. */
+  #dlg-loops { width:min(820px,94vw); }
+  .loops { display:flex; flex-direction:column; max-height:72vh; overflow-y:auto; overscroll-behavior:contain; margin:0 -6px; }
+  .lp-sec { display:flex; align-items:center; gap:8px; margin:14px 6px 4px; font-size:11.5px; font-weight:750; letter-spacing:.09em; text-transform:uppercase; color:var(--faint); }
+  .lp-sec:first-child { margin-top:2px; }
+  .lp-sec .n { font:12px ui-monospace,Menlo,monospace; letter-spacing:0; color:var(--muted); }
+  .lp-sec button { border:0; background:none; padding:0; font:inherit; letter-spacing:inherit; text-transform:inherit; color:inherit; cursor:pointer; }
+  .lp-sec button:hover { color:var(--accent); }
+  .lp-row { display:grid; grid-template-columns:26px 1fr auto; gap:4px 10px; padding:9px 6px; border-radius:9px; align-items:start; cursor:pointer; }
+  .lp-row:hover { background:var(--surface-2); }
+  .lp-ico { font-size:15px; line-height:22px; text-align:center; color:var(--muted); }
+  .lp-t { font-size:15px; font-weight:650; line-height:1.4; color:var(--ink); overflow-wrap:anywhere; }
+  .lp-then { margin-top:2px; font-size:13.5px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere; }
+  .lp-then b { font-weight:650; color:var(--ink); }
+  .lp-meta { display:flex; flex-wrap:wrap; gap:3px 12px; margin-top:4px; font-size:12.5px; color:var(--faint); font-variant-numeric:tabular-nums; }
+  .lp-meta .ws { font-weight:650; }
+  .lp-meta .due { color:var(--warn); font-weight:650; }
+  .lp-meta .soon { color:var(--accent); font-weight:650; }
+  .lp-acts { display:flex; gap:6px; align-items:center; }
+  .lp-acts button { height:28px; padding:0 10px; border-radius:7px; border:1px solid var(--line); background:var(--surface); color:var(--muted); font:inherit; font-size:12.5px; font-weight:650; cursor:pointer; white-space:nowrap; }
+  .lp-acts button:hover { border-color:var(--accent); color:var(--accent); }
+  .lp-acts button.arm { border-color:var(--danger); color:var(--danger); }
+  .lp-opts { grid-column:2 / -1; display:flex; flex-wrap:wrap; gap:6px; margin-top:2px; }
+  .lp-opts button { height:30px; padding:0 12px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--ink); font:inherit; font-size:13.5px; font-weight:600; cursor:pointer; }
+  .lp-opts button:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
+  .lp-opts input { flex:1; min-width:180px; height:30px; padding:0 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font:inherit; font-size:13.5px; }
+  .lp-none { padding:18px 6px; font-size:14.5px; color:var(--faint); }
   .var-rows { display:flex; flex-direction:column; gap:6px; max-height:44vh; overflow:auto; }
   .var-row { display:flex; align-items:center; gap:8px; padding:7px 9px; border:1px solid var(--line); border-radius:9px; background:var(--bg); }
   .var-row .nm { font:14.5px ui-monospace,Menlo,monospace; font-weight:600; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
@@ -1561,6 +1628,7 @@
   <div class="tools">
     <button class="icon" id="btn-startday" title="Start the day — one terminal per workspace proposes today's work">☀️</button>
     <button class="icon" id="btn-robert" title="Robert (⌘K)">🤖</button><span class="fab-unread" id="fab-unread" hidden></span>
+    <button class="icon" id="btn-loops" title="Open loops — work parked on something, follow-ups, unanswered questions, what runs on a clock (L)">⏰</button><span class="fab-unread loops-n" id="loops-n" hidden></span>
     <button class="icon" id="btn-more" title="More">⋯</button>
   </div>
 </header>
@@ -1695,6 +1763,7 @@
           <option value="pr">PR</option>
           <option value="investigation">Investigation</option>
           <option value="qa">QA</option>
+          <option value="chat">Chat — just talk</option>
         </select>
       </label>
     </div>
@@ -1804,6 +1873,13 @@
   </div>
 </dialog>
 
+<dialog id="dlg-loops">
+  <div class="dlg">
+    <h3>Open loops <span class="hint" id="loops-sum"></span><button class="icon" id="loops-close" title="Close (⎋)" style="margin-left:auto">✕</button></h3>
+    <div id="loops-body" class="loops"></div>
+  </div>
+</dialog>
+
 <dialog id="dlg-keys">
   <div class="dlg">
     <h3>Keys</h3>
@@ -1816,6 +1892,7 @@
       <div><kbd>Y</kbd> <kbd>A</kbd> <kbd>N</kbd><span>answer the open prompt: first / second / last option (or y / n)</span></div>
       <div><kbd>C</kbd><span>continue a finished turn · <kbd>E</kbd> Esc into it (interrupts the turn)</span></div>
       <div><kbd>N</kbd><span>new terminal: pick CLI + model, type what it should do, ⏎ · empty ⏎ = blank · <kbd>⇧N</kbd> the full dialog</span></div>
+      <div><kbd>L</kbd><span>open loops: parked work, follow-ups, unanswered questions, what runs on a clock</span></div>
       <div><kbd>⇧L</kbd><span>new terminal, as a Lead — opens and drives its own terminals for this goal</span></div>
       <div><kbd>X</kbd><span>close the terminal you are in (goal done + kill; twice while it is working)</span></div>
       <div><kbd>⌘K</kbd><span>Robert · <kbd>⌘⇧K</kbd> full screen ↔ docked (⎋ in his box goes back too)</span></div>
@@ -2136,6 +2213,7 @@ const KIND_TIP = {
   pr: "PR — done when a pull request is open with green tests",
   investigation: "Investigation — done when there's an answer with evidence, no code changes unless asked",
   qa: "QA — done when there's a verdict: what passed, what failed, how to reproduce",
+  chat: "Chat — talking it through: no finish line, no hand-off unless you ask for one",
 };
 // Claude's permission menu, as the daemon reads it off the screen (status.permission). The terminal is
 // never quiet while that menu is up — the pending tool's ⏺ blinks — so s.prompt never carries it.
@@ -2293,6 +2371,7 @@ function render() {
   ensureActive();
   renderStage();
   syncBadge();
+  loopsBadge();
   DeskCockpit.refresh(4000); // a terminal opened or ended: its PRs may have moved (renderCounts repaints the rest)
 }
 function renderCounts() {
@@ -2746,7 +2825,7 @@ async function goalsLoad(id, total) {
 const D = { id: null, asks: [], outcome: null, earlier: [], shown: [], dialog: null, at: 0, busy: false, sig: "", all: false, armShip: 0, drafts: new Map() };
 // The board's layout: which card is expanded over it (null = the whole board), which earlier hand-offs
 // are open, and where each scrolling card was — a repaint rebuilds the cards and must not jump them.
-const FX = { id: null, exp: null, hopen: new Set(), scroll: new Map(), zoom: new Set() };
+const FX = { id: null, exp: null, hopen: new Set(), scroll: new Map(), zoom: new Set(), actAll: false };
 const decisionsSig = (s) => [s.id, s.status?.phase, s.status?.asks || 0, s.status?.line || "", s.outcome_at || "", s.shown_at || "", s.state, s.prompt?.question || ""].join("|");
 async function decisionsLoad(s, force) {
   if (!s) return;
@@ -2908,8 +2987,9 @@ function focusStatus(s) {
   const color = need ? NEED_COLOR[need.k] : COMP_PH_COLOR[ph] || "var(--line)";
   return `<section class="fx-status${need ? " need" : ""}" style="--nc:${color}">`
     + `<div class="st-l">${chip}</div>`
-    + `<div class="st-m"><div class="st-line" title="${esc(line)}">${esc(line)}</div>${pulseHtml(s)}</div>`
+    + `<div class="st-m" data-fexp="act" title="Everything it has done — live, by the second (click)"><div class="st-line" title="${esc(line)}">${esc(line)}</div>${pulseHtml(s)}</div>`
     + `<div class="st-r"><span title="how long this terminal has been running">⏱ ${s.live ? "" : "ran "}${ran}</span>${eta}`
+    + (F.id === s.id && F.events.length ? `<button type="button" class="fx-exp" data-fexp="act" title="${FX.exp === "act" ? "Back to the whole board (Esc)" : "Everything it has done — live, by the second"}">${FX.exp === "act" ? "⤡ Back to board" : "⤢ Activity"}</button>` : "")
     + (others ? `<button type="button" class="st-others" data-fnext title="the next terminal that needs you (⌘J)">${others} more need${others === 1 ? "s" : ""} you · ⌘J</button>` : "")
     + `</div></section>`;
 }
@@ -2987,89 +3067,115 @@ async function answerDialog(s, i, text, more) {
   if (more) { s.prompt = null; renderStory(); toast("answered"); } else advance(s.id, "answered");
 }
 
-// ③ Talk: what you said to it along the way and what it said back, paired — a question asked mid-run
-// and its answer, or a brainstorm. The newest exchange is open in full; older ones fold to a line.
-// Images it `mc show`ed sit under the answer of the turn they arrived in.
-const T = { id: null, open: new Set(), all: false, pending: null, follow: false, sig: "", shows: "" };
-function talkTurns(s) {
-  const turns = [];
-  let cur = null;
-  const firstUser = F.events.find((e) => e.kind === "user");
-  for (const e of F.events) {
-    if (e.kind === "user") {
-      // The daemon types too — the cache keeper's `/compact`, a `[chronos budget]` notice — and neither is
-      // you talking. Slash commands are mechanics.
-      if (SYS_LINE.test(e.text) || DAEMON_LINE.test(e.text)) continue;
-      const t = cleanUser(e.text); if (!t) continue;
-      if (cur && !cur.says.length && norm(cur.you) === norm(t)) continue;
-      // The first line of a terminal opened WITH a goal is the daemon's seed (goal + contract), not you
-      // talking. A blank terminal's first line is yours, and shows like any other.
-      cur = { seq: e.seq, at: e.ts || 0, you: t, opening: e === firstUser && !!s.spawn_goal, says: [], cut: 0 };
-      turns.push(cur);
-    } else if (e.kind === "act" || e.kind === "say" || e.kind === "understanding" || e.kind === "result") {
-      if (!cur) { cur = { seq: e.seq, at: e.ts || 0, you: "", opening: true, says: [], cut: 0 }; turns.push(cur); }
-      // Its answer is what it wrote after its last tool call (a reply and its Summary are two events
-      // of one message); what it said between calls is narration, folded above the answer.
-      if (e.kind === "act") cur.cut = cur.says.length;
-      else cur.says.push(e);
-    }
-  }
-  const out = turns.filter((t) => t.says.length || !t.opening);
-  // A show belongs to the last turn that began before it. One sent before you ever spoke opens the card.
-  const shown = D.id === s.id ? D.shown : [];
-  for (const sh of shown) {
-    const at = Date.parse(sh.at) || 0;
-    let t = null;
-    for (const x of out) if (!x.at || x.at <= at) t = x;
-    if (!t) { t = out[0]?.opening ? out[0] : { seq: -1, at, you: "", opening: true, says: [], cut: 0 }; if (t !== out[0]) out.unshift(t); }
-    (t.shows ||= []).push(sh);
-  }
-  return out;
-}
+// ③ Talk: the conversation as a chat — every line you sent it (right) and everything it said back
+// (left), in order, each with its time. What it did between two messages folds to one quiet line
+// ("3 commands · 2 edits", click to list them); while it works, what it is doing right now is the last
+// line, so Talk never sits silent over a busy agent. Images it `mc show`ed land where they arrived.
+// Leo, 2026-10-30: Talk has to be more present — "easier to read all my messages plus the talk from
+// the model"; it used to keep only the answer after the last tool call and fold the rest away.
+const T = { id: null, all: false, open: new Set(), pending: null, follow: false, sig: "", shows: "" };
+const TALK_MAX = 80;
 // What it showed, as the hand-off draws its screenshots: click one to see it whole.
 const showsHtml = (list) => list.map((sh) => `<div class="ta-show">${sh.caption ? `<div class="cap">${md(sh.caption)}</div>` : ""}<div class="fx-shots">`
   + sh.shots.map((x) => `<figure data-shotzoom="${esc(x.name)}"${FX.zoom.has(x.name) ? ` class="zoom"` : ""}><img data-shot="${esc(x.name)}" alt="${esc(x.label)}"><figcaption>${esc(x.label)}</figcaption></figure>`).join("")
   + `</div></div>`).join("");
 const sayText = (e) => stripLead(stripLead(stripLead(e.text, "understanding"), "result"), "summary");
+function talkThread(s) {
+  const items = [];
+  let acts = [], errs = 0, lastYou = "";
+  const firstUser = F.events.find((e) => e.kind === "user");
+  const flush = () => { if (acts.length || errs) items.push({ k: "acts", acts, errs, at: acts[0]?.at || 0, key: "a" + (acts[0]?.seq ?? items.length) }); acts = []; errs = 0; };
+  for (const e of F.events) {
+    if (e.kind === "user") {
+      // The daemon types too — the cache keeper's `/compact`, a `[chronos budget]` notice — and neither
+      // is you talking. Slash commands are mechanics.
+      if (SYS_LINE.test(e.text) || DAEMON_LINE.test(e.text)) continue;
+      // A terminal opened WITH a goal starts with the daemon's seed (goal + contract): it shows as the
+      // goal you gave it. A blank terminal's first line is yours, like any other.
+      const seed = e === firstUser && !!s.spawn_goal;
+      const t = seed ? String(s.spawn_goal).trim() : cleanUser(e.text);
+      if (!t || norm(t) === lastYou) continue;
+      flush();
+      lastYou = norm(t);
+      items.push({ k: "you", text: t, at: e.ts || 0, seq: e.seq, seed });
+    } else if (e.kind === "act") {
+      const a = cleanAct(e.text);
+      if (a && !isNoiseAct(a)) acts.push({ text: a, at: e.ts || 0, seq: e.seq });
+    } else if (e.kind === "error") errs++;
+    else if (e.kind === "say" || e.kind === "understanding" || e.kind === "result") {
+      flush();
+      lastYou = "";
+      items.push({ k: "say", text: sayText(e), at: e.ts || 0, seq: e.seq });
+    }
+  }
+  flush();
+  // A show goes after the last thing that happened before it; with no stamps to place it, at the end.
+  for (const sh of D.id === s.id ? D.shown : []) {
+    const at = Date.parse(sh.at) || 0;
+    let i = items.length;
+    if (at && items.some((x) => x.at)) { i = 0; items.forEach((x, j) => { if (x.at && x.at <= at) i = j + 1; }); }
+    items.splice(i, 0, { k: "show", sh, at });
+  }
+  return items;
+}
+// What it is doing this second, while it works: its newest tool call (if nothing came after it), else
+// that it is thinking or writing. Null when its turn is over.
+function talkNow(s, items) {
+  if (!s.live || s.focus_only || phaseOf(s) !== "working") return null;
+  const last = items[items.length - 1];
+  const act = last?.k === "acts" && last.acts.length ? last.acts[last.acts.length - 1] : null;
+  return act ? { text: TermCompanion.actPhrase(act.text), at: act.at } : { text: s.quiet === false ? "thinking…" : "working…", at: 0 };
+}
+const actsWord = (g) => (g.acts.length ? foldActs(g.acts.map((a) => a.text)) : "") + (g.errs ? `${g.acts.length ? " · " : ""}${g.errs} failed` : "");
 function focusTalk(s) {
-  if (T.id !== s.id) Object.assign(T, { id: s.id, open: new Set(), all: false, pending: null, follow: false, sig: "", shows: "" });
+  if (T.id !== s.id) Object.assign(T, { id: s.id, all: false, open: new Set(), pending: null, follow: false, sig: "", shows: "" });
   T.shows = "";
   if (F.id !== s.id) return "";
-  const turns = talkTurns(s);
+  const items = talkThread(s);
   // Your line from the composer, until its own record lands in the transcript.
-  if (T.pending && turns.some((t) => !t.opening && norm(t.you) === norm(T.pending.text) && (!t.at || t.at >= T.pending.at - 10000))) T.pending = null;
-  // Its column stays on the board either way: an empty card says where your words will show.
-  if (!turns.length && !T.pending)
-    return s.live ? `<section class="fx fx-talk"><div class="fx-top"><span class="fx-lbl">Talk</span></div><div class="fx-body"><div class="fx-wait">Nothing said yet — what you type below shows here, with its answer under it.</div></div></section>` : "";
-  const working = s.live && s.quiet === false;
-  const last = turns[turns.length - 1];
-  const shown = T.all ? turns : turns.slice(-6);
-  const qLine = (t) => t.opening ? `<div class="tq opening">from the start</div>`
-    : `<div class="tq"><time>${esc(t.at ? TermCompanion.hhmm(t.at) : "")}</time><span>${esc(clip(t.you, 600))}</span></div>`;
-  const rows = shown.map((t) => {
-    const newest = t === last && !T.pending;
-    let a;
-    const shows = t.shows || [];
-    const nImg = shows.reduce((n, sh) => n + sh.shots.length, 0);
-    if (!t.says.length) a = shows.length ? "" : `<div class="ta wait">${newest && working ? "working on it…" : "nothing said back yet"}</div>`;
-    else if (newest || T.open.has(t.seq)) {
-      const words = t.says.map(sayText);
-      const from = t.cut < words.length ? t.cut : words.length - 1;
-      const every = T.open.has("w" + t.seq);
-      const body = (every ? words : words.slice(from)).join("\n\n");
-      if (newest) T.shows = words.slice(from).join("\n\n");
-      a = (from > 0 ? `<button type="button" class="fx-more" data-tw="${t.seq}">${every ? "only its answer" : `+ ${from} earlier note${from === 1 ? "" : "s"}`}</button>` : "")
-        + `<div class="ta fx-sum">${md(body)}</div>`;
-    } else a = `<div class="ta folded">${nImg ? `<span class="ta-n">🖼 ${nImg}</span>` : ""}${esc(clip(plainLine(sayText(t.says[t.says.length - 1])), 220))}</div>`;
-    if (shows.length && (newest || T.open.has(t.seq) || !t.says.length)) a += `<div class="ta">${showsHtml(shows)}</div>`;
-    const fold = !newest && t.says.length ? ` data-topen="${t.seq}" title="${T.open.has(t.seq) ? "fold" : "open the whole answer"}"` : "";
-    return `<div class="turn${newest ? " last" : ""}${fold ? " foldable" : ""}"${fold}>${qLine(t)}${a}</div>`;
+  if (T.pending && items.some((x) => x.k === "you" && !x.seed && norm(x.text) === norm(T.pending.text) && (!x.at || x.at >= T.pending.at - 10000))) T.pending = null;
+  // What it said since your last line — the hand-off card checks it so its Result is not printed twice.
+  const lastYou = items.map((x) => x.k).lastIndexOf("you");
+  T.shows = items.slice(lastYou + 1).filter((x) => x.k === "say").map((x) => x.text).join("\n\n");
+  const now = talkNow(s, items);
+  const chat = s.goal_kind === "chat";
+  const top = `<div class="fx-top"><span class="fx-lbl">${chat ? "Chat" : "Talk"}</span>`
+    + (chat && s.goal ? `<span class="tk-topic" title="${esc(s.goal)}">${esc(clip(s.goal, 120))}</span>` : "")
+    + `<span class="sp"></span>`
+    + (chat && s.live ? `<button type="button" class="fx-exp" data-ftask title="Ask it to turn this into a task: a goal, a finish line, a hand-off">Make it a task</button>` : "")
+    + (chat ? "" : expBtn("talk")) + `</div>`;
+  if (!items.length && !T.pending && !now)
+    return s.live ? `<section class="fx fx-talk">${top}<div class="fx-body"><div class="fx-wait">Nothing said yet — what you type below shows here, with its answer under it.</div></div></section>` : "";
+  const shown = T.all || items.length <= TALK_MAX ? items : items.slice(-TALK_MAX);
+  const when = (at) => (at ? `<time>${esc(TermCompanion.hhmm(at))}</time>` : `<time></time>`);
+  const rows = shown.map((x, i) => {
+    if (x.k === "you") return `<div class="tk you${x.seed ? " seed" : ""}">${x.seed ? `<div class="cap">the goal you opened it with</div>` : ""}<div class="b">${esc(clip(x.text, x.seed ? 1200 : 4000))}</div>${when(x.at)}</div>`;
+    if (x.k === "say") return `<div class="tk say">${when(x.at)}<div class="b fx-sum">${md(x.text)}</div></div>`;
+    if (x.k === "show") return `<div class="tk show">${showsHtml([x.sh])}</div>`;
+    // Its tool calls between two messages: one line, the list on a click. The trailing group of a
+    // terminal still working is the "now" line below instead.
+    if (now && i === shown.length - 1 && !T.open.has(x.key)) return now.at ? "" : `<div class="tk acts" data-tacts="${esc(x.key)}">· ${esc(actsWord(x))}</div>`;
+    const open = T.open.has(x.key);
+    return `<div class="tk acts${open ? " open" : ""}" data-tacts="${esc(x.key)}" title="${open ? "fold" : "what it ran"}">· ${esc(actsWord(x))}`
+      + (open ? `<ul>${x.acts.map((a) => `<li>${when(a.at)}<span>${esc(a.text)}</span></li>`).join("")}</ul>` : "") + `</div>`;
   });
-  if (T.pending) rows.push(`<div class="turn last"><div class="tq"><time>${esc(TermCompanion.hhmm(T.pending.at))}</time><span>${esc(clip(T.pending.text, 600))}</span></div><div class="ta wait">sent — waiting for it to answer…</div></div>`);
-  return `<section class="fx fx-talk${FX.exp === "talk" ? " exp" : ""}"><div class="fx-top"><span class="fx-lbl">Talk</span><span class="sp"></span>`
-    + (turns.length > 6 ? `<button type="button" class="fx-more" data-tall>${T.all ? "only the last 6" : "all " + turns.length}</button>` : "")
-    + expBtn("talk")
-    + `</div><div class="fx-body" data-keep="talk" data-stick>${rows.join("")}</div></section>`;
+  if (shown.length < items.length) rows.unshift(`<button type="button" class="fx-more tk-earlier" data-tall>↑ ${items.length - shown.length} earlier</button>`);
+  else if (T.all && items.length > TALK_MAX) rows.unshift(`<button type="button" class="fx-more tk-earlier" data-tall>only the newest ${TALK_MAX}</button>`);
+  if (T.pending) {
+    // Sent as "send now" (a working Claude): its running step went to the background and it answers in
+    // this turn. Any other CLI reads a line typed mid-turn only when its current tool call ends.
+    const why = T.pending.now ? "sent now — what it was running moved to the background; it answers in a moment…"
+      : now?.at ? `queued — it reads this when “${clip(now.text, 70)}” ends` : now ? "sent — it reads this in a moment…" : "sent — waiting for its answer…";
+    rows.push(`<div class="tk you">${`<div class="b">${esc(clip(T.pending.text, 4000))}</div>`}<time>${esc(TermCompanion.hhmm(T.pending.at))}</time></div><div class="tk wait">${esc(why)}</div>`);
+  }
+  if (now) {
+    const last = items[items.length - 1];
+    const n = last?.k === "acts" ? last.acts.length : 0;
+    rows.push(`<div class="tk live"><i></i><b title="${esc(now.text)}">${esc(clip(now.text, 160))}</b>`
+      + (now.at ? `<time data-clock="ago" data-at="${now.at}">${esc(elapsedOf(now.at))}</time>` : "")
+      + (n > 1 ? `<span data-tacts="${esc(last.key)}" class="n">${n} steps since it last spoke</span>` : "") + `</div>`);
+  }
+  return `<section class="fx fx-talk${FX.exp === "talk" ? " exp" : ""}">${top}<div class="fx-body" data-keep="talk" data-stick>${rows.join("")}</div></section>`;
 }
 // ⤢ on a card that can grow: it takes the whole board; ⤡ (or Esc) gives the board back.
 const expBtn = (k) => `<button type="button" class="fx-exp" data-fexp="${k}" title="${FX.exp === k ? "Back to the whole board (Esc)" : "Expand — read it all"}">${FX.exp === k ? "⤡ Back to board" : "⤢ Expand"}</button>`;
@@ -3077,13 +3183,74 @@ const expBtn = (k) => `<button type="button" class="fx-exp" data-fexp="${k}" tit
 // Talk scrolls inside its card, so "into view" is that card's bottom — never the page.
 function talkFollow() {
   if (!T.follow) return;
-  const el = qs("#story .fx-talk .turn.last"); if (!el) return;
-  const sig = (T.pending ? "p" : "r") + el.textContent.length;
+  const box = qs("#story .fx-talk .fx-body"); if (!box) return;
+  const sig = (T.pending ? "p" : "r") + box.scrollHeight;
   if (sig === T.sig) return;
-  const first = !T.sig || T.sig[0] !== sig[0];
   T.sig = sig;
-  const box = el.closest(".fx-body");
-  if (first && box) box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top - 8;
+  box.scrollTop = box.scrollHeight;
+  if (!T.pending) T.follow = false;
+}
+// A line to the agent from the board. While a Claude terminal is working, it goes as "send now"
+// (Claude Code's Ctrl+X Ctrl+S): whatever it is running — a long command, a subagent — moves to the
+// background and it reads your line in the same turn, instead of after that step ends (measured on
+// Claude Code 2.1.314: a question during a 100s command was answered in ~5s, not ~35s). Leo,
+// 2026-10-30: "agents never block the talk… it should run on the background so they can still answer".
+const sendsNow = (s) => s.backend === "claude-code" && phaseOf(s) === "working";
+function talkSend(s, text) {
+  if (!s?.live || !text) return;
+  const now = sendsNow(s);
+  answer(s.id, { text, enter: true, ...(now ? { now: true } : {}) });
+  if (S.mode === "focus") {
+    if (T.id !== s.id) Object.assign(T, { id: s.id, all: false, open: new Set(), shows: "" });
+    Object.assign(T, { pending: { text, at: Date.now(), now }, follow: true, sig: "" });
+    renderStory();
+  }
+}
+const TASK_LINE = "Let's turn this into a task: set the goal and its finish line with `mc goal set \"<outcome>\" --kind pr|investigation|qa --done-when \"<check>\"`, then work toward it and hand off with `mc outcome`.";
+
+// The status strip, expanded (Leo, 2026-10-30: "see live what it is doing, and by timestamp what it
+// was doing before"): every step of this terminal in order — what it ran or edited, what it said, what
+// you said, what failed, the phases this page watched it move through — stamped to the second, with
+// how long each step took and a running clock on the one it is on now. Newest at the bottom.
+const hmsAt = (at) => { if (!at) return ""; const d = new Date(at), p = (n) => String(n).padStart(2, "0"); return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+const ACT_MAX = 400;
+const LINK_ACT = /^printed\s+(https?:\/\/\S+)$/;
+function focusActivity(s) {
+  const evs = F.events.filter((e) => e.kind !== "think");
+  const chs = C.id === s.id ? C.chapters : [];
+  const firstUser = evs.find((e) => e.kind === "user");
+  const working = s.live && phaseOf(s) === "working";
+  const rows = [];
+  let ci = 0;
+  const li = (cls, at, html, tail = "") => rows.push(`<li class="${cls}"><time>${hmsAt(at)}</time><span>${html}</span>${tail}</li>`);
+  for (let i = 0; i < evs.length; i++) {
+    const e = evs[i], at = e.ts || 0;
+    while (ci < chs.length && at && (chs[ci].at || 0) <= at) { const c = chs[ci++]; li("ch", c.at, `${esc(PH_WORD[c.phase] || c.phase)}${c.line ? " — " + esc(clip(c.line, 160)) : ""}`); }
+    // How long a step took: until the next thing happened. The last, while it works, is running now.
+    const next = evs[i + 1]?.ts || 0;
+    const live = working && i === evs.length - 1 && at;
+    const took = live ? `<em class="now" data-clock="ago" data-at="${at}">${esc(elapsedOf(at))}</em>`
+      : next && at && next - at >= 3000 ? `<em>${esc(TermCompanion.elapsed(next - at))}</em>` : "";
+    if (e.kind === "act") {
+      const a = cleanAct(e.text); if (!a || isNoiseAct(a)) continue;
+      const link = LINK_ACT.exec(a);
+      li("act" + (live ? " live" : ""), at, link ? `printed <a href="${esc(link[1])}">${esc(link[1])}</a>` : esc(TermCompanion.actPhrase(a)), took);
+    } else if (e.kind === "error") li("err", at, esc(clip(TermCompanion.plainText(e.text), 300)), took);
+    else if (e.kind === "user") {
+      if (SYS_LINE.test(e.text) || DAEMON_LINE.test(e.text)) continue;
+      const seed = e === firstUser && !!s.spawn_goal;
+      li("you", at, (seed ? "you opened it: " : "you: ") + esc(clip(seed ? s.spawn_goal : cleanUser(e.text), 300)), took);
+    } else li("say", at, esc(clip(TermCompanion.plainText(e.text), 400)), took);
+  }
+  for (; ci < chs.length; ci++) { const c = chs[ci]; li("ch", c.at, `${esc(PH_WORD[c.phase] || c.phase)}${c.line ? " — " + esc(clip(c.line, 160)) : ""}`); }
+  const shown = FX.actAll || rows.length <= ACT_MAX ? rows : rows.slice(-ACT_MAX);
+  const first = evs.find((e) => e.ts)?.ts || 0;
+  return `<section class="fx fx-actv exp"><div class="fx-top"><span class="fx-lbl">Activity</span>`
+    + `<span class="n">${rows.length} step${rows.length === 1 ? "" : "s"}${first ? " since " + esc(TermCompanion.hhmm(first)) : ""}</span><span class="sp"></span>${expBtn("act")}</div>`
+    + `<div class="fx-body" data-keep="act" data-stick>`
+    + (shown.length < rows.length ? `<button type="button" class="fx-more" data-actall>↑ ${rows.length - shown.length} earlier</button>` : "")
+    + (rows.length ? `<ol class="fx-act">${shown.join("")}</ol>` : `<div class="fx-wait">Nothing yet — every step it takes lands here as it happens.</div>`)
+    + `</div></section>`;
 }
 // ② What it needs from you now — its asks (answerable here even while Robert still has them), the
 // question dialog or menu on its screen, a wall. These are the dock's: the bottom of the board, the
@@ -3272,14 +3439,21 @@ function renderStory() {
   const act = document.activeElement;
   const typing = act?.matches?.("#story input[data-atext]") ? { sel: `input[data-atext="${CSS.escape(act.dataset.atext)}"]`, pos: act.selectionStart }
     : act?.matches?.("#story input[data-dtext]") ? { sel: "input[data-dtext]", pos: act.selectionStart } : null;
-  if (FX.id !== s.id) Object.assign(FX, { id: s.id, exp: null, hopen: new Set(), scroll: new Map(), zoom: new Set() });
+  if (FX.id !== s.id) Object.assign(FX, { id: s.id, exp: FX.exp === "act" ? "act" : null, hopen: new Set(), scroll: new Map(), zoom: new Set(), actAll: false });
   // Where each scrolling card was, and whether it sat at its bottom (Talk and Decided follow the newest).
   for (const el of qsa("[data-keep]", body)) if (el.clientHeight) FX.scroll.set(el.dataset.keep, { top: el.scrollTop, end: el.scrollHeight - el.scrollTop - el.clientHeight < 24 });
   const out = focusOutcome(s);
-  const grid = `<div class="fx-grid${out && !out.includes("fx-out wait") ? " has-out" : ""}${FX.exp ? " exp" : ""}">`
-    + `<div class="fx-col c1">${focusGoal(s)}${focusDecided(s)}</div>`
-    + `<div class="fx-col c2${FX.exp === "talk" ? " holds-exp" : ""}">${focusTalk(s)}</div>`
-    + `<div class="fx-col c3${FX.exp === "out" ? " holds-exp" : ""}">${out}</div></div>`;
+  const ready = !!out && !out.includes("fx-out wait");
+  // No hand-off yet: its "lands here when done" line sits under the goal and Talk takes the room.
+  // A chat (goal kind "chat"): nothing to finish, so no goal card — the talk is the board, with a
+  // hand-off beside it if one is filed. Activity (the status strip's ⤢) takes the board like any card.
+  const chat = s.goal_kind === "chat";
+  const c2 = `<div class="fx-col c2${FX.exp === "talk" ? " holds-exp" : ""}">${focusTalk(s)}</div>`;
+  const c3 = ready ? `<div class="fx-col c3${FX.exp === "out" ? " holds-exp" : ""}">${out}</div>` : "";
+  const grid = FX.exp === "act"
+    ? `<div class="fx-grid exp"><div class="fx-col c1 holds-exp">${focusActivity(s)}</div></div>`
+    : `<div class="fx-grid${chat ? " fx-chat" : ""}${ready ? " has-out" : ""}${FX.exp ? " exp" : ""}">`
+      + (chat ? "" : `<div class="fx-col c1">${focusGoal(s)}${focusDecided(s)}${ready ? "" : out}</div>`) + c2 + c3 + `</div>`;
   body.innerHTML = focusStatus(s) + grid + focusDock(s);
   // An expanded card that is not on the board any more (no Talk yet, no hand-off) gives the board back.
   if (FX.exp && !qs(".fx.exp", body)) { FX.exp = null; return renderStory(); }
@@ -3342,16 +3516,16 @@ qs("#story").addEventListener("click", (e) => {
   const a = e.target.closest("[data-aans]"); if (a) return answerAskFromFocus(s, a.dataset.aans, a.dataset.v);
   const dq = e.target.closest("[data-dopt]"); if (dq) return answerDialog(s, Number(dq.dataset.dopt), null, dq.hasAttribute("data-dmore"));
   if (e.target.closest("a")) return;
-  const tw = e.target.closest("[data-tw]"); if (tw) { const k = "w" + tw.dataset.tw; if (T.open.has(k)) T.open.delete(k); else T.open.add(k); return renderStory(); }
+  const ta = e.target.closest("[data-tacts]"); if (ta && !String(window.getSelection?.() || "")) { const k = ta.dataset.tacts; if (!T.open.delete(k)) T.open.add(k); return renderStory(); }
   if (e.target.closest("[data-tall]")) { T.all = !T.all; return renderStory(); }
-  // An image zooms — inside an opened older turn too, which a click anywhere else folds.
+  if (e.target.closest("[data-actall]")) { FX.actAll = !FX.actAll; return renderStory(); }
+  if (e.target.closest("[data-ftask]")) return talkSend(s, TASK_LINE);
+  // An image zooms.
   const z = e.target.closest("[data-shotzoom]");
   if (z) { const k = z.dataset.shotzoom; if (k && !FX.zoom.delete(k)) FX.zoom.add(k); z.classList.toggle("zoom"); return; }
-  const to = e.target.closest("[data-topen]");
-  if (to && !String(window.getSelection?.() || "")) { const k = Number(to.dataset.topen); if (T.open.has(k)) T.open.delete(k); else T.open.add(k); return renderStory(); }
   const sh = e.target.closest("[data-ship]"); if (sh) return setShip(s, sh.dataset.ship);
   if (e.target.closest("[data-fterm]")) return setMode("term");
-  const fx = e.target.closest("[data-fexp]"); if (fx) return focusExpand(fx.dataset.fexp);
+  const fx = e.target.closest("[data-fexp]"); if (fx && !String(window.getSelection?.() || "")) return focusExpand(fx.dataset.fexp);
   if (e.target.closest("[data-fnext]")) return step(1, true);
   if (e.target.closest("[data-shipclear]")) { shipEnd(s.id); return renderStory(); }
   const ho = e.target.closest("[data-hopen]");
@@ -4211,12 +4385,9 @@ qs("#composer").addEventListener("submit", (e) => {
   e.preventDefault();
   const text = say.value.trim(); if (!text || !S.active) return;
   say.value = ""; say.style.height = "auto";
-  answer(S.active, { text, enter: true });
-  if (S.mode === "focus" && byId(S.active)?.live) {
-    if (T.id !== S.active) Object.assign(T, { id: S.active, open: new Set(), all: false, shows: "" });
-    Object.assign(T, { pending: { text, at: Date.now() }, follow: true, sig: "" });
-    renderStory();
-  }
+  const s = byId(S.active);
+  if (!s?.live) return answer(S.active, { text, enter: true });
+  talkSend(s, text);
 });
 
 // ── dropping a file on a terminal ────────────────────────────────────────────────────────────
@@ -5674,6 +5845,171 @@ async function openLog() {
 qs("#btn-log").onclick = openLog;
 qs("#log-since").onchange = openLog;
 qs("#log-close").onclick = () => qs("#dlg-log").close();
+
+// ── open loops ───────────────────────────────────────────────────────────────────────────────
+// Everything still open that the rail does not show as a live terminal asking: work parked on a
+// condition (`mc when` — src/continuations.ts), notes with a follow-up booked (jot-followup.ts),
+// questions nobody has answered (an ask outlives its terminal), and what runs on a clock (cron jobs,
+// folded). Leo, 2026-10-30: "super important to me to see what things are still open and need
+// follow-ups". Read from the routes those features already serve; the ⏰ count is the first three.
+const LOOPS = { waits: [], asks: [], jobs: [], busy: false, jobsOpen: false, arm: "", armT: 0 };
+const WAIT_ICON = { pr: "⇡", terminal: "▣", ask: "?", at: "⏰", script: "⚙", check: "👁", manual: "✋" };
+const spanWord = (m) => (m < 60 ? m + "m" : m < 48 * 60 ? Math.round(m / 60) + "h" : Math.round(m / 1440) + "d");
+// "today 16:02 · in 3h" / "Mon 2 Nov 09:00 · in 3d" / "today 09:10 · 40m ago".
+function loopWhen(iso) {
+  const t = typeof iso === "number" ? iso : Date.parse(iso || ""); if (!t) return "";
+  const d = new Date(t);
+  const day = d.toDateString() === new Date().toDateString() ? "today" : d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  const m = Math.round((t - Date.now()) / 60000);
+  return `${day} ${TermCompanion.hhmm(t)} · ${m === 0 ? "now" : m > 0 ? "in " + spanWord(m) : spanWord(-m) + " ago"}`;
+}
+const loopFollowUps = () => S.jots.filter((j) => j.status === "open" && j.follow_up_at && !j.followed_up_at);
+// When a wait next moves: an `at` fires at its time; the rest are checked on a cadence.
+const waitNext = (c) => Date.parse((c.kind === "at" ? c.target : c.next_check_at) || "") || Date.parse(c.timeout_at || "") || Infinity;
+async function loopsLoad() {
+  if (LOOPS.busy) return;
+  LOOPS.busy = true;
+  try {
+    const [w, a, j] = await Promise.all([
+      api("/continuations").catch(() => null),
+      api("/asks?status=open").catch(() => null),
+      api("/jobs?kind=operator").catch(() => null),
+    ]);
+    if (Array.isArray(w)) LOOPS.waits = w.sort((x, y) => waitNext(x) - waitNext(y));
+    if (Array.isArray(a)) LOOPS.asks = a.sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)));
+    if (Array.isArray(j)) LOOPS.jobs = j.filter((x) => x.enabled && x.next_run).sort((x, y) => x.next_run.localeCompare(y.next_run));
+  } finally {
+    LOOPS.busy = false;
+    loopsBadge();
+    if (qs("#dlg-loops").open) loopsRender();
+  }
+}
+let loopsT = 0;
+const loopsSoon = () => { clearTimeout(loopsT); loopsT = setTimeout(loopsLoad, 800); };
+function loopsBadge() {
+  const n = LOOPS.waits.length + loopFollowUps().length + LOOPS.asks.length;
+  const b = qs("#loops-n");
+  b.textContent = n; b.hidden = !n;
+}
+// The terminal a loop belongs to, as a line: its title, and whether it is still open.
+function loopTerm(id) {
+  if (!id) return "";
+  const s = byId(id);
+  return s ? `${s.live ? "▣" : "▢"} ${esc(clip(title(s), 60))}${s.live ? "" : " (ended)"}` : `▢ terminal ${esc(id.slice(0, 8))} (ended)`;
+}
+const wsBit = (ws) => (ws ? `<span class="ws" style="color:${wsColor(ws)}">${esc(wsName(ws))}</span>` : "");
+function waitRow(c) {
+  const what = c.label || (c.kind === "script" ? "script: " + c.target : c.kind === "pr" ? "PR " + (c.target || "").replace(/^https:\/\/github\.com\//, "") + (c.until ? " → " + c.until : "") : c.target || c.kind);
+  const then = c.note || c.goal || "";
+  const meta = [wsBit(c.workspace_id), c.session_id ? loopTerm(c.session_id) : `<span>opens a new terminal</span>`];
+  if (c.status === "met") meta.push(`<span class="soon">met — continuing</span>`);
+  else if (c.kind === "at") meta.push(`<span class="soon">fires ${esc(loopWhen(c.target))}</span>`);
+  else {
+    if (c.next_check_at) meta.push(`<span>next check ${esc(loopWhen(c.next_check_at))}</span>`);
+    if (c.checks) meta.push(`<span>checked ${c.checks}×</span>`);
+  }
+  if (c.timeout_at) meta.push(`<span>gives up ${esc(loopWhen(c.timeout_at))}</span>`);
+  meta.push(`<span>parked by ${esc(String(c.created_by || "").replace(/^agent:/, "terminal "))} ${esc(age(c.created_at))} ago</span>`);
+  const armed = LOOPS.arm === "x" + c.id && Date.now() - LOOPS.armT < 3000;
+  return `<div class="lp-row" data-lsel="${esc(c.session_id || "")}"><span class="lp-ico" title="${esc(c.kind)}">${WAIT_ICON[c.kind] || "·"}</span>`
+    + `<div><div class="lp-t">${esc(clip(what, 240))}</div>`
+    + (then ? `<div class="lp-then"><b>then</b> ${esc(clip(then, 260))}</div>` : "")
+    + (c.last_check && c.kind !== "at" ? `<div class="lp-then">last look: ${esc(clip(c.last_check, 200))}</div>` : "")
+    + `<div class="lp-meta">${meta.join("")}</div></div>`
+    + `<div class="lp-acts">${c.status === "armed" ? `<button type="button" data-lfire="${esc(c.id)}" title="It is met — continue the work now">Fire now</button>` : ""}`
+    + `<button type="button" data-lcancel="${esc(c.id)}" class="${armed ? "arm" : ""}" title="Stop waiting — nothing continues">${armed ? "Cancel? again" : "Cancel"}</button></div></div>`;
+}
+function followRow(j) {
+  const due = Date.parse(j.follow_up_at) <= Date.now();
+  return `<div class="lp-row" data-lfollow="${esc(j.id)}"><span class="lp-ico">📝</span>`
+    + `<div><div class="lp-t">${esc(clip(j.title, 240))}</div>`
+    + (j.follow_up_check ? `<div class="lp-then"><b>check</b> ${esc(clip(j.follow_up_check, 220))}</div>` : "")
+    + `<div class="lp-meta">${wsBit(j.workspace_id)}<span class="${due ? "due" : "soon"}">${due ? "due " : "opens a terminal "}${esc(loopWhen(j.follow_up_at))}</span></div></div>`
+    + `<div class="lp-acts"><button type="button" data-lfollow="${esc(j.id)}" title="Change or clear the time">Edit</button></div></div>`;
+}
+// /asks hands options back as the stored JSON text, /decisions as an array.
+const askOptions = (a) => { if (Array.isArray(a.options)) return a.options; try { const v = JSON.parse(a.options || "[]"); return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
+function askRow(a) {
+  const who = a.for_operator ? "for you" : a.route === "lead" ? "its Lead has it" : "Robert has it";
+  const opts = askOptions(a).map((o) => `<button type="button" data-laans="${esc(a.id)}" data-v="${esc(o)}">${esc(clip(o, 60))}</button>`).join("");
+  return `<div class="lp-row" data-lsel="${esc(a.session_id || "")}"><span class="lp-ico">?</span>`
+    + `<div><div class="lp-t">${esc(clip(a.question, 300))}</div>`
+    + `<div class="lp-meta">${wsBit(a.workspace_id)}${a.session_id ? loopTerm(a.session_id) : a.ticket_key ? `<span>${esc(a.ticket_key)}</span>` : "<span>a job run</span>"}<span>${esc(who)}</span><span>asked ${esc(age(a.created_at))} ago</span></div></div><span></span>`
+    + `<div class="lp-opts">${opts}<input data-latext="${esc(a.id)}" placeholder="${opts ? "or say something else" : "your answer"} · ⏎" autocomplete="off"></div></div>`;
+}
+function jobRow(j) {
+  return `<div class="lp-row" data-ljob="${esc(j.id)}"><span class="lp-ico">⏱</span>`
+    + `<div><div class="lp-t">${esc(j.name)}</div><div class="lp-meta">${wsBit(j.workspace_id)}<span class="soon">next ${esc(loopWhen(j.next_run))}</span>${j.cron_expr ? `<span>${esc(j.cron_expr)}</span>` : ""}</div></div><span></span></div>`;
+}
+function loopsRender() {
+  const fu = loopFollowUps().sort((a, b) => a.follow_up_at.localeCompare(b.follow_up_at));
+  const parts = [];
+  const sec = (label, n, extra = "") => `<div class="lp-sec">${label}<span class="n">${n}</span>${extra}</div>`;
+  if (LOOPS.waits.length) parts.push(sec("Waiting on", LOOPS.waits.length), ...LOOPS.waits.map(waitRow));
+  if (fu.length) parts.push(sec("Follow-ups", fu.length), ...fu.map(followRow));
+  if (LOOPS.asks.length) parts.push(sec("Unanswered", LOOPS.asks.length), ...LOOPS.asks.map(askRow));
+  if (!parts.length) parts.push(`<div class="lp-none">Nothing open — no parked work, follow-ups or unanswered questions.</div>`);
+  if (LOOPS.jobs.length)
+    parts.push(`<div class="lp-sec"><button type="button" data-ljobs>On a clock ${LOOPS.jobsOpen ? "▾" : "▸"}</button><span class="n">${LOOPS.jobs.length}</span></div>`, ...(LOOPS.jobsOpen ? LOOPS.jobs.map(jobRow) : []));
+  const body = qs("#loops-body");
+  const typing = document.activeElement?.matches?.("#loops-body input[data-latext]") ? { id: document.activeElement.dataset.latext, v: document.activeElement.value } : null;
+  body.innerHTML = parts.join("");
+  if (typing) { const el = body.querySelector(`input[data-latext="${CSS.escape(typing.id)}"]`); if (el) { el.value = typing.v; el.focus(); } }
+  qs("#loops-sum").textContent = [
+    LOOPS.waits.length ? LOOPS.waits.length + " waiting" : "",
+    fu.length ? fu.length + " follow-up" + (fu.length === 1 ? "" : "s") : "",
+    LOOPS.asks.length ? LOOPS.asks.length + " unanswered" : "",
+  ].filter(Boolean).join(" · ");
+}
+function openLoops() {
+  const d = qs("#dlg-loops");
+  if (!d.open) d.showModal();
+  loopsRender();
+  loopsLoad();
+}
+qs("#btn-loops").onclick = openLoops;
+qs("#loops-close").onclick = () => qs("#dlg-loops").close();
+qs("#loops-body").addEventListener("click", async (e) => {
+  const b = e.target.closest("button, input, .lp-row");
+  if (!b || b.tagName === "INPUT") return;
+  if (b.dataset.ljobs != null) { LOOPS.jobsOpen = !LOOPS.jobsOpen; return loopsRender(); }
+  if (b.dataset.lfire) {
+    try { await api("/continuations/" + b.dataset.lfire + "/fire", { method: "POST", body: JSON.stringify({ evidence: "fired by hand from the Desk" }) }); toast("fired — the work continues"); }
+    catch (err) { toast(String(err.message).slice(0, 120)); }
+    return loopsLoad();
+  }
+  if (b.dataset.lcancel) {
+    // Cancelling drops the work's way back: arm it, like every other click here that cannot be undone.
+    if (LOOPS.arm !== "x" + b.dataset.lcancel || Date.now() - LOOPS.armT > 3000) { LOOPS.arm = "x" + b.dataset.lcancel; LOOPS.armT = Date.now(); setTimeout(loopsRender, 3100); return loopsRender(); }
+    LOOPS.arm = "";
+    try { await api("/continuations/" + b.dataset.lcancel + "/cancel", { method: "POST", body: JSON.stringify({ why: "cancelled from the Desk" }) }); toast("cancelled"); }
+    catch (err) { toast(String(err.message).slice(0, 120)); }
+    return loopsLoad();
+  }
+  if (b.dataset.laans) return loopAnswer(b.dataset.laans, b.dataset.v);
+  if (b.dataset.lfollow) { const j = S.jots.find((x) => x.id === b.dataset.lfollow); if (j) { qs("#dlg-loops").close(); openFollow(j); } return; }
+  if (b.dataset.ljob) { qs("#dlg-loops").close(); return openJobs(b.dataset.ljob); }
+  if (b.dataset.lsel != null) {
+    const s = b.dataset.lsel && byId(b.dataset.lsel);
+    if (!s) return toast(b.dataset.lsel ? "that terminal has ended — it reopens when this continues" : "no terminal — a new one opens when this continues");
+    qs("#dlg-loops").close();
+    select(s.id);
+  }
+});
+qs("#loops-body").addEventListener("keydown", (e) => {
+  const t = e.target.closest("input[data-latext]");
+  if (!t || e.key !== "Enter") return;
+  e.preventDefault(); e.stopPropagation();
+  loopAnswer(t.dataset.latext, t.value.trim());
+});
+async function loopAnswer(id, text) {
+  if (!text) return;
+  try {
+    await api("/asks/" + id + "/answer", { method: "POST", body: JSON.stringify({ answer: text, by: "operator" }) });
+    LOOPS.asks = LOOPS.asks.filter((a) => a.id !== id);
+    loopsRender(); loopsBadge(); toast("answered");
+  } catch (err) { toast(String(err.message).slice(0, 120)); }
+}
 
 // ── shared vars ──────────────────────────────────────────────────────────────────────────────
 // This panel never shows a value — not once, not on request. daemon → child env, and that is all.
@@ -8212,6 +8548,7 @@ function connectBus() {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     if (!DeskScope.passes(e, LOCK)) return;
     if (DW.topics.has(e.topic)) dwBus(e.topic);
+    if (e.topic === "ask.created" || e.topic === "ask.answered") loopsSoon();
     AskCard.onEvent(e);
     if (AskCard.TOPICS.includes(e.topic)) return;
     if (ArtifactView.TOPICS.includes(e.topic)) {
@@ -8415,6 +8752,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "n" || e.key === "N") { e.preventDefault(); return ask ? pick("last") : e.shiftKey ? openNew() : quickOpen(); }
   // ⇧L: the quick line, pre-armed to open as a Lead (LEADS.md) — no answer-key meaning to collide with.
   if (e.shiftKey && e.key.toLowerCase() === "l") { e.preventDefault(); return quickOpen(true); }
+  if (k === "l") { e.preventDefault(); return openLoops(); }
   if (!f || !f.live) return;
   if (k === "x") { e.preventDefault(); return stageAction("close"); }
   if (k === "t") { e.preventDefault(); return setMode("term"); }
@@ -8852,6 +9190,9 @@ const booted = load().then(openFromHash).then(loadJobs).catch((e) => { qs("#stor
 connectBus();
 // The chat's chips name a project, so the thread paints after the client list has landed.
 booted.then(ovHistory);
+// Open loops: the ⏰ count. Parked work moves on the daemon's clock, not the bus — a minute is plenty.
+booted.then(loopsLoad);
+setInterval(() => { if (!document.hidden) loopsLoad(); }, 60000);
 addEventListener("hashchange", openFromHash);
 </script>
 </body>

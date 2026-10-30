@@ -34,6 +34,12 @@ test("deskSeed carries the goal, the finish line for its kind, and the brief", (
   // Each kind states a different done.
   assert.match(deskSeed("why the DAG fails", "investigation"), /answer with the evidence/i);
   assert.match(deskSeed("check the export", "qa"), /verdict/i);
+  // A chat has nothing to finish and nothing to ship: no finish-line question, no merge/deploy rule.
+  const chat = deskSeed("talk through Q4 pricing", "chat");
+  assert.match(chat, /Shape of work: CHAT/);
+  assert.match(chat, /--kind chat/);
+  assert.doesNotMatch(chat, /When the work is green/);
+  assert.doesNotMatch(chat, /make sure the goal AND how we will know/);
   // No kind, no brief → still a runnable prompt.
   const bare = deskSeed("write the memo", null);
   assert.match(bare, /^Goal: write the memo/);
