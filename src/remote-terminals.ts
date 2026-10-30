@@ -28,7 +28,7 @@ import { brainLink, type BrainLink } from "./hostlink/brain-link.js";
 import { findHost, hostOnline, LOCAL_HOST_ID, registerHost, remoteHosts } from "./hosts/index.js";
 import { RemoteHost, type HostLinkPort } from "./hosts/remote.js";
 import { adoptRemoteSession, isLive, openSession, remoteResumable, resumeOpts } from "./terminal.js";
-import { lastActivityState, reviveSeedFor } from "./revive.js";
+import { inFlightAtRestart, lastActivityState, reviveSeedFor } from "./revive.js";
 import { reconcileRuns } from "./remote-runs.js";
 import { reapRemoteWorktrees } from "./worktrees.js";
 import { HOST_FAILOVER_END_REASON, salvageMoved } from "./host-failover.js";
@@ -120,7 +120,7 @@ export async function reconcileHost(
     if (!ended || ended.status === "live" || !remoteResumable(ended)) continue;
     // Sticky: openSession reads the host from the row, so this reopens on the same machine.
     const revive = opts.revive ?? ((r: Session) => {
-      const seed = reviveSeedFor(lastActivityState(r.id));
+      const seed = reviveSeedFor(lastActivityState(r.id), inFlightAtRestart(r.id));
       return openSession({ ...resumeOpts(r), ...(seed ? { seed } : {}) });
     });
     try {
