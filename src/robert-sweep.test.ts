@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { db, sessions, workspaces } from "./store.js";
 import { drainScope, quietSweep, setWakeAsker, setWakeNotifier, setWakePoster, SWEEP_KEY, WAKE_ATTEMPT_CAP } from "./wake-queue.js";
-import { setSweepProbe, sweepOnce, sweepSay, workingIn } from "./robert-sweep.js";
+import { setSweepLastIn, setSweepProbe, sweepOnce, sweepSay, workingIn } from "./robert-sweep.js";
 import { writeSetting } from "./settings.js";
 import type { TermStatus } from "./term-status.js";
 
@@ -15,7 +15,9 @@ const st = (phase: TermStatus["phase"], over: Partial<TermStatus> = {}): TermSta
   subagents: 0, progress: null, hooked: true, ...over,
 });
 let screens = new Map<string, TermStatus>();
+let typed = new Map<string, number>();
 setSweepProbe((id) => screens.get(id) ?? null);
+setSweepLastIn((id) => typed.get(id) ?? null);
 setWakeNotifier(async () => {});
 
 let n = 0;
@@ -31,6 +33,7 @@ function reset() {
   db.prepare("DELETE FROM sessions").run();
   db.prepare("DELETE FROM workspaces").run();
   screens = new Map();
+  typed = new Map();
 }
 
 test("workingIn: only goal-bearing terminals that are working count", () => {
@@ -42,6 +45,29 @@ test("workingIn: only goal-bearing terminals that are working count", () => {
   term(w, "waiting", { on: "robert" });
   term(w, "working", {}, "");
   assert.equal(workingIn(w), 2, "working + waiting on CI; a stop or a scratch window is not work in flight");
+});
+
+test("workingIn: a ticked goal with nothing typed since is finished, even while its status reads working", () => {
+  reset();
+  const w = ws().id;
+  const now = Date.now();
+  const tick = (s: { id: string }, at: number) => sessions.setGoal(s.id, { goal_done_at: new Date(at).toISOString() });
+  // Collage d139188e: ticked, Summary written, and statusOf still said working an hour later.
+  const done = term(w, "working");
+  tick(done, now - 60 * 60_000);
+  assert.equal(workingIn(w, now), 0, "a finished terminal must not wake Robert every interval");
+  // Typed to after the tick: the goal moved, so it is work in flight again.
+  const more = term(w, "working");
+  tick(more, now - 60 * 60_000);
+  typed.set(more.id, now - 5 * 60_000);
+  // Typed to only BEFORE the tick: still finished.
+  const before = term(w, "working");
+  tick(before, now - 10 * 60_000);
+  typed.set(before.id, now - 20 * 60_000);
+  assert.equal(workingIn(w, now), 1);
+  // A new goal clears the tick: counted again.
+  sessions.setGoal(done.id, { goal: "next thing", goal_done_at: null });
+  assert.equal(workingIn(w, now), 2);
 });
 
 test("sweepOnce: a busy workspace is queued on its own scope, a quiet one is not", () => {
