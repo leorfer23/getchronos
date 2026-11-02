@@ -66,11 +66,11 @@ test("green: the latest fire ran and succeeded", () => {
 });
 
 test("red: the latest run failed — status, local time and the error's first line", () => {
-  const j = mkJob(ws.id, { name: "catalog-sync" });
+  const j = mkJob(ws.id, { name: "nightly-sync" });
   mkRun(j.id, "timeout", AT_FIRE, { error: "\n  watchdog: no output for 600s\nstack…" });
   const [red] = jobHealth(ws.id, { now: NOW }).red;
   assert.equal(red.kind, "failed");
-  assert.equal(red.job_name, "catalog-sync");
+  assert.equal(red.job_name, "nightly-sync");
   assert.match(red.detail, /^timeout at 02\/11 09:00: watchdog: no output for 600s$/);
   assert.equal(red.runs.length, 1);
 });
@@ -202,10 +202,10 @@ test("recordCheck: one zero-cost run per fire — success when green, failed wit
   assert.deepEqual([green.status, green.cost_usd, green.summary], ["success", 0, "all green — 3 jobs, 9 runs in 24h"]);
   const red = recordCheck(check.id, {
     workspace_id: ws.id, since: h(24), until: h(0), jobs: 3, runs: 9, recovered: 0,
-    red: [{ job_id: "j1", job_name: "catalog-sync", kind: "failed", detail: "timeout", runs: [] }],
+    red: [{ job_id: "j1", job_name: "nightly-sync", kind: "failed", detail: "timeout", runs: [] }],
   });
   assert.equal(red.status, "failed");
-  assert.match(red.error!, /^1 red of 3 jobs, 9 runs in 24h: catalog-sync$/);
+  assert.match(red.error!, /^1 red of 3 jobs, 9 runs in 24h: nightly-sync$/);
 });
 
 test("the cron gate: nothing scheduled → no row; green → a success row and no agent; red → a terminal", async () => {
@@ -239,7 +239,7 @@ test("openCheckTerminal: the terminal carries the brief; refused → the check j
   const check = mkJob(ws.id, { name: JOB_CHECK_PREFIX + ws.slug });
   const health = {
     workspace_id: ws.id, since: h(24), until: NOW.toISOString(), jobs: 2, runs: 4, recovered: 0,
-    red: [{ job_id: "abcdef1234", job_name: "catalog-sync", kind: "failed" as const, detail: "timeout at 02/11 06:30: watchdog", runs: [] }],
+    red: [{ job_id: "abcdef1234", job_name: "nightly-sync", kind: "failed" as const, detail: "timeout at 02/11 06:30: watchdog", runs: [] }],
   };
   const rec = recordCheck(check.id, health);
   let seen: any = null;
@@ -248,7 +248,7 @@ test("openCheckTerminal: the terminal carries the brief; refused → the check j
   assert.equal(seen.workspace_id, ws.id);
   assert.equal(seen.created_by, "job-check");
   assert.match(seen.goal, /^Job check 2026-11-02: 1 red in Acme — find why, fix, re-run$/);
-  assert.match(seen.description, /catalog-sync \(job abcdef1234\) — failed: timeout at 02\/11 06:30: watchdog/);
+  assert.match(seen.description, /nightly-sync \(job abcdef1234\) — failed: timeout at 02\/11 06:30: watchdog/);
   assert.match(runs.get(rec.id)!.summary!, /→ terminal sess-123$/);
 
   let call: any[] = [];
@@ -259,7 +259,7 @@ test("openCheckTerminal: the terminal carries the brief; refused → the check j
   assert.deepEqual(fell, { run_id: "run-87654321" });
   assert.equal(call[0], check.id);
   assert.equal(call[1], "job-check:fallback");
-  assert.match(call[3], /terminal could not open: seat cap reached[\s\S]*catalog-sync/);
+  assert.match(call[3], /terminal could not open: seat cap reached[\s\S]*nightly-sync/);
   assert.match(runs.get(rec.id)!.summary!, /terminal refused \(seat cap reached \(6 live\)\); headless run run-8765/);
 });
 
