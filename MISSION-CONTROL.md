@@ -276,6 +276,17 @@ with a `resolved_reason`, distinct from the operator's ✕ (`dismissed`).
   then ranks every open row and note with `mc inbox rank` (`POST /api/workspaces/:id/rank`,
   priority high|normal|low + why). A fire with nothing open is skipped by a scheduler gate
   (`registerCronGate`) before any model runs.
+- **`job-check:<slug>`** (src/job-check.ts): one cron job per workspace, 17:00 daily in the operator's zone
+  (`CHRONOS_JOB_CHECK_CRON`, `CHRONOS_JOB_CHECK=0` removes them). The daemon itself (no model) checks every
+  job of the client that ran or was due in the 24h before the fire: red = the latest run failed / timed out /
+  was blocked, killed or rate-limited past the auto-resume window; the latest due fire has no run and no
+  recorded skip (missed) or was refused by `dispatch()`; the verifier rejected a success; or 3+ failures in
+  the day. `fallback:<name>` clones count for their job; internal machinery is left out. Every fire leaves
+  one zero-cost run on the check job (the Jobs page strip). All green ends there; red opens a Desk terminal
+  in that client (created_by `job-check`) that finds the cause, fixes, re-runs (`mc job run` + `mc run watch`)
+  and hands off with `mc outcome`; a refused terminal falls back to the job's headless run with the list as
+  context. `mc job check [--json]` / `GET /api/jobs/health` (workspace token = own client). The scheduler
+  now records the last fire per job that started no run (`kv cron.skip.<job id>`: gate | inflight | refused).
 `POST /api/inbox/:id/resolve {reason}` takes the row's own workspace token or admin; `reopen` is admin.
 The Desk orders each client's rows by rank (rows filed since the last ranking first), clients with the
 most high-priority rows first, and shows "N closed for you in the last 2 days" with ↩ Reopen. Notes

@@ -246,6 +246,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc job list [--workspace ID]
   mc job get <ID|name>
   mc job run <ID|name>       dispatch a job now (headless)
+  mc job check [--hours 24] [--json] [--workspace ID]   the daily job check: what of this client's jobs did not run right (failed, missed, refused, flaky)
   mc job rm <ID|name>        delete a job
   mc job new --name "..." --goal "..." [--cron "0 9 * * 1-5" | --at "2026-09-12 09:00"] [--backend b] [--model m]
              [--workspace ID] [--cwd path] [--sandbox guard|strict|off]
@@ -1571,6 +1572,21 @@ function askCap(question) {
         const sched = j.trigger_type === "cron" ? `cron(${j.cron_expr})` : j.trigger_type;
         return `${j.enabled ? "●" : "○"} ${j.id.slice(0, 8)}\t${sched}\t${j.backend}/${j.model || "·"}\t${j.name}`;
       }).join("\n"));
+    }
+    if (cmd === "job" && pos[1] === "check") {
+      const q = new URLSearchParams();
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (wsId) q.set("ws", wsId);
+      if (opt.hours) q.set("hours", String(opt.hours));
+      const h = await req("GET", "/jobs/health?" + q);
+      if (opt.json) return console.log(JSON.stringify(h, null, 2));
+      const at = (iso) => (iso ? new Date(iso).toLocaleString("en-GB", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).replace(",", "") : "—");
+      const head = `${h.jobs} job${h.jobs === 1 ? "" : "s"}, ${h.runs} run${h.runs === 1 ? "" : "s"} · ${at(h.since)} → ${at(h.until)}` + (h.recovered ? ` · ${h.recovered} recovered on their own` : "");
+      if (!h.red.length) return console.log(`✓ all green — ${head}`);
+      return console.log([`✗ ${h.red.length} red — ${head}`, ...h.red.map((r, i) => [
+        `${i + 1}. ${r.job_name} (job ${r.job_id}) — ${r.kind}: ${r.detail}`,
+        ...r.runs.map((x) => `   run ${x.id} · ${x.status} · ${at(x.started_at)}${x.error ? " · " + x.error.slice(0, 160) : ""}`),
+      ].join("\n"))].join("\n"));
     }
     if (cmd === "job" && pos[1] === "get") {
       const j = await findJob(pos[2] || die("job get needs <ID|name>"));

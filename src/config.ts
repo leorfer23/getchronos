@@ -304,6 +304,14 @@ export const CONFIG = {
   // operator reads terminals, not the chat. 0 → the old chat card only.
   robertAskTerminals: process.env.CHRONOS_ROBERT_ASK_TERMINALS !== "0" && process.env.CHRONOS_TEST !== "1",
   inboxCleanupCron: process.env.CHRONOS_INBOX_CLEANUP_CRON ?? "0 10,18 * * *",
+  // Daily job check (src/job-check.ts): one cron job per workspace that checks every job that ran or was
+  // due in the 24h before it fires — operator-requested 2026-11-02 at 17:00 his time (slackTriageTz).
+  // All green costs nothing (the daemon checks, no model). Red opens a terminal that finds why, fixes and
+  // re-runs. CHRONOS_JOB_CHECK=0 removes the jobs.
+  jobCheck: {
+    enabled: process.env.CHRONOS_JOB_CHECK !== "0",
+    cron: process.env.CHRONOS_JOB_CHECK_CRON ?? "0 17 * * *",
+  },
   inboxCleanupModel: process.env.CHRONOS_INBOX_CLEANUP_MODEL ?? "sonnet",
   // Stale notes (src/note-workers.ts): right before a cleanup fire the daemon itself (no model) closes
   // agent/nextday notes nobody touched in this many days, unless ranked high, followed up or being
