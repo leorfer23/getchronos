@@ -27,6 +27,25 @@ export function readPower(): Power {
   }
 }
 
+/**
+ * A dark wake from `pmset -g systemstate`: the system is up with CPU (and network) but no Graphics —
+ * the few-second maintenance blips a sleeping laptop wakes into every ~17 min. A full wake lists
+ * "CPU Graphics Audio Network". Unreadable output = not a dark wake (never hold work on a guess).
+ */
+export function isDarkWake(pmsetOutput: string): boolean {
+  const caps = /System Capabilities are:([^\n]*)/.exec(pmsetOutput)?.[1];
+  return !!caps && /\bCPU\b/.test(caps) && !/\bGraphics\b/.test(caps);
+}
+
+export function readDarkWake(): boolean {
+  if (process.platform !== "darwin") return false;
+  try {
+    return isDarkWake(execFileSync("pmset", ["-g", "systemstate"], { encoding: "utf8", timeout: 5_000 }));
+  } catch {
+    return false;
+  }
+}
+
 export type AwakePolicy = {
   /** Hold on battery too. The brain releases (an unplugged laptop may idle-sleep); a host with live work holds. */
   onBattery: boolean;

@@ -1,6 +1,7 @@
-import { status } from "./dispatcher.js";
+import { CONFIG } from "./config.js";
+import { setWakeProbe, status } from "./dispatcher.js";
 import { sessions } from "./store.js";
-import { startCaffeinate } from "./caffeinate.js";
+import { readDarkWake, startCaffeinate } from "./caffeinate.js";
 
 export { onAcPower } from "./caffeinate.js";
 
@@ -17,6 +18,9 @@ function busy(): boolean {
   return sessions.list({ status: "live" }).length > 0;
 }
 
+// caffeinate -i does not keep a dark wake up (powerd re-sleeps it with PreventUserIdleSystemSleep
+// held), so headless runs are not started in one — they wait in the queue for a full wake.
 export function startAwake() {
+  if (CONFIG.darkWakeHold) setWakeProbe(readDarkWake);
   startCaffeinate({ tag: "[awake]", busy, policy: { onBattery: false, minBatteryPct: 100 } });
 }

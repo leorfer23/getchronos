@@ -240,6 +240,7 @@ Grouped by what it does. Anything not listed here is in the table at the bottom.
 | `CHRONOS_AUTO_CI_FIX` | **on** | dispatch a fixer when CI goes red on an open PR. `0` to disable |
 | `CHRONOS_CI_FIX_MAX` | `2` | attempts per ticket before it stops trying |
 | `CHRONOS_SELF_DEPLOY` | **on** | rebuild and restart the daemon when its own `main` moves. `0` to disable |
+| `CHRONOS_DARKWAKE_HOLD` | **on** | while the Mac is in a dark wake (asleep on battery, up for a few seconds of maintenance), headless runs stay queued and start at the next full wake. `off` = start them anyway |
 
 Autonomy is also per project (`auto_plan`, `auto_build`, `auto_review`) — the variables above are
 ceilings, not switches, and a project with all three off never dispatches anything on its own. Turn
@@ -638,6 +639,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_CONNECTOR_SYNC_RETAIN` | `2000` | `src/config.ts` |
 | `CHRONOS_CURSOR_BIN` | `"cursor-agent"` | `src/config.ts` |
 | `CHRONOS_DAILY_BUDGET` | `0` | `src/config.ts` |
+| `CHRONOS_DARKWAKE_HOLD` | `"on"` | `src/config.ts` |
 | `CHRONOS_DAY_HEARTBEAT` | `"1"` | `src/config.ts` |
 | `CHRONOS_DAY_HEARTBEAT_CRON` | `"*/30 * * * *"` | `src/config.ts` |
 | `CHRONOS_DAY_HEARTBEAT_DIGEST_SKIP` | `"1"` | `src/config.ts` |
