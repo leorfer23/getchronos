@@ -105,6 +105,7 @@ import { jobsBoard, runsFeed, type JobKind } from "./jobs-board.js";
 import { storyFromEvents } from "./run-story.js";
 import { installSlackMcp, slackStatus, ensureTriageJob } from "./slack.js";
 import { ensureCleanupJob } from "./inbox-cleanup.js";
+import { ensureCheckJob, healthRequest } from "./job-check.js";
 import { syncWorkspace, pushComment, pushStatus, pushHours, pushClose } from "./connectors/index.js";
 import { isStatusDivergent } from "./connectors/types.js";
 import { refresh as refreshCal, refreshAll as refreshCals, importLocalCalendars, ingestLocal } from "./calendar.js";
@@ -2483,6 +2484,14 @@ export function startServer() {
     });
     res.json({ ...b, jobs: b.jobs.map((j) => ({ ...j, next_run: nextRun(j.id) })) });
   });
+  // The daily job check's read (src/job-check.ts): what of a client's jobs did not run right in the last
+  // N hours (24). A workspace token reads its own client only; the operator names one with ?ws=.
+  api.get("/jobs/health", (req, res) => {
+    const scope = callerScope(req);
+    if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    const r = healthRequest(scope, req.query);
+    res.status(r.status).json(r.body);
+  });
   api.get("/jobs/runs", (req, res) => {
     const scope = callerScope(req);
     if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
@@ -3129,6 +3138,7 @@ export function startServer() {
       : req.body;
     const created = workspaces.create(body);
     ensureCleanupJob(created);
+    ensureCheckJob(created);
     const w = wsWithRepos(created);
     bus.publish({ topic: "workspace.changed" });
     res.status(201).json(w);

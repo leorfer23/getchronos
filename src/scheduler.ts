@@ -1,5 +1,5 @@
 import { Cron } from "croner";
-import { jobs, runs } from "./store.js";
+import { jobs, kv, runs } from "./store.js";
 import { dispatch } from "./dispatcher.js";
 import { onceDecision } from "./once.js";
 
@@ -18,6 +18,22 @@ export function cronSkipReason(job: { id: string; name: string; workspace_id: st
     try { const why = gate(job); if (why) return why; } catch (e) { console.warn(`[scheduler] gate ${prefix} threw:`, e); }
   }
   return null;
+}
+
+/**
+ * The last cron fire of a job that started no run, and why — the job check (src/job-check.ts) reads it
+ * to tell a fire skipped on purpose from one that never happened (daemon down at that minute).
+ * gate: a cron gate said there was nothing to do · inflight: the previous run was still going ·
+ * refused: dispatch() said no (budget, loop guard, burn brake, backend not allowed…) — that one is a
+ * failure to run, and used to vanish into the scheduler's ignored return value.
+ */
+export interface CronSkip { at: string; kind: "gate" | "inflight" | "refused"; why: string }
+const SKIP_KEY = "cron.skip.";
+function noteSkip(jobId: string, kind: CronSkip["kind"], why: string): void {
+  try { kv.set(SKIP_KEY + jobId, JSON.stringify({ at: new Date().toISOString(), kind, why })); } catch (e) { console.warn("[scheduler] could not record a skip", e); }
+}
+export function lastCronSkip(jobId: string): CronSkip | null {
+  try { const v = kv.get(SKIP_KEY + jobId); return v ? (JSON.parse(v) as CronSkip) : null; } catch { return null; }
 }
 
 // True when this job still has a queued/running run — skip stacking cron fires on a long job.
@@ -42,14 +58,20 @@ export function reloadSchedules(): void {
           try {
             if (hasInflight(job.id)) {
               console.log(`[scheduler] skip cron ${job.id.slice(0, 8)} — prior run still inflight`);
+              noteSkip(job.id, "inflight", "prior run still inflight");
               return;
             }
             const skip = cronSkipReason(job);
             if (skip) {
               console.log(`[scheduler] skip cron ${job.name} — ${skip}`);
+              noteSkip(job.id, "gate", skip);
               return;
             }
-            dispatch(job.id, "cron");
+            const r = dispatch(job.id, "cron");
+            if ("error" in r) {
+              console.warn(`[scheduler] cron ${job.name} refused: ${r.error}`);
+              noteSkip(job.id, "refused", r.error);
+            }
           } catch (e) {
             console.error(`[scheduler] dispatch failed for job ${job.id}:`, e);
           }
