@@ -3026,15 +3026,14 @@ function dialogOf(s, p, ph) {
   };
 }
 function dialogHtml(d) {
-  const more = d.of > 1 && d.n > 0 && d.n < d.of;
   const btns = d.choices.map((c) => {
     const rec = REC_RE.test(c.label), ok = c.i >= 0 && !d.multi;
-    return `<button type="button" class="fx-choice${rec ? " best" : ""}" ${ok ? `data-dopt="${c.i}"${more ? " data-dmore" : ""}` : `disabled title="not on its screen yet — open the terminal (⌘E)"`}>`
+    return `<button type="button" class="fx-choice${rec ? " best" : ""}" ${ok ? `data-dopt="${c.i}"` : `disabled title="not on its screen yet — open the terminal (⌘E)"`}>`
       + `<b>${esc(c.label.replace(REC_RE, ""))}</b>${rec ? `<em>recommended</em>` : ""}${c.detail ? `<span>${esc(c.detail)}</span>` : ""}</button>`;
   }).join("");
   const extra = [];
-  if (d.type >= 0 && !d.multi) extra.push(`<input data-dtext="${d.type}"${more ? " data-dmore" : ""} value="${esc(D.drafts.get("dialog") || "")}" placeholder="or answer in your own words · ⏎" autocomplete="off">`);
-  if (d.chat >= 0) extra.push(`<button type="button" data-dopt="${d.chat}" data-dmore title="Close the question and talk it through">Talk it over first</button>`);
+  if (d.type >= 0 && !d.multi) extra.push(`<input data-dtext="${d.type}" value="${esc(D.drafts.get("dialog") || "")}" placeholder="or answer in your own words · ⏎" autocomplete="off">`);
+  if (d.chat >= 0) extra.push(`<button type="button" data-dopt="${d.chat}" title="Close the question and talk it through">Talk it over first</button>`);
   if (d.multi || !d.onScreen) extra.push(`<button type="button" data-fterm>Open the terminal (⌘E)</button>`);
   const who = [`<b>It asked you</b>`, d.header ? esc(d.header) : "", d.of > 1 && d.n > 0 ? `question ${d.n} of ${d.of}` : "", d.multi ? "several can be picked — pick them in the terminal" : ""].filter(Boolean).join(" · ");
   return `<div class="fx-q dialog"><div class="who">${who}</div><div class="q">${esc(d.question)}</div>`
@@ -3058,7 +3057,7 @@ function permissionHtml(p) {
 // Answering it: the keys that move its menu's cursor to the row, then Enter. Free text moves to
 // "Type something.", types the line and presses Enter (Claude Code 2.1: verified in a live TUI).
 const arrowsTo = (o) => Array(Math.abs(o.offset)).fill(o.offset > 0 ? "down" : "up");
-async function answerDialog(s, i, text, more) {
+async function answerDialog(s, i, text) {
   const p = s.prompt && typeof s.prompt === "object" ? s.prompt : null;
   const o = p?.options?.[i]; if (!o) return toast("that question is gone from its screen");
   if (text == null) await answer(s.id, optionBody(o));
@@ -3069,8 +3068,8 @@ async function answerDialog(s, i, text, more) {
     await answer(s.id, { text, enter: true });
     D.drafts.delete("dialog");
   }
-  // One answer of several: stay on it for the next question. The last one: on to whatever needs you next.
-  if (more) { s.prompt = null; renderStory(); toast("answered"); } else advance(s.id, "answered");
+  // One answer or the last of several: you stay on the terminal you answered (stayAfter).
+  stayAfter(s, "answered");
 }
 
 // ③ Talk: the conversation as a chat — every line you sent it (right) and everything it said back
@@ -3524,7 +3523,7 @@ qs("#story").addEventListener("keydown", (e) => {
   if (d) {
     e.preventDefault(); e.stopPropagation();
     const s = S.active && byId(S.active), text = d.value.trim();
-    if (s && text) answerDialog(s, Number(d.dataset.dtext), text, d.hasAttribute("data-dmore"));
+    if (s && text) answerDialog(s, Number(d.dataset.dtext), text);
     return;
   }
   const t = e.target.closest("input[data-atext]"); if (!t) return;
@@ -3534,7 +3533,7 @@ qs("#story").addEventListener("keydown", (e) => {
 qs("#story").addEventListener("click", (e) => {
   const s = S.active && byId(S.active); if (!s) return;
   const a = e.target.closest("[data-aans]"); if (a) return answerAskFromFocus(s, a.dataset.aans, a.dataset.v);
-  const dq = e.target.closest("[data-dopt]"); if (dq) return answerDialog(s, Number(dq.dataset.dopt), null, dq.hasAttribute("data-dmore"));
+  const dq = e.target.closest("[data-dopt]"); if (dq) return answerDialog(s, Number(dq.dataset.dopt), null);
   if (e.target.closest("a")) return;
   const ta = e.target.closest("[data-tacts]"); if (ta && !String(window.getSelection?.() || "")) { const k = ta.dataset.tacts; if (!T.open.delete(k)) T.open.add(k); return renderStory(); }
   if (e.target.closest("[data-tall]")) { T.all = !T.all; return renderStory(); }
@@ -4325,7 +4324,12 @@ qs("#h-comp").onclick = () => {
   return C.min ? compToggle(false) : compMin(true);
 };
 
-// After a decision, the next terminal that needs you is already on the stage.
+// Answering a terminal keeps you on it. Leo, 2026-11-02: "when I answer a question in an agent chat,
+// it reroutes me to another chat… no rerouting me" — an answer (an option, y/n, Continue) used to walk
+// the stage to the next terminal that needed you. The answered question leaves the screen at once so
+// it cannot be pressed twice; the daemon's next poll brings whatever the agent does next.
+function stayAfter(s, why) { s.prompt = null; renderStage(); toast(why); }
+// Closing a terminal takes it off the stage, so the next terminal that needs you takes its place.
 function advance(fromId, why) {
   const before = needsList(), i = Math.max(0, before.findIndex((x) => x.id === fromId));
   const order = before.filter((x) => x.id !== fromId);
@@ -4344,7 +4348,7 @@ async function stageAction(a) {
   if (a === "all") { F.all = !F.all; return renderStory(); }
   if (a === "reopen") return restart(s.id);
   if (a === "next") return step(1, true);
-  if (a === "continue") { input(s.id, { text: "continue", enter: true }); return advance(s.id, "continued"); }
+  if (a === "continue") { input(s.id, { text: "continue", enter: true }); return stayAfter(s, "continued"); }
   if (a === "stop") return input(s.id, { key: "esc" });
   if (a === "close") {
     if (s.state === "working" && Date.now() - F.arm > 2500) { F.arm = Date.now(); renderBar(); setTimeout(() => { if (S.active === s.id && Date.now() - F.arm >= 2500) renderBar(); }, 2600); return; }
@@ -4375,8 +4379,8 @@ function stageClick(e) {
   const s = S.active && byId(S.active); if (!s) return;
   const p = permMenu(s) || (s.prompt && typeof s.prompt === "object" ? s.prompt : null);
   if (t.dataset.fa) return stageAction(t.dataset.fa);
-  if (t.dataset.fopt !== undefined) { const o = p?.options?.[Number(t.dataset.fopt)]; if (o) { answer(s.id, optionBody(o)); advance(s.id, "answered"); } return; }
-  if (t.dataset.fyn) { answer(s.id, { text: t.dataset.fyn, enter: true }); return advance(s.id, "answered"); }
+  if (t.dataset.fopt !== undefined) { const o = p?.options?.[Number(t.dataset.fopt)]; if (o) { answer(s.id, optionBody(o)); stayAfter(s, "answered"); } return; }
+  if (t.dataset.fyn) { answer(s.id, { text: t.dataset.fyn, enter: true }); return stayAfter(s, "answered"); }
   if (t.hasAttribute("data-ftype")) focusSay();
 }
 qs("#story").addEventListener("click", stageClick);
@@ -8766,10 +8770,10 @@ document.addEventListener("keydown", (e) => {
   // not looking at. N is "no" while a prompt is open, and a blank terminal otherwise.
   const ask = f && f.live ? askOf(f) : null;
   const pick = (which) => {
-    if (ask.kind === "yn") { answer(f.id, { text: which === "last" ? "n" : "y", enter: true }); return advance(f.id, "answered"); }
+    if (ask.kind === "yn") { answer(f.id, { text: which === "last" ? "n" : "y", enter: true }); return stayAfter(f, "answered"); }
     if (ask.kind !== "select") return;
     const o = which === "first" ? ask.options[0] : which === "second" ? ask.options[1] : ask.options[ask.options.length - 1];
-    if (o) { answer(f.id, optionBody(o)); advance(f.id, "answered"); }
+    if (o) { answer(f.id, optionBody(o)); stayAfter(f, "answered"); }
   };
   if (e.key === "n" || e.key === "N") { e.preventDefault(); return ask ? pick("last") : e.shiftKey ? openNew() : quickOpen(); }
   // ⇧L: the quick line, pre-armed to open as a Lead (LEADS.md) — no answer-key meaning to collide with.
