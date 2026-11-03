@@ -206,8 +206,27 @@ test("hand-offs: the newest in full, every earlier one kept and folded; Talk and
   assert.match(html, /\+ expBtn\("out"\)/);
   assert.match(css, /\.fx-grid\.exp > \.fx-col:not\(\.holds-exp\), \.fx-grid\.exp \.fx-col > \.fx:not\(\.exp\) \{ display:none; \}/);
   assert.match(html, /if \(e\.key === "Escape" && S\.mode === "focus" && FX\.exp/, "Esc gives the board back");
-  // A repaint keeps every card where it was scrolled (Talk follows the newest when it was at the end).
-  assert.match(html, /el\.scrollTop = was\.end && el\.hasAttribute\("data-stick"\) \? el\.scrollHeight : was\.top;/);
+  // A repaint keeps every card where it was scrolled (Talk follows the newest while you are on it).
+  assert.match(html, /pinTo\(el, pinned\(el\) \|\| !was \? el\.scrollHeight : was\.top\)/);
+  assert.match(html, /if \(was\) el\.scrollTop = was\.top;/);
+});
+
+test("talk follows its newest line unless you scrolled up — decided by your scrolling, not at repaint", () => {
+  // Leo, 2026-11-03: "siempre debería estar abajo de todo a excepción que yo esté scrolleando".
+  // A screenshot decoding after a repaint grew Talk under the reader; measuring "at the end" at the
+  // next repaint then read false and Talk stopped following for good.
+  assert.match(html, /const pinned = \(el\) => FX\.pin\.get\(el\.dataset\.keep\) \?\? true;/, "never scrolled = follows");
+  assert.match(html, /FX\.pin\.set\(el\.dataset\.keep, el\.scrollHeight - el\.scrollTop - el\.clientHeight < 32\)/, "your scroll sets it");
+  assert.match(html, /if \(Math\.abs\(el\.scrollTop - mine\) < 2\) return;/, "our own scrollTop writes are not yours");
+  assert.match(html, /if \(box && pinned\(box\)\) pinTo\(box, box\.scrollHeight\);/, "an image that loads keeps a following card at the bottom");
+  assert.match(html, /pin: new Map\(\) \}\);/, "another terminal starts following again");
+});
+
+test("repaint carries the images on screen over, so the scroll restore measures real heights", () => {
+  // A fresh <img> is 0px until it decodes: the restore clamped scrollTop and big screenshots jumped.
+  assert.match(html, /if \(pool\) imgReuse\(body, pool\);/);
+  assert.match(html, /const pool = same \? imgPool\(body\) : null;/, "only the same terminal's images");
+  assert.match(html, /if \(img\.getAttribute\("src"\) \|\| img\.dataset\.fetching\) continue;/, "no refetch of an image already showing");
 });
 
 test("activity: the status strip expands into every step, stamped to the second, live", () => {

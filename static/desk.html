@@ -2830,7 +2830,7 @@ async function goalsLoad(id, total) {
 const D = { id: null, asks: [], outcome: null, earlier: [], shown: [], dialog: null, at: 0, busy: false, sig: "", all: false, armShip: 0, drafts: new Map() };
 // The board's layout: which card is expanded over it (null = the whole board), which earlier hand-offs
 // are open, and where each scrolling card was — a repaint rebuilds the cards and must not jump them.
-const FX = { id: null, exp: null, hopen: new Set(), scroll: new Map(), zoom: new Set(), actAll: false };
+const FX = { id: null, exp: null, hopen: new Set(), scroll: new Map(), zoom: new Set(), actAll: false, pin: new Map() };
 const decisionsSig = (s) => [s.id, s.status?.phase, s.status?.asks || 0, s.status?.line || "", s.outcome_at || "", s.shown_at || "", s.state, s.prompt?.question || ""].join("|");
 async function decisionsLoad(s, force) {
   if (!s) return;
@@ -3192,7 +3192,8 @@ function talkFollow() {
   const sig = (T.pending ? "p" : "r") + box.scrollHeight;
   if (sig === T.sig) return;
   T.sig = sig;
-  box.scrollTop = box.scrollHeight;
+  FX.pin.set("talk", true);
+  pinTo(box, box.scrollHeight);
   if (!T.pending) T.follow = false;
 }
 // A line to the agent from the board. While a Claude terminal is working, it goes as "send now"
@@ -3486,9 +3487,10 @@ function renderStory() {
   const typing = act?.matches?.("#story input[data-atext]") ? { sel: `input[data-atext="${CSS.escape(act.dataset.atext)}"]`, pos: act.selectionStart }
     : act?.matches?.("#story input[data-dtext]") ? { sel: "input[data-dtext]", pos: act.selectionStart } : null;
   const same = FX.id === s.id;
-  if (!same) Object.assign(FX, { id: s.id, exp: FX.exp === "act" ? "act" : null, hopen: new Set(), scroll: new Map(), zoom: new Set(), actAll: false });
-  // Where each scrolling card was, and whether it sat at its bottom (Talk and Decided follow the newest).
-  for (const el of qsa("[data-keep]", body)) if (el.clientHeight) FX.scroll.set(el.dataset.keep, { top: el.scrollTop, end: el.scrollHeight - el.scrollTop - el.clientHeight < 24 });
+  if (!same) Object.assign(FX, { id: s.id, exp: FX.exp === "act" ? "act" : null, hopen: new Set(), scroll: new Map(), zoom: new Set(), actAll: false, pin: new Map() });
+  // Where each scrolling card was. Talk, Decided and Activity follow their newest line instead while
+  // FX.pin says you are on it (pinTo, below).
+  for (const el of qsa("[data-keep]", body)) if (el.clientHeight) FX.scroll.set(el.dataset.keep, { top: el.scrollTop });
   // A narrow board scrolls the whole story, not its cards — keep that too.
   const storyTop = body.scrollTop;
   const pool = same ? imgPool(body) : null;
@@ -3510,8 +3512,8 @@ function renderStory() {
   if (FX.exp && !qs(".fx.exp", body)) { FX.exp = null; return renderStory(); }
   for (const el of qsa("[data-keep]", body)) {
     const was = FX.scroll.get(el.dataset.keep);
-    if (!was) { if (el.hasAttribute("data-stick")) el.scrollTop = el.scrollHeight; continue; }
-    el.scrollTop = was.end && el.hasAttribute("data-stick") ? el.scrollHeight : was.top;
+    if (el.hasAttribute("data-stick")) { pinTo(el, pinned(el) || !was ? el.scrollHeight : was.top); continue; }
+    if (was) el.scrollTop = was.top;
   }
   if (same) body.scrollTop = storyTop;
   tidyLinks(body);
@@ -3546,6 +3548,27 @@ async function setShip(s, k) {
   } catch (err) { toast(String(err.message).slice(0, 120)); }
   renderStory();
 }
+// Talk, Decided and Activity sit on their newest line unless you scrolled up to read; back at the
+// bottom, they follow again. That is kept from YOUR scrolling (FX.pin), not measured at repaint: a
+// screenshot decoding after the repaint grew the card under the reader, and the next repaint read
+// "not at the bottom" and stopped following for good. Our own scrollTop writes go through pinTo so
+// the scroll event they cause is not taken for yours.
+const PIN_PROG = new WeakMap();
+const pinned = (el) => FX.pin.get(el.dataset.keep) ?? true;
+function pinTo(el, top) { el.scrollTop = top; PIN_PROG.set(el, el.scrollTop); }
+qs("#story").addEventListener("scroll", (e) => {
+  const el = e.target;
+  if (!el.matches?.("[data-keep][data-stick]") || !el.clientHeight) return;
+  const mine = PIN_PROG.get(el);
+  if (mine !== undefined) { PIN_PROG.delete(el); if (Math.abs(el.scrollTop - mine) < 2) return; }
+  FX.pin.set(el.dataset.keep, el.scrollHeight - el.scrollTop - el.clientHeight < 32);
+}, true);
+// An image that finishes decoding grows its card: a card on its newest line stays there.
+qs("#story").addEventListener("load", (e) => {
+  if (e.target.tagName !== "IMG") return;
+  const box = e.target.closest("[data-keep][data-stick]");
+  if (box && pinned(box)) pinTo(box, box.scrollHeight);
+}, true);
 qs("#story").addEventListener("input", (e) => {
   const t = e.target.closest("input[data-atext]"); if (t) D.drafts.set(t.dataset.atext, t.value);
   const d = e.target.closest("input[data-dtext]"); if (d) D.drafts.set("dialog", d.value);
