@@ -26,6 +26,7 @@ import {
   type CheckoutInfo, type ExecResult, type ExecSpec, type LiveInfo, type RingSpill,
 } from "../hostlink/wire.js";
 import { expandHomeRelative } from "../hosts/spawn-spec.js";
+import { awakeTimeout, type AwakeTimeout } from "../awake-timeout.js";
 import {
   expandPathTokens, isProcSpec,
   type OneshotResult, type OneshotSpec, type ProcSpec, type WorktreeEnsureArgs,
@@ -88,7 +89,8 @@ type ProcChan = {
   partial: Buffer;
   stderrTail: string;
   timedOut: boolean;
-  watchdog: NodeJS.Timeout | null;
+  /** Counts awake time only, like the brain's: a host asleep on battery keeps its runs (awake-timeout.ts). */
+  watchdog: AwakeTimeout | null;
   forgetT?: NodeJS.Timeout;
   backend: string;
   cwd: string;
@@ -287,8 +289,7 @@ export class HostProcs {
     child.stderr!.on("data", (b: Buffer) => this.onStderr(c, b.toString("utf8")));
     child.on("close", (code, signal) => this.onClose(c, code, signal));
     const limit = Math.max(1000, Number(spec.timeout_ms) || 0) + (this.o.graceMs ?? 15_000);
-    c.watchdog = setTimeout(() => this.timeout(c), limit);
-    c.watchdog.unref?.();
+    c.watchdog = awakeTimeout(() => this.timeout(c), limit);
     return { ch, pid: child.pid ?? 0, cwd };
   }
 
@@ -329,7 +330,7 @@ export class HostProcs {
   }
 
   private onClose(c: ProcChan, code: number | null, signal: NodeJS.Signals | null): void {
-    if (c.watchdog) clearTimeout(c.watchdog);
+    c.watchdog?.clear();
     if (c.partial.length) { this.emit(c, c.partial); c.partial = Buffer.alloc(0); }
     c.exit = { code, signal: signal ?? null, timed_out: c.timedOut };
     this.sendExit(c);
