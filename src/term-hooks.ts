@@ -80,6 +80,11 @@ export function cursorHooks(): Record<string, any[]> {
     subagentStart: [e('{"permission":"allow"}')],
     subagentStop: [e("{}")],
     sessionEnd: [e("{}")],
+    // No agent sends (src/no-send.ts): a shell spelling of a send is refused. Not gated on MC_SESSION —
+    // every cursor run, a fallback engine or a job included. Cursor's own permissions.deny matches only a
+    // command's first word, so `gh pr comment` (gh stays allowed) needs this hook. Fails OPEN to allow:
+    // cursor blocks on empty or invalid output, and an mc older than this hook prints nothing.
+    beforeShellExecution: [{ command: `out=$(${MC} hook no-send 2>/dev/null); [ -n "$out" ] && printf '%s' "$out" || printf '{"permission":"allow"}'`, timeout: 5 }],
   };
 }
 
@@ -88,7 +93,7 @@ const commandsOf = (entry: any): string[] =>
   [entry?.command, ...(Array.isArray(entry?.hooks) ? entry.hooks.map((h: any) => h?.command) : [])].filter((c) => typeof c === "string");
 const isOurs = (entry: any) =>
   commandsOf(entry).some(
-    (c) => /\.mc\/bin\/mc"? hook (claude|cursor|grok)\b/.test(c) || /\.mc\/bin\/rtk-rewrite\.sh\b/.test(c),
+    (c) => /\.mc\/bin\/mc"? hook (claude|cursor|grok|no-send)\b/.test(c) || /\.mc\/bin\/rtk-rewrite\.sh\b/.test(c),
   );
 
 /** Merge our hook entries into a hooks map: drop our old copies, keep everyone else's, append ours. */

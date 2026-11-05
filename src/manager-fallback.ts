@@ -13,6 +13,7 @@ import { getBackend, hasBackend } from "./backends/index.js";
 import { CREDIT_WALL_RE } from "./backends/types.js";
 import { childEnv } from "./child-env.js";
 import { sandboxWrap, type SandboxMode } from "./sandbox.js";
+import { ensureCursorNoSend } from "./no-send.js";
 import { workspaces } from "./store.js";
 import { resultText } from "./summarize.js";
 
@@ -206,6 +207,11 @@ export type ManagerFallbackTurnOpts = {
   cwd?: string;
   profileDir?: string;
   sandbox?: SandboxMode;
+  /** The primary's walls, carried to the fallback engine (a project's Robert: telegram/agent.ts robertSandbox). */
+  addDirs?: string[];
+  denyDirs?: string[];
+  /** The env the fallback starts from. Absent → the daemon's own (the fleet-wide Robert, executives). */
+  baseEnv?: NodeJS.ProcessEnv;
   onDelta?: (t: string, kind: "text" | "thinking" | "tool" | "tool_done") => void;
   timeoutMs?: number;
   /** Original primary error, for logging / system note. */
@@ -231,6 +237,32 @@ export function capabilityGap(
   if (agent.tools && !caps.toolAllowlist)
     gap.push(`your declared tool set (${agent.tools}) — this backend runs its own default tools`);
   return gap;
+}
+
+/**
+ * How a fallback turn is launched: the primary's walls (cwd, add/deny dirs) and env carried over, so an
+ * engine swap never widens what the turn can read or which credentials it holds. Pure but for
+ * ensureCursorNoSend; exported for tests.
+ */
+export function fallbackLaunch(
+  opts: Pick<ManagerFallbackTurnOpts, "sandbox" | "addDirs" | "denyDirs" | "baseEnv" | "extraEnv" | "wsId">,
+  backendName: string,
+  spec: { cmd: string; args: string[]; env?: Record<string, string> },
+  cwd: string,
+  profileDir: string,
+): { cmd: string; cmdArgs: string[]; env: NodeJS.ProcessEnv } {
+  const { cmd, cmdArgs } = sandboxWrap(opts.sandbox ?? "guard", cwd, opts.addDirs ?? [], profileDir, opts.denyDirs ?? [], spec.cmd, spec.args);
+  // Workspace vars / secrets_file (CURSOR_API_KEY) — Robert's extraEnv only carries CHRONOS_ADMIN
+  // + MC_*, and the daemon's own env only has what .secrets loaded. Without this, a cursor step on the
+  // fallback chain died with "Authentication required… set CURSOR_API_KEY" even when the workspace
+  // already held the key for Desk terminals. A caller-given baseEnv is already the workspace's env
+  // (childEnv), CURSOR_API_KEY included.
+  const wsEnv = opts.baseEnv ?? (opts.wsId ? childEnv(workspaces.get(opts.wsId)) : undefined);
+  const fromWs = !opts.baseEnv ? wsEnv?.CURSOR_API_KEY : undefined;
+  // cursor has no deny flag: its deny rules and send hook live in its config dir (no-send.ts).
+  if (backendName === "cursor-agent") ensureCursorNoSend((wsEnv ?? process.env).CURSOR_CONFIG_DIR);
+  const env = { ...(opts.baseEnv ?? process.env), ...(fromWs ? { CURSOR_API_KEY: fromWs } : {}), ...(spec.env ?? {}), ...(opts.extraEnv ?? {}) };
+  return { cmd, cmdArgs, env };
 }
 
 /**
@@ -284,15 +316,7 @@ export function runManagerFallbackTurn(opts: ManagerFallbackTurnOpts): Promise<s
     maxBudgetUsd: CONFIG.agent.maxBudgetUsd * 4, // one-shot may need several tool rounds
   });
 
-  const { cmd, cmdArgs } = sandboxWrap(
-    opts.sandbox ?? "guard",
-    cwd,
-    [],
-    profileDir,
-    [],
-    spec.cmd,
-    spec.args,
-  );
+  const { cmd, cmdArgs, env } = fallbackLaunch(opts, backend.name, spec, cwd, profileDir);
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -303,21 +327,7 @@ export function runManagerFallbackTurn(opts: ManagerFallbackTurnOpts): Promise<s
       fn();
     };
 
-    // Workspace vars / secrets_file (CURSOR_API_KEY) — Robert's extraEnv only carries CHRONOS_ADMIN
-    // + MC_*, and the daemon's process.env only has what .secrets loaded. Without this, a cursor
-    // step on the fallback chain died with "Authentication required… set CURSOR_API_KEY" even when
-    // the workspace already held the key for Desk terminals.
-    const fromWs = opts.wsId ? childEnv(workspaces.get(opts.wsId)).CURSOR_API_KEY : undefined;
-    const child = spawn(cmd, cmdArgs, {
-      cwd,
-      env: {
-        ...process.env,
-        ...(fromWs ? { CURSOR_API_KEY: fromWs } : {}),
-        ...spec.env,
-        ...(opts.extraEnv ?? {}),
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(cmd, cmdArgs, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
 
     const watchdog = setTimeout(() => {
       child.kill("SIGKILL");
@@ -412,6 +422,9 @@ export type WithProviderFallbackOpts = {
   cwd?: string;
   profileDir?: string;
   sandbox?: SandboxMode;
+  addDirs?: string[];
+  denyDirs?: string[];
+  baseEnv?: NodeJS.ProcessEnv;
   onDelta?: ManagerFallbackTurnOpts["onDelta"];
   timeoutMs?: number;
   /** The agent's declaration (see ManagerFallbackTurnOpts.agent) — carried across the engine swap. */
@@ -471,6 +484,9 @@ export async function withProviderFallback(opts: WithProviderFallbackOpts): Prom
       cwd: opts.cwd,
       profileDir: opts.profileDir,
       sandbox: opts.sandbox,
+      addDirs: opts.addDirs,
+      denyDirs: opts.denyDirs,
+      baseEnv: opts.baseEnv,
       onDelta: opts.onDelta,
       timeoutMs: opts.timeoutMs,
       agent: opts.agent,

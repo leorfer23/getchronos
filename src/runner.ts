@@ -85,6 +85,7 @@ import { worktreeSandboxDirs } from "./worktree-core.js";
 import { ensureRoot, mainCheckouts } from "./hostd/resolve.js";
 import { sharedReposBlock } from "./shared-repos.js";
 import { routeConfigDir, routeProfileForHost } from "./profile-route.js";
+import { ensureCursorNoSend } from "./no-send.js";
 export { worktreeSandboxDirs };
 
 // Pure decision extracted for unit testing (the real check lives inline in the close handler, where
@@ -404,6 +405,8 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
   // failure above and re-injects on the next dispatch instead of vanishing.
   if (pendingMessageIds.length) messages.markDelivered(pendingMessageIds, runId);
   let child: ProcHandle;
+  // cursor has no deny flag: its deny rules and send hook live in its config dir (no-send.ts).
+  if (!remote && backend.name === "cursor-agent") ensureCursorNoSend(childEnv(ws).CURSOR_CONFIG_DIR);
   if (!remote) {
     // Same credential grant a terminal in this workspace gets — a headless `bq` run needs gcloud just
     // as much as an interactive one, and the two diverging would be its own confusing bug.

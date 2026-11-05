@@ -1,4 +1,5 @@
 import { CONFIG } from "../config.js";
+import { opencodeNoSendConfig } from "../no-send.js";
 import type { Job } from "../types.js";
 import { jsonLine, type AgentBackend, type NormalizedEvent, type OneShotOpts, type RateLimit, type RunResult, type SpawnSpec } from "./types.js";
 
@@ -42,7 +43,7 @@ export const opencodeBackend: AgentBackend = {
     const goal = system ? `${system}\n\n---\n\n${prompt}` : prompt;
     const args = ["run", goal, "--format", "json", "--auto"];
     if (model) args.push("--model", model);
-    return { cmd: CONFIG.opencodeBin, args, env: {} };
+    return { cmd: CONFIG.opencodeBin, args, env: { OPENCODE_CONFIG_CONTENT: opencodeNoSendConfig() } };
   },
 
   // Interactive = opencode's TUI, which is the DEFAULT command (no subcommand). `run` needs a positional
@@ -52,7 +53,10 @@ export const opencodeBackend: AgentBackend = {
   },
 
   env() {
-    return {}; // provider keys arrive via child-env (secrets_file) or opencode's own auth.json
+    // Provider keys arrive via child-env (secrets_file) or opencode's own auth.json. The one thing added
+    // here is the no-send layer: a runtime config that denies the send tools and shell spellings
+    // (no-send.ts). It holds under --auto (verified live: `gh pr comment` refused, `gh pr list` runs).
+    return { OPENCODE_CONFIG_CONTENT: opencodeNoSendConfig() };
   },
 
   parseLine: jsonLine,
