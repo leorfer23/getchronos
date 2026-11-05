@@ -86,7 +86,7 @@ test("real browser: two leases isolated, no debugging port, forged secret refuse
     await eng.stop("test");
     if (pid) for (let i = 0; i < 40 && alive(pid); i++) await new Promise((r) => setTimeout(r, 50));
     const left = sh("/usr/bin/pgrep", ["-f", dataDir]);
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     assert.ok(!pid || !alive(pid), "the browser process is gone");
     assert.equal(left, "", "no renderer/GPU helper left behind");
   }

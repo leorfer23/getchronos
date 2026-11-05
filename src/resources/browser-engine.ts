@@ -605,7 +605,7 @@ export class ChromeEngine implements BrowserEngine {
     // down: cookies and storage of every lease live in it while the browser runs.
     fs.mkdirSync(this.o.dataDir, { recursive: true, mode: 0o700 });
     fs.chmodSync(this.o.dataDir, 0o700);
-    for (const n of fs.readdirSync(this.o.dataDir)) if (n.startsWith("profile-")) fs.rmSync(path.join(this.o.dataDir, n), { recursive: true, force: true });
+    for (const n of fs.readdirSync(this.o.dataDir)) if (n.startsWith("profile-")) await this.rmProfile(path.join(this.o.dataDir, n));
     const dir = fs.mkdtempSync(path.join(this.o.dataDir, "profile-"));
     fs.chmodSync(dir, 0o700);
     let proc: Launched | null = null;
@@ -638,7 +638,7 @@ export class ChromeEngine implements BrowserEngine {
     } catch (e: any) {
       mux?.close();
       proc?.kill("SIGKILL");
-      fs.rmSync(dir, { recursive: true, force: true });
+      await this.rmProfile(dir);
       this.lastError = String(e?.message ?? e);
       throw e;
     }
@@ -663,7 +663,18 @@ export class ChromeEngine implements BrowserEngine {
     try { run.wss.close(); } catch {}
     try { run.proxy.close(); } catch {}
     run.mux.close();
-    void run.proc.exited.then(() => fs.rmSync(run.dir, { recursive: true, force: true }));
+    void run.proc.exited.then(() => this.rmProfile(run.dir));
+  }
+
+  /**
+   * Remove a profile dir, never throwing. Chrome's helpers (GPU, renderer) can still be writing into it
+   * for a moment after the browser exits, so a plain rm races them (ENOTEMPTY — on CI it surfaced as an
+   * unhandled rejection out of teardown's floating promise); fs.rm retries that with a backoff. A dir
+   * that still will not go is logged and left for the next start, which clears every profile-* first.
+   */
+  private async rmProfile(dir: string): Promise<void> {
+    try { await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+    catch (e: any) { this.log(`could not remove ${path.basename(dir)}: ${e?.code ?? e?.message ?? e} — the next start clears it`); }
   }
 
   async open(o: OpenOpts = {}): Promise<Opened> {
@@ -772,7 +783,7 @@ export class ChromeEngine implements BrowserEngine {
     const t = new Promise<boolean>((r) => setTimeout(() => r(false), 5000).unref?.());
     if (!(await Promise.race([run.proc.exited.then(() => true), t]))) run.proc.kill("SIGKILL");
     await Promise.race([run.proc.exited, new Promise((r) => setTimeout(r, 2000).unref?.())]);
-    fs.rmSync(run.dir, { recursive: true, force: true });
+    await this.rmProfile(run.dir);
     this.log(`stopped (${why})${lost.length ? ` — ${lost.length} lease${lost.length === 1 ? "" : "s"} closed` : ""}`);
     if (lost.length) for (const cb of this.lostLs) cb(lost);
   }
