@@ -235,6 +235,7 @@ test("the operator-input hooks sit on his paths only, never inside sendInput", a
   const api = read("api.ts");
   assert.match(api, /if \(handTyped\(m\.d\)\) noteOperatorInput\(id\);/, "the Desk pane websocket");
   assert.match(api, /if \(admin && \(req\.body\.by \|\| "operator"\) === "operator"\) noteOperatorInput\(s\.id\);/, "/input, admin + his by");
+  assert.match(api, /if \(ask\.session_id && by === "operator" && tokenOk\(req\.get\("x-mc-admin"\), CONFIG\.adminToken\)\) noteOperatorInput\(ask\.session_id\);/, "his answer to a terminal's ask from the Desk or phone");
   const term = read("terminal.ts");
   const send = term.slice(term.indexOf("export function sendInput("), term.indexOf("export function resize("));
   assert.ok(send.length > 0 && !send.includes("noteOperatorInput"), "sendInput is every hand's door — counting there would count Robert");

@@ -2872,6 +2872,9 @@ export function startServer() {
     const by = lead ? `lead:${lead.leadId.slice(0, 8)}` : req.body.by || "human";
     const out = await answerAsk(ask.id, req.body.answer, by);
     if (!out.ok) return res.status(out.status ?? 409).json({ error: out.error });
+    // His answer from the Desk or phone to a terminal's question is engagement with that terminal,
+    // same as typing it into the pane (src/proactive-score.ts). Robert answers with by "robert".
+    if (ask.session_id && by === "operator" && tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) noteOperatorInput(ask.session_id);
     res.json(out.ask);
   });
 
