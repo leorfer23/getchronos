@@ -17,6 +17,9 @@ import {
 import type { Job, RunStatus } from "./types.js";
 
 const TZ = "America/Argentina/Buenos_Aires";
+// jobHealth prints local times in CONFIG.slackTriageTz, which defaults to the machine's zone — pin it,
+// or the suite only passes on a Mac set to Buenos Aires (CI runners are UTC).
+(CONFIG as any).slackTriageTz = TZ;
 // 17:00 in Buenos Aires (UTC-3).
 const NOW = new Date("2026-11-02T20:00:00.000Z");
 const h = (hoursAgo: number) => new Date(NOW.getTime() - hoursAgo * 3_600_000).toISOString();
