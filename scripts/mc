@@ -525,6 +525,18 @@ const HELP = `mc — Mission Control backlog CLI
   mc vpn down                        drop your hold; the daemon turns it off a minute after the last
                                      hold ends (and never one the operator turned on by hand)
   mc vpn [status] [--json]           state, whether Chronos turned it on, who holds it
+  mc service [ls] [--workspace <slug>] [--json]
+                                     always-on processes the daemon keeps running (SERVICES.md): state,
+                                     uptime, restarts, CPU/RAM. A workspace token sees its own
+  mc service logs <name> [-f|--follow] [--tail N]
+                                     its output (-f follows). Restarting a service is the operator's:
+                                     ask for it, never kill its process yourself
+  mc service add <name> --workspace <slug> --cwd <abs dir> --command "<cmd>" [--ref <branch>]
+                     [--restart always|on-failure|never] [--env K=V]… [--start]       (operator)
+  mc service on|off|restart|deploy <name>   switch it on (now and at every boot) / off / restart /
+                                     check its --ref out in its cwd and restart              (operator)
+  mc service edit <name> [--command …] [--cwd …] [--ref …] [--restart …] [--env K=V] [--unset K]
+  mc service rm <name>                                                                       (operator)
   mc hosts [list]                    every computer (HOSTS.md): status, load, live terminals, version,
                                      what is wrong. Without the admin token: names, room, and whether
                                      your workspace may run there. Placement is automatic; --host pins
@@ -3772,6 +3784,102 @@ function askCap(question) {
         return;
       }
       die("mc vpn [status] | up | down  [--workspace <slug>] [--label x] [--json]");
+    }
+    // Services (SERVICES.md): always-on processes the daemon keeps running. Reading is open to the
+    // workspace's own terminals; defining or switching one is the operator's (admin token).
+    if (cmd === "service" || cmd === "services") {
+      const sub = cmd === "services" && !pos[1] ? "ls" : pos[1] || "ls";
+      const ws = opt.workspace && opt.workspace !== "true" ? opt.workspace : undefined;
+      const wsQ = ws ? "?workspace=" + encodeURIComponent(ws) : "";
+      const readH = process.env.MC_WORKSPACE_TOKEN ? undefined : (() => { const t = adminToken(); return t ? { "x-mc-admin": t } : undefined; })();
+      const val = (k) => (opt[k] && opt[k] !== "true" ? opt[k] : undefined);
+      const vals = (k) => (multi[k] || []).map((x) => String(x)).filter((x) => x && x !== "true");
+      const envPairs = () => {
+        const out = {};
+        for (const kv of vals("env")) {
+          const i = kv.indexOf("=");
+          if (i < 1) die(`--env takes K=V, got '${kv}'`);
+          out[kv.slice(0, i)] = kv.slice(i + 1);
+        }
+        for (const k of vals("unset")) out[k] = null;
+        return out;
+      };
+      const name = () => pos[2] || die(`usage: mc service ${sub} <name>`);
+      const svcPath = (n, rest = "") => `/services/${encodeURIComponent(n)}${rest}${wsQ}`;
+      const ago = (ms) => { const s = Math.round(ms / 1000); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 172800 ? `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m` : `${Math.floor(s / 86400)}d`; };
+      const line = (v) => {
+        const state = v.status === "running" ? `running ${v.uptime_ms != null ? ago(v.uptime_ms) : ""} · pid ${v.pid}` :
+          v.status === "backoff" ? `restarting at ${new Date(v.next_start_at).toLocaleTimeString()} (restart ${v.restarts})` :
+          v.status === "crashed" && v.next_start_at && v.enabled ? `crashed · trying again at ${new Date(v.next_start_at).toLocaleTimeString()}` : v.enabled ? v.status : "off";
+        const use = v.rss_mb != null ? ` · ${v.rss_mb} MB · ${v.cpu}% CPU` : "";
+        return `${v.enabled ? "●" : "○"} ${v.name.padEnd(16)} ${(v.workspace_slug || "").padEnd(12)} ${state}${use}${v.last_error && v.status !== "running" ? ` — ${v.last_error}` : ""}`;
+      };
+      if (sub === "ls" || sub === "list" || sub === "status") {
+        const out = await req("GET", "/services" + wsQ, undefined, readH);
+        if (opt.json) return console.log(JSON.stringify(out, null, 2));
+        if (!out.length) return console.log("no services" + (ws ? ` in ${ws}` : "") + " — the operator adds one with mc service add");
+        for (const v of out) console.log(line(v));
+        return;
+      }
+      if (sub === "show") {
+        const v = await req("GET", svcPath(name()), undefined, readH);
+        if (opt.json) return console.log(JSON.stringify(v, null, 2));
+        console.log(line(v));
+        console.log(`  command  ${v.command}\n  cwd      ${v.cwd}${v.ref ? `\n  ref      ${v.ref}` : ""}\n  restart  ${v.restart}${v.env_keys.length ? `\n  env      ${v.env_keys.join(", ")}` : ""}\n  log      ${v.log_file}`);
+        return;
+      }
+      if (sub === "logs" || sub === "log") {
+        const n = name();
+        const tail = Number(val("tail") ?? 20000);
+        let r = await req("GET", svcPath(n, "/logs") + (wsQ ? "&" : "?") + "tail=" + tail, undefined, readH);
+        process.stdout.write(r.data);
+        if (!(opt.follow || pos.includes("-f"))) return;
+        for (;;) {
+          await new Promise((res) => setTimeout(res, 1000));
+          r = await req("GET", svcPath(n, "/logs") + (wsQ ? "&" : "?") + "from=" + r.to, undefined, readH);
+          if (r.data) process.stdout.write(r.data);
+        }
+      }
+      const H = adminHeaders();
+      if (sub === "add") {
+        const body = {
+          workspace: ws || process.env.MC_WORKSPACE || die("--workspace <slug> is required"),
+          name: name(),
+          command: val("command") || die("--command \"<cmd>\" is required"),
+          cwd: val("cwd") || die("--cwd <absolute dir> is required"),
+          description: val("description"),
+          ref: val("ref"),
+          restart: val("restart"),
+          env: Object.fromEntries(Object.entries(envPairs()).filter(([, v]) => v != null)),
+          start: !!opt.start,
+        };
+        const v = await req("POST", "/services", body, H);
+        return console.log(opt.json ? JSON.stringify(v, null, 2) : line(v));
+      }
+      if (sub === "edit") {
+        const body = {};
+        for (const k of ["command", "cwd", "description", "ref", "restart"]) if (val(k) !== undefined) body[k] = val(k);
+        if (opt["no-ref"]) body.ref = null;
+        const env = envPairs();
+        if (Object.keys(env).length) body.env = env;
+        if (!Object.keys(body).length) die("nothing to change — pass --command, --cwd, --ref, --restart, --env K=V or --unset K");
+        const v = await req("PATCH", svcPath(name()), body, H);
+        console.log(line(v));
+        if (v.restart_needed) console.log(`  running the old definition — mc service restart ${v.name} to apply`);
+        return;
+      }
+      const ACT = { on: "start", start: "start", off: "stop", stop: "stop", restart: "restart", deploy: "deploy" };
+      if (ACT[sub]) {
+        const v = await req("POST", svcPath(name(), "/" + ACT[sub]), undefined, H);
+        if (opt.json) return console.log(JSON.stringify(v, null, 2));
+        if (v.deployed) console.log(`deployed ${v.ref} ${v.deployed.from.slice(0, 7)} → ${v.deployed.to.slice(0, 7)}${v.deployed.restarted ? " · restarted" : " · switched off, not started"}`);
+        return console.log(line(v));
+      }
+      if (sub === "rm" || sub === "delete") {
+        await req("DELETE", svcPath(name()), undefined, H);
+        return console.log(`deleted ${pos[2]} (its log stays on disk)`);
+      }
+      die("mc service [ls] | show | logs [-f] | add | edit | on | off | restart | deploy | rm  <name>  [--workspace <slug>] [--json]");
     }
     // The shared headless browser (`mc browser run` is handled before parse()).
     if (cmd === "browser") {

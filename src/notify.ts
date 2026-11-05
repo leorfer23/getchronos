@@ -38,6 +38,10 @@ export function startNotify() {
       desktop(`🔴 Chronos: ${t?.key ?? "PR"} CI failing`, `${t?.title ?? "Open PR"} — checks failed on the PR`);
       return;
     }
+    if (e.topic === "service.alarm") {
+      desktop(`🔴 Chronos: service ${e.name} is down`, String(e.reason ?? "").slice(0, 200));
+      return;
+    }
     if (e.topic === "auth.needed") {
       desktop(`🔐 Chronos: ${e.backend} needs login`, `${e.job_name} failed on auth — login terminal open in Mission Control`);
       return;

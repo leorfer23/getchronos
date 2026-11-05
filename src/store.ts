@@ -8,6 +8,8 @@ export { triggers } from "./store/triggers.js";
 export { workspaces } from "./store/workspaces.js";
 export { workspaceVars } from "./store/workspace-vars.js";
 export type { WorkspaceVar, PublicWorkspaceVar } from "./store/workspace-vars.js";
+export { services, envOf, RESTART_POLICIES, SERVICE_NAME_RE } from "./store/services.js";
+export type { Service, ServiceStatus, RestartPolicy, NewService, ServicePatch } from "./store/services.js";
 export { egressLog } from "./store/egress.js";
 export { activity } from "./store/activity.js";
 export { connectorSyncs } from "./store/connector-syncs.js";

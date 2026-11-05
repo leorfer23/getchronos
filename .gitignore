@@ -29,6 +29,8 @@ relay/.dev.vars
 chronos.db.*
 backups/
 sessions/
+# Services' output (src/services.ts): one rotated log per service.
+service-logs/
 projects/
 *.log
 *.log.*.gz

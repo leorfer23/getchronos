@@ -184,6 +184,7 @@ import { boardNudge, fileOutcome, normalizeOutcome, normalizeShow, saveShot, sho
 import { pressureWord, swapPctOf } from "./machine.js";
 import { machineBrowserBlock, mountBrowserRoutes } from "./resources/browser-routes.js";
 import { mountVpnRoutes } from "./vpn-routes.js";
+import { mountServiceRoutes } from "./service-routes.js";
 import { procsView } from "./resources/brain.js";
 import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
 import { hostName, reposOnHost } from "./hosts/workdir.js";
@@ -2238,6 +2239,8 @@ export function startServer() {
   mountBrowserRoutes(api);
   // `mc vpn`: a workspace's VPN on while its terminals/runs hold it (src/vpn.ts).
   mountVpnRoutes(api);
+  // Services: always-on processes the daemon keeps running (src/services.ts, SERVICES.md).
+  mountServiceRoutes(api);
 
   api.get("/stats", (_req, res) => {
     const days = (n: number) => new Date(Date.now() - n * 86400000).toISOString();

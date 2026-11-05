@@ -47,6 +47,9 @@ Attribution is **lineage observed while the parent is alive** (`src/resources/le
   and headless runs), the live channels on a host — **never `sessions.pid` from the DB**, which
   survives a restart and can then name anybody. A root is believed only if it is the spawner's
   **direct child** and started within [-5 s, +60 s] of when the spawner says it spawned it.
+- **Owner kinds:** `session` (a Desk terminal), `run` (a headless run), `service` (an always-on
+  process, SERVICES.md). A service counts against its workspace like the others, but the ladder never
+  renices or pauses it, and a budget warning has no one in it to tell.
 - **Owner = one incarnation** `(kind, id, root pid)`. promoteToLead / a model failover reopen the same
   session id under a new pid: the old incarnation ends, its leftovers are reaped, the new pty starts clean.
 - **Sticky**: an entry is keyed by `(pid, start time)` — a recycled pid is a stranger and the entry is

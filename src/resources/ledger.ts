@@ -89,12 +89,13 @@ export function parsePs(out: string): Proc[] {
 
 export const exeName = (comm: string): string => path.basename(comm);
 
-export type OwnerKind = "session" | "run";
+/** A Desk terminal, a headless run, or an always-on service (src/services.ts). */
+export type OwnerKind = "session" | "run" | "service";
 
 /** A process the daemon (or hostd) spawned and is still running, as its own in-memory list says. */
 export type Root = {
   kind: OwnerKind;
-  /** Session id for a terminal, run id for a headless run. */
+  /** Session id for a terminal, run id for a headless run, service id for a service. */
   id: string;
   pid: number;
   /** When the spawner says it spawned it (ms). Null = unknown (hostd): the direct-child rule alone then decides. */

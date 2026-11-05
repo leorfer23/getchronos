@@ -146,9 +146,10 @@ export type BusEvent = (
       count: number;
       rss_mb: number;
       cmd: string;
-      owner_kind: "session" | "run" | null;
+      owner_kind: "session" | "run" | "service" | null;
       session_id?: string | null;
       run_id?: string;
+      service_id?: string;
       workspace_id: string | null;
     }
   // The budget ladder (src/resources/ladder.ts, RESOURCES.md → PR 2): a workspace over its share of a
@@ -197,6 +198,10 @@ export type BusEvent = (
   | { topic: "inbox.updated"; workspace_id: string; item_id: string }
   | { topic: "launch.updated"; launch_id: string; workspace_id: string }
   | { topic: "launch.ran"; launch_id: string; workspace_id: string; session_id: string }
+  // Services (src/services.ts, SERVICES.md): a service's status changed; or it gave up — a crash loop,
+  // or a failed exit its restart policy leaves down — and the operator should look.
+  | { topic: "service.changed"; service_id: string; workspace_id: string; name: string; status: string }
+  | { topic: "service.alarm"; service_id: string; workspace_id: string; name: string; status: string; reason: string }
   | { topic: "focus.event"; session_id: string; event: unknown }
   // The board (src/board.ts, store/board.ts) — the Buzz-channel replacement. Fires on every post;
   // `depth` is the wake-chain depth (operator/system posts are 0, an exec's auto-reply is parent+1)

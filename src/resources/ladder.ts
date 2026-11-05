@@ -165,7 +165,7 @@ export type LadderEvent =
       cmd: string;
       rss_mb: number;
       cpu: number;
-      owner_kind: "session" | "run" | null;
+      owner_kind: "session" | "run" | "service" | null;
       session_id?: string | null;
       run_id?: string;
     }
@@ -644,7 +644,8 @@ export class Ladder {
     // candidate's owned ancestors need theirs for the keep-list: read both, once per process.
     const owned = [...this.ledger.entries.values()].filter((e) => {
       const o = this.ledger.owners.get(e.owner);
-      return o && !o.ended && key(o.workspaceId) === k && !isPaused.has(e.pid) && maybeHeavy(e, this.cfg, this.deps.reaper);
+      // Never a service's process: a SIGSTOPped bot or API is an outage, not a lighter workspace.
+      return o && !o.ended && o.kind !== "service" && key(o.workspaceId) === k && !isPaused.has(e.pid) && maybeHeavy(e, this.cfg, this.deps.reaper);
     });
     if (!owned.length) return;
     const read = await readChains(this.ledger, owned.map((e) => e.pid), this.deps.args, this.deps.reaper);
@@ -791,7 +792,8 @@ export function heavyTops(
   const heavy = new Set<number>();
   for (const e of ledger.entries.values()) {
     const o = ledger.owners.get(e.owner);
-    if (!o || o.ended || key(o.workspaceId) !== k || e.pid === o.rootPid) continue;
+    // A service is meant to run all day: slowing it (a renice is one-way) would outlast the strain.
+    if (!o || o.ended || o.kind === "service" || key(o.workspaceId) !== k || e.pid === o.rootPid) continue;
     if (isHeavy(e, cfg, rc)) heavy.add(e.pid);
   }
   const out: SlowTop[] = [];
