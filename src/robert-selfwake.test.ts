@@ -206,3 +206,17 @@ test("sweepOnce: at most one self-wake per pass across workspaces — the post-d
   sweepOnce(5);
   assert.equal(wakes().length, 2, "the other one next pass; the first is not due again yet");
 });
+
+test("selfwakeOnce: a workspace whose proactive terminals he keeps ignoring gets no look (proactive-score backs it off)", () => {
+  reset();
+  const w = quietWs();
+  rewriteBrief(w.id, BRIEF_SEED.replace("## Next\n", "## Next\n- [ ] one thing\n"));
+  for (let i = 0; i < 8; i++) {
+    const s = term(w.id, { created_by: PROACTIVE_BY });
+    db.prepare("UPDATE sessions SET status='ended', created_at=? WHERE id=?").run(new Date(NOW - 2 * 24 * HOUR).toISOString(), s.id);
+  }
+  assert.equal(selfwakeOnce(w, NOW), "backed off");
+  assert.equal(wakes().length, 0);
+  writeSetting("robert.proactive_autotune", false, w.id);
+  assert.equal(selfwakeOnce(w, NOW), null, "autotune off: he looks again");
+});

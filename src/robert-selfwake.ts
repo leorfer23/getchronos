@@ -26,6 +26,7 @@ import { briefNote, nextItemText, normalizeBrief } from "./briefs.js";
 import { jobHealth } from "./job-check.js";
 import { isStopped } from "./robert-drive.js";
 import { PROACTIVE_AUTO_BY } from "./inbox-guard.js";
+import { proactiveAllowed } from "./proactive-score.js";
 import { setting, settingOn } from "./settings.js";
 import { asks, db, inbox, kv, sessionPrs, sessions, workspaces } from "./store.js";
 import { statusOf, type TermStatus } from "./term-status.js";
@@ -180,6 +181,9 @@ export function selfwakeOnce(ws: Workspace, nowMs = Date.now()): string | null {
   if (nowMs - last < every) return "not due";
   if (dormant(ws.id, nowMs)) return "dormant";
   if (capRefusal(ws.id, nowMs)) return "capped";
+  // He has been ignoring the terminals this opens here (proactive-score.ts): no turn spent on a look
+  // whose one move would be refused anyway.
+  if (!proactiveAllowed(PROACTIVE_BY, ws.id, nowMs)) return "backed off";
 
   const now = signals(ws, nowMs);
   let before: string[] = [];

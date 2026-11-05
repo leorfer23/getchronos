@@ -19,7 +19,7 @@ import { nameError as varNameError, expiryFromHours } from "./store/workspace-va
 import { answerAsk, notifyAskCreated, resolveAsk, waitForAskAnswer } from "./asks.js";
 import { holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { operatorAnswered, operatorKeys } from "./ask-in-terminal.js";
-import { handTyped, noteOperatorInput, proactiveStats } from "./proactive-score.js";
+import { handTyped, noteOperatorInput, proactiveAllowed, proactiveStats } from "./proactive-score.js";
 import { deliverPending, resolveMessageTarget, sendMessage } from "./messages.js";
 import { egressCfg, egressPort, syncEgress } from "./egress.js";
 import { createSkill, skillBody, skillRef, patchSkill, appendSkill, setSkillStatus, removeSkill, useSkill } from "./skills.js";
@@ -3004,7 +3004,7 @@ export function startServer() {
   // Robert's self-wake opens at most one terminal through here; the caps are the daemon's, not his.
   api.post("/robert/proactive", requireAdmin, validate(ProactiveOpenSchema), async (req, res) => {
     try {
-      const r = await openProactive(req.body, (o) => openSession(o));
+      const r = await openProactive(req.body, (o) => openSession(o), { allowed: proactiveAllowed });
       if (!r.ok) return res.status(r.status).json({ error: r.error });
       res.status(201).json({ id: r.id });
     } catch (e: any) {
