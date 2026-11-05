@@ -600,7 +600,7 @@ export function startServer() {
   });
 
   // Drive an interactive CLI login (opens a browser); resolves when the session is established.
-  api.post("/backends/:name/login", async (req, res) => {
+  api.post("/backends/:name/login", requireAdmin, async (req, res) => {
     const b = getBackend(req.params.name);
     if (!b.login) return res.status(400).json({ error: `${b.name} has no login flow` });
     try {
@@ -1312,7 +1312,7 @@ export function startServer() {
   // What the operator just copied, readable by an agent that has no clipboard of its own. Scoped like any
   // other read: the daemon is the one with hands on the Mac, so this works for a sandboxed agent
   // too. Every call is a `clipboard.read` bus event naming the caller — the content never is.
-  api.get("/clipboard", async (req, res) => {
+  api.get("/clipboard", requireAdmin, async (req, res) => {
     const scope = callerScope(req);
     if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
     if (!clipboardEnabled()) return res.status(403).json({ error: "clipboard access is disabled (CHRONOS_CLIPBOARD=0)" });
@@ -1888,6 +1888,13 @@ export function startServer() {
   api.post("/notes", validate(NewNoteSchema), (req, res) => {
     try {
       if (rejectsGlobal(req, res)) return;
+      // A ★ memo in another client's workspace would land in that client's agents' prompts.
+      const scope = callerScope(req);
+      if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+      if (scope.ws !== null) {
+        if (req.body?.workspace_id && req.body.workspace_id !== scope.ws) return res.status(404).json({ error: "workspace not found" });
+        req.body = { ...req.body, workspace_id: scope.ws };
+      }
       res.status(201).json(publicNote(noteSvc.createNote(req.body || {})));
     } catch (e: any) {
       res.status(400).json({ error: String(e?.message ?? e) });
@@ -2135,9 +2142,12 @@ export function startServer() {
   // should be able to write the rule down without waiting for the operator to do it.
   api.get("/lessons", (req, res) => {
     const { workspace, repo, state, topic } = req.query as Record<string, string | undefined>;
+    const scope = callerScope(req);
+    if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    if (scope.ws !== null && workspace && workspace !== scope.ws) return res.status(404).json({ error: "workspace not found" });
     res.json(
       lessons.list({
-        workspace_id: workspace,
+        workspace_id: scope.ws ?? workspace,
         repo_id: repo,
         state: state as LessonState | undefined,
         topic,
@@ -2146,6 +2156,17 @@ export function startServer() {
   });
 
   api.post("/lessons", validate(NewLessonSchema), (req, res) => {
+    const scope = callerScope(req);
+    if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    if (scope.ws !== null) {
+      // An agent files a lesson for its own workspace, as itself, for the operator to promote.
+      if (req.body.workspace_id !== scope.ws) return res.status(404).json({ error: "workspace not found" });
+      if (req.body.source === "operator") return res.status(403).json({ error: "only the operator files a lesson as the operator" });
+      if (req.body.state === "active") return res.status(403).json({ error: "only the operator makes a lesson active" });
+      // The store's defaults are source "operator" + state "active" (straight into prompts): an agent's
+      // lesson is a proposal until the operator promotes it.
+      req.body = { ...req.body, source: req.body.source ?? "review", state: "proposed" };
+    }
     if (!workspaces.get(req.body.workspace_id))
       return res.status(404).json({ error: "workspace not found" });
     if (req.body.repo_id && !repos.get(req.body.repo_id))
@@ -2155,7 +2176,7 @@ export function startServer() {
 
   // Both edit and delete announce the rule as it was and as it is: a comms rule that changed, moved
   // topic or went away leaves that workspace's voice page stale (prose.ts rewrites it).
-  api.patch("/lessons/:id", validate(PatchLessonSchema), (req, res) => {
+  api.patch("/lessons/:id", requireAdmin, validate(PatchLessonSchema), (req, res) => {
     const before = lessons.get(req.params.id);
     if (!before) return res.status(404).json({ error: "lesson not found" });
     const after = lessons.update(req.params.id, req.body);
@@ -2164,7 +2185,7 @@ export function startServer() {
     res.json(after);
   });
 
-  api.delete("/lessons/:id", (req, res) => {
+  api.delete("/lessons/:id", requireAdmin, (req, res) => {
     const before = lessons.get(req.params.id);
     lessons.remove(req.params.id);
     if (before) publishLesson(before, "deleted");
@@ -2176,25 +2197,27 @@ export function startServer() {
   // own merged code must never again be invisible to everything that reports on it.
   // `operational` is the trust layer on top: ok stays true for launchd/Buzz presence, but
   // operational.status can be "degraded" when connectors, recoveries, or stale reviews need a human.
-  api.get("/health", (_req, res) => {
+  api.get("/health", (req, res) => {
+    // Public liveness; the rollup names every workspace and its connector errors — operator only.
+    if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return res.json({ ok: true });
     res.json({ ok: true, ...dispatchStatus(), deploy: deployStatus(), operational: operationalHealth() });
   });
 
   // Same snapshot as /health.operational, exposed on its own so Fleet/Inbox can poll without the
   // spend/concurrency rollup. Read-only; never mutates.
-  api.get("/operational", (_req, res) => {
+  api.get("/operational", requireAdmin, (_req, res) => {
     res.json(operationalHealth());
   });
 
   // What each provider credential has left, and the last few dispatch verdicts that read it. Read
   // this BEFORE opening several terminals on one backend (agents/_blocks/quota.md says so): the
   // snapshot is the only place that knows a profile is rate-limited until 14:00 or never logged in.
-  api.get("/quota", (_req, res) => {
+  api.get("/quota", requireAdmin, (_req, res) => {
     res.json({ mode: gateMode(), snapshot: quotaSnapshot(), decisions: recentDecisions() });
   });
 
   // Subscription usage as each vendor reports it (usage-meter.ts): the Desk bar's chips + `mc usage`.
-  api.get("/usage", (_req, res) => {
+  api.get("/usage", requireAdmin, (_req, res) => {
     res.json(usageSnapshot());
   });
   // `mc statusline claude` — every Claude session's statusLine hands us its rate_limits.
@@ -2226,7 +2249,12 @@ export function startServer() {
       pressure: pressureWord(load.pressureLevel),
       swapUsedPct: swapPctOf(load),
       admission,
-      heavy: { slots: host.slots.size(), holders: host.slots.holders(), waiting: host.slots.waiting() },
+      heavy: {
+        slots: host.slots.size(),
+        // Another client's slot names its session, workspace and command: a workspace token sees its own.
+        holders: host.slots.holders().filter((h) => { const ws = callerScope(req)?.ws ?? null; return ws === null || h.workspace_id === ws; }),
+        waiting: host.slots.waiting(),
+      },
       vitals: samples,
       // Who holds what on this Mac (RESOURCES.md): per terminal/run and per workspace, from the
       // reaper's ledger. Brain only — a host's ledger lives on that host. A workspace token sees its
@@ -2243,6 +2271,13 @@ export function startServer() {
   // here through that host's forwarder, and gets that host's pool (`ncpu / 6` of that machine). All
   // pools live on the brain, in memory on purpose — a slot outliving a daemon restart would be a
   // permit nobody can release — and a terminal's slots are freed when it ends (machine.ts).
+  // A workspace token may beat or release only a slot its own workspace holds.
+  const slotIsCallers = (req: express.Request, holders: Array<{ slot_id: string; workspace_id: string | null }>, id: string) => {
+    const ws = callerScope(req)?.ws ?? null;
+    if (ws === null) return true;
+    const h = holders.find((x) => x.slot_id === id);
+    return !h || h.workspace_id === ws; // unknown id → the pool's own 404/false answers
+  };
   const slotsFor = (req: express.Request, res: express.Response) => {
     const host = callerHost(req);
     if (!host) res.status(409).json({ error: "the forwarding host is not registered on this brain" });
@@ -2273,6 +2308,7 @@ export function startServer() {
     if (!checkToken(req, res)) return;
     const heavySlots = slotsFor(req, res);
     if (!heavySlots) return;
+    if (!slotIsCallers(req, heavySlots.holders(), req.params.id)) return res.status(404).json({ error: "slot not held (reclaimed?)" });
     if (!heavySlots.beat(req.params.id)) return res.status(404).json({ error: "slot not held (reclaimed?)" });
     res.json({ ok: true });
   });
@@ -2280,6 +2316,7 @@ export function startServer() {
     if (!checkToken(req, res)) return;
     const heavySlots = slotsFor(req, res);
     if (!heavySlots) return;
+    if (!slotIsCallers(req, heavySlots.holders(), req.params.id)) return res.json({ released: false });
     res.json({ released: heavySlots.release(req.params.id) });
   });
 
@@ -2290,7 +2327,7 @@ export function startServer() {
   // Services: always-on processes the daemon keeps running (src/services.ts, SERVICES.md).
   mountServiceRoutes(api);
 
-  api.get("/stats", (_req, res) => {
+  api.get("/stats", requireAdmin, (_req, res) => {
     const days = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
     const counts = runs.statusCounts(days(30));
     const done = (counts.success ?? 0) + (counts.failed ?? 0) + (counts.timeout ?? 0);
@@ -2344,17 +2381,17 @@ export function startServer() {
   });
 
   // One-glance fleet board: per-workspace live runs, queue, today's outcomes, PRs, spend + 5h tokens.
-  api.get("/fleet", (_req, res) => {
+  api.get("/fleet", requireAdmin, (_req, res) => {
     res.json(fleetData());
   });
 
   // Flow home view: state counters + the open queue + shipped (review/recently-done) work, enriched.
-  api.get("/flow", (_req, res) => {
+  api.get("/flow", requireAdmin, (_req, res) => {
     res.json(flowData());
   });
 
   // Per-client cost ledger: headless runs by stage + Desk terminals. Defaults to month-to-date.
-  api.get("/costs", (req, res) => {
+  api.get("/costs", requireAdmin, (req, res) => {
     const from = (req.query.from as string) || new Date().toISOString().slice(0, 7) + "-01";
     const to = (req.query.to as string) || new Date().toISOString();
     const workspace = req.query.workspace as string | undefined;
@@ -2387,7 +2424,7 @@ export function startServer() {
 
   // Daily cost/token time-series for the Fleet trend charts. One row per (day, model, workspace).
   // Defaults to the last 30 days. Frontend pivots by model / workspace / % share.
-  api.get("/costs/daily", (req, res) => {
+  api.get("/costs/daily", requireAdmin, (req, res) => {
     const to = (req.query.to as string) || new Date().toISOString();
     const from =
       (req.query.from as string) || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
@@ -2472,7 +2509,7 @@ export function startServer() {
   });
 
   // Client billing pack: a weekly per-workspace work report. Defaults to the last 7 days.
-  api.get("/report", (req, res) => {
+  api.get("/report", requireAdmin, (req, res) => {
     const workspace = req.query.workspace as string | undefined;
     if (!workspace) return res.status(400).json({ error: "workspace required" });
     const to = (req.query.to as string) || new Date().toISOString();
@@ -2888,7 +2925,7 @@ export function startServer() {
 
   // "Later" is an answer: date the question off the live list instead of leaving it live or
   // fabricating a reply. `until: null` lifts the hold; answering it lifts it too (store/asks.ts).
-  api.post("/asks/:id/hold", validate(HoldSchema), (req, res) => holdRoute(req, res, "ask"));
+  api.post("/asks/:id/hold", requireAdmin, validate(HoldSchema), (req, res) => holdRoute(req, res, "ask"));
 
   // Long-poll: resolves as soon as the ask is answered, else after timeout_ms (capped at 55s — under
   // Express/proxy idle timeouts) with the still-open row. `mc ask` loops this to cover its full wait.
@@ -3197,7 +3234,11 @@ export function startServer() {
   };
 
   api.get("/workspaces", (req, res) => {
-    const all = workspaces.list(req.query.archived === "1");
+    // A workspace token sees its own workspace and nothing else: the list named every client — ids,
+    // repo paths and remotes, account, Slack/egress/VPN config — to any agent that asked.
+    const scope = callerScope(req);
+    if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    const all = workspaces.list(req.query.archived === "1").filter((w) => scope.ws === null || w.id === scope.ws);
     const syncs = connectorSyncs.latestByWorkspace();
     // Asked from a terminal on another computer (the forwarder's stamp, never the caller's): each repo
     // also carries `host_path`, that computer's checkout of it, or null — `repos.path` is the brain's.
@@ -3908,7 +3949,7 @@ export function startServer() {
     }
   });
 
-  api.post("/workspaces/:id/sync", async (req, res) => {
+  api.post("/workspaces/:id/sync", requireAdmin, async (req, res) => {
     const w = workspaces.get(req.params.id);
     if (!w) return res.status(404).json({ error: "not found" });
     try {
@@ -4031,7 +4072,7 @@ export function startServer() {
   // Gate commands this repo's own build files imply — npm scripts, pytest, go test, cargo, flutter,
   // dbt, gradle, make. Read-only suggestion: attaching a repo shouldn't mean the operator (or Robert)
   // remembering every stack's incantation. Nothing runs until it's saved to gate_cmds.
-  api.get("/repos/:id/gates/suggest", (req, res) => {
+  api.get("/repos/:id/gates/suggest", requireAdmin, (req, res) => {
     const repo = repos.get(req.params.id);
     if (!repo) return res.status(404).json({ error: "repo not found" });
     res.json({ current: parseGates(repo), suggested: suggestGates(repo.path) });
@@ -4197,6 +4238,8 @@ export function startServer() {
     const t = tickets.get(req.params.id);
     if (!t) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, t.workspace_id)) return;
+    // A link shows the other ticket's key, title, status and URL — and can block it: same workspace only.
+    if (tickets.get(req.body.to_id)?.workspace_id !== t.workspace_id) return res.status(404).json({ error: "ticket not found" });
     try {
       res.status(201).json(ticketLinks.add(req.params.id, req.body.to_id, req.body.type));
     } catch (e: any) {
@@ -4552,7 +4595,7 @@ export function startServer() {
   // same reason triggers are: a watch is a persistent, unattended, credentialed call, and a
   // sandboxed workspace agent must not be able to mint one. The executives (who hold the token)
   // create these for themselves; Robert on Telegram PROPOSEs it and it lands on the safe tier.
-  api.get("/watches", (req, res) => {
+  api.get("/watches", requireAdmin, (req, res) => {
     const scope = callerScope(req);
     if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
     const list = watches.list({
@@ -4594,9 +4637,9 @@ export function startServer() {
   // ──────────────────────────── Mission Control: recovery ────────────────────────────
   // Work that stopped without finishing. Listing is open (it's the same read every surface makes);
   // deciding is admin-gated, because approving spends money by re-dispatching an agent.
-  api.get("/recovery", (req, res) => res.json(filterByBucket(listStalls(), parseBucketFilter(req.query.bucket))));
+  api.get("/recovery", requireAdmin, (req, res) => res.json(filterByBucket(listStalls(), parseBucketFilter(req.query.bucket))));
 
-  api.post("/recovery/:id/hold", validate(HoldSchema), (req, res) => holdRoute(req, res, "recovery"));
+  api.post("/recovery/:id/hold", requireAdmin, validate(HoldSchema), (req, res) => holdRoute(req, res, "recovery"));
 
   api.post("/recovery/decide", requireAdmin, async (req, res) => {
     const id = String(req.body?.id ?? "");
@@ -4619,7 +4662,7 @@ export function startServer() {
     res.json(filterByBucket(mine, parseBucketFilter(req.query.bucket)));
   });
 
-  api.post("/reviews/:id/hold", validate(HoldSchema), (req, res) => holdRoute(req, res, "review"));
+  api.post("/reviews/:id/hold", requireAdmin, validate(HoldSchema), (req, res) => holdRoute(req, res, "review"));
 
   api.get("/reviews/:id", (req, res) => {
     const r = reviews.get(req.params.id);
@@ -4642,11 +4685,11 @@ export function startServer() {
         res.status(502).json({ error: String(e?.message ?? e) });
       }
     };
-  api.post("/reviews/:id/approve", validate(ReviewNotesSchema), reviewAction(approve));
-  api.post("/reviews/:id/changes", validate(ReviewNotesSchema), reviewAction(requestChanges));
-  api.post("/reviews/:id/merge", validate(ReviewNotesSchema), reviewAction(merge));
+  api.post("/reviews/:id/approve", requireAdmin, validate(ReviewNotesSchema), reviewAction(approve));
+  api.post("/reviews/:id/changes", requireAdmin, validate(ReviewNotesSchema), reviewAction(requestChanges));
+  api.post("/reviews/:id/merge", requireAdmin, validate(ReviewNotesSchema), reviewAction(merge));
   // Third exit: close the review row without shipping (approve) or reopening the ticket (changes).
-  api.post("/reviews/:id/dismiss", validate(ReviewNotesSchema), reviewAction(dismiss));
+  api.post("/reviews/:id/dismiss", requireAdmin, validate(ReviewNotesSchema), reviewAction(dismiss));
 
   // Dispatch the AI reviewer for a pending review (manual trigger; auto when workspace auto_review).
   api.post("/reviews/:id/dispatch-review", (req, res) => {
@@ -4673,7 +4716,7 @@ export function startServer() {
   });
 
   // ───────────────────────────── Mission Control: calendar ─────────────────────────────
-  api.get("/calendars", (_req, res) => res.json(calendars.list()));
+  api.get("/calendars", requireAdmin, (_req, res) => res.json(calendars.list()));
 
   api.post("/calendars", requireAdmin, validate(NewCalendarSchema), async (req, res) => {
     try {
