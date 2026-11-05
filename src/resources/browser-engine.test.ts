@@ -352,6 +352,27 @@ test("a browser that dies takes its leases with it, reported to the pool", async
   assert.equal(eng.status().running, false);
 });
 
+test("a profile dir that will not go is logged, never thrown: stop resolves and nothing rejects later", async () => {
+  const logs: string[] = [];
+  const { eng } = engine("g", { log: (l) => logs.push(l) });
+  const rejected: unknown[] = [];
+  const onRejection = (r: unknown) => rejected.push(r);
+  process.on("unhandledRejection", onRejection);
+  await eng.open();
+  const dir: string = (eng as any).run.dir;
+  fs.writeFileSync(path.join(dir, "Cookies"), "x");
+  fs.chmodSync(dir, 0o500); // its file cannot be unlinked → rm fails (EACCES), like a helper still holding it
+  try {
+    await eng.stop("test");
+    await settle();
+    assert.deepEqual(rejected, [], "teardown's rm-on-exit must not reject into the void");
+    assert.ok(logs.some((l) => /could not remove profile-\S+: (EACCES|EPERM|ENOTEMPTY)/.test(l)), logs.join("\n"));
+  } finally {
+    process.off("unhandledRejection", onRejection);
+    fs.chmodSync(dir, 0o700);
+  }
+});
+
 test("no engine installed: open fails with the install line, and a disabled engine refuses", async () => {
   const eng = new ChromeEngine({ cfg: cfg(), dataDir: path.join(tmp, "f"), find: () => ({ found: null, error: "no headless browser installed on this machine — install one: npx x" }), log: () => {} });
   await assert.rejects(eng.open(), /no headless browser installed/);
