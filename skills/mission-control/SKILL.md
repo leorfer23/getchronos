@@ -106,6 +106,7 @@ mc state working "bisecting the 3am failure"               # the line under your
 mc state waiting "CI on PR #214" --on ci --eta 12m         # BEFORE you stop to wait on anything that isn't the operator
 mc state waiting "the export terminal (a1b2c3d4)" --on terminal
 mc when pr <url> --until approved --note "merge it"           # waiting hours/days? park it — Chronos continues you when it happens
+mc pr checks <url>                                         # a PR's CI, review and mergeable — not `gh pr checks` (a workspace's own GitHub token cannot read check runs)
 mc state blocked "need write access to the prod bucket" --reason auth   # a wall
 mc state decide "drop the legacy view or keep it? I'd drop it"          # only when mc ask-robert doesn't fit
 mc goal done                                               # objective reached → ✅ review (write the Summary first)

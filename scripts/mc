@@ -281,6 +281,8 @@ const HELP = `mc — Mission Control backlog CLI
   mc pad add "<title>" [--body "..."] [--follow <when> [--check "..."]]   park a thought (body may be piped on stdin) — any terminal, own client
   mc pad follow <id> <when> [--check "what to look at"]   an agent opens a terminal on this row at <when>: +2d, tomorrow 9:00, monday 10, 2026-10-01 14:00
   mc pad follow <id> off             cancel the follow-up
+  mc pr checks <url> [--json]       a PR of this workspace: state, review, mergeable and every CI check — use it
+                                     instead of \`gh pr checks\` (a workspace's own GitHub token cannot read check runs)
   mc when <condition> [--note "what you will do then"] [--timeout 3d] [--every 5m] [--then auto|resume|new]
                                      park THIS terminal's work until the condition holds, then continue it: typed
                                      into this terminal if open, else reopened on the same transcript, else a fresh
@@ -2917,6 +2919,20 @@ function askCap(question) {
     // Shared vars — env the operator handed THIS workspace, with a shelf life. They are already in
     // the environment of any terminal spawned after they were added; `export` is how a terminal that
     // was ALREADY open picks up one added mid-session, without the value ever hitting the screen.
+    if (cmd === "pr") {
+      // A workspace on a fine-grained GitHub token cannot read check runs (GitHub offers such tokens
+      // no Checks permission), so `gh pr checks` fails there. The daemon reads them, for this
+      // workspace's own PRs only (src/pr-checks.ts).
+      if (pos[1] !== "checks" || !pos[2]) die("mc pr checks <https://github.com/owner/repo/pull/N> [--json]");
+      const wsQ = !process.env.MC_WORKSPACE_TOKEN && (opt.workspace || process.env.MC_WORKSPACE)
+        ? "&workspace=" + encodeURIComponent(opt.workspace || process.env.MC_WORKSPACE) : "";
+      const r = await req("GET", "/prs/checks?url=" + encodeURIComponent(pos[2]) + wsQ);
+      if (opt.json) return console.log(JSON.stringify(r, null, 2));
+      const icon = { passing: "✓", failing: "✗", pending: "…" };
+      console.log(`${r.state ?? "?"}${r.isDraft ? " (draft)" : ""} · review ${String(r.reviewDecision || "none").toLowerCase()} · mergeable ${String(r.mergeable ?? "?").toLowerCase()} · CI ${r.ci ?? "none"}`);
+      for (const c of r.checks) console.log(`  ${icon[c.state] ?? "?"} ${c.name}${c.state === "failing" && c.url ? "  " + c.url : ""}`);
+      return;
+    }
     if (cmd === "vars" || cmd === "var") {
       const wsId = opt.workspace || process.env.MC_WORKSPACE;
       if (!wsId) die("vars needs --workspace or MC_WORKSPACE");

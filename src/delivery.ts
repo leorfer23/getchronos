@@ -2,7 +2,7 @@ import { tickets, repos, workspaces, reviews } from "./store.js";
 import { updateTicket, dispatchCiFix, ticketBranch } from "./tickets.js";
 import { maybeRunGate } from "./merge-gate.js";
 import { dismiss } from "./reviews.js";
-import { childEnv } from "./child-env.js";
+import { childEnv, ghReadEnv } from "./child-env.js";
 import { execFileTimed } from "./exec.js";
 import { bus } from "./bus.js";
 import { CONFIG } from "./config.js";
@@ -237,7 +237,7 @@ export async function reconcileOrphanReviews(limit = MAX_ORPHAN_RECONCILE): Prom
     if (!repo?.path) continue;
     const ws = workspaces.get(t.workspace_id);
     const branch = ticketBranch(t.key);
-    const parsed = await viewPr(branch, repo.path, childEnv(ws) as NodeJS.ProcessEnv);
+    const parsed = await viewPr(branch, repo.path, ghReadEnv(ws)); // a read: see child-env.ts ghReadEnv
     if (!parsed?.url || !isPrUrl(parsed.url)) continue;
 
     const ci = ciRollup(parsed.statusCheckRollup);
@@ -295,7 +295,7 @@ export async function pollDeliveries(now = new Date()): Promise<void> {
     try {
       raw = (await execFileTimed("gh", ["pr", "view", t.pr_url, "--json", "state,statusCheckRollup"], {
         cwd,
-        env: childEnv(ws),
+        env: ghReadEnv(ws), // a read: see child-env.ts ghReadEnv
         encoding: "utf8",
       })).stdout.trim();
     } catch (e: any) {

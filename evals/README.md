@@ -62,7 +62,7 @@ worse rather than the prompt losing a section:
   goal; `disallowed_tools` + `isReadOnlyRun(job.name)` so a merge never parks on an ask.
 - **Grade** — read-only difficulty 1-5 scale, `mc grade`, no status flip; tool ban + `grade:` prefix
   so it never parks.
-- **CI-fix** — the open PR URL, real inspection via `gh pr checks` / `gh run view --log-failed`
+- **CI-fix** — the open PR URL, real inspection via `mc pr checks` / `gh run view --log-failed`
   (don't guess), push to the same branch, never open a new PR.
 - **Merge-gate** — CI + final `gh pr diff`, repo gate commands, machine-readable
   `MERGE-GATE: APPROVE` / `HOLD` verdict lines, and the hard rule that Chronos owns `gh pr merge`.

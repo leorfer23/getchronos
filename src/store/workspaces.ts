@@ -6,6 +6,19 @@ import { db } from "./db.js";
 import { now } from "./util.js";
 import { mergeConnectorConfigWithSentinel } from "../redact.js";
 import type { NewWorkspace, Workspace } from "../types.js";
+import { parseEnvFile } from "../env-file.js";
+import { expandHome, hasOwnGithub, operatorGhDir } from "../gh-env.js";
+import { workspaceVars } from "./workspace-vars.js";
+
+/** A workspace's GitHub credential as its env carries it: its own (token or login dir) and that dir. */
+function githubOf(id: string, secretsFile: string | null): { own: boolean; dir: string | null } {
+  const env: Record<string, string> = {};
+  if (secretsFile) {
+    try { Object.assign(env, parseEnvFile(path.resolve(process.cwd(), secretsFile))); } catch { /* unreadable = none */ }
+  }
+  try { Object.assign(env, workspaceVars.active(id)); } catch { /* store hiccup = none */ }
+  return { own: hasOwnGithub(env), dir: env.GH_CONFIG_DIR?.trim() ? expandHome(env.GH_CONFIG_DIR) : null };
+}
 
 export const workspaces = {
   list(includeArchived = false): Workspace[] {
@@ -200,6 +213,17 @@ export const workspaces = {
       if (o.config_dir && o.config_dir !== me?.config_dir) {
         extra.push(path.join(o.config_dir, "projects"), path.join(o.config_dir, "history.jsonl"));
       }
+    }
+    // GitHub: a workspace with its own credential never reaches the operator's login (which sees
+    // every org), and no workspace reaches another's gh login dir (gh-env.ts).
+    const meRow = db.prepare(`SELECT secrets_file FROM workspaces WHERE id = ?`).get(workspaceId) as { secrets_file: string | null } | undefined;
+    const myGh = githubOf(workspaceId, meRow?.secrets_file ?? null);
+    const opGh = operatorGhDir();
+    if (myGh.own) extra.push(opGh);
+    const otherGh = db.prepare(`SELECT id, secrets_file FROM workspaces WHERE id != ?`).all(workspaceId) as Array<{ id: string; secrets_file: string | null }>;
+    for (const o of otherGh) {
+      const g = githubOf(o.id, o.secrets_file);
+      if (g.dir && g.dir !== myGh.dir && g.dir !== opGh) extra.push(g.dir);
     }
     const worktrees = otherRoots.map((r) => worktreeRootFor(r.p));
     return [...new Set([...otherRoots.map((r) => r.p), ...worktrees, ...otherSecrets.map((r) => r.p), ...extra])];

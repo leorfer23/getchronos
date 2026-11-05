@@ -24,7 +24,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import { execFileTimed } from "./exec.js";
-import { childEnv } from "./child-env.js";
+import { childEnv, ghReadEnv } from "./child-env.js";
 import { ciRollup, isPrUrl } from "./delivery.js";
 import { artifactsFromFeed } from "./session-artifacts.js";
 import { prBelongsTo } from "./pr-ownership.js";
@@ -157,11 +157,12 @@ export async function pollSessionPrs(nowMs = Date.now()): Promise<string[]> {
     if (!auto && (ws.archived || nowMs - Date.parse(row.updated_at) < TRACK_POLL_MS)) continue;
     views++;
     const cwd = fs.existsSync(row.cwd) ? row.cwd : os.homedir();
-    const env = childEnv(ws);
+    const env = childEnv(ws); // the merge: the workspace's own credential
+    const readEnv = ghReadEnv(ws); // the look (state + CI): see child-env.ts ghReadEnv
 
     let v: PrView;
     try {
-      v = JSON.parse(await gh(["pr", "view", row.url, "--json", "state,isDraft,author,createdAt,statusCheckRollup,reviewDecision,mergeable,title"], cwd, env));
+      v = JSON.parse(await gh(["pr", "view", row.url, "--json", "state,isDraft,author,createdAt,statusCheckRollup,reviewDecision,mergeable,title"], cwd, readEnv));
     } catch (e: any) {
       sessionPrs.touch(row.url); // to the back of the line, so one broken PR cannot hold up the rest
       const k = `${row.url}:${day}:view`;

@@ -252,7 +252,7 @@ test("ci-fix goal: real CI inspection on the existing PR branch", async () => {
 
   assert.ok(goal.includes(ticket.key), "CI-fix agent is never told which ticket it is fixing");
   assert.ok(goal.includes(prUrl), "lost the PR URL — agent cannot inspect the failing checks");
-  assert.ok(goal.includes(`gh pr checks ${prUrl}`), "lost the real-CI inspection step — agent would guess at the failure");
+  assert.ok(goal.includes(`mc pr checks ${prUrl}`), "lost the real-CI inspection step — agent would guess at the failure");
   assert.ok(goal.includes("gh run view --log-failed") || /don't guess/i.test(goal), "lost the 'read the actual error' instruction");
   assert.ok(goal.includes(ticketBranch(ticket.key)), "lost the PR branch name — agent may push somewhere else");
   assert.ok(/do NOT open a new PR/i.test(goal), "lost the same-PR rule — a new PR orphans the failing one");
@@ -274,7 +274,7 @@ test("merge-gate goal: approval criteria + machine-readable verdict, never merge
   assert.ok(goal.includes("MERGE GATE"), "lost the merge-gate framing");
   assert.ok(goal.includes(prUrl), "lost the PR URL — gate cannot see CI or the final diff");
   assert.ok(goal.includes(ticketBranch(ticket.key)), "lost the branch name");
-  assert.ok(goal.includes(`gh pr checks ${prUrl}`), "lost the CI-check step — red checks would not block");
+  assert.ok(goal.includes(`mc pr checks ${prUrl}`), "lost the CI-check step — red checks would not block");
   assert.ok(goal.includes(`gh pr diff ${prUrl}`), "lost the final-diff step — pre-PR review could not see this");
   assert.ok(/Do NOT run `?gh pr merge`?/i.test(goal), "lost the do-not-merge rule — agent would land outside the audit trail");
   assert.ok(goal.includes("MERGE-GATE: APPROVE"), "lost the APPROVE verdict line — merge-gate.ts would never merge");
