@@ -72,6 +72,7 @@ import { sessionArtifacts } from "./session-artifacts.js";
 import { findMedia, mediaMime, sessionMedia } from "./session-media.js";
 import { recordSessionPrs } from "./terminal-automerge.js";
 import { openProactive } from "./robert-selfwake.js";
+import { notifyDraft } from "./draft-notify.js";
 import { isShipTerminal } from "./ship-guard.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
@@ -958,6 +959,11 @@ export function startServer() {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
+    // An agent left a draft (it never sends): tell the operator, and touch nothing on the card.
+    if (req.body.event === "draft") {
+      void notifyDraft({ workspace_id: s.workspace_id, where: `terminal ${s.id.slice(0, 8)}${s.goal ? ` · ${String(s.goal).slice(0, 60)}` : ""}`, label: String(req.body.label ?? "draft") });
+      return res.json({ ok: true });
+    }
     const status = applyHook(s.id, req.body);
     if (req.body.event === "session_end") forgetMemorySeen(s.id);
     // A ★ memo changed since this terminal's prompt was baked: hand the new text back for the CLI

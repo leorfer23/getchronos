@@ -44,6 +44,8 @@ const cursorCmd = (fallback: string) => `if [ -n "$MC_SESSION" ]; then ${MC} hoo
 export const rtkCmd = `[ "$CHRONOS_RTK" = "0" ] || ${RTK} 2>/dev/null || true`;
 
 const ASK_TOOLS = "AskUserQuestion|ExitPlanMode|ask_user_question|ask_user";
+/** A Slack/Gmail draft just written (draft-notify.ts tells the operator). Kept in sync with DRAFT_TOOL_MATCHER. */
+const DRAFT_TOOLS = "mcp__.*__(slack_send_message_draft|create_draft|update_draft)";
 const BASH_TOOLS = "Bash|bash|Shell|shell";
 
 /** Claude and grok share the event names and the { matcher, hooks: [{ type, command }] } shape. */
@@ -62,7 +64,7 @@ export function claudeStyleHooks(cmd: string, opts: { notification: boolean; per
     SubagentStop: [h()],
     SessionEnd: [h()],
     PreToolUse: preTool,
-    PostToolUse: opts.nudge ? [h(ASK_TOOLS), h(undefined, opts.nudge)] : [h(ASK_TOOLS)],
+    PostToolUse: opts.nudge ? [h(ASK_TOOLS), h(DRAFT_TOOLS), h(undefined, opts.nudge)] : [h(ASK_TOOLS), h(DRAFT_TOOLS)],
     ...(opts.notification ? { Notification: [h("permission_prompt|elicitation_dialog|elicitation_url_dialog")] } : {}),
     // The moment claude opens a "Do you want to proceed?" menu, with the tool and what it would run.
     // Its permission_prompt Notification only comes ~6s later and names nothing.

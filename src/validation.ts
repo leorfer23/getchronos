@@ -131,7 +131,7 @@ export const SessionProgressSchema = z.object({
 });
 /** One lifecycle hook from a terminal's CLI, normalized by `mc hook`. */
 export const SessionHookSchema = z.object({
-  event: z.enum(["prompt", "stop", "subagent_start", "subagent_stop", "ask", "answered", "session_end"]),
+  event: z.enum(["prompt", "stop", "subagent_start", "subagent_stop", "ask", "answered", "session_end", "draft"]),
   key: z.string().max(200).nullable().optional(),
   label: z.string().max(400).nullable().optional(),
   question: z.string().max(2000).optional(),
