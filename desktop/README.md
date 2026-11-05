@@ -6,7 +6,7 @@ launchd; these are just renderers in real windows, and each reads `.admin-token`
 
 | File | Builds to | What it is |
 |---|---|---|
-| `app.swift` | `mc-app` (`scripts/build-app.sh`) | Resizable app window. Takes the page as an argument: bare `mc-app` is the terminal wall (`/desk`), `mc-app /app` opens Chat/Tickets. |
+| `app.swift` | `mc-app` (`scripts/build-app.sh`) | Resizable app window. Takes the page as an argument: bare `mc-app` is the terminal wall (`/desk`), `mc-app /app` opens Chat/Tickets. Also hosts **the bar** (below). |
 | `icon.svg` → `icon.icns` | `scripts/build-icon.sh` | The Mac app icon: the hourglass mark from `site/assets/favicon.svg` on the night ground, sized to Apple's icon grid. `build-app.sh` bundles it. |
 | `wapp.swift` | `wapp` (`scripts/build-wapp.sh`) | Drives the real WhatsApp desktop client. See below. |
 | `hostbar.swift` | `~/.chronos-host/bin/chronos-hostbar` (`getchronos host menubar install`) | A **host's** menu bar item: how many agents work on this Mac right now, and on which repos. Reads only the host's loopback `/__host/status`, no token. Ships in the npm package and is compiled on the host. See HOSTS.md → Menu bar. |
@@ -16,6 +16,39 @@ launchd; these are just renderers in real windows, and each reads `.admin-token`
 nothing builds it any more — `scripts/build-app.sh` no longer reads anything
 from it (the icon moved to `desktop/icon.icns`). The section below is kept for whoever wants to revive it; it points at `/`, which
 now redirects to the Desk rather than the dashboard it was written against.
+
+## The bar (in `app.swift`)
+
+A Spotlight-style panel (`static/bar.html`) that floats over whatever app is in front. One line, two
+things to do with it: **ask Robert** (the Desk chat's own turn, `POST /api/agent`, answered in the
+panel and spoken when you talked), or **send what is on screen to a new terminal** in the workspace it
+belongs to (`POST /api/capture/open`, `src/capture.ts`).
+
+| Way in | What it carries |
+|---|---|
+| **⌘⇧Space** | the front app, its window title, a browser's address, and whatever you copied in the last 2 minutes (text, a link, an image — Shot puts every shot there). Pressed again while the panel is up: talk. |
+| Services → **Send to Chronos** | the selected text or file, in apps that offer Services. |
+| `chronos://capture?text=…&url=…&file=…&app=…` | for other apps — Shot's ⌘⏎. A file must be an image, PDF or text file under Pictures, Desktop or Downloads. |
+
+↵ does the obvious thing (with a capture: a terminal; without: ask Robert), ⌘↵ the other, tab picks the
+workspace, ⌫ on an empty line drops the capture, esc closes. Nothing is sent before ↵ — the hotkey, the
+URL scheme and the clipboard only fill the panel in.
+
+**Which workspace.** Never a guess (`src/capture.ts`): a Slack permalink's subdomain maps to the one
+workspace whose inbox already holds links into that Slack, a GitHub link to the workspace that owns the
+repo, and every open teaches the route for every key the capture carried (the Slack window's team, the
+Chrome profile, a client's own domain). No key → the chip says *Pick a workspace*. Learned routes:
+`GET /api/capture/routes`, forget one with `DELETE /api/capture/routes/<key>`.
+
+**Permissions.** The hotkey needs none (Carbon `RegisterEventHotKey`). The window title and the
+browser address need **Accessibility** for Chronos.app — macOS asks once, on the first ⌘⇧Space; without
+it a capture still routes by its own link. Password managers' copies (nspasteboard.org concealed /
+transient types) are never picked up.
+
+**Change the hotkey:** `defaults write sh.chronos.app barHotkey "ctrl+opt+space"` (or `off`), then
+`launchctl kickstart -k gui/$(id -u)/sh.chronos.app`. After any change to `app.swift` or
+`build-app.sh`: `bash scripts/build-app.sh && launchctl kickstart -k gui/$(id -u)/sh.chronos.app` —
+`npm run deploy` does not rebuild the app.
 
 ## The Tauri scaffold (unused)
 

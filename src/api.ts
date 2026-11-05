@@ -192,6 +192,7 @@ import { pressureWord, swapPctOf } from "./machine.js";
 import { machineBrowserBlock, mountBrowserRoutes } from "./resources/browser-routes.js";
 import { mountVpnRoutes } from "./vpn-routes.js";
 import { mountServiceRoutes } from "./service-routes.js";
+import { mountCaptureRoutes } from "./capture-routes.js";
 import { procsView } from "./resources/brain.js";
 import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
 import { hostName, reposOnHost } from "./hosts/workdir.js";
@@ -2356,6 +2357,8 @@ export function startServer() {
   mountVpnRoutes(api);
   // Services: always-on processes the daemon keeps running (src/services.ts, SERVICES.md).
   mountServiceRoutes(api);
+  // "Send to Chronos" — the Mac bar (desktop/app.swift → static/bar.html, src/capture.ts).
+  mountCaptureRoutes(api, { openSession });
 
   api.get("/stats", requireAdmin, (_req, res) => {
     const days = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
@@ -5090,6 +5093,9 @@ export function startServer() {
       route: req.body.route,
       surface,
       stagedSessionId: req.body.session ?? null,
+      // The Mac bar: the workspace of what is on screen (a client's Slack window), as weak as the
+      // Desk's staged terminal — below a #tag, a text signal and the sticky.
+      uiWorkspace: req.body.context_ws ?? null,
       replyWorkspace: quote?.workspace_id ?? null,
     });
     // Two projects match, or a work request with nothing to go on: offer the choice rather than guess.
@@ -5255,6 +5261,10 @@ export function startServer() {
   // window, filtered by client. Reads /api/analytics only; same token rules as the Desk.
   const sendAltitude = serveHtml(path.join(staticDir, "altitude.html"), "Altitude UI missing from static/altitude.html.");
   app.get(["/altitude", "/altitude.html"], sendAltitude);
+  // The bar (static/bar.html): the Mac-wide Spotlight-style panel the desktop app opens on its hotkey —
+  // ask Robert, or send what is on screen to a terminal (src/capture.ts). Same token rules as the Desk.
+  const sendBar = serveHtml(path.join(staticDir, "bar.html"), "Bar UI missing from static/bar.html.");
+  app.get(["/bar", "/bar.html"], sendBar);
   // Widget modules (static/desk-widgets/*.js), fetched by the Desk's loader with a dynamic import.
   // Reachable by bare file name only: the name is the registry key, so the pattern below is the same
   // `[a-z0-9-]` alphabet and no path can be built out of it. no-store because a widget edited during

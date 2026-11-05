@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chronos Bar</title>
+<link rel="icon" href="data:,">
+<!--
+  The bar: a Spotlight-style panel the desktop app (desktop/app.swift) floats over whatever app is in
+  front when the operator presses its hotkey. One line, two things it can do with it:
+    · ask Robert — the same turn the Desk's chat sends (POST /api/agent), answered here, streamed;
+    · send what was on screen to a new terminal (POST /api/capture/open, src/capture.ts) — a copied
+      Slack link, selected text, a screenshot — in the workspace the capture names.
+  The app hands this page the capture with window.barOpen({ctx, file?, voice?}); the page tells the app
+  to close / resize / show the Desk through window.webkit.messageHandlers.mcbar. Whatever workspace
+  the chip shows is where it goes: a capture never opens on a guess (capture.ts says why).
+-->
+<style>
+  :root {
+    --surface:#FFFFFF; --surface-2:#F1F3F1; --ink:#1B211E; --muted:#67716B; --faint:#9AA49E; --line:#DEE3DF;
+    --accent:#2E7D64; --accent-ink:#FFFFFF; --accent-soft:#E1EEE8; --warn:#9A6B00; --warn-soft:#F5EAD0;
+    --danger:#B23B2E; --ok:#2E7D64;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --surface:#1B201D; --surface-2:#252B27; --ink:#E6ECE8; --muted:#93A099; --faint:#6B7671; --line:#2F3632;
+    --accent:#56B693; --accent-ink:#0D1511; --accent-soft:#1F332B; --warn:#D9A83F; --warn-soft:#33290F;
+    --danger:#E0705F; --ok:#56B693;
+  } }
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:transparent; }
+  body { color:var(--ink); font:15px/1.45 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; -webkit-font-smoothing:antialiased; overflow:hidden; }
+  #card { background:var(--surface); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+  button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; padding:0; }
+
+  #cap { display:flex; gap:10px; align-items:flex-start; margin:10px 10px 0; padding:8px 10px; background:var(--surface-2); border-radius:9px; }
+  #cap[hidden] { display:none; }
+  #thumb { width:56px; height:40px; object-fit:cover; border-radius:5px; flex:none; }
+  #cap-main { flex:1; min-width:0; }
+  #cap-src { font-size:12px; color:var(--muted); }
+  #cap-body { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #cap-x { color:var(--faint); font-size:13px; padding:2px 4px; }
+  #cap-x:hover { color:var(--ink); }
+
+  #row { display:flex; align-items:flex-start; gap:8px; padding:12px 14px 8px; }
+  #q { flex:1; border:0; outline:0; resize:none; background:transparent; color:var(--ink); font:20px/1.35 inherit; font-family:inherit; max-height:140px; padding:2px 0; }
+  #q::placeholder { color:var(--faint); }
+  #mic { width:30px; height:30px; border-radius:15px; display:grid; place-items:center; color:var(--muted); flex:none; }
+  #mic:hover { background:var(--surface-2); color:var(--ink); }
+  #mic.on { background:var(--accent); color:var(--accent-ink); }
+  #mic svg { width:16px; height:16px; }
+
+  #pills { display:flex; flex-wrap:wrap; gap:6px; padding:0 14px 8px; }
+  #pills[hidden] { display:none; }
+  .pill { padding:2px 10px; border-radius:999px; font-size:12.5px; border:1px solid var(--line); color:var(--muted); }
+  .pill:hover { color:var(--ink); }
+  .pill.on { background:var(--accent-soft); border-color:var(--accent); color:var(--ink); }
+
+  #foot { display:flex; align-items:center; gap:10px; padding:7px 14px 9px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); }
+  #ws { padding:1px 9px; border-radius:999px; background:var(--surface-2); color:var(--ink); }
+  #ws.none { background:var(--warn-soft); color:var(--warn); }
+  #ws.auto { color:var(--muted); }
+  #why { color:var(--faint); }
+  #hint { margin-left:auto; white-space:nowrap; }
+  #lang { color:var(--faint); font-size:11.5px; letter-spacing:.04em; }
+  kbd { font:11.5px ui-monospace,"SF Mono",Menlo,monospace; color:var(--muted); }
+
+  #out { border-top:1px solid var(--line); padding:10px 14px 12px; max-height:340px; overflow:auto; font-size:14.5px; white-space:pre-wrap; word-wrap:break-word; }
+  #out[hidden] { display:none; }
+  #out .who { font-size:12px; color:var(--muted); margin-bottom:3px; }
+  #out .ok { color:var(--ok); }
+  #out .err { color:var(--danger); }
+  #out a { color:var(--accent); cursor:pointer; text-decoration:none; }
+  #out .cands { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; white-space:normal; }
+</style>
+</head>
+<body>
+<div id="card">
+  <div id="cap" hidden>
+    <img id="thumb" alt="" hidden>
+    <div id="cap-main"><div id="cap-src"></div><div id="cap-body"></div></div>
+    <button id="cap-x" title="Drop the capture (⌫ on an empty line)">✕</button>
+  </div>
+  <div id="row">
+    <textarea id="q" rows="1" placeholder="Ask Robert…" spellcheck="false"></textarea>
+    <button id="mic" title="Talk (press the hotkey again)"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 10.5a2.5 2.5 0 0 0 2.5-2.5V3.5a2.5 2.5 0 0 0-5 0V8A2.5 2.5 0 0 0 8 10.5Zm4.25-2.75a.75.75 0 0 0-1.5 0 2.75 2.75 0 0 1-5.5 0 .75.75 0 0 0-1.5 0 4.25 4.25 0 0 0 3.5 4.18V13.5H5.5a.75.75 0 0 0 0 1.5h5a.75.75 0 0 0 0-1.5H8.75v-1.57a4.25 4.25 0 0 0 3.5-4.18Z"/></svg></button>
+  </div>
+  <div id="pills" hidden></div>
+  <div id="foot"><span id="ws"></span><span id="why"></span><span id="hint"></span><button id="lang"></button></div>
+  <div id="out" hidden></div>
+</div>
+<script>
+"use strict";
+const TOKEN = window.__MC_TOKEN__ || (() => { try { return localStorage.getItem("mc-token"); } catch { return null; } })();
+const CLIENT = "bar-" + Math.random().toString(36).slice(2, 12);
+const $ = (s) => document.querySelector(s);
+const q = $("#q");
+const AUTO = "__auto__";
+
+const S = {
+  ctx: {},          // what the app captured (src/capture.ts CaptureCtx)
+  file: null,       // {name, mime, b64} — a screenshot, from the clipboard or Shot
+  route: null,      // POST /capture/resolve
+  list: [],         // every workspace, for the pills
+  pick: null,       // the workspace id the chip shows; AUTO = let Robert's router decide
+  turn: null,       // the Robert turn this page is waiting on
+  reply: "",
+  voice: false,     // this turn was spoken: speak the answer
+  openedAt: 0,
+  lang: (() => { try { return localStorage.getItem("desk-voice-lang") || "es"; } catch { return "es"; } })(),
+};
+const hasCapture = () => !!(S.file || (S.ctx.text && S.ctx.text.trim()) || S.ctx.url);
+const wsById = (id) => S.list.find((w) => w.id === id) || null;
+
+// ── the app ─────────────────────────────────────────────────────────────────────────────────────
+function host(msg) { try { window.webkit.messageHandlers.mcbar.postMessage(msg); } catch {} }
+function closeBar() { vcStop(); host({ type: "close" }); }
+let lastH = 0;
+function fit() {
+  requestAnimationFrame(() => {
+    const h = Math.ceil($("#card").getBoundingClientRect().height);
+    if (h !== lastH) { lastH = h; host({ type: "size", height: h }); }
+  });
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch("/api" + path, { ...opts, headers: { "content-type": "application/json", ...(TOKEN ? { "x-mc-admin": TOKEN } : {}), ...(opts.headers || {}) } });
+  const j = await r.json().catch(() => null);
+  if (!r.ok) { const e = new Error((j && j.error) || r.status + " " + r.statusText); e.status = r.status; throw e; }
+  return j;
+}
+
+// Called by the app every time the panel comes up. A capture replaces the last one; no capture keeps
+// the conversation that was on screen if it is recent.
+window.barOpen = async function (payload = {}) {
+  const now = Date.now();
+  const fresh = payload.ctx && (payload.ctx.text || payload.ctx.url || payload.file);
+  if (fresh || now - S.openedAt > 5 * 60_000) reset();
+  S.openedAt = now;
+  S.ctx = payload.ctx || {};
+  S.file = payload.file || null;
+  renderCapture();
+  q.focus();
+  try {
+    const r = await api("/capture/resolve", { method: "POST", body: JSON.stringify({ ctx: S.ctx }) });
+    S.route = r; S.list = r.workspaces || [];
+    // A capture goes where its key says, or nowhere until he picks. A question goes to the router.
+    S.pick = hasCapture() ? (r.ws ? r.ws.id : null) : AUTO;
+  } catch (e) {
+    S.route = null; S.pick = hasCapture() ? null : AUTO;
+    show("err", "Chronos is not answering: " + e.message);
+  }
+  renderFoot();
+  connectBus();
+  if (payload.voice) vcStart();
+};
+// The hotkey again while the panel is up: talk.
+window.barVoice = () => (VC.on ? vcStop() : vcStart());
+// The panel went away (clicked outside, Esc): never leave the microphone open behind it.
+window.barHidden = () => vcStop();
+
+function reset() {
+  S.turn = null; S.reply = ""; S.voice = false;
+  q.value = ""; autosize();
+  $("#out").hidden = true; $("#out").textContent = "";
+}
+
+function renderCapture() {
+  const cap = $("#cap");
+  if (!hasCapture()) { cap.hidden = true; q.placeholder = "Ask Robert…"; fit(); return; }
+  cap.hidden = false;
+  const th = $("#thumb");
+  if (S.file && /^image\//.test(S.file.mime || "")) { th.src = "data:" + S.file.mime + ";base64," + S.file.b64; th.hidden = false; }
+  else th.hidden = true;
+  const team = slackTeam(S.ctx.title);
+  const src = S.file && !S.ctx.text ? (S.file.name || "screenshot") : [S.ctx.app, team].filter(Boolean).join(" · ") || "Clipboard";
+  $("#cap-src").textContent = src;
+  const body = (S.ctx.text || S.ctx.url || "").trim().replace(/\s+/g, " ");
+  $("#cap-body").textContent = body || (S.file ? "image" : "");
+  q.placeholder = "What should it do? (optional)";
+  fit();
+}
+function slackTeam(title) {
+  const p = String(title || "").split(" - ").map((s) => s.trim()).filter(Boolean);
+  if (p.length < 2 || p[p.length - 1] !== "Slack") return null;
+  p.pop(); while (p.length && /^\d+ new items?$/i.test(p[p.length - 1])) p.pop();
+  return p.length >= 2 ? p[p.length - 1] : null;
+}
+function dropCapture() { S.ctx = {}; S.file = null; if (S.pick !== AUTO && !S.pick) S.pick = AUTO; renderCapture(); renderFoot(); }
+$("#cap-x").onclick = () => { dropCapture(); q.focus(); };
+
+// ── the workspace chip ──────────────────────────────────────────────────────────────────────────
+function options() { return (hasCapture() ? [] : [AUTO]).concat(S.list.map((w) => w.id)); }
+function renderFoot() {
+  const chip = $("#ws"), why = $("#why"), hint = $("#hint");
+  const w = S.pick && S.pick !== AUTO ? wsById(S.pick) : null;
+  chip.className = w ? "" : S.pick === AUTO ? "auto" : "none";
+  chip.textContent = w ? w.name : S.pick === AUTO ? "Auto" : "Pick a workspace";
+  // Why it is there: the key that decided — or, when another key in the same capture points
+  // elsewhere, that warning instead (the capture disagrees with itself; he should look).
+  const r = S.route;
+  const others = w && r && r.others ? r.others.filter((o) => o.id !== w.id) : [];
+  why.textContent = others.length
+    ? "⚠ also looks like " + others.map((o) => o.name).join(", ")
+    : w && r && r.ws && r.ws.id === w.id && r.key ? "from " + (r.keys.find((k) => k.key === r.key)?.label || r.key) : "";
+  const tab = "<kbd>tab</kbd> workspace";
+  hint.innerHTML = hasCapture()
+    ? (w ? `<kbd>↵</kbd> new terminal · <kbd>⌘↵</kbd> ask Robert · ${tab}` : `${tab} · then <kbd>↵</kbd>`)
+    : `<kbd>↵</kbd> ask Robert · <kbd>⌘↵</kbd> new terminal · ${tab}`;
+  $("#lang").textContent = S.lang.toUpperCase();
+  renderPills();
+  fit();
+}
+function renderPills(force) {
+  const box = $("#pills");
+  const show = force || (hasCapture() && !S.pick) || box.dataset.open === "1";
+  box.hidden = !show;
+  if (!show) return;
+  box.innerHTML = "";
+  for (const id of options()) {
+    const b = document.createElement("button");
+    b.className = "pill" + (id === S.pick ? " on" : "");
+    b.textContent = id === AUTO ? "Auto" : wsById(id)?.name || id;
+    b.onclick = () => { S.pick = id; box.dataset.open = "1"; renderFoot(); q.focus(); };
+    box.appendChild(b);
+  }
+}
+function cycle(dir) {
+  const opts = options();
+  if (!opts.length) return;
+  const i = opts.indexOf(S.pick);
+  S.pick = opts[(i + dir + opts.length) % opts.length];
+  $("#pills").dataset.open = "1";
+  renderFoot();
+}
+$("#ws").onclick = () => { $("#pills").dataset.open = $("#pills").dataset.open === "1" ? "" : "1"; renderPills(); fit(); };
+$("#lang").onclick = () => {
+  S.lang = S.lang === "es" ? "en" : "es";
+  try { localStorage.setItem("desk-voice-lang", S.lang); } catch {}
+  renderFoot();
+};
+
+// ── keys ────────────────────────────────────────────────────────────────────────────────────────
+function autosize() { q.style.height = "auto"; q.style.height = Math.min(140, q.scrollHeight) + "px"; fit(); }
+q.addEventListener("input", autosize);
+q.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.preventDefault(); if (VC.on) vcStop(); else closeBar(); return; }
+  if (e.key === "Tab") { e.preventDefault(); cycle(e.shiftKey ? -1 : 1); return; }
+  if (e.key === "Backspace" && !q.value && hasCapture()) { e.preventDefault(); dropCapture(); return; }
+  if (e.key === "o" && e.metaKey && S.lastSession) { e.preventDefault(); openDesk(S.lastSession); return; }
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    const terminal = hasCapture() ? !e.metaKey : e.metaKey;
+    submit(terminal);
+  }
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && document.activeElement !== q) closeBar(); });
+
+let sending = false;
+async function submit(terminal, spoken) {
+  if (sending) return;
+  const text = q.value.trim();
+  if (terminal) return openTerminal(text);
+  if (!text && !hasCapture()) return;
+  return askRobert(text, spoken);
+}
+
+// ── a terminal ──────────────────────────────────────────────────────────────────────────────────
+async function upload(path, file) {
+  const bin = Uint8Array.from(atob(file.b64), (c) => c.charCodeAt(0));
+  const r = await fetch("/api" + path, { method: "POST", headers: { "content-type": file.mime || "application/octet-stream", "x-filename": file.name || "capture", ...(TOKEN ? { "x-mc-admin": TOKEN } : {}) }, body: bin });
+  const j = await r.json().catch(() => null);
+  if (!r.ok) throw new Error((j && j.error) || "upload failed");
+  return j;
+}
+async function openTerminal(instruction) {
+  const w = S.pick && S.pick !== AUTO ? wsById(S.pick) : null;
+  if (!w) { $("#pills").dataset.open = "1"; renderPills(true); show("err", "Pick the workspace first (tab)."); return; }
+  if (!instruction && !hasCapture()) { show("err", "Type what the terminal should do."); return; }
+  sending = true;
+  show("", "Opening a terminal in " + w.name + "…");
+  try {
+    const files = [];
+    if (S.file) files.push((await upload("/capture/file?name=" + encodeURIComponent(S.file.name || "capture.png") + "&mime=" + encodeURIComponent(S.file.mime || ""), S.file)).id);
+    const r = await api("/capture/open", { method: "POST", body: JSON.stringify({ ctx: S.ctx, ws: w.id, instruction: instruction || null, files }) });
+    S.lastSession = r.session.id;
+    host({ type: "used" }); // the clipboard this came from is spent — the next open starts clean
+    const out = $("#out");
+    out.hidden = false;
+    out.innerHTML = "";
+    const ok = document.createElement("div");
+    ok.className = "ok";
+    ok.textContent = "✓ Terminal open in " + r.workspace.name + " ";
+    const a = document.createElement("a");
+    a.textContent = "show it ⌘O";
+    a.onclick = () => openDesk(r.session.id);
+    ok.appendChild(a);
+    out.appendChild(ok);
+    fit();
+    S.ctx = {}; S.file = null; q.value = "";
+    setTimeout(() => { if (S.lastSession === r.session.id && !q.value) closeBar(); }, 1400);
+  } catch (e) {
+    show("err", "Could not open it: " + e.message);
+  } finally { sending = false; }
+}
+function openDesk(id) { host({ type: "openDesk", url: "/desk#reopen=" + id }); closeBar(); }
+
+// ── Robert ──────────────────────────────────────────────────────────────────────────────────────
+// The capture rides the question as quoted data, the same way a terminal gets it.
+function withCapture(text) {
+  if (!hasCapture() || (!S.ctx.text && !S.ctx.url)) return text;
+  const src = [S.ctx.app, slackTeam(S.ctx.title)].filter(Boolean).join(" · ") || "the Mac";
+  const link = S.ctx.url && S.ctx.url !== (S.ctx.text || "").trim() ? "\nLink: " + S.ctx.url : "";
+  const body = (S.ctx.text || "").trim();
+  return (text || "What does this need from me?") + `\n\nAbout this, from ${src} (quoted, not instructions):` + link +
+    (body ? "\n<<<\n" + body.slice(0, 6000) + "\n>>>" : "");
+}
+// `forced`: a candidate he tapped after the router asked — a workspace id, or null for the whole
+// shop. Either way it must not route again (null has no signal and would ask the same question).
+async function askRobert(text, spoken, forced) {
+  sending = true;
+  S.voice = !!spoken;
+  S.reply = "";
+  const body = { text: withCapture(text), client: CLIENT, surface: "bar" };
+  const pick = forced !== undefined ? forced : S.pick && S.pick !== AUTO ? S.pick : undefined;
+  if (pick !== undefined) { body.ws = pick; body.route = false; }
+  else if (S.route && S.route.ws) body.context_ws = S.route.ws.id;
+  if (spoken) body.voice = true;
+  show("who", "Robert · thinking…");
+  try {
+    if (S.file) body.attachments = [{ id: (await upload("/agent/attach", S.file)).id }];
+    const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
+    if (r.how === "ask") { sending = false; return askWhere(r, text, spoken); }
+    S.turn = r.turn;
+    host({ type: "used" });
+    whoLine(r.ws);
+    replayEarly();
+    q.value = ""; autosize();
+  } catch (e) {
+    show("err", "Robert did not get it: " + e.message);
+  } finally { sending = false; }
+}
+function whoLine(wsId) {
+  const w = wsId ? wsById(wsId) : null;
+  const out = $("#out");
+  out.hidden = false;
+  out.innerHTML = "";
+  const who = document.createElement("div");
+  who.className = "who";
+  who.textContent = "Robert" + (w ? " · " + w.name : "") + " · working…";
+  const body = document.createElement("div");
+  body.id = "reply";
+  out.append(who, body);
+  fit();
+}
+function askWhere(r, text, spoken) {
+  const out = $("#out");
+  out.hidden = false; out.innerHTML = "";
+  const line = document.createElement("div");
+  line.textContent = r.reply || "Which project is this about?";
+  const row = document.createElement("div");
+  row.className = "cands";
+  for (const c of (r.ask && r.ask.candidates) || []) {
+    const b = document.createElement("button");
+    b.className = "pill";
+    b.textContent = c.name || c.slug;
+    b.onclick = () => askRobert(text, spoken, c.ws ?? null);
+    row.appendChild(b);
+  }
+  out.append(line, row);
+  fit();
+}
+
+// The answer rides the bus, keyed by this page's client id and the turn. A quick turn can publish
+// before the POST that started it has answered with the turn id — kept here, replayed once it has.
+let sock = null;
+const early = [];
+function replayEarly() {
+  const mine = early.splice(0).filter((e) => e.turn === S.turn);
+  for (const e of mine) onBus(e);
+}
+function connectBus() {
+  if (!TOKEN || (sock && sock.readyState <= 1)) return;
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+  sock = new WebSocket(`${scheme}//${location.host}/ws?token=${encodeURIComponent(TOKEN)}&topics=${encodeURIComponent("agent.delta,agent.push")}`);
+  sock.onmessage = (ev) => {
+    let e; try { e = JSON.parse(ev.data); } catch { return; }
+    if (e.client !== CLIENT) return;
+    if (!S.turn || e.turn !== S.turn) { early.push(e); if (early.length > 50) early.shift(); return; }
+    onBus(e);
+  };
+  sock.onclose = () => { sock = null; };
+}
+function onBus(e) {
+    const box = $("#reply");
+    if (!box) return;
+    if (e.topic === "agent.delta" && e.text && e.kind !== "thinking") { S.reply += e.text; box.textContent = S.reply; fit(); }
+    if (e.topic === "agent.push") {
+      S.reply = String(e.reply || "");
+      box.textContent = S.reply;
+      const who = $("#out .who");
+      if (who) who.textContent = who.textContent.replace(" · working…", "");
+      S.turn = null;
+      fit();
+      if (S.voice) speak(S.reply);
+    }
+}
+
+// ── voice ───────────────────────────────────────────────────────────────────────────────────────
+// One utterance per press, transcribed by the local whisper (POST /api/transcribe) — the same ear as
+// the Desk's voice call, kept to what a quick question needs: start on sound, end on 800ms of quiet.
+const VAD = { start: 0.025, hold: 0.012, speech: 0.04, endMs: 800, minSpeechMs: 220, maxMs: 30000, preMs: 350 };
+const HEARD_NOISE = /^(\[.*\]|\(.*\)|\*.*\*|thank you\.?|thanks for watching.*|you\.?|bye\.?|gracias( por ver.*)?\.?|subt[ií]tulos.*|amara\.org.*|[.…,!? ]+)$/i;
+const VC = { on: false, ctx: null, stream: null, node: null, src: null, seg: null, pre: [], preMs: 0, noise: 0.01, rate: 48000, audio: null };
+async function vcStart() {
+  if (VC.on) return;
+  if (!navigator.mediaDevices?.getUserMedia) return show("err", "No microphone in this window.");
+  VC.on = true; $("#mic").classList.add("on"); q.placeholder = "Listening…";
+  VC.audio = VC.audio || new Audio();
+  try {
+    VC.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    VC.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
+  } catch (err) { vcStop(); return show("err", "Microphone: " + (err?.name === "NotAllowedError" ? "permission denied" : err?.message || err)); }
+  if (!VC.on) return vcStop();
+  await VC.ctx.resume().catch(() => {});
+  VC.rate = VC.ctx.sampleRate;
+  VC.src = VC.ctx.createMediaStreamSource(VC.stream);
+  VC.node = VC.ctx.createScriptProcessor(2048, 1, 1);
+  const sink = VC.ctx.createGain(); sink.gain.value = 0;
+  VC.node.onaudioprocess = (ev) => vcFrame(ev.inputBuffer.getChannelData(0));
+  VC.src.connect(VC.node); VC.node.connect(sink); sink.connect(VC.ctx.destination);
+  Object.assign(VC, { seg: null, pre: [], preMs: 0, noise: 0.01 });
+}
+function vcStop() {
+  if (!VC.on && !VC.stream) return;
+  VC.on = false; $("#mic").classList.remove("on");
+  try { if (VC.node) { VC.node.onaudioprocess = null; VC.node.disconnect(); } VC.src?.disconnect(); } catch {}
+  VC.node = VC.src = null;
+  VC.stream?.getTracks().forEach((t) => t.stop()); VC.stream = null;
+  const c = VC.ctx; VC.ctx = null; setTimeout(() => c?.close().catch(() => {}), 300);
+  renderCapture();
+}
+function vcFrame(f) {
+  let sum = 0;
+  for (let i = 0; i < f.length; i++) sum += f[i] * f[i];
+  const rms = Math.sqrt(sum / f.length), now = performance.now(), ms = (f.length / VC.rate) * 1000;
+  const frame = new Float32Array(f);
+  if (!VC.seg) {
+    VC.pre.push(frame); VC.preMs += ms;
+    while (VC.preMs > VAD.preMs && VC.pre.length > 1) VC.preMs -= (VC.pre.shift().length / VC.rate) * 1000;
+    if (rms > Math.max(VAD.start, VC.noise * 3)) { VC.seg = { frames: VC.pre, ms: VC.preMs, loudMs: rms > VAD.speech ? ms : 0, last: now }; VC.pre = []; VC.preMs = 0; }
+    else VC.noise = Math.min(0.02, VC.noise * 0.97 + rms * 0.03);
+    return;
+  }
+  const s = VC.seg;
+  s.frames.push(frame); s.ms += ms;
+  if (rms > Math.max(VAD.hold, VC.noise * 2)) { s.last = now; if (rms > VAD.speech) s.loudMs += ms; }
+  if (now - s.last > VAD.endMs || s.ms > VAD.maxMs) {
+    VC.seg = null;
+    if (s.loudMs >= VAD.minSpeechMs) { vcStop(); heard(s.frames); }
+  }
+}
+async function heard(frames) {
+  q.placeholder = "Transcribing…";
+  try {
+    const r = await fetch("/api/transcribe?lang=" + S.lang, { method: "POST", headers: { "content-type": "audio/wav", ...(TOKEN ? { "x-mc-admin": TOKEN } : {}) }, body: wav(frames, VC.rate) });
+    const j = await r.json().catch(() => ({}));
+    const text = String(j.text || "").trim();
+    renderCapture();
+    if (!text || HEARD_NOISE.test(text)) return show("", "Didn't catch that — press the hotkey and try again.");
+    q.value = text; autosize();
+    // Spoken with a capture: it is the instruction; the chip still shows where it goes, so it waits
+    // for ↵. Spoken with nothing captured: a question for Robert, answered out loud.
+    if (!hasCapture()) submit(false, true);
+  } catch (e) { renderCapture(); show("err", "Transcribe failed: " + e.message); }
+}
+function wav(frames, rate) {
+  const ratio = rate / 16000;
+  const total = frames.reduce((n, f) => n + f.length, 0);
+  const out = new Int16Array(Math.floor(total / ratio));
+  let o = 0, acc = 0, cnt = 0, pos = 0;
+  for (const f of frames) for (let i = 0; i < f.length; i++, pos++) {
+    acc += f[i]; cnt++;
+    if (pos + 1 >= (o + 1) * ratio && o < out.length) { const v = Math.max(-1, Math.min(1, acc / cnt)); out[o++] = v < 0 ? v * 0x8000 : v * 0x7fff; acc = 0; cnt = 0; }
+  }
+  const buf = new ArrayBuffer(44 + o * 2), dv = new DataView(buf);
+  const str = (at, t) => { for (let i = 0; i < t.length; i++) dv.setUint8(at + i, t.charCodeAt(i)); };
+  str(0, "RIFF"); dv.setUint32(4, 36 + o * 2, true); str(8, "WAVE"); str(12, "fmt ");
+  dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true); dv.setUint32(24, 16000, true);
+  dv.setUint32(28, 32000, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); str(36, "data"); dv.setUint32(40, o * 2, true);
+  for (let i = 0; i < o; i++) dv.setInt16(44 + i * 2, out[i], true);
+  return new Blob([buf], { type: "audio/wav" });
+}
+async function speak(text) {
+  const t = String(text || "").trim();
+  if (!t || t.startsWith("⚠️")) return;
+  try {
+    const r = await fetch("/api/speak", { method: "POST", headers: { "content-type": "application/json", ...(TOKEN ? { "x-mc-admin": TOKEN } : {}) }, body: JSON.stringify({ text: t.slice(0, 1200), lang: S.lang }) });
+    if (!r.ok) return;
+    const url = URL.createObjectURL(await r.blob());
+    const a = VC.audio || (VC.audio = new Audio());
+    a.src = url;
+    a.playbackRate = Number((() => { try { return localStorage.getItem("desk-voice-speed"); } catch { return null; } })()) || 1.5;
+    a.onended = () => URL.revokeObjectURL(url);
+    await a.play().catch(() => {});
+  } catch {}
+}
+$("#mic").onclick = () => window.barVoice();
+
+// ── small things ────────────────────────────────────────────────────────────────────────────────
+function show(kind, text) {
+  const out = $("#out");
+  out.hidden = false;
+  out.innerHTML = "";
+  const d = document.createElement("div");
+  if (kind) d.className = kind;
+  d.textContent = text;
+  out.appendChild(d);
+  fit();
+}
+new ResizeObserver(fit).observe($("#card"));
+// Opened in a plain browser tab (no app around it): still usable, for testing.
+if (!window.webkit?.messageHandlers?.mcbar) window.addEventListener("load", () => window.barOpen({}));
+</script>
+</body>
+</html>

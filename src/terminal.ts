@@ -14,6 +14,7 @@ import { sessions, sessionGoals, workspaces, repos, tickets, runs, jobs, notes a
 import { backendAllowed, getBackend, workspaceBackends } from "./backends/index.js";
 import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow } from "./sandbox.js";
 import { ensureDropDir } from "./drops.js";
+import { claimStaged, dropsBrief } from "./capture.js";
 import { ensureBypassAccepted, ensureTrustedCwd } from "./claude-trust.js";
 import { ensureGrokTrustedCwd, grokHome } from "./grok-trust.js";
 import { isEarlyDeath, reportEarlyDeath } from "./desk-incidents.js";
@@ -588,6 +589,9 @@ export async function openSession(
     /** More than one finish line, in the order they should be worked (src/goals.ts). The first one
      *  becomes the card's goal; `mc goal done` walks the rest. */
     goals?: Array<string | { text: string; kind?: GoalKind | null }> | null;
+    /** Files the daemon staged before this terminal existed (src/capture.ts, by id): moved into its
+     *  own drop dir once the row exists and named in its brief. Never from a request body. */
+    stagedDrops?: string[] | null;
   },
 ): Promise<Session & { duplicate_of?: DupGoal }> {
   ensurePtyHelper();
@@ -723,6 +727,13 @@ export async function openSession(
     row = { ...row, placement: why };
     console.log(`[placement] ${row.id.slice(0, 8)} (${openedBy || "operator"}) → ${targetHost}: ${why}`);
     bus.publish({ topic: "session.placed", session_id: row.id, workspace_id: row.workspace_id, host_id: targetHost, reason: why });
+  }
+  // Files staged for it before it had an id ("Send to Chronos", src/capture.ts): into its own drop
+  // dir — the one it is granted below — and into the brief, so the first prompt already points at
+  // paths it can Read. Local only: a remote terminal's drop dir lives on its host.
+  if (opts.stagedDrops?.length && !remote && !opts.resumeId) {
+    const moved = claimStaged(opts.stagedDrops, ensureDropDir(row.id));
+    if (moved.length) opts = { ...opts, description: [opts.description?.trim(), dropsBrief(moved)].filter(Boolean).join("\n\n") };
   }
   // Several finish lines, queued at spawn (src/goals.ts). The row keeps mirroring the FIRST one, so
   // everything downstream — the card, the title, the phase — sees a terminal with one goal; the list

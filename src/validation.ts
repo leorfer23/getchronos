@@ -1059,6 +1059,8 @@ export const AgentTextSchema = z.object({
   client: z.string().trim().max(64).optional(),
   /** Sent from the Desk voice call: the reply is read aloud, so Robert answers short and spoken. */
   voice: z.boolean().optional(),
+  /** The Mac bar: the workspace of what the operator is looking at — a weak routing hint only. */
+  context_ws: z.string().trim().max(64).nullish(),
   /** Files already uploaded to POST /agent/attach, riding this turn. Ids only — the server rebuilds
    *  the paths it hands the model from its own rows, so a client cannot name a path to be Read. */
   attachments: z.array(z.object({ id: z.string().trim().min(1).max(64) })).max(10).optional(),

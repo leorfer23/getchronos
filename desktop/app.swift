@@ -463,6 +463,363 @@ if let s = ProcessInfo.processInfo.environment["MC_APP_TEST_WEDGE"], let secs = 
   DispatchQueue.main.asyncAfter(deadline: .now() + secs) { while true { sleep(60) } }
 }
 
+// ── The bar ──────────────────────────────────────────────────────────────────────────────────────
+// A Spotlight-style panel over whatever app is in front (static/bar.html): ask Robert, or send what
+// is on screen to a new terminal in the workspace it belongs to (src/capture.ts). Three ways in, one
+// panel:
+//   · the hotkey (⌘⇧Space; `defaults write sh.chronos.app barHotkey "ctrl+opt+space"`, "off" = none) —
+//     carries what was copied in the last two minutes; pressed again while the panel is up, it talks;
+//   · Services → "Send to Chronos" on selected text or a file, in any app that offers Services;
+//   · chronos://capture?text=…&url=…&file=… — Shot's "Send to Chronos", or anything else on this Mac.
+// It is a non-activating panel: the app in front stays in front (and stays what the capture names),
+// and closing the panel leaves you exactly where you were. Nothing is sent until ↵ — the URL scheme
+// and the clipboard only fill the panel in.
+import Carbon.HIToolbox
+import ApplicationServices
+
+func showDesk() {
+  window.makeKeyAndOrderFront(nil)
+  NSApp.activate(ignoringOtherApps: true)
+}
+
+final class BarPanel: NSPanel {
+  override var canBecomeKey: Bool { true }
+  override var canBecomeMain: Bool { false }
+}
+
+final class Bar: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NSWindowDelegate {
+  let width: CGFloat = 680
+  let panel: BarPanel
+  let view: WKWebView
+  let pageURL: URL
+  var loaded = false
+  var pending: [String: Any]?
+  var height: CGFloat = 120
+
+  // The clipboard counts as part of a capture only when it changed recently and was not already
+  // used: a link copied a minute ago is what he means; whatever sat there since this morning is not.
+  var clipCount = NSPasteboard.general.changeCount
+  var clipAt = Date.distantPast
+  var usedCount = NSPasteboard.general.changeCount
+  var shownCount = -1
+  static let freshFor: TimeInterval = 120
+
+  init(token: String?) {
+    pageURL = URL(string: "/bar", relativeTo: targetURL)!.absoluteURL
+    panel = BarPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+                     styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
+                     backing: .buffered, defer: false)
+    panel.isFloatingPanel = true
+    panel.level = .statusBar
+    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+    panel.isOpaque = false
+    panel.backgroundColor = .clear
+    panel.hasShadow = true
+    panel.hidesOnDeactivate = false
+    panel.isReleasedWhenClosed = false
+    let cfg = WKWebViewConfiguration()
+    if let t = token, let json = try? JSONSerialization.data(withJSONObject: [t]), let lit = String(data: json, encoding: .utf8) {
+      cfg.userContentController.addUserScript(WKUserScript(source: "window.__MC_TOKEN__ = \(lit)[0];", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+    }
+    view = WKWebView(frame: NSRect(x: 0, y: 0, width: width, height: height), configuration: cfg)
+    super.init()
+    cfg.userContentController.add(self, name: "mcbar")
+    view.setValue(false, forKey: "drawsBackground")
+    view.autoresizingMask = [.width, .height]
+    view.uiDelegate = ui
+    view.navigationDelegate = self
+    panel.contentView = view
+    // Every Accessibility read below happens while he waits for the panel: a hung app answers in a
+    // quarter second or not at all, instead of the default six.
+    AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25)
+    panel.delegate = self
+    load()
+    let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+      guard let self = self else { return }
+      let c = NSPasteboard.general.changeCount
+      if c != self.clipCount { self.clipCount = c; self.clipAt = Date() }
+    }
+    RunLoop.main.add(t, forMode: .common)
+  }
+
+  func load() { view.load(URLRequest(url: pageURL)) }
+  func webView(_ w: WKWebView, didFinish n: WKNavigation!) {
+    loaded = true
+    if let p = pending { pending = nil; deliver(p) }
+  }
+  func webView(_ w: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) { loaded = false }
+  func webViewWebContentProcessDidTerminate(_ w: WKWebView) { loaded = false }
+
+  // The page's hand on the panel.
+  func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
+    guard let d = m.body as? [String: Any], let type = d["type"] as? String else { return }
+    switch type {
+    case "close": hide()
+    case "size":
+      if let h = d["height"] as? Double { height = max(56, min(640, CGFloat(h))); place(keepTop: true) }
+    case "used": usedCount = shownCount
+    case "openDesk":
+      if let u = d["url"] as? String, let url = URL(string: u, relativeTo: targetURL)?.absoluteURL {
+        web.evaluateJavaScript("location.href = \(jsString(url.absoluteString)); void 0;") { _, _ in }
+      }
+      showDesk()
+    default: break
+    }
+  }
+
+  func windowDidResignKey(_ n: Notification) { hide() }
+
+  func hide() {
+    guard panel.isVisible else { return }
+    view.evaluateJavaScript("window.barHidden && window.barHidden(); void 0;") { _, _ in }
+    panel.orderOut(nil)
+  }
+
+  // Top-centre of the screen the mouse is on, like Spotlight; grows downward as the answer streams.
+  func place(keepTop: Bool) {
+    let mouse = NSEvent.mouseLocation
+    let screen = (keepTop && panel.isVisible ? panel.screen : nil)
+      ?? NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main
+    guard let vf = screen?.visibleFrame else { return }
+    let top = keepTop && panel.isVisible ? panel.frame.maxY : vf.maxY - vf.height * 0.2
+    panel.setFrame(NSRect(x: vf.midX - width / 2, y: top - height, width: width, height: height), display: true)
+  }
+
+  // The hotkey: up → talk; down → open with what is in front and what was just copied.
+  func hotkey() {
+    if panel.isVisible { view.evaluateJavaScript("window.barVoice && window.barVoice(); void 0;") { _, _ in }; return }
+    var payload: [String: Any] = ["ctx": frontContext()]
+    if let clip = freshClipboard() { merge(&payload, clip) }
+    show(payload)
+  }
+
+  func show(_ payload: [String: Any]) {
+    place(keepTop: false)
+    panel.makeKeyAndOrderFront(nil)
+    panel.makeFirstResponder(view)
+    if loaded { deliver(payload) } else { pending = payload; load() }
+  }
+
+  // A page that loaded while the daemon was still booting can be its error page, with no barOpen in
+  // it: load the real one and hand the payload over once it is up.
+  func deliver(_ payload: [String: Any]) {
+    guard let json = try? JSONSerialization.data(withJSONObject: payload),
+          let lit = String(data: json, encoding: .utf8) else { return }
+    view.evaluateJavaScript("typeof window.barOpen === 'function' ? (window.barOpen(\(lit)), 'ok') : 'missing'") { [weak self] r, _ in
+      guard let self = self, (r as? String) != "ok" else { return }
+      self.loaded = false
+      self.pending = payload
+      self.load()
+    }
+  }
+
+  // What is in front: the app, its window's title, a browser's address. The title and the address
+  // come through Accessibility; without that grant the capture still works, it just routes by its
+  // own link (or asks). macOS asks for the grant once, the first time the hotkey is used.
+  func frontContext() -> [String: Any] {
+    var ctx: [String: Any] = [:]
+    guard let front = NSWorkspace.shared.frontmostApplication,
+          front.bundleIdentifier != Bundle.main.bundleIdentifier else { return ctx }
+    ctx["app"] = front.localizedName ?? ""
+    ctx["bundle"] = front.bundleIdentifier ?? ""
+    guard axTrusted() else { return ctx }
+    let el = AXUIElementCreateApplication(front.processIdentifier)
+    AXUIElementSetMessagingTimeout(el, 0.25)
+    guard let win = axAttr(el, kAXFocusedWindowAttribute) else { return ctx }
+    let w = win as! AXUIElement
+    if let t = axAttr(w, kAXTitleAttribute) as? String, !t.isEmpty { ctx["title"] = String(t.prefix(1000)) }
+    if Bar.browsers.contains(front.bundleIdentifier ?? ""), let u = addressBar(w) { ctx["browser_url"] = u }
+    return ctx
+  }
+
+  static let browsers: Set<String> = [
+    "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary", "app.zen-browser.zen",
+    "org.mozilla.firefox", "com.apple.Safari", "com.brave.Browser", "company.thebrowser.Browser", "com.microsoft.edgemac",
+  ]
+
+  func axTrusted() -> Bool {
+    if AXIsProcessTrusted() { return true }
+    if !UserDefaults.standard.bool(forKey: "barAskedAccessibility") {
+      UserDefaults.standard.set(true, forKey: "barAskedAccessibility")
+      let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+      return AXIsProcessTrustedWithOptions(opts)
+    }
+    return false
+  }
+
+  func axAttr(_ el: AXUIElement, _ name: String) -> CFTypeRef? {
+    var out: CFTypeRef?
+    return AXUIElementCopyAttributeValue(el, name as CFString, &out) == .success ? out : nil
+  }
+
+  // The browser's own address field, found in its window chrome — never inside the page (an
+  // AXWebArea is skipped: walking a page's tree is slow and can wake the browser's accessibility mode).
+  func addressBar(_ win: AXUIElement) -> String? {
+    var queue: [(AXUIElement, Int)] = [(win, 0)]
+    var seen = 0
+    let looksLikeURL = try! NSRegularExpression(pattern: "^(https?://)?[\\w-]+(\\.[\\w-]+)+(:\\d+)?(/\\S*)?$", options: [.caseInsensitive])
+    while !queue.isEmpty && seen < 200 {
+      let (el, depth) = queue.removeFirst()
+      seen += 1
+      let role = axAttr(el, kAXRoleAttribute) as? String ?? ""
+      if role == "AXWebArea" { continue }
+      if role == kAXTextFieldRole || role == kAXComboBoxRole,
+         let v = axAttr(el, kAXValueAttribute) as? String {
+        let s = v.trimmingCharacters(in: .whitespaces)
+        if !s.isEmpty, s.count < 4000, looksLikeURL.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil { return s }
+      }
+      if depth < 7, let kids = axAttr(el, kAXChildrenAttribute) as? [AXUIElement] {
+        for k in kids { queue.append((k, depth + 1)) }
+      }
+    }
+    return nil
+  }
+
+  // A recent copy: text (a link is also the capture's url), else an image or a file. Password
+  // managers mark what they copy (nspasteboard.org's Concealed/Transient types): never that.
+  func freshClipboard() -> [String: Any]? {
+    let pb = NSPasteboard.general
+    // Copied a moment ago, before the poll saw it: that is the freshest copy there is.
+    if pb.changeCount != clipCount { clipCount = pb.changeCount; clipAt = Date() }
+    guard clipCount != usedCount,
+          Date().timeIntervalSince(clipAt) < Bar.freshFor else { return nil }
+    let types = (pb.types ?? []).map { $0.rawValue }
+    if types.contains("org.nspasteboard.ConcealedType") || types.contains("org.nspasteboard.TransientType") { return nil }
+    shownCount = clipCount
+    if let s = pb.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+      var ctx: [String: Any] = ["text": String(s.prefix(100_000))]
+      if !s.contains(where: { $0.isWhitespace }), let u = URL(string: s), u.scheme == "https" || u.scheme == "http" { ctx["url"] = s }
+      return ["ctx": ctx]
+    }
+    if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+       let f = urls.first, let file = Bar.fileBlob(f) { return ["file": file] }
+    if let data = pb.data(forType: .png) ?? pb.data(forType: .tiff).flatMap({ NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }) {
+      return ["file": ["name": "clipboard.png", "mime": "image/png", "b64": data.base64EncodedString()]]
+    }
+    return nil
+  }
+
+  func merge(_ payload: inout [String: Any], _ extra: [String: Any]) {
+    var ctx = payload["ctx"] as? [String: Any] ?? [:]
+    for (k, v) in extra["ctx"] as? [String: Any] ?? [:] { ctx[k] = v }
+    payload["ctx"] = ctx
+    if let f = extra["file"] { payload["file"] = f }
+  }
+
+  // A file handed to the panel (Services, Shot): images, PDFs and text only, 25MB at most.
+  static let fileTypes: [String: String] = [
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp",
+    "heic": "image/heic", "pdf": "application/pdf", "txt": "text/plain", "md": "text/markdown", "csv": "text/csv",
+  ]
+  static func fileBlob(_ url: URL) -> [String: Any]? {
+    let f = url.resolvingSymlinksInPath()
+    guard let mime = fileTypes[f.pathExtension.lowercased()],
+          let size = (try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 0, size <= 25 * 1024 * 1024,
+          let data = try? Data(contentsOf: f) else { return nil }
+    return ["name": f.lastPathComponent, "mime": mime, "b64": data.base64EncodedString()]
+  }
+
+  // Services → Send to Chronos: the selection itself, from the app that is in front.
+  func service(_ pb: NSPasteboard) {
+    var payload: [String: Any] = ["ctx": frontContext()]
+    if let s = pb.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+      var ctx: [String: Any] = ["text": String(s.prefix(100_000))]
+      if !s.contains(where: { $0.isWhitespace }), let u = URL(string: s), u.scheme == "https" || u.scheme == "http" { ctx["url"] = s }
+      merge(&payload, ["ctx": ctx])
+    } else if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], let u = urls.first {
+      if u.isFileURL, let f = Bar.fileBlob(u) { payload["file"] = f } else if !u.isFileURL { merge(&payload, ["ctx": ["url": u.absoluteString, "text": u.absoluteString]]) }
+    }
+    show(payload)
+  }
+
+  // chronos://capture?text=…&url=…&file=… — any app on this Mac (and any web page, which is why it
+  // only fills the panel in). A file must be an image/PDF/text under Pictures, Desktop or Downloads.
+  func open(url: URL) {
+    guard url.scheme == "chronos", url.host == "capture" else { return }
+    let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    let get = { (n: String) in items.first(where: { $0.name == n })?.value }
+    var payload: [String: Any] = ["ctx": frontContext()]
+    var ctx: [String: Any] = [:]
+    if let t = get("text"), !t.isEmpty { ctx["text"] = String(t.prefix(100_000)) }
+    if let u = get("url"), !u.isEmpty { ctx["url"] = String(u.prefix(4000)) }
+    if let a = get("app"), !a.isEmpty { ctx["app"] = String(a.prefix(120)) }
+    merge(&payload, ["ctx": ctx])
+    if let p = get("file") {
+      let home = FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath().path
+      let f = URL(fileURLWithPath: p).resolvingSymlinksInPath()
+      let ok = ["Pictures", "Desktop", "Downloads"].contains { f.path.hasPrefix(home + "/" + $0 + "/") }
+      if ok, let blob = Bar.fileBlob(f) { payload["file"] = blob }
+    }
+    show(payload)
+  }
+}
+let bar = Bar(token: adminToken())
+
+final class Services: NSObject {
+  // Read the services pasteboard inside the call: it is only promised for its duration.
+  @objc func sendToChronos(_ pb: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+    bar.service(pb)
+  }
+}
+let services = Services()
+app.servicesProvider = services
+NSUpdateDynamicServices()
+
+final class URLHandler: NSObject {
+  @objc func handle(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+    guard let s = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue, let u = URL(string: s) else { return }
+    DispatchQueue.main.async { bar.open(url: u) }
+  }
+}
+let urlHandler = URLHandler()
+NSAppleEventManager.shared().setEventHandler(urlHandler, andSelector: #selector(URLHandler.handle(_:reply:)),
+                                             forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+
+// "cmd+shift+space", "ctrl+opt+k", … or "off". Carbon's RegisterEventHotKey needs no Accessibility grant.
+func parseHotkey(_ spec: String) -> (UInt32, UInt32)? {
+  let parts = spec.lowercased().split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces) }
+  guard let key = parts.last, parts.count >= 2 else { return nil }
+  var mods: UInt32 = 0
+  for m in parts.dropLast() {
+    switch m {
+    case "cmd", "command": mods |= UInt32(cmdKey)
+    case "shift": mods |= UInt32(shiftKey)
+    case "opt", "option", "alt": mods |= UInt32(optionKey)
+    case "ctrl", "control": mods |= UInt32(controlKey)
+    default: return nil
+    }
+  }
+  let named: [String: Int] = ["space": kVK_Space, "return": kVK_Return, "slash": kVK_ANSI_Slash, "period": kVK_ANSI_Period]
+  let letters: [Character: Int] = [
+    "a": kVK_ANSI_A, "b": kVK_ANSI_B, "c": kVK_ANSI_C, "d": kVK_ANSI_D, "e": kVK_ANSI_E, "f": kVK_ANSI_F, "g": kVK_ANSI_G,
+    "h": kVK_ANSI_H, "i": kVK_ANSI_I, "j": kVK_ANSI_J, "k": kVK_ANSI_K, "l": kVK_ANSI_L, "m": kVK_ANSI_M, "n": kVK_ANSI_N,
+    "o": kVK_ANSI_O, "p": kVK_ANSI_P, "q": kVK_ANSI_Q, "r": kVK_ANSI_R, "s": kVK_ANSI_S, "t": kVK_ANSI_T, "u": kVK_ANSI_U,
+    "v": kVK_ANSI_V, "w": kVK_ANSI_W, "x": kVK_ANSI_X, "y": kVK_ANSI_Y, "z": kVK_ANSI_Z,
+    "0": kVK_ANSI_0, "1": kVK_ANSI_1, "2": kVK_ANSI_2, "3": kVK_ANSI_3, "4": kVK_ANSI_4,
+    "5": kVK_ANSI_5, "6": kVK_ANSI_6, "7": kVK_ANSI_7, "8": kVK_ANSI_8, "9": kVK_ANSI_9,
+  ]
+  let code = named[key] ?? (key.count == 1 ? letters[key.first!] : nil)
+  guard let c = code, mods != 0 else { return nil }
+  return (UInt32(c), mods)
+}
+var barHotKeyRef: EventHotKeyRef?
+let hotkeySpec = ProcessInfo.processInfo.environment["MC_BAR_HOTKEY"]
+  ?? UserDefaults.standard.string(forKey: "barHotkey") ?? "cmd+shift+space"
+if hotkeySpec.lowercased() != "off" {
+  if let (code, mods) = parseHotkey(hotkeySpec) {
+    var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+    InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
+      DispatchQueue.main.async { bar.hotkey() }
+      return noErr
+    }, 1, &spec, nil, nil)
+    let id = EventHotKeyID(signature: OSType(0x4D434252), id: 1) // 'MCBR'
+    let st = RegisterEventHotKey(code, mods, id, GetApplicationEventTarget(), 0, &barHotKeyRef)
+    if st != noErr { FileHandle.standardError.write("[mc-app] bar hotkey \(hotkeySpec) not registered (\(st))\n".data(using: .utf8)!) }
+  } else {
+    FileHandle.standardError.write("[mc-app] bar hotkey \"\(hotkeySpec)\" not understood — e.g. cmd+shift+space\n".data(using: .utf8)!)
+  }
+}
+
 window.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
 app.run()

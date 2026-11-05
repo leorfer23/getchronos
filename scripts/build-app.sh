@@ -32,7 +32,21 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSMicrophoneUsageDescription</key><string>Chronos listens while a voice call with Robert is connected.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Chronos listens while a voice call with Robert is connected, or while you talk to the bar.</string>
+  <!-- The bar (desktop/app.swift → static/bar.html): Services → "Send to Chronos" on selected text or a
+       file, and chronos://capture?… for other apps (Shot). Both only fill the bar in; ↵ sends. -->
+  <key>NSServices</key><array><dict>
+    <key>NSMenuItem</key><dict><key>default</key><string>Send to Chronos</string></dict>
+    <key>NSMessage</key><string>sendToChronos</string>
+    <key>NSPortName</key><string>Chronos</string>
+    <key>NSSendTypes</key><array><string>public.utf8-plain-text</string><string>public.url</string></array>
+    <key>NSSendFileTypes</key><array><string>public.image</string><string>com.adobe.pdf</string><string>public.plain-text</string></array>
+    <key>NSRequiredContext</key><dict/>
+  </dict></array>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>sh.chronos.capture</string>
+    <key>CFBundleURLSchemes</key><array><string>chronos</string></array>
+  </dict></array>
 </dict></plist>
 PLIST
 
@@ -58,6 +72,11 @@ mkdir -p "$(dirname "$SPOT")"
 rm -rf "$SPOT"
 ditto "$APP" "$SPOT"
 mdimport "$SPOT" 2>/dev/null || true
+
+# The Services menu and the chronos:// scheme are read from Info.plist by LaunchServices and pbs; a
+# rebuilt bundle is not picked up until they re-scan.
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" 2>/dev/null || true
+/System/Library/CoreServices/pbs -update 2>/dev/null || true
 
 # The icon is cached per bundle path by the icon services daemon, and a rebuilt bundle at the same
 # path keeps showing the old tile until the mtime moves and the Dock restarts. Both are cheap.
