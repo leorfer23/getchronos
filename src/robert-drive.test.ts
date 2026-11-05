@@ -103,6 +103,18 @@ test("fireIfStill: by default Robert watches every terminal, handed to him or no
   assert.equal(rows()[0].workspace_id, s.workspace_id, "the wake runs on that workspace's Robert (and its account)");
 });
 
+test("fireIfStill: a Ship terminal's stops are the operator's merge call — Robert is never woken, not even waiting on him", () => {
+  reset();
+  const s = term({ created_by: "ship", goal: "Ship ready PRs: acme/app#264" });
+  for (const [phase, over] of [["your_turn", {}], ["decide", {}], ["review", {}], ["waiting", { on: "robert" }]] as const) {
+    screens.set(s.id, st(phase, over as Partial<TermStatus>));
+    assert.equal(fireIfStill(s.id, driveKey(s.id, phase, st(phase).since), NOW), null, phase);
+  }
+  onStatus(s.id, st("your_turn"));
+  assert.equal(armedWakes().some((w) => w.session_id === s.id), false, "no timer armed either");
+  assert.equal(rows().length, 0);
+});
+
 test("fireIfStill: with watch-all off, a terminal not handed to Robert stays quiet (unless it waited on him)", () => {
   reset();
   const off = term({ robert: false });

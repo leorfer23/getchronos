@@ -69,6 +69,7 @@ import { focusEfficiencySnapshot } from "./focus.js";
 import { sessionArtifacts } from "./session-artifacts.js";
 import { findMedia, mediaMime, sessionMedia } from "./session-media.js";
 import { recordSessionPrs } from "./terminal-automerge.js";
+import { isShipTerminal } from "./ship-guard.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
 import { cloudRunFor, cloudSessionState, cloudVisibleRepos, followUpCloudSession, openCloudSession, wantsCloudBackend } from "./desk-cloud.js";
@@ -2756,8 +2757,11 @@ export function startServer() {
       // workspace that requires human answers no agent may decide, Lead included. Refused either way
       // it becomes an ordinary ask; the response carries the route actually granted, which is how
       // `mc` knows to say so in one line instead of claiming it asked a Lead that never heard it.
-      const route =
-        req.body.route === "lead" && !mayRouteToLead(sess.id) ? fallback : (req.body.route ?? fallback);
+      // A Ship terminal's question is the operator's merge/deploy word (ship-guard.ts): it never
+      // stops at Robert or a Lead, whatever the CLI asked for.
+      const route = isShipTerminal(sess)
+        ? "operator"
+        : req.body.route === "lead" && !mayRouteToLead(sess.id) ? fallback : (req.body.route ?? fallback);
       const ask = asks.create({
         session_id: sess.id,
         asked_by: askerLabel(sess.id),
