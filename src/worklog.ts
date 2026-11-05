@@ -27,7 +27,7 @@ import { briefNote, mergeNext, mergeRecently, rewriteBrief } from "./briefs.js";
 import { oneShotText, stripAnsi } from "./summarize.js";
 import { isReadOnlyRun } from "./runner.js";
 import { storyFromEvents } from "./run-story.js";
-import type { Note, Run, Session, Workspace } from "./types.js";
+import type { Job, Note, Run, Session, Workspace } from "./types.js";
 
 export const WORKLOG_SLUG = "worklog";
 const WORKLOG_TITLE = "Worklog";
@@ -158,14 +158,16 @@ export function readWorklog(workspace_id: string, limit = 50): WorklogRow[] {
 /**
  * The two writes. Ledger first (history is the thing we must not lose), then the brief's two living
  * sections — every other heading on that page is the operator's prose and is left exactly as it is.
+ * `ledgerOnly` keeps a routine pass (a scheduled job that ran clean) out of the brief: forty "triage
+ * ran clean" lines a day were burying the work Robert is meant to act on.
  */
-export function writeEntry(workspace_id: string, e: WorklogEntry, when = new Date()): WorklogRow {
+export function writeEntry(workspace_id: string, e: WorklogEntry, when = new Date(), opts: { ledgerOnly?: boolean } = {}): WorklogRow {
   const at = stamp(when);
   const note = worklogNote(workspace_id);
   if (!note) throw new Error("workspace not found");
   appendNote(note.id, entryBlock(e, at));
 
-  const brief = briefNote(workspace_id);
+  const brief = opts.ledgerOnly ? null : briefNote(workspace_id);
   if (brief) {
     let body = mergeRecently(brief.body, `${at.slice(0, 10)} · ${e.what} · ${e.outcome}`);
     const open = [...e.pending, ...e.next];
@@ -208,6 +210,8 @@ export interface WorklogInput {
   cost?: { turns?: number | null; usd?: number | null };
   /** When set, skip the LLM and write this entry (session digest already summarized the work). */
   ready?: WorklogEntry;
+  /** Ledger only, never the brief — see writeEntry. */
+  ledgerOnly?: boolean;
 }
 
 const outcomeLine = (status: string): string =>
@@ -286,6 +290,11 @@ export function shouldLogSession(
 // logging those as finished work would put a half-done piece in the ledger and then log it twice.
 const ENDED = new Set(["success", "failed", "timeout", "killed", "blocked"]);
 
+/** A scheduled job that ran clean is routine: ledger yes, brief no. A failed one still reaches the brief. */
+export function isRoutineRun(job: Pick<Job, "trigger_type">, status: string): boolean {
+  return job.trigger_type === "cron" && status === "success";
+}
+
 /** Builds and jobs are work; read-only passes and the ledger's own summarizers are not. */
 export function shouldLogRun(jobName: string | null | undefined, status: string): boolean {
   if (isReadOnlyRun(jobName)) return false;
@@ -313,7 +322,7 @@ async function record(source: string, workspace_id: string, input: WorklogInput,
     return null;
   }
   try {
-    const row = writeEntry(workspace_id, entry);
+    const row = writeEntry(workspace_id, entry, new Date(), { ledgerOnly: input.ledgerOnly });
     kv.set(srcKey(source), new Date().toISOString());
     return row;
   } catch (e) {
@@ -373,6 +382,7 @@ export async function recordRun(runId: string, ask?: Ask): Promise<WorklogRow | 
     pr: t?.pr_url ?? null,
     ticket: t?.key ?? null,
     cost: { turns: run.num_turns, usd: run.cost_usd },
+    ledgerOnly: isRoutineRun(job, run.status),
   }, ask);
 }
 
