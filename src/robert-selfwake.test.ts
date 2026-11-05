@@ -9,7 +9,7 @@ import { rewriteBrief, BRIEF_SEED } from "./briefs.js";
 import { writeSetting } from "./settings.js";
 import { quietSweep, wakeSection, SWEEP_KEY } from "./wake-queue.js";
 import {
-  changed, capRefusal, inHours, localHour, openProactive, PROACTIVE_BY, selfwakeOnce, selfwakeSay,
+  changed, capRefusal, inHours, issueTicket, localHour, openProactive, PROACTIVE_BY, redeemTicket, selfwakeOnce, selfwakeSay,
   setSelfwakeProbe, signals, SELFWAKE_KEY,
 } from "./robert-selfwake.js";
 import { sweepOnce, setSweepProbe } from "./robert-sweep.js";
@@ -160,24 +160,24 @@ test("openProactive: one terminal per workspace per hour, a daily cap, labelled 
   const w = quietWs();
   const opened: any[] = [];
   const opener = async (o: any) => { opened.push(o); return term(w.id, { created_by: o.created_by, goal: o.goal }); };
-  const r1 = await openProactive({ workspace_id: w.slug, goal: "draft the  vendor   follow-up", description: "Next item" }, opener, { nowMs: Date.now() });
+  const r1 = await openProactive({ workspace_id: w.slug, ticket: issueTicket(w.id), goal: "draft the  vendor   follow-up", description: "Next item" }, opener, { nowMs: Date.now() });
   assert.equal(r1.ok, true);
   assert.equal(opened[0].created_by, PROACTIVE_BY);
   assert.equal(opened[0].goal, "draft the vendor follow-up");
   assert.match(opened[0].description, /Robert opened this on his own/);
   assert.ok(isInboxAuto({ created_by: PROACTIVE_BY }), "same box as an inbox terminal: no merge, deploy or messages");
 
-  const r2 = await openProactive({ workspace_id: w.id, goal: "another" }, opener, { nowMs: Date.now() });
+  const r2 = await openProactive({ workspace_id: w.id, ticket: issueTicket(w.id), goal: "another" }, opener, { nowMs: Date.now() });
   assert.deepEqual(r2, { ok: false, status: 429, error: "this workspace already got a proactive terminal in the last hour" });
   assert.equal(opened.length, 1);
 
   const gated = ws();
-  const r3 = await openProactive({ workspace_id: gated.id, goal: "x y z" }, opener, { nowMs: Date.now(), allowed: () => false });
+  const r3 = await openProactive({ workspace_id: gated.id, ticket: issueTicket(gated.id), goal: "x y z" }, opener, { nowMs: Date.now(), allowed: () => false });
   assert.equal(r3.ok, false);
   assert.equal((r3 as any).status, 429);
 
   writeSetting("robert.proactive", false, gated.id);
-  assert.equal(((await openProactive({ workspace_id: gated.id, goal: "x y z" }, opener)) as any).status, 409);
+  assert.equal(((await openProactive({ workspace_id: gated.id, ticket: issueTicket(gated.id), goal: "x y z" }, opener)) as any).status, 409);
   assert.equal(((await openProactive({ workspace_id: "nope", goal: "x y z" }, opener)) as any).status, 404);
 });
 
@@ -219,4 +219,30 @@ test("selfwakeOnce: a workspace whose proactive terminals he keeps ignoring gets
   assert.equal(wakes().length, 0);
   writeSetting("robert.proactive_autotune", false, w.id);
   assert.equal(selfwakeOnce(w, NOW), null, "autotune off: he looks again");
+});
+
+test("the wall: a self-wake ticket opens a terminal only in the workspace it was issued for, once", async () => {
+  reset();
+  const a = quietWs(), b = quietWs();
+  const opened: any[] = [];
+  const opener = async (o: any) => { opened.push(o); return term(o.workspace_id, { created_by: o.created_by }); };
+  const forA = issueTicket(a.id);
+  const cross = await openProactive({ workspace_id: b.id, ticket: forA, goal: "leak a's context into b" }, opener);
+  assert.deepEqual(cross, { ok: false, status: 403, error: "no valid self-wake ticket for this workspace" });
+  assert.equal(redeemTicket(forA), null, "a refused ticket is spent too");
+  const none = await openProactive({ workspace_id: a.id, goal: "no ticket at all" }, opener);
+  assert.equal((none as any).status, 403);
+  const t = issueTicket(a.id);
+  assert.equal((await openProactive({ workspace_id: a.id, ticket: t, goal: "the real one" }, opener)).ok, true);
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].workspace_id, a.id);
+  const old = issueTicket(a.id, Date.now() - 3 * HOUR);
+  assert.equal(redeemTicket(old), null, "expired");
+  // The wake's prompt carries a ticket for its own workspace.
+  rewriteBrief(b.id, BRIEF_SEED.replace("## Next\n", "## Next\n- [ ] one thing\n"));
+  assert.equal(selfwakeOnce(b, NOW), null);
+  const say = JSON.parse(wakes().at(-1).payload).say as string;
+  const tk = /"ticket":"([a-f0-9]{16})"/.exec(say)?.[1];
+  assert.ok(tk);
+  assert.equal(redeemTicket(tk), b.id);
 });

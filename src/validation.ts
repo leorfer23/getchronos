@@ -328,6 +328,7 @@ const worklogItems = z.array(z.string().trim().min(1).max(240)).max(5).optional(
 // Robert's self-wake opening ONE terminal (src/robert-selfwake.ts openProactive): the daemon caps it.
 export const ProactiveOpenSchema = z.object({
   workspace_id: z.string().trim().min(1).max(80),
+  ticket: z.string().trim().max(40).nullable().optional(),
   goal: z.string().trim().min(3).max(400),
   description: z.string().max(4000).nullable().optional(),
 });

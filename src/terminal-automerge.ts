@@ -27,6 +27,7 @@ import { execFileTimed } from "./exec.js";
 import { childEnv } from "./child-env.js";
 import { ciRollup, isPrUrl } from "./delivery.js";
 import { artifactsFromFeed } from "./session-artifacts.js";
+import { prBelongsTo } from "./pr-ownership.js";
 import { repos, sessions, sessionPrs, workspaces } from "./store.js";
 import { notifyInfo } from "./telegram/api.js";
 import type { FocusEvent } from "./focus.js";
@@ -84,12 +85,25 @@ export function recordSessionPrs(s: Session, urls: string[]): number {
   const cwd = sessionCwd(s);
   let n = 0;
   for (const url of urls) {
+    // The wall (pr-ownership.ts): a PR this terminal only QUOTED from another workspace's repo is
+    // never tracked here — not offered, not merged, not shown as this workspace's.
+    if (isPrUrl(url) && !prBelongsTo(ws.id, url).ok) {
+      noteForeign(ws.id, url);
+      continue;
+    }
     if (isPrUrl(url) && sessionPrs.record({ url, session_id: s.id, workspace_id: ws.id, cwd })) n++;
   }
   return n;
 }
 
 const harvestedEnded = new Set<string>();
+const foreignSeen = new Set<string>();
+function noteForeign(wsId: string, url: string): void {
+  const k = `${wsId}|${url}`;
+  if (foreignSeen.has(k)) return;
+  foreignSeen.add(k);
+  console.log(`[automerge] not tracked in ${wsId.slice(0, 8)}: ${url} — ${prBelongsTo(wsId, url).why}`);
+}
 
 /** Sweep live (and just-ended) terminals of every workspace for PR links in their feed. */
 export function harvestSessionPrs(eventsOf: (id: string) => FocusEvent[], nowMs = Date.now()): number {
@@ -135,6 +149,11 @@ export async function pollSessionPrs(nowMs = Date.now()): Promise<string[]> {
     const ws = workspaces.get(row.workspace_id);
     if (!ws) continue;
     const auto = !!ws.auto_merge_prs;
+    const owned = prBelongsTo(ws.id, row.url);
+    if (!owned.ok) {
+      sessionPrs.update(row.url, { state: "skipped", skip_reason: `not this workspace's: ${owned.why}` });
+      continue;
+    }
     if (!auto && (ws.archived || nowMs - Date.parse(row.updated_at) < TRACK_POLL_MS)) continue;
     views++;
     const cwd = fs.existsSync(row.cwd) ? row.cwd : os.homedir();
