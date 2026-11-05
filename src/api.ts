@@ -148,7 +148,7 @@ import { RepoGitError, resolveRepoGitFields } from "./repo-git.js";
 import type { GoalKind, LessonState, Session } from "./types.js";
 import { redactConnectorConfig, publicTrigger } from "./redact.js";
 import { sharedRepoViews } from "./shared-repos.js";
-import { requireAdmin, tokenOk, callerScope, checkScope, checkRepoScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
+import { requireAdmin, tokenlessGate, tokenlessMode, tokenlessReport, tokenOk, callerScope, checkScope, checkRepoScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
 import { wsByIdOrSlug, wsRefs } from "./ws-ref.js";
 import { findHost, hostOnline } from "./hosts/index.js";
 import { RemoteHost } from "./hosts/remote.js";
@@ -531,9 +531,16 @@ export function startServer() {
   // Requests an agent on another computer made through its host (HOSTS.md): remote, never loopback-
   // trusted, and bound to their own session and host. A no-op for everything else.
   api.use(forwardedGate);
+  // No token = no identity: recorded (and refused once CHRONOS_TOKENLESS=deny) — authz.ts.
+  api.use(tokenlessGate);
   // A workspace may be named by id or slug in a path, ?workspace= or a body's workspace_id; resolved
   // to the id here, before any route's scope check runs (src/ws-ref.ts — never widens access).
   api.use(wsRefs);
+
+  // Who is still calling with no token — the list to empty before flipping CHRONOS_TOKENLESS=deny.
+  api.get("/authz/tokenless", requireAdmin, (_req, res) => {
+    res.json({ mode: tokenlessMode(), callers: tokenlessReport() });
+  });
 
   api.get("/backends", (_req, res) => {
     res.json(listBackends());

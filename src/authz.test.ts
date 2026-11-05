@@ -182,3 +182,57 @@ test("spawnRefusal: only the operator, Robert and a live Lead of that workspace 
   assert.ok(spawnRefusal({ ws: other.id }, { ws: home.id, leadId: lead.id }));
   assert.equal(spawnRefusal(null, null), "invalid workspace token");
 });
+
+// ───────────────────── tokenless requests (tokenlessGate) ─────────────────────
+import { resetTokenless, tokenlessGate, tokenlessReport } from "./authz.js";
+
+function gateReq(path: string, headers: Record<string, string> = {}, method = "GET"): any {
+  return { ...fakeReq(headers), path, method };
+}
+function runGate(req: any): { passed: boolean; status: number | null; body: any } {
+  let status: number | null = null, body: any = null, passed = false;
+  const res: any = { status(s: number) { status = s; return res; }, json(b: any) { body = b; return res; } };
+  tokenlessGate(req, res, () => { passed = true; });
+  return { passed, status, body };
+}
+function withMode<T>(mode: string, fn: () => T): T {
+  const prev = process.env.CHRONOS_TOKENLESS;
+  process.env.CHRONOS_TOKENLESS = mode;
+  try { return fn(); } finally { if (prev === undefined) delete process.env.CHRONOS_TOKENLESS; else process.env.CHRONOS_TOKENLESS = prev; }
+}
+
+test("tokenless gate, log mode: the call passes and is recorded by route shape and client", () => {
+  resetTokenless();
+  withMode("log", () => {
+    const r = runGate(gateReq("/sessions/0f9c515f-1111-2222-3333-444455556666/focus", { "user-agent": "curl/8.7" }));
+    assert.equal(r.passed, true);
+    runGate(gateReq("/sessions/aaaaaaaa-1111-2222-3333-444455556666/focus", { "user-agent": "curl/8.7" }));
+  });
+  const seen = tokenlessReport();
+  assert.equal(seen.length, 1, "ids collapse to one route shape");
+  assert.equal(seen[0].path, "/sessions/:id/focus");
+  assert.equal(seen[0].n, 2);
+});
+
+test("tokenless gate, deny mode: refused with 401 — and a WRONG admin token counts as no token", () => {
+  resetTokenless();
+  withMode("deny", () => {
+    const none = runGate(gateReq("/board"));
+    assert.equal(none.passed, false);
+    assert.equal(none.status, 401);
+    const forged = runGate(gateReq("/board", { "x-mc-admin": "not-the-token" }));
+    assert.equal(forged.passed, false);
+    assert.equal(callerScope(fakeReq({ "x-mc-admin": "not-the-token" })), null, "and callerScope agrees");
+    assert.equal(callerScope(fakeReq({})), null);
+  });
+});
+
+test("tokenless gate: identified callers and the public paths always pass", () => {
+  withMode("deny", () => {
+    assert.equal(runGate(gateReq("/board", { "x-mc-admin": CONFIG.adminToken })).passed, true);
+    assert.equal(runGate(gateReq("/sessions", { "x-mc-workspace-token": "anything" })).passed, true, "callerScope judges the token");
+    assert.equal(runGate(gateReq("/leads/me/events", { "x-mc-lead": "anything" })).passed, true);
+    for (const p of ["/health", "/push/vapid", "/triggers/hook/abc123"]) assert.equal(runGate(gateReq(p)).passed, true, p);
+  });
+  withMode("allow", () => assert.equal(runGate(gateReq("/board")).passed, true));
+});

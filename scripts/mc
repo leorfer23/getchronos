@@ -49,10 +49,22 @@ function parse(argv) {
 }
 // Set by `mc hook`: a hook must never write to stderr or exit early (see hook()).
 let QUIET_QUEUE = false;
+// Who this `mc` is, on every call: an agent's workspace token when it has one; otherwise the operator's
+// admin token when this machine can read it (his shell, Robert). The daemon no longer treats "no token"
+// as the operator (authz.ts tokenlessGate) — every agent could have claimed that by leaving its token off.
+let operatorAuth;
+function identityHeaders() {
+  if (process.env.MC_WORKSPACE_TOKEN) return WS_TOKEN_HEADERS;
+  if (operatorAuth === undefined) {
+    const t = adminToken();
+    operatorAuth = t ? { "x-mc-admin": t } : {};
+  }
+  return operatorAuth;
+}
 async function req(method, path, body, headers) {
   const r = await fetch(API + path, {
     method,
-    headers: { ...(body ? { "content-type": "application/json" } : {}), ...WS_TOKEN_HEADERS, ...SESSION_HEADERS, ...headers },
+    headers: { ...(body ? { "content-type": "application/json" } : {}), ...identityHeaders(), ...SESSION_HEADERS, ...headers },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await r.text();
