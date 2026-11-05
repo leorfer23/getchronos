@@ -131,7 +131,7 @@ import { runCommandLine } from "./commands.js";
 import { flowData } from "./flow.js";
 import { transcribe, audioFilename, transcribeFailure } from "./transcribe.js";
 import { speak, voiceFor, listVoices } from "./speak.js";
-import { askManagerWeb, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
+import { activeWorkspaceIds, askFleetFanout, askManagerWeb, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurnSmart, setSticky } from "./thread-router.js";
 import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type LeadEvent } from "./store.js";
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
@@ -5055,16 +5055,22 @@ export function startServer() {
     // Two projects match, or a work request with nothing to go on: offer the choice rather than guess.
     // Nothing has run yet, so the tap just re-sends the same text with a ws. Sync on purpose: no turn
     // id, nothing to wait for on the bus.
-    if (turn.ask) {
+    // Two projects named in one line (two #tags, or two project signals): each project's own Robert
+    // does its part — no single model reads both clients (workspaces never mix).
+    const named = turn.ask && /two tags|more than one project/.test(turn.ask.why)
+      ? turn.ask.candidates.map((c) => c.ws).filter((x): x is string => !!x)
+      : [];
+    if (turn.ask && named.length < 2) {
       return res.json({ reply: askLine(turn.ask), ask: { why: turn.ask.why, candidates: turn.ask.candidates }, actions: [], ws: null, how: "ask" });
     }
-    commitTurn(surface, turn);
-    const ws = turn.ws;
-    // Auto-routed (no #tag, no hand pick): the fleet-wide Robert runs it, focused on the router's pick,
-    // so one untagged line can reach every project. The row still files under `ws` so chips can show
-    // which project it landed on. A #tag or a hand pick keeps that workspace's own Robert (its client
-    // profile, MCP and accounts).
-    const runWs = turn.routed && turn.how !== "tag" ? null : ws;
+    if (!turn.ask) commitTurn(surface, turn);
+    const ws = turn.ask ? null : turn.ws;
+    // Workspaces never mix: a turn about one project runs on THAT project's Robert (its client profile,
+    // brief, thread, MCP and accounts). A turn for the whole shop — or for several named projects —
+    // fans out to each project's Robert and is stitched in code; small talk with no project goes to
+    // the fleet-wide Robert, whose prompt carries no client's content at all.
+    const runWs = ws;
+    const fanout = named.length >= 2 ? named : ws === null && !turn.routed?.social ? activeWorkspaceIds() : null;
     const text = turn.text; // the #tag never reaches the model
     const client = req.body.client;
     const turnId = randomUUID();
@@ -5090,12 +5096,14 @@ export function startServer() {
       try {
         // Stream TEXT deltas so Desk/phone can speak sentence-by-sentence while the turn runs.
         // client + turn on every delta: the page that asked speaks its own turn's sentences only.
-        const { reply, steps, engine } = await askManagerWeb(
-          prompt,
-          (t, kind) => bus.publish({ topic: "agent.delta", text: t, kind, ws, client, turn: turnId }),
-          runWs,
-          { voice, turn: turnId, focus: runWs ? null : ws },
-        );
+        const { reply, steps, engine } = fanout && fanout.length
+          ? await askFleetFanout(prompt, fanout, { turn: turnId })
+          : await askManagerWeb(
+              prompt,
+              (t, kind) => bus.publish({ topic: "agent.delta", text: t, kind, ws, client, turn: turnId }),
+              runWs,
+              { voice, turn: turnId },
+            );
         const row = chat.add(text, reply || "", "web", ws, steps, shown, quote, engine);
         chat.prune(2000);
         bus.publish({

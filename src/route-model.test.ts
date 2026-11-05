@@ -38,7 +38,9 @@ test("anything else is the model's call — made with the open terminals and the
   assert.match(r.why, /^model: /);
   // What it was shown: the projects, the terminal, and the sticky as a hint — not as the answer.
   assert.match(prompts[0], /- cedar: Cedar/);
-  assert.match(prompts[0], /cedar · fix the invoice loader/);
+  // Workspaces never mix: the topic is matched in code; the prompt names the project, not the text.
+  assert.match(prompts[0], /its words match an open terminal in cedar/);
+  assert.doesNotMatch(prompts[0], /fix the invoice loader/);
   assert.match(prompts[0], /previous message landed on atlas/);
   assert.match(prompts[0], /Message: """how is the invoice loader going\?"""/);
 });

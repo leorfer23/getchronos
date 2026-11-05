@@ -16,6 +16,7 @@ import { CONFIG } from "./config.js";
 import { chat, repos, sessions, workspaces } from "./store.js";
 import { noteHelperCall } from "./helper-spend.js";
 import { oneShotText } from "./summarize.js";
+import { tokens } from "./text-similarity.js";
 import type { Workspace } from "./types.js";
 
 export type RouteHints = {
@@ -62,19 +63,24 @@ export function routePrompt(text: string, hints: RouteHints): string {
   const repoNames = (w: Workspace) => repos.list(w.id).map((r) => r.name).slice(0, 8).join(", ");
   const projects = ws.map((w) => `- ${w.slug}: ${w.name}${repoNames(w) ? ` · repos: ${repoNames(w)}` : ""}`).join("\n");
 
-  const live = sessions.list({ status: "live", limit: 60 });
-  const terms = live
-    .map((s) => `- ${s.id.slice(0, 8)} · ${slug(s.workspace_id)} · ${clip(s.title || s.goal, 90) || "(untitled)"}${s.goal && s.title && s.goal !== s.title ? ` — goal: ${clip(s.goal, 70)}` : ""}${(s as any).branch ? ` · ${(s as any).branch}` : ""}`)
-    .join("\n");
+  // Workspaces never mix: this prompt names projects and counts, never what any client's terminal or
+  // conversation says. Which project a terminal or an id belongs to is matched in code (the hints).
+  const live = sessions.list({ status: "live", limit: 200 });
+  const counts = new Map<string, number>();
+  for (const s of live) counts.set(slug(s.workspace_id), (counts.get(slug(s.workspace_id)) ?? 0) + 1);
+  const terms = [...counts.entries()].map(([sl, n]) => `- ${sl}: ${n} open`).join("\n");
 
   const recent = chat.recentAll(8)
     .filter((m: any) => m.source !== "divider" && (m.you || m.reply))
     .slice(-6)
-    .map((m: any) => `- [${slug(m.workspace_id ?? null)}] operator: ${clip(m.you, 160)}${m.reply ? ` / robert: ${clip(m.reply, 120)}` : ""}`)
-    .join("\n");
+    .map((m: any) => slug(m.workspace_id ?? null))
+    .join(" → ");
 
   const h: string[] = [];
   for (const s of hints.signals) h.push(`- ${s.why} → ${s.workspaces.join(" or ")}`);
+  // Topic matching happens HERE, in code: which project's open terminals or recent messages share
+  // words with this one. Only the project and a count reach the model — never the matched text.
+  for (const t of topicMatches(text, live)) h.push(`- its words match ${t.what} in ${t.slug} (${t.shared} words in common)`);
   if (hints.fleetIntent) h.push("- the wording reads like a question about the whole shop");
   if (hints.social) h.push("- it reads like small talk (greeting / thanks)");
   if (hints.sticky) h.push(`- the previous message landed on ${hints.sticky.slug ?? "all"} (${hints.sticky.minutesAgo} min ago)`);
@@ -86,10 +92,10 @@ export function routePrompt(text: string, hints: RouteHints): string {
     "Projects:",
     projects || "(none)",
     "",
-    "Open terminals (id · project · what it is doing):",
+    "Open terminals per project (counts only):",
     terms || "(none)",
     "",
-    "Recent conversation, oldest first, [project it landed on]:",
+    "Where the last messages landed, oldest first:",
     recent || "(none)",
     "",
     "Hints from keyword rules (useful, but can be wrong or miss things):",
@@ -97,7 +103,7 @@ export function routePrompt(text: string, hints: RouteHints): string {
     "",
     `Message: """${clip(text, 1200)}"""`,
     "",
-    "Decide from meaning, not just keywords: a topic, a bug, a feature or a person that belongs to one project's terminals or recent conversation is about that project. A follow-up with no new topic continues the previous project. A change of topic is NOT a follow-up.",
+    "Decide from meaning, not just keywords: a topic, a repo, a feature or a person that belongs to one project is about that project. A follow-up with no new topic continues the project the last message landed on. A change of topic is NOT a follow-up.",
     'Use "all" for a question about the whole shop, work spanning several projects, or small talk. Use "ask" only when you genuinely cannot tell.',
     'Answer with ONE line of JSON and nothing else: {"project":"<slug>|all|ask","confidence":0.0-1.0,"why":"<under 12 words>","candidates":["<slug>",...]}',
   ].join("\n");
@@ -158,4 +164,29 @@ export async function modelRoute(text: string, hints: RouteHints): Promise<Model
   } catch {
     return null;
   }
+}
+
+/**
+ * Projects whose open terminals (title/goal) or recent operator messages share at least two
+ * meaningful words with the message — computed locally so the routing prompt can say "matches an
+ * open terminal in cedar" without carrying any client's text. Best match per project, strongest first.
+ */
+export function topicMatches(
+  text: string,
+  live: Array<{ workspace_id: string | null; title?: string | null; goal?: string | null }>,
+): Array<{ slug: string; shared: number; what: string }> {
+  const want = tokens(text);
+  if (!want.size) return [];
+  const best = new Map<string, { shared: number; what: string }>();
+  const score = (wsId: string | null, s: string, what: string) => {
+    if (!wsId) return;
+    const sl = workspaces.get(wsId)?.slug;
+    if (!sl) return;
+    let n = 0;
+    for (const t of tokens(s)) if (want.has(t)) n++;
+    if (n >= 2 && n > (best.get(sl)?.shared ?? 0)) best.set(sl, { shared: n, what });
+  };
+  for (const s of live) score(s.workspace_id, `${s.title ?? ""} ${s.goal ?? ""}`, "an open terminal");
+  for (const m of chat.recentAll(20) as any[]) if (m.you) score(m.workspace_id ?? null, m.you, "a recent message");
+  return [...best.entries()].map(([slug, v]) => ({ slug, ...v })).sort((a, b) => b.shared - a.shared).slice(0, 3);
 }

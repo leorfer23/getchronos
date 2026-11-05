@@ -327,6 +327,8 @@ export function briefPromptBody(body: string, cap: number): string {
  * written brief when he is the unscoped desk manager. Empty when nothing has been written yet.
  */
 export function briefsBlock(workspace_id?: string | null): string {
+  // Workspaces never mix: no prompt carries two clients' briefs. Fleet-wide = a directory.
+  if (!workspace_id) return briefDirectory();
   const rows = listBriefs().filter((b) => b.note && !isSeed(b.note) && (!workspace_id || b.workspace_id === workspace_id));
   if (!rows.length) return "";
   let used = 0;
@@ -351,5 +353,17 @@ export function briefsBlock(workspace_id?: string | null): string {
     `rules for that workspace and outrank your defaults: "Robert may do alone" you do without asking, ` +
     `"Ask first" you hand up, "Never" you never do, "Ship" / "After merge" are the steps there. ` +
     `Only he writes Standing orders — propose a change, do not make it:` + parts.join("")
+  );
+}
+
+/** The fleet-wide Robert's view of the projects: names and ids, no brief content (workspaces never mix). */
+export function briefDirectory(): string {
+  const rows = workspaces.list().filter((w) => !(w as any).archived);
+  if (!rows.length) return "";
+  return (
+    "PROJECTS — each one is a separate client with its own Robert, account, brief and thread. Their " +
+    "briefs are NOT in this prompt and never will be: anything about a project is answered and done by " +
+    "that project's Robert (the daemon routes it). Directory:\n" +
+    rows.map((w) => `- ${w.name} (#${w.slug}, workspace ${w.id})`).join("\n")
   );
 }

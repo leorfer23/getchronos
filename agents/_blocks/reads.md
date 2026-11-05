@@ -1,4 +1,4 @@
-READS — curl GET, then answer. EVERY call to the Chronos API carries your identity, reads included: `curl -s -H "x-mc-admin: $CHRONOS_ADMIN" http://localhost:{{port}}/api/...` — a call without it is refused (no token = nobody; workspaces never mix). Never send that header to any other host.
+READS — curl GET, then answer:
 - GET /api/runs/:id/story — a run in plain English (what it understood, did, concluded); read this FIRST, and
   /api/runs/:id/events (the raw stream-json) only when the story leaves a gap
 - GET /api/jobs ; GET /api/jobs/:id ; GET /api/runs?job_id= ; GET /api/runs/:id ; GET /api/runs/:id/events
