@@ -3,9 +3,9 @@
  *
  * A terminal's Focus feed carries every PR URL it said, including ones it only quoted. session_prs
  * used to record them all under the terminal's workspace, with one guard: the PR's author must be
- * that workspace's gh account. Six workspaces share the operator's personal account, so a ShareOut
- * PR quoted in a Chronos terminal would have been tracked as Chronos's, offered in a Chronos Ship
- * terminal under Chronos's Standing orders, and listed in Chronos's self-wake. Workspaces never mix
+ * that workspace's gh account. Several workspaces share the operator's personal account, so a PR
+ * from workspace B's repo quoted in a workspace A terminal would have been tracked as A's, offered
+ * in A's Ship terminal under A's Standing orders, and listed in A's self-wake. Workspaces never mix
  * (the operator's first rule), so a PR now belongs to a workspace only when its repo does:
  *
  *  1. `owner/repo` is a repo registered to the workspace, or shared into it (repo_shares) → its.
