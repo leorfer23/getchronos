@@ -26,7 +26,7 @@ belongs to (`POST /api/capture/open`, `src/capture.ts`).
 
 | Way in | What it carries |
 |---|---|
-| **⌘⇧Space** | the front app, its window title, a browser's address, and whatever you copied in the last 2 minutes (text, a link, an image — Shot puts every shot there). Pressed again while the panel is up: talk. |
+| **a tap of the right ⌘** (or **⌥⇧Space**) | the front app, its window title, a browser's address, and whatever you copied in the last 2 minutes (text, a link, an image — Shot puts every shot there). Again while the panel is up: talk. |
 | Services → **Send to Chronos** | the selected text or file, in apps that offer Services. |
 | `chronos://capture?text=…&url=…&file=…&app=…` | for other apps — Shot's ⌘⏎. A file must be an image, PDF or text file under Pictures, Desktop or Downloads. |
 
@@ -40,13 +40,17 @@ repo, and every open teaches the route for every key the capture carried (the Sl
 Chrome profile, a client's own domain). No key → the chip says *Pick a workspace*. Learned routes:
 `GET /api/capture/routes`, forget one with `DELETE /api/capture/routes/<key>`.
 
-**Permissions.** The hotkey needs none (Carbon `RegisterEventHotKey`). The window title and the
-browser address need **Accessibility** for Chronos.app — macOS asks once, on the first ⌘⇧Space; without
-it a capture still routes by its own link. Password managers' copies (nspasteboard.org concealed /
-transient types) are never picked up.
+**Permissions.** The right-⌘ tap, the window title and the browser address need **Accessibility** for
+Chronos.app; macOS asks once, at launch (never over the panel — a dialog there takes its focus and
+the panel closes). ⌥⇧Space needs none (Carbon `RegisterEventHotKey`), so it is the fallback: without
+the grant, and inside apps with Secure Keyboard Entry on (some terminals, password fields), where no
+app sees modifier taps. Password managers' copies (nspasteboard.org concealed / transient types) are
+never picked up. The grant survives rebuilds only with the signing identity below.
 
-**Change the hotkey:** `defaults write sh.chronos.app barHotkey "ctrl+opt+space"` (or `off`), then
-`launchctl kickstart -k gui/$(id -u)/sh.chronos.app`. After any change to `app.swift` or
+**Change the trigger:** `defaults write sh.chronos.app barHotkey "rcmd, ctrl+opt+space"` — a list of
+`rcmd` / `ropt` (a tap of the right ⌘ / ⌥ alone) and at most one combination; `off` = none. Then
+`launchctl kickstart -k gui/$(id -u)/sh.chronos.app`. A combination another app registered first is
+silently theirs (⌘⇧Space is 1Password's Quick Access). After any change to `app.swift` or
 `build-app.sh`: `bash scripts/build-app.sh && launchctl kickstart -k gui/$(id -u)/sh.chronos.app` —
 `npm run deploy` does not rebuild the app.
 
@@ -122,9 +126,10 @@ openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 -nod
 openssl pkcs12 -export -legacy -inkey key.pem -in cert.pem -out wapp.p12 -passout pass:chronos \
   -name "Chronos Local Signing"
 security import wapp.p12 -k ~/Library/Keychains/login.keychain-db -T /usr/bin/codesign -P chronos
-security add-trusted-cert -r trustRoot -p codeSign -k ~/Library/Keychains/login.keychain-db cert.pem
+# optional — codesign does not need it, and it asks for your password:
+# security add-trusted-cert -r trustRoot -p codeSign -k ~/Library/Keychains/login.keychain-db cert.pem
 rm key.pem wapp.p12   # the identity now lives in the keychain
-security find-identity -v -p codesigning   # must list it, or codesign will not use it
+security find-identity -p codesigning   # must list it (as CSSMERR_TP_NOT_TRUSTED if you skipped add-trusted-cert — fine)
 ```
 
 Changing the certificate changes the requirement, so Accessibility needs re-granting once after that.

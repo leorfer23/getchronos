@@ -38,7 +38,8 @@ swiftc -O "$SRC" -o "$APP/Contents/MacOS/wapp"
 # the requirement "this identifier signed by this cert", which the next build still satisfies.
 # Create one with scripts/../desktop/README.md → "Stable signing identity".
 SIGN_ID="${WAPP_SIGN_ID:-Chronos Local Signing}"
-if security find-identity -v -p codesigning | grep -qF "$SIGN_ID"; then
+# No `-v`: it hides a self-signed (untrusted) identity, which codesign uses all the same.
+if security find-identity -p codesigning | grep -qF "\"$SIGN_ID\""; then
   codesign -s "$SIGN_ID" -f --identifier sh.chronos.wapp "$APP"
 else
   echo "warning: '$SIGN_ID' not in the keychain — falling back to ad-hoc." >&2

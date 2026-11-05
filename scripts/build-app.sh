@@ -55,8 +55,11 @@ swiftc -O "$SRC" -o "$APP/Contents/MacOS/mc-app"
 
 # Same reasoning as build-wapp.sh: sign with the local identity when it exists so the code hash is
 # not the thing macOS remembers about this app; ad-hoc otherwise.
+# No `-v`: a self-signed identity is listed as CSSMERR_TP_NOT_TRUSTED, which `-v` hides — so the app
+# was signed ad-hoc even with the certificate in the keychain, and every rebuild reset its
+# Accessibility and microphone grants. codesign signs with it either way; trust is not needed.
 SIGN_ID="${MC_APP_SIGN_ID:-Chronos Local Signing}"
-if security find-identity -v -p codesigning | grep -qF "$SIGN_ID"; then
+if security find-identity -p codesigning | grep -qF "\"$SIGN_ID\""; then
   codesign -s "$SIGN_ID" -f --identifier sh.chronos.app "$APP"
 else
   codesign -s - -f --identifier sh.chronos.app "$APP"
