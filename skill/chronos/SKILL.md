@@ -13,14 +13,14 @@ can fire jobs by cron, manual click, Telegram, or a remote Cloudflare relay webh
 **You manage it entirely through its REST API with `curl` (Bash tool).** Always check it's up first:
 
 ```bash
-curl -s http://localhost:7777/api/health
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" http://localhost:7777/api/health
 ```
 If that fails, the daemon may be stopped: `launchctl kickstart -k gui/$(id -u)/sh.chronos.daemon`.
 
 ## Create a job
 
 ```bash
-curl -s -X POST http://localhost:7777/api/jobs -H 'Content-Type: application/json' -d '{
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" -X POST http://localhost:7777/api/jobs -H 'Content-Type: application/json' -d '{
   "name": "daily-report",
   "goal": "Summarize today's git commits in ~/myrepo and write SUMMARY.md.",
   "profile": "claude",
@@ -62,18 +62,18 @@ Returns the created job (with `id`). Only `name` and `goal` are required.
 ## Other operations
 
 ```bash
-curl -s http://localhost:7777/api/jobs                 # list jobs (+ next_run)
-curl -s http://localhost:7777/api/jobs/<id>            # one job
-curl -s -X PATCH http://localhost:7777/api/jobs/<id> -d '{"enabled":false}'   # edit (e.g. disable)
-curl -s -X DELETE http://localhost:7777/api/jobs/<id>  # delete
-curl -s -X POST http://localhost:7777/api/jobs/<id>/run    # run now -> {run_id, status}
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" http://localhost:7777/api/jobs                 # list jobs (+ next_run)
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" http://localhost:7777/api/jobs/<id>            # one job
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" -X PATCH http://localhost:7777/api/jobs/<id> -d '{"enabled":false}'   # edit (e.g. disable)
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" -X DELETE http://localhost:7777/api/jobs/<id>  # delete
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" -X POST http://localhost:7777/api/jobs/<id>/run    # run now -> {run_id, status}
 
-curl -s "http://localhost:7777/api/runs?job_id=<id>"   # run history
-curl -s http://localhost:7777/api/runs/<run_id>        # run detail (status, cost_usd, num_turns, summary, verify_verdict)
-curl -s http://localhost:7777/api/runs/<run_id>/events # full transcript
-curl -s -X POST http://localhost:7777/api/runs/<run_id>/kill   # kill a running job
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" "http://localhost:7777/api/runs?job_id=<id>"   # run history
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" http://localhost:7777/api/runs/<run_id>        # run detail (status, cost_usd, num_turns, summary, verify_verdict)
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" http://localhost:7777/api/runs/<run_id>/events # full transcript
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" -X POST http://localhost:7777/api/runs/<run_id>/kill   # kill a running job
 
-curl -s http://localhost:7777/api/stats                # spend today/7d/30d, success rate, top jobs
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" http://localhost:7777/api/stats                # spend today/7d/30d, success rate, top jobs
 ```
 
 ## Triggers (event → job)
@@ -83,7 +83,7 @@ gives you an inbound webhook at a secret URL; an optional **filter** decides whi
 
 ```bash
 # Create an HTTP trigger bound to a job. Response includes token + hook_url.
-curl -s -X POST http://localhost:7777/api/triggers -d '{
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" -X POST http://localhost:7777/api/triggers -d '{
   "name": "cf-5xx",
   "job_id": "<job-id>",
   "inject": "goal",                       // "goal" = append event to the prompt; "none" = ignore it
@@ -92,12 +92,12 @@ curl -s -X POST http://localhost:7777/api/triggers -d '{
     { "path": "body.count",      "op": "gt",     "value": 10 }
   ]
 }'
-curl -s http://localhost:7777/api/triggers                 # list (with hook_url)
-curl -s -X PATCH http://localhost:7777/api/triggers/<id> -d '{"enabled":false}'
-curl -s -X DELETE http://localhost:7777/api/triggers/<id>
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" http://localhost:7777/api/triggers                 # list (with hook_url)
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" -X PATCH http://localhost:7777/api/triggers/<id> -d '{"enabled":false}'
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" -X DELETE http://localhost:7777/api/triggers/<id>
 
 # Fire it (what an external service POSTs). 200 = matched+dispatched, 202 = received but filtered out.
-curl -s -X POST http://localhost:7777/api/triggers/hook/<token> -d '{"alert_type":"http_5xx_spike","count":137}'
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" -X POST http://localhost:7777/api/triggers/hook/<token> -d '{"alert_type":"http_5xx_spike","count":137}'
 ```
 
 - **Filter ops:** `equals` `contains` `regex` `gt` `lt` `exists`. `path` is a dot-path into the event
@@ -119,9 +119,9 @@ dispatch** (`POST /tickets/<id>/dispatch` → 400 `blocked by …`) until every 
 when working a ticket; raw REST:
 ```bash
 # add: FROM blocks TO (TO can't build until FROM is done). type: blocks|parent|relates|duplicates
-curl -s -X POST http://localhost:7777/api/tickets/<from_id>/links -H 'Content-Type: application/json' \
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" -X POST http://localhost:7777/api/tickets/<from_id>/links -H 'Content-Type: application/json' \
   -d '{"to_id":"<to_id>","type":"blocks"}'
-curl -s -X DELETE http://localhost:7777/api/tickets/<from_id>/links/<link_id>   # remove
+curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" -X DELETE http://localhost:7777/api/tickets/<from_id>/links/<link_id>   # remove
 ```
 Cycles are rejected. Links stay in Chronos (not pushed to Jira/ClickUp).
 
