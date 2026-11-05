@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { grokDenyArgs } from "../no-send.js";
 import { promisify } from "node:util";
 import { CONFIG } from "../config.js";
 import { pricedOrEstimate } from "../pricing.js";
@@ -57,6 +58,7 @@ export const grokBackend: AgentBackend = {
     // No CONFIG.defaultModel fallback: that's a claude alias ("sonnet") grok rejects — omit → grok default.
     if (job.model) args.push("--model", job.model);
     if (job.append_system) args.push("--rules", job.append_system); // standing notes appended to system prompt
+    args.push(...grokDenyArgs()); // no agent ever sends (no-send.ts); deny wins over bypassPermissions in grok
     return args;
   },
 
@@ -67,6 +69,7 @@ export const grokBackend: AgentBackend = {
     if (system) args.push("--rules", system);
     if (model) args.push("--model", model);
     if (resumeSessionId) args.push("--resume", resumeSessionId);
+    args.push(...grokDenyArgs());
     return { cmd: CONFIG.grokBin, args, env: {} };
   },
 
@@ -77,7 +80,7 @@ export const grokBackend: AgentBackend = {
     // sandbox grant, not from grok itself.
     // --session-id pins a NEW chat to the Chronos row UUID; --resume reopens that same UUID's
     // transcript (Desk reopen / daemon revive). Without these, every reopen was an empty chat.
-    const a: string[] = ["--always-approve"];
+    const a: string[] = ["--always-approve", ...grokDenyArgs()];
     if (model) a.push("--model", model);
     if (appendSystem) a.push("--rules", appendSystem);
     if (sessionId) a.push(resume ? "--resume" : "--session-id", sessionId);

@@ -13,6 +13,7 @@ import { opencodeBackend } from "./backends/opencode.js";
 import { openaiApiBackend } from "./backends/openai-api.js";
 import { listBackends } from "./backends/index.js";
 import { addUsage } from "./runner.js";
+import { claudeDenyArgs, grokDenyArgs } from "./no-send.js";
 
 test("claude oneShot: verifier-style verdict run (tools + budget guardrails)", () => {
   const s = claudeBackend.oneShot({ prompt: "judge this", model: "sonnet", configDir: "/cfg", allowedTools: "Read,Bash", maxBudgetUsd: 0.5 });
@@ -24,6 +25,7 @@ test("claude oneShot: verifier-style verdict run (tools + budget guardrails)", (
     "--strict-mcp-config",
     "--max-budget-usd", "0.5",
     "--dangerously-skip-permissions",
+    ...claudeDenyArgs(), // no agent ever sends (no-send.ts) — one-shots included
     "--model", "sonnet",
   ]);
   assert.equal(s.env.CLAUDE_CONFIG_DIR, "/cfg");
@@ -142,6 +144,7 @@ test("grok buildArgs: -p + streaming-json + bypass, model/rules only when set", 
   assert.deepEqual(a, [
     "-p", "do it", "--output-format", "streaming-json", "--permission-mode", "bypassPermissions",
     "--session-id", "sess", "--model", "grok-4.5",
+    ...grokDenyArgs(), // no agent ever sends (no-send.ts)
   ]);
   const b = grokBackend.buildArgs({ goal: "g", append_system: "NOTES" } as any, "sess", "CTX");
   assert.ok(b.includes("--rules") && b[b.indexOf("--rules") + 1] === "NOTES");

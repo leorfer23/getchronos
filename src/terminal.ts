@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { INBOX_AUTO_RULES, inboxAutoDenyArgs, isInboxAuto } from "./inbox-guard.js";
+import { mergeDeny, NO_SEND_RULE } from "./no-send.js";
 import path from "node:path";
 import os from "node:os";
 import type { WebSocket } from "ws";
@@ -73,7 +74,9 @@ SHOW, DON'T LIST: an image they should see (a screenshot, a chart, a mockup) →
 Say every link (PR, doc) in full on its own line. Write for a human on a phone: plain words, no filler, no code dumps.
 
 ## Checkout + load
-Main checkouts are read-only — \`mc worktree <repo>\`, cd there, push before you finish. Full test/typecheck/build: \`mc heavy -- <cmd>\`. Prefer fff MCP tools for repo search when available; shell via RTK when installed (transparent).`;
+Main checkouts are read-only — \`mc worktree <repo>\`, cd there, push before you finish. Full test/typecheck/build: \`mc heavy -- <cmd>\`. Prefer fff MCP tools for repo search when available; shell via RTK when installed (transparent).
+
+${NO_SEND_RULE}`;
 
 /**
  * The block a WORKER of a live Lead is opened with (LEADS.md), or "" for every other terminal.
@@ -897,7 +900,7 @@ export async function openSession(
       ? backend.interactiveArgs(opts.model ?? null, sysArg, repoDirs, spawnSessionId, doResume)
       : [];
     // An auto-opened inbox terminal: the CLI itself refuses merges, deploys and messaging (inbox-guard.ts).
-    if (isInboxAuto(row) && backend.name === "claude-code") iArgs.push(...inboxAutoDenyArgs());
+    if (isInboxAuto(row) && backend.name === "claude-code") mergeDeny(iArgs, inboxAutoDenyArgs()[1]);
     // What every request of this terminal re-sends before it has done anything (lean-prompt.ts).
     if (backend.name === "claude-code") iArgs.push(...leanClaudeArgs(configDir, opts.workspace_id ?? null));
     // Credential stores this client is trusted with (Globex ↔ ~/.config/gcloud, so `bq` can auth).

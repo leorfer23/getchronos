@@ -4291,6 +4291,11 @@ export function startServer() {
     const t = tickets.get(req.params.id);
     if (!t) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, t.workspace_id)) return;
+    // No agent ever comments anywhere (no-send.ts) — and every caller of this route is an agent or
+    // Robert. The comment becomes a draft the operator posts himself.
+    if (CONFIG.noSendComments) {
+      return res.status(403).json({ error: "agents never post comments — leave the text as a draft for the operator (no-send rule)" });
+    }
     try {
       await pushComment(t, req.body.body);
       res.json({ ok: true, external_system: t.external_system, external_id: t.external_id });
@@ -4302,7 +4307,7 @@ export function startServer() {
   // …or push the ticket's current local status out. Optional { hours } overrides/backfills a
   // tracker-required hours-spent field on close (Jira Done); falls back to the ticket's most
   // recent "Logged Nh." note when omitted.
-  api.post("/tickets/:id/push-status", validate(PushStatusSchema), async (req, res) => {
+  api.post("/tickets/:id/push-status", requireAdmin, validate(PushStatusSchema), async (req, res) => {
     const t = tickets.get(req.params.id);
     if (!t) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, t.workspace_id)) return;
@@ -4316,7 +4321,7 @@ export function startServer() {
 
   // …or write just the hours-spent field (Jira "Hours Spent"), leaving the status alone. Also
   // appends "Logged Nh." to the local work log, so a later Done push reuses the same number.
-  api.post("/tickets/:id/push-hours", validate(PushHoursSchema), async (req, res) => {
+  api.post("/tickets/:id/push-hours", requireAdmin, validate(PushHoursSchema), async (req, res) => {
     const t = tickets.get(req.params.id);
     if (!t) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, t.workspace_id)) return;
