@@ -172,6 +172,8 @@ function adminToken() {
   // fails for Robert.
   if (process.env.CHRONOS_ADMIN_TOKEN) return process.env.CHRONOS_ADMIN_TOKEN;
   if (process.env.CHRONOS_ADMIN) return process.env.CHRONOS_ADMIN;
+  // Telegram's Robert: his project's read-only credential (the daemon refuses writes made with it).
+  if (process.env.CHRONOS_READ_TOKEN) return process.env.CHRONOS_READ_TOKEN;
   for (const f of TOKEN_FILES) {
     try { const t = fs.readFileSync(f, "utf8").trim(); if (t) return t; } catch {}
   }

@@ -699,6 +699,13 @@ export const CONFIG = {
           `${home}/.config/gws`,
           `${home}/.kube`,
           inRepo(".admin-token"),
+          // The daemon's own store holds EVERY workspace: their tokens, chats, notes, terminals.
+          // Agents reach their own slice through the API (scoped); the files are the daemon's alone.
+          inRepo("chronos.db"),
+          inRepo("chronos.db-wal"),
+          inRepo("chronos.db-shm"),
+          inRepo(".secrets"),
+          inRepo("backups"),
           // Broker credentials (src/broker.ts) — the whole point is that sandboxed agents can
           // SPEND these via POST /api/broker/:slug but never READ them. Resolved, not hardcoded:
           // an operator who sets CHRONOS_BROKER_FILE would otherwise move the creds OUT of the

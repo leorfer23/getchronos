@@ -1,3 +1,6 @@
+import path from "node:path";
+import { worktreeRootFor } from "../worktree-core.js";
+import { inRepo, resolveNotesDir } from "../repo-root.js";
 import { randomUUID, randomBytes } from "node:crypto";
 import { db } from "./db.js";
 import { now } from "./util.js";
@@ -181,6 +184,24 @@ export const workspaces = {
         `SELECT secrets_file AS p FROM workspaces WHERE id != ? AND secrets_file IS NOT NULL`
       )
       .all(workspaceId) as Array<{ p: string }>;
-    return [...otherRoots, ...otherSecrets].map((r) => r.p);
+    // Workspaces never mix: beyond the other clients' repos, their worktrees, landing dirs, the
+    // Chronos notes/tickets mirrors of each, and the transcripts of any OTHER Claude account (a
+    // profile this workspace does not run on — a shared profile is this workspace's own too).
+    const me = db.prepare(`SELECT config_dir FROM workspaces WHERE id = ?`).get(workspaceId) as { config_dir: string | null } | undefined;
+    const others = db
+      .prepare(`SELECT slug, default_dir, config_dir FROM workspaces WHERE id != ?`)
+      .all(workspaceId) as Array<{ slug: string; default_dir: string | null; config_dir: string | null }>;
+    const notesRoot = resolveNotesDir();
+    const ticketsRoot = inRepo("tickets");
+    const extra: string[] = [];
+    for (const o of others) {
+      if (o.default_dir) extra.push(o.default_dir);
+      extra.push(path.join(notesRoot, o.slug), path.join(ticketsRoot, o.slug));
+      if (o.config_dir && o.config_dir !== me?.config_dir) {
+        extra.push(path.join(o.config_dir, "projects"), path.join(o.config_dir, "history.jsonl"));
+      }
+    }
+    const worktrees = otherRoots.map((r) => worktreeRootFor(r.p));
+    return [...new Set([...otherRoots.map((r) => r.p), ...worktrees, ...otherSecrets.map((r) => r.p), ...extra])];
   },
 };

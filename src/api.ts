@@ -73,6 +73,7 @@ import { findMedia, mediaMime, sessionMedia } from "./session-media.js";
 import { recordSessionPrs } from "./terminal-automerge.js";
 import { openProactive } from "./robert-selfwake.js";
 import { notifyDraft } from "./draft-notify.js";
+import { robertMay } from "./robert-scope.js";
 import { isShipTerminal } from "./ship-guard.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
@@ -132,7 +133,7 @@ import { runCommandLine } from "./commands.js";
 import { flowData } from "./flow.js";
 import { transcribe, audioFilename, transcribeFailure } from "./transcribe.js";
 import { speak, voiceFor, listVoices } from "./speak.js";
-import { activeWorkspaceIds, askFleetFanout, askManagerWeb, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
+import { activeWorkspaceIds, askFleetFanout, askManagerWeb, handFilesTo, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurnSmart, setSticky } from "./thread-router.js";
 import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type LeadEvent } from "./store.js";
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
@@ -150,7 +151,7 @@ import { RepoGitError, resolveRepoGitFields } from "./repo-git.js";
 import type { GoalKind, LessonState, Session } from "./types.js";
 import { redactConnectorConfig, publicTrigger } from "./redact.js";
 import { sharedRepoViews } from "./shared-repos.js";
-import { checkToken, requireAdmin, tokenlessGate, tokenlessMode, tokenlessReport, tokenOk, callerScope, checkScope, checkRepoScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
+import { checkToken, operatorOrRobertOf, robertScopeOf, setRobertGate, requireAdmin, tokenlessGate, tokenlessMode, tokenlessReport, tokenOk, callerScope, checkScope, checkRepoScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
 import { wsByIdOrSlug, wsRefs } from "./ws-ref.js";
 import { findHost, hostOnline } from "./hosts/index.js";
 import { RemoteHost } from "./hosts/remote.js";
@@ -557,6 +558,8 @@ export function startServer() {
   const api = express.Router();
   // Requests an agent on another computer made through its host (HOSTS.md): remote, never loopback-
   // trusted, and bound to their own session and host. A no-op for everything else.
+  // A project's Robert: admin inside his own workspace only (authz.ts robertToken, robert-scope.ts).
+  setRobertGate(robertMay);
   api.use(forwardedGate);
   // No token = no identity: recorded (and refused once CHRONOS_TOKENLESS=deny) — authz.ts.
   api.use(tokenlessGate);
@@ -986,10 +989,15 @@ export function startServer() {
     // the wall by probing ids. (`lead_id === leadId` also rules out the Lead typing into itself: its
     // own lead_id is null.) The workspace check stays as a second wall in case a row ever crosses.
     const admin = tokenOk(req.get("x-mc-admin"), CONFIG.adminToken);
-    const lead = admin ? null : leadScope(req);
-    if (!admin && !lead)
+    const target = sessions.get(req.params.id);
+    // The project's Robert types into his own project's terminals (drive: the next step), never another's.
+    const robert = !admin && operatorOrRobertOf(req, target?.workspace_id);
+    const lead = admin || robert ? null : leadScope(req);
+    if (!admin && !robert && !lead) {
+      if (robertScopeOf(req.get("x-mc-admin"))) return res.status(404).json({ error: "not found" });
       return res.status(403).json({ error: "typing into a terminal is admin-gated (x-mc-admin)" });
-    const s = sessions.get(req.params.id);
+    }
+    const s = target;
     if (!s || (lead && !leadMayType(lead, s))) return res.status(404).json({ error: "not found" });
     // A cloud session has no tty to write keystrokes into — the composer's message maps to a
     // follow-up turn on the same cloud agent instead (src/desk-cloud.ts). Keys/nav sequences make
@@ -1569,8 +1577,8 @@ export function startServer() {
   // not in front) and asks here: osascript notifications work from the daemon regardless of which
   // window holds the page, and the page has no OS hand of its own in a plain browser tab.
   api.post("/desk/notify", validate(DeskNotifySchema), (req, res) => {
-    // Admin token, checked inline: requireAdmin is declared further down this file (same as /input).
-    if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken))
+    // The operator, or a project's Robert telling him something (a notification is to him, never out).
+    if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken) && robertScopeOf(req.get("x-mc-admin"))?.role !== "rw")
       return res.status(403).json({ error: "admin-gated (x-mc-admin)" });
     if (!CONFIG.desktopNotify) return res.status(204).end();
     desktopNotify(req.body.title, req.body.body ?? "");
@@ -2387,8 +2395,13 @@ export function startServer() {
   });
 
   // One-glance fleet board: per-workspace live runs, queue, today's outcomes, PRs, spend + 5h tokens.
-  api.get("/fleet", requireAdmin, (_req, res) => {
-    res.json(fleetData());
+  api.get("/fleet", requireAdmin, (req, res) => {
+    const ws = callerScope(req)?.ws ?? null;
+    const d = fleetData();
+    if (ws === null) return res.json(d);
+    // A project's Robert: his workspace's row, and no shop-wide totals.
+    const slug = workspaces.get(ws)?.slug;
+    res.json({ workspaces: d.workspaces.filter((w) => w.slug === slug) });
   });
 
   // Flow home view: state counters + the open queue + shipped (review/recently-done) work, enriched.
@@ -2400,7 +2413,7 @@ export function startServer() {
   api.get("/costs", requireAdmin, (req, res) => {
     const from = (req.query.from as string) || new Date().toISOString().slice(0, 7) + "-01";
     const to = (req.query.to as string) || new Date().toISOString();
-    const workspace = req.query.workspace as string | undefined;
+    const workspace = (callerScope(req)?.ws ?? undefined) || (req.query.workspace as string | undefined);
     const rows = runs.costReport({ workspace_id: workspace, from, to });
     const runs_usd = rows.reduce((s, r) => s + r.cost_usd, 0);
     const desk = sessions.spendSince(from, { workspace_id: workspace, until: to });
@@ -2434,7 +2447,7 @@ export function startServer() {
     const to = (req.query.to as string) || new Date().toISOString();
     const from =
       (req.query.from as string) || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    const rows = runs.dailyCosts({ workspace_id: req.query.workspace as string | undefined, from, to });
+    const rows = runs.dailyCosts({ workspace_id: (callerScope(req)?.ws ?? undefined) || (req.query.workspace as string | undefined), from, to });
     res.json({ from, to, rows });
   });
 
@@ -2516,7 +2529,7 @@ export function startServer() {
 
   // Client billing pack: a weekly per-workspace work report. Defaults to the last 7 days.
   api.get("/report", requireAdmin, (req, res) => {
-    const workspace = req.query.workspace as string | undefined;
+    const workspace = (callerScope(req)?.ws ?? undefined) || (req.query.workspace as string | undefined);
     if (!workspace) return res.status(400).json({ error: "workspace required" });
     const to = (req.query.to as string) || new Date().toISOString();
     const from = (req.query.from as string) || new Date(Date.now() - 7 * 86400000).toISOString();
@@ -3476,7 +3489,8 @@ export function startServer() {
     res.json({ workspace_id: req.params.id, entries: worklog.readWorklog(req.params.id, limit) });
   });
   api.post("/workspaces/:id/worklog", validate(WorklogEntrySchema), (req, res) => {
-    const admin = tokenOk(req.get("x-mc-admin"), CONFIG.adminToken);
+    // The operator, his project's Robert, or a Lead — each in their own workspace.
+    const admin = operatorOrRobertOf(req, req.params.id);
     const lead = !admin && req.get("x-mc-lead") ? leadScope(req) : null;
     if (!admin && !lead)
       return res.status(403).json({ error: "writing the worklog is admin-gated (x-mc-admin), or a Lead in its own workspace (x-mc-lead)" });
@@ -3525,7 +3539,7 @@ export function startServer() {
   // credential is mandatory and must match: the admin token, or THIS workspace's token.
   api.get("/workspaces/:id/vars/export", (req, res) => {
     if (!workspaces.get(req.params.id)) return res.status(404).json({ error: "workspace not found" });
-    const admin = tokenOk(req.get("x-mc-admin"), CONFIG.adminToken);
+    const admin = operatorOrRobertOf(req, req.params.id);
     const wsTok = req.get("x-mc-workspace-token");
     const mine = !!wsTok && workspaces.getByToken(wsTok)?.id === req.params.id;
     if (!admin && !mine)
@@ -4608,7 +4622,7 @@ export function startServer() {
       ...(req.query.owner ? { owner: String(req.query.owner) } : {}),
       ...(req.query.all === "1" ? {} : { enabled: true }),
     });
-    res.json(scope.ws === null ? list : list.filter((w) => w.workspace_id === null || w.workspace_id === scope.ws));
+    res.json(scope.ws === null ? list : list.filter((w) => w.workspace_id === scope.ws));
   });
 
   api.post("/watches", requireAdmin, validate(NewWatchSchema), (req, res) => {
@@ -4643,7 +4657,11 @@ export function startServer() {
   // ──────────────────────────── Mission Control: recovery ────────────────────────────
   // Work that stopped without finishing. Listing is open (it's the same read every surface makes);
   // deciding is admin-gated, because approving spends money by re-dispatching an agent.
-  api.get("/recovery", requireAdmin, (req, res) => res.json(filterByBucket(listStalls(), parseBucketFilter(req.query.bucket))));
+  api.get("/recovery", requireAdmin, (req, res) => {
+    const ws = callerScope(req)?.ws ?? null;
+    const all = listStalls();
+    res.json(filterByBucket(ws === null ? all : all.filter((s) => s.workspace_id === ws), parseBucketFilter(req.query.bucket)));
+  });
 
   api.post("/recovery/:id/hold", requireAdmin, validate(HoldSchema), (req, res) => holdRoute(req, res, "recovery"));
 
@@ -5091,7 +5109,9 @@ export function startServer() {
     // goes above the words typed so he knows which comment is being answered, and is kept off `text`.
     // A parent that is gone just makes this an ordinary line.
     const quoted = quote ? { id: quote.id, side: quote.side, text: quoteExcerpt(quote.text) } : null;
-    const prompt = quotePrompt(quote) + text + chatAttachmentsBlock(files);
+    // A project's Robert cannot read Chronos's attachments root (every client's files): this turn's
+    // files are copied into his own dir and he gets those paths.
+    const prompt = quotePrompt(quote) + text + chatAttachmentsBlock(fanout?.length ? files : handFilesTo(runWs, files));
     const shown = files.map((a) => ({ id: a.id, url: a.url, mime: a.mime, name: a.name }));
     const voice = !!req.body.voice;
     bus.publish({ topic: "agent.asked", you: text, at: new Date().toISOString(), source: surface, ws, client, turn: turnId, ...(shown.length ? { attachments: shown } : {}), ...(quoted ? { quote: quoted } : {}) });

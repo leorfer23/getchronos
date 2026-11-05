@@ -23,6 +23,7 @@ import { isAuthError, isProviderLimitError, withProviderFallback } from "../mana
 import { agentDef, agentPrompt } from "../agent-defs.js";
 import { widgetPromptBlock } from "../widgets/index.js";
 import { askLine, commitTurn, resolveTurnSmart, type Route } from "../thread-router.js";
+import { robertToken } from "../authz.js";
 import { send, sendChatAction, esc } from "./api.js";
 import { kb, type Btn } from "./keyboards.js";
 import { getActiveExec } from "./active-exec.js";
@@ -680,7 +681,9 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
         wsId: runWs,
         profileDir: m.profileDir,
         agent: { name: "Robert", tools: MANAGER_TOOLS },
-        // Telegram propose-and-confirm: no CHRONOS_ADMIN on primary or fallback.
+        // Telegram propose-and-confirm: no CHRONOS_ADMIN on primary or fallback — only his project's
+        // read-only credential, so his reads still name him.
+        ...(runWs ? { extraEnv: { CHRONOS_READ_TOKEN: robertToken(runWs, "ro"), MC_AGENT_NAME: "robert", MC_WORKSPACE: runWs } } : {}),
         killPrimary: () => {
           m.kill();
           if (runWs) tgWsWarm.delete(`${chat}:${wsKey(runWs)}`);
@@ -966,6 +969,10 @@ type WarmOpts = {
   cwd?: string;
   allowedTools?: string;                   // default "Bash,Read"
   sandbox?: SandboxMode;                   // default "guard"
+  /** Other workspaces' places this manager may not read (a project's Robert: isolationDenyDirs). */
+  denyDirs?: string[];
+  /** Extra dirs it may read and write (a project's Robert: his own home, ~/.mc/robert/<slug>). */
+  addDirs?: string[];
   // JSON for --mcp-config (AgentDef.mcp). Absent → --strict-mcp-config with nothing to load, i.e.
   // no MCP servers at all, which is what every executive got before agents could declare a bundle.
   mcpConfig?: string;
@@ -1053,7 +1060,7 @@ export class WarmManager {
     if (this.resumeId) args.push("--resume", this.resumeId);
     const cwd = this.opts.cwd || process.cwd();
     const { cmd, cmdArgs } = sandboxWrap(
-      this.opts.sandbox ?? "guard", cwd, [], profileDir, [], CONFIG.claudeBin, args
+      this.opts.sandbox ?? "guard", cwd, this.opts.addDirs ?? [], profileDir, this.opts.denyDirs ?? [], CONFIG.claudeBin, args
     );
     const child = spawn(cmd, cmdArgs, {
       cwd,
@@ -1390,6 +1397,8 @@ function webManager(key: string, wsId: string | null): WarmManager {
       // read from the registry at spawn so a widget added later never leaves him naming a card the
       // page cannot mount. Web surface only — Telegram has nowhere to render one.
       system: personaSystem("robert", robertPrompt("web"), wsId ? agentContext(wsId) : "", briefsBlock(wsId), widgetPromptBlock()),
+      // A project's Robert reads only his project's places (workspaces never mix).
+      ...robertSandbox(wsId),
       model: getWebModel(),
       profileDir: dir,
       allowedTools: MANAGER_TOOLS,
@@ -1400,7 +1409,7 @@ function webManager(key: string, wsId: string | null): WarmManager {
     // workspace, so every workspace-scoped `mc` command (pad, idea, skill, learn) can default to it
     // instead of making him carry a uuid around. Absent for the unscoped/personal manager, where
     // there is no one right answer and the command should say so rather than guess.
-    extraEnv: { CHRONOS_ADMIN: CONFIG.adminToken, MC_AGENT_NAME: "robert", ...(wsId ? { MC_WORKSPACE: wsId } : {}) },
+    extraEnv: { CHRONOS_ADMIN: robertCredential(wsId), MC_AGENT_NAME: "robert", ...(wsId ? { MC_WORKSPACE: wsId } : {}) },
       resumeSessionId: getWebSession(key),
       onSessionId: (id) => setWebSession(key, id),
       onStaleResume: () => clearWebSession(key),
@@ -1464,6 +1473,52 @@ export function warmWebManager(wsId?: string | null) {
 // never recycles the warm process; the chat log keeps only what he said.
 export const VOICE_TURN =
   "(VOICE — the operator is talking to you on the Desk voice call. What follows is speech-to-text: names of projects, terminals and people may be misheard, so match them generously against the fleet and the briefs, and if two things fit, ask which. Your reply is READ ALOUD: first sentence = the outcome or your one question; at most three short sentences in total; plain spoken words — no markdown, lists, tables, ids, keys, paths, URLs or emoji. Clear commands you execute directly as always, then say what you did. Anything destructive, outward-facing or ambiguous: ask one short yes/no question he can answer out loud, and act on his spoken yes. UI lines still go after the reply; they are not read out.)";
+
+/**
+ * What a Robert carries as CHRONOS_ADMIN: his project's own credential (authz.ts robertToken —
+ * admin inside that workspace, nothing outside it). Only the fleet-wide Robert, whose prompt holds no
+ * client's content, keeps the operator's token.
+ */
+/**
+ * Where a project's Robert lives on disk, and what he may not read: his workspace's landing dir (or a
+ * dir of his own — never the daemon's checkout, which holds every client), walled off from every
+ * other workspace's repos, notes, tickets and Claude transcripts like any of his workspace's agents.
+ */
+export function robertSandbox(wsId: string | null | undefined): { cwd?: string; addDirs?: string[]; denyDirs?: string[] } {
+  if (!wsId) return {};
+  const w = workspaces.get(wsId);
+  let cwd = w?.default_dir && fs.existsSync(w.default_dir) ? w.default_dir : null;
+  const home = robertHome(wsId);
+  if (!cwd) cwd = home;
+  return { cwd, addDirs: [home], denyDirs: workspaces.isolationDenyDirs(wsId) };
+}
+
+/** ~/.mc/robert/<slug>: a project's Robert's own dir — the files handed to his turns land here. */
+export function robertHome(wsId: string): string {
+  const dir = path.join(os.homedir(), ".mc", "robert", workspaces.get(wsId)?.slug ?? wsId);
+  try { fs.mkdirSync(dir, { recursive: true }); } catch { /* the spawn reports it */ }
+  return dir;
+}
+
+/**
+ * Files the operator pasted into a turn live under Chronos's attachments root, which a project's
+ * Robert cannot read (it holds every client's). Copy this turn's files into his own dir and hand
+ * him those paths instead.
+ */
+export function handFilesTo<T extends { path: string; text_path?: string | null }>(wsId: string | null | undefined, files: T[]): T[] {
+  if (!wsId || !files.length) return files;
+  const dir = path.join(robertHome(wsId), "attachments");
+  try { fs.mkdirSync(dir, { recursive: true }); } catch { return files; }
+  const copy = (src: string) => {
+    const dst = path.join(dir, path.basename(src));
+    try { fs.copyFileSync(src, dst); return dst; } catch { return src; }
+  };
+  return files.map((f) => ({ ...f, path: copy(f.path), ...(f.text_path ? { text_path: copy(f.text_path) } : {}) }));
+}
+
+export function robertCredential(wsId: string | null | undefined, role: "rw" | "ro" = "rw"): string {
+  return wsId ? robertToken(wsId, role) : CONFIG.adminToken;
+}
 
 /** Projects with something going on: a live terminal, or one opened in the last 3 days. */
 export function activeWorkspaceIds(limit = 8, nowMs = Date.now()): string[] {
@@ -1579,7 +1634,7 @@ export async function askManagerWeb(
     // MC_AGENT_NAME signs what he does through `mc`; MC_WORKSPACE is which client this desk
     // Robert belongs to (see the warm-manager spawn above). The fallback engine has to carry both,
     // or a degraded turn silently loses the workspace default the primary had.
-    extraEnv: { CHRONOS_ADMIN: CONFIG.adminToken, MC_AGENT_NAME: "robert", ...(realWsId ? { MC_WORKSPACE: realWsId } : {}) },
+    extraEnv: { CHRONOS_ADMIN: robertCredential(realWsId), MC_AGENT_NAME: "robert", ...(realWsId ? { MC_WORKSPACE: realWsId } : {}) },
     profileDir: m.profileDir,
     onDelta,
     // `prompt` already carries this thread's recap, so only the declaration needs carrying.
@@ -1833,11 +1888,14 @@ function warmForChatWs(chat: number, wsId: string): WarmManager {
       // propose-and-confirm — NOT the web execute-directly persona. Same workspace skill index as the
       // web chat, so continuing a thread from the phone knows the same procedures.
       system: personaSystem("robert", robertPrompt("telegram"), agentContext(wsId), briefsBlock(wsId)),
+      ...robertSandbox(wsId),
       model: CONFIG.agent.model,
       allowedTools: MANAGER_TOOLS,
       inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
       profileDir: dir, // the workspace's account (or its sibling when walled) + skills + MCP
-      // deliberately no extraEnv: without CHRONOS_ADMIN the agent can only read and PROPOSE
+      // No CHRONOS_ADMIN: he reads and PROPOSES. His reads carry his project's read-only credential
+      // (authz.ts robertToken "ro") — the daemon refuses any write it is used for.
+      extraEnv: { CHRONOS_READ_TOKEN: robertToken(wsId, "ro"), MC_AGENT_NAME: "robert", MC_WORKSPACE: wsId },
       resumeSessionId: getWebSession(key),
       onSessionId: (id) => setWebSession(key, id),
       onStaleResume: () => clearWebSession(key),

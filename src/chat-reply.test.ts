@@ -31,7 +31,7 @@ test("replyTo is an id and a side — no text a client could put in his mouth", 
 
 test("the turn: quote read back from the row, above the words; routing and `you` stay the words typed", () => {
   assert.match(api, /const quote = req\.body\.replyTo \? chat\.quoteOf\(req\.body\.replyTo\.id, req\.body\.replyTo\.side\) : null;/);
-  assert.match(api, /const prompt = quotePrompt\(quote\) \+ text \+ chatAttachmentsBlock\(files\);/);
+  assert.match(api, /const prompt = quotePrompt\(quote\) \+ text \+ chatAttachmentsBlock\(fanout\?\.length \? files : handFilesTo\(runWs, files\)\);/);
   // Quote is loaded BEFORE resolveTurnSmart so the parent's project can steer the router.
   assert.match(api, /replyWorkspace: quote\?\.workspace_id \?\? null/);
   // The router reads req.body.text — a #tag inside the quoted parent never re-routes the reply.
