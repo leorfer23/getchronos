@@ -546,6 +546,9 @@ export const CONFIG = {
   // Auto-resume a run that hit a rate-limit/credit wall, once access resets — but only if the wait
   // is within this many hours (0 disables). Avoids burning retries on a wall the job can't pass.
   resumeAfterRateLimitMaxHours: Number(process.env.CHRONOS_RESUME_RL_MAX_HOURS ?? 6),
+  // On boot, a cron job whose latest fire fell while the daemon was down (Mac off, reboot, deploy) runs
+  // once if that fire is within this many hours (0 disables). src/cron-catchup.ts.
+  cronCatchupHours: Number(process.env.CHRONOS_CRON_CATCHUP_HOURS ?? 24),
   // Default model when a job doesn't pick one. Sonnet ≈ 5× cheaper than Opus for similar tasks;
   // jobs can still set model:"opus" for heavy work. Desk terminals also fall back here (then to the
   // workspace default_model) so interactive spend is not profile-null / unknown.

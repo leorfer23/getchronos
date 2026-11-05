@@ -2,6 +2,9 @@ import { Cron } from "croner";
 import { jobs, kv, runs } from "./store.js";
 import { dispatch } from "./dispatcher.js";
 import { onceDecision } from "./once.js";
+import { missedFire } from "./cron-catchup.js";
+import { CONFIG } from "./config.js";
+import type { Job } from "./types.js";
 
 const tasks = new Map<string, Cron>();
 
@@ -41,6 +44,30 @@ function hasInflight(jobId: string): boolean {
   return runs.list(jobId, 20).some((r) => r.status === "running" || r.status === "queued");
 }
 
+// One cron fire: skip a stacked or gated fire (recorded, so the job check can tell), else dispatch.
+function fireCron(job: Job, trigger: string): void {
+  try {
+    if (hasInflight(job.id)) {
+      console.log(`[scheduler] skip cron ${job.id.slice(0, 8)} — prior run still inflight`);
+      noteSkip(job.id, "inflight", "prior run still inflight");
+      return;
+    }
+    const skip = cronSkipReason(job);
+    if (skip) {
+      console.log(`[scheduler] skip cron ${job.name} — ${skip}`);
+      noteSkip(job.id, "gate", skip);
+      return;
+    }
+    const r = dispatch(job.id, trigger);
+    if ("error" in r) {
+      console.warn(`[scheduler] cron ${job.name} refused: ${r.error}`);
+      noteSkip(job.id, "refused", r.error);
+    }
+  } catch (e) {
+    console.error(`[scheduler] dispatch failed for job ${job.id}:`, e);
+  }
+}
+
 // Rebuild all cron registrations from the jobs table. Called on boot and on any job CRUD.
 export function reloadSchedules(): void {
   for (const c of tasks.values()) c.stop();
@@ -54,28 +81,7 @@ export function reloadSchedules(): void {
         // protect: block re-entry while the callback itself is still on the stack/promise;
         // hasInflight covers the longer case where the prior run is still queued/executing.
         { timezone: job.timezone || "UTC", name: job.id, protect: true },
-        () => {
-          try {
-            if (hasInflight(job.id)) {
-              console.log(`[scheduler] skip cron ${job.id.slice(0, 8)} — prior run still inflight`);
-              noteSkip(job.id, "inflight", "prior run still inflight");
-              return;
-            }
-            const skip = cronSkipReason(job);
-            if (skip) {
-              console.log(`[scheduler] skip cron ${job.name} — ${skip}`);
-              noteSkip(job.id, "gate", skip);
-              return;
-            }
-            const r = dispatch(job.id, "cron");
-            if ("error" in r) {
-              console.warn(`[scheduler] cron ${job.name} refused: ${r.error}`);
-              noteSkip(job.id, "refused", r.error);
-            }
-          } catch (e) {
-            console.error(`[scheduler] dispatch failed for job ${job.id}:`, e);
-          }
-        }
+        () => fireCron(job, "cron")
       );
       tasks.set(job.id, cron);
     } catch (e) {
@@ -107,6 +113,32 @@ function fireOnce(jobId: string) {
   jobs.update(jobId, { run_at: null });
   tasks.get(jobId)?.stop();
   tasks.delete(jobId);
+}
+
+/**
+ * Boot only: run once every enabled cron job whose latest fire fell while the daemon was down
+ * (src/cron-catchup.ts has the rule). The job check goes last — it judges the others, and their
+ * catch-up runs are live by then, so it does not call them missed. Returns how many it fired.
+ */
+export function catchUpMissedCron(now = new Date()): number {
+  const windowMs = CONFIG.cronCatchupHours * 3_600_000;
+  if (!(windowMs > 0)) return 0;
+  const due: { job: Job; at: Date }[] = [];
+  for (const job of jobs.enabledCron()) {
+    if (!job.cron_expr) continue;
+    const lastStartedAt = runs.list(job.id, 5).reduce<string | null>((m, r) => (r.started_at && (!m || r.started_at > m) ? r.started_at : m), null);
+    const at = missedFire({
+      expr: job.cron_expr, tz: job.timezone || "UTC", createdAt: job.created_at,
+      lastStartedAt, lastSkipAt: lastCronSkip(job.id)?.at ?? null, windowMs, now,
+    });
+    if (at) due.push({ job, at });
+  }
+  due.sort((a, b) => Number(a.job.name.startsWith("job-check:")) - Number(b.job.name.startsWith("job-check:")));
+  for (const { job, at } of due) {
+    console.log(`[scheduler] catch-up ${job.name} — due ${at.toISOString()}, the daemon was down then`);
+    fireCron(job, "cron:catchup");
+  }
+  return due.length;
 }
 
 export function nextRun(jobId: string): string | null {

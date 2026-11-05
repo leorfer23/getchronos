@@ -1,7 +1,7 @@
 import "./env.js";
 import { CONFIG } from "./config.js";
 import { startServer } from "./api.js";
-import { reloadSchedules } from "./scheduler.js";
+import { catchUpMissedCron, reloadSchedules } from "./scheduler.js";
 import { startTelegram } from "./telegram.js";
 import { startRelay } from "./relay-client.js";
 import { startNotify } from "./notify.js";
@@ -157,6 +157,9 @@ startStandup();
 installAllSlackMcp();
 ensureAllCleanupJobs();
 ensureAllCheckJobs();
+// Cron fires the daemon was down for (Mac off, reboot, deploy) run once — a minute in, once hosts and
+// terminals are back. A Mac that only slept needs none: croner fires the overdue slot on wake.
+setTimeout(() => { try { catchUpMissedCron(); } catch (e) { console.error("[scheduler] catch-up failed", e); } }, 60_000);
 startNoteWorkerHook();
 startInboxAutoDispatch();
 installRtkRewriteScript();
