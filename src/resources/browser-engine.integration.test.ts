@@ -84,8 +84,13 @@ test("real browser: two leases isolated, no debugging port, forged secret refuse
     await eng.close(B.handle);
   } finally {
     await eng.stop("test");
-    if (pid) for (let i = 0; i < 40 && alive(pid); i++) await new Promise((r) => setTimeout(r, 50));
+    // Chrome's helpers (renderer, GPU) exit on their own once the browser is gone — on a loaded CI
+    // runner a few seconds later (two were still up right after stop). A helper still here after 10s
+    // is a real leak; kill it so a failed run does not leave it behind.
+    const settled = () => (!pid || !alive(pid)) && sh("/usr/bin/pgrep", ["-f", dataDir]) === "";
+    for (let i = 0; i < 200 && !settled(); i++) await new Promise((r) => setTimeout(r, 50));
     const left = sh("/usr/bin/pgrep", ["-f", dataDir]);
+    if (left) sh("/usr/bin/pkill", ["-9", "-f", dataDir]);
     fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     assert.ok(!pid || !alive(pid), "the browser process is gone");
     assert.equal(left, "", "no renderer/GPU helper left behind");
