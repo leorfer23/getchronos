@@ -1,13 +1,21 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { HostTerminals, VetoError, remoteKey, type HostBackend } from "./terminals.js";
+import { signalGroup } from "./fence.js";
 import type { SpawnSpec } from "../hosts/spawn-spec.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "hostd-terms-"));
+
+// A test that fails part-way must not leave its pty behind: a live (or frozen) pty holds the event
+// loop open, and this file — and with it `npm test` — would never exit.
+const built: HostTerminals[] = [];
+after(() => {
+  for (const t of built) for (const l of t.live()) if (!l.exit) signalGroup(l.pid, "SIGKILL", true);
+});
 const spec = (over: Partial<SpawnSpec> = {}): SpawnSpec => ({
   kind: "intent", session_id: "sess-veto", workspace: { id: "ws-g", slug: "acme" }, backend: "sh", model: null, role: "human",
   cli_session: null, resume: false, repo: null, repos: [], worktree: null, resume_cwd: null, cwd_hint: "landing",
@@ -17,13 +25,15 @@ const spec = (over: Partial<SpawnSpec> = {}): SpawnSpec => ({
 
 function terminals(deny: string[], calls: string[]) {
   const sh: HostBackend = { name: "sh", bin: () => "/bin/sh", interactiveArgs: () => { calls.push("args"); return ["-c", "echo hi"]; }, env: () => ({}) };
-  return new HostTerminals({
+  const t = new HostTerminals({
     home, root: process.cwd(), prepare: false, mcPort: 7777,
     profiles: () => { calls.push("profiles"); return { claude: home }; },
     checkouts: async () => { calls.push("checkouts"); return []; },
     deny: () => deny,
     backends: { sh },
   });
+  built.push(t);
+  return t;
 }
 
 test("the brain's policy frame adds a veto; it can never lift the local one", async () => {
@@ -82,25 +92,26 @@ test("remoteKey: the same repo matches whatever form its remote was written in",
 
 // ───────────── the fence (fence.ts) and salvage (salvage.ts) on a real pty ─────────────
 
-const stat = (pid: number) => { try { return execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).trim(); } catch { return ""; } };
-// A signal is delivered asynchronously: on a loaded runner `ps` can still show the old state for a
-// moment after kill(2) returns. Poll until it matches (or 2s pass) instead of reading once.
-const statUntil = async (pid: number, ok: (st: string) => boolean, timeoutMs = 2000) => {
+// The fence is judged by what it is for — a frozen terminal makes no progress, a thawed one does —
+// not by `ps`: inside a sandboxed terminal, where `npm test` usually runs, sandbox-exec will not run
+// setuid /bin/ps. The ticker writes a line every 50ms; its output is the ring's last seq.
+const lastSeq = (t: HostTerminals) => t.live()[0]?.last_seq ?? 0;
+/** True once the output moves past `from`; false if it has not within `timeoutMs`. */
+const moves = async (t: HostTerminals, from: number, timeoutMs = 3000) => {
   const t0 = Date.now();
-  let st = stat(pid);
-  while (!ok(st) && Date.now() - t0 < timeoutMs) {
-    await new Promise((r) => setTimeout(r, 20));
-    st = stat(pid);
-  }
-  return st;
+  while (lastSeq(t) <= from && Date.now() - t0 < timeoutMs) await new Promise((r) => setTimeout(r, 20));
+  return lastSeq(t) > from;
 };
-// Until the pty child has exec'd its program it is still node-pty's spawn-helper (macOS) or a forked
-// node (Linux); a SIGSTOP sent in that window can be lost on a loaded runner (seen on macOS CI:
-// still `S<s+` 2s later). Freeze only once the child is the program the terminal runs.
-const comm = (pid: number) => { try { return execFileSync("ps", ["-o", "comm=", "-p", String(pid)], { encoding: "utf8" }).trim(); } catch { return ""; } };
-const execd = async (pid: number, timeoutMs = 3000) => {
+/** True once the output has stood still for `stillMs` (what was already in flight drains first); false if it never did within `timeoutMs`. */
+const stops = async (t: HostTerminals, stillMs = 300, timeoutMs = 3000) => {
   const t0 = Date.now();
-  while (!/(^|\/)(sh|sleep)$/.test(comm(pid)) && Date.now() - t0 < timeoutMs) await new Promise((r) => setTimeout(r, 20));
+  let seq = lastSeq(t), since = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 20));
+    if (lastSeq(t) !== seq) { seq = lastSeq(t); since = Date.now(); }
+    else if (Date.now() - since >= stillMs) return true;
+  }
+  return false;
 };
 const exited = (t: HostTerminals, timeoutMs = 5000) => new Promise<void>((resolve, reject) => {
   const t0 = Date.now();
@@ -108,29 +119,33 @@ const exited = (t: HostTerminals, timeoutMs = 5000) => new Promise<void>((resolv
   tick();
 });
 
-function sleeper(cwd: string | null = null) {
-  const sh: HostBackend = { name: "sh", bin: () => "/bin/sh", interactiveArgs: () => ["-c", "sleep 30"], env: () => ({}) };
-  return new HostTerminals({
+function sleeper(cwd: string | null = null, script = "sleep 30") {
+  const sh: HostBackend = { name: "sh", bin: () => "/bin/sh", interactiveArgs: () => ["-c", script], env: () => ({}) };
+  const t = new HostTerminals({
     home, root: process.cwd(), prepare: false, mcPort: 7777,
     profiles: () => ({ claude: home }),
     checkouts: async () => (cwd ? [{ path: cwd, remote_url: "git@github.com:acme/app.git" }] : []),
     deny: () => [],
     backends: { sh },
   });
+  built.push(t);
+  return t;
 }
 
 test("fence: freezeAll stops the pty's process group; an attach (still ours) thaws it; a kill while frozen still lands", async () => {
-  const t = sleeper();
+  const t = sleeper(null, "while :; do echo tick; sleep 0.05; done");
   const r = await t.spawn(spec({ session_id: "sess-fence", workspace: null }));
-  await execd(r.pid);
+  // Freeze only once the program runs: a SIGSTOP to node-pty's spawn-helper, before it has exec'd,
+  // can be lost on a loaded runner (seen on macOS CI).
+  assert.ok(await moves(t, 0), "the ticker runs");
   assert.equal(t.freezeAll(), 1);
   assert.equal(t.freezeAll(), 0, "already frozen");
-  assert.match(await statUntil(r.pid, (st) => /T/.test(st)), /T/, "stopped");
+  assert.ok(await stops(t), "stopped: no more output");
   assert.equal(t.live()[0].frozen, true, "hello.live[] says so");
   assert.equal(t.work()[0].frozen, true);
   assert.equal(t.frozenCount(), 1);
   t.attach(r.ch, 0, 0, "sess-fence");
-  assert.doesNotMatch(await statUntil(r.pid, (st) => !/T/.test(st)), /T/, "running again");
+  assert.ok(await moves(t, lastSeq(t)), "running again");
   assert.equal(t.live()[0].frozen, undefined);
   t.freezeAll();
   t.kill(r.ch);
