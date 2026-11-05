@@ -2220,6 +2220,24 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       CREATE INDEX idx_services_ws ON services(workspace_id);`),
   },
 
+  {
+    version: 153,
+    name: "session_prs ship facts + offer — every workspace's PRs are tracked, a ready one is offered once",
+    // The operator opened terminals by hand only to say "merge + deploy #N" for a green PR whose
+    // terminal had closed. src/ship-loop.ts now offers those itself, in one Ship terminal per client.
+    // `title` / `review_decision` / `mergeable` / `draft` are what the last poll read; `no_ci` = no
+    // checks ever registered after the grace (ready-without-CI outside auto-merge workspaces).
+    // `ship_offered_at` + `ship_session_id` make the offer once-only and say which terminal holds it.
+    up: (db) => db.exec(`
+      ALTER TABLE session_prs ADD COLUMN title TEXT;
+      ALTER TABLE session_prs ADD COLUMN review_decision TEXT;
+      ALTER TABLE session_prs ADD COLUMN mergeable TEXT;
+      ALTER TABLE session_prs ADD COLUMN draft INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE session_prs ADD COLUMN no_ci INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE session_prs ADD COLUMN ship_offered_at TEXT;
+      ALTER TABLE session_prs ADD COLUMN ship_session_id TEXT;`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

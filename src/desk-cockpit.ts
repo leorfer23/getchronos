@@ -9,7 +9,7 @@
  * Where a PR comes from, deduplicated by URL:
  *   · a live terminal's pins — sessionArtifacts(): its ticket's PR, plus PRs its Focus feed names,
  *     looked up through the same 90s gh cache the companion rail uses (state, title and now CI);
- *   · session_prs (migration 139) — PRs an auto-merge workspace's terminals opened, which stay open
+ *   · session_prs (migrations 139 + 153) — PRs any workspace's terminals opened, which stay open
  *     after the terminal ends;
  *   · tickets with an open pr_url — the ones POST /tickets/:id/merge-pr can merge.
  * Only PRs known to be OPEN are listed: a merged, closed or unknown one is not something to act on.
@@ -105,7 +105,7 @@ export async function cockpitData(scopeWs: string | null, eventsOf: (id: string)
       continue;
     }
     byUrl.set(r.url, {
-      url: r.url, ...parts(r.url), title: null,
+      url: r.url, ...parts(r.url), title: r.title ?? null,
       ci: (r.ci_state as CiState) ?? null,
       session_id: r.session_id, workspace_id: r.workspace_id,
       merge: null, auto_merge: autoMerge(r.workspace_id), note,

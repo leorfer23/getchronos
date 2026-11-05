@@ -41,6 +41,7 @@ import { promptTracked } from "./terminal-prompts.js";
 import { focusEvents, sessionActivity, sendInput } from "./terminal.js";
 import { signalsOf, statusOf, type TermStatus } from "./term-status.js";
 import { setting, settingOn } from "./settings.js";
+import { isShipTerminal } from "./ship-guard.js";
 
 export type DriveKind = "review" | "turn" | "decide" | "blocked" | "robert";
 /** The same five as a set — the inbox stores kinds as free text, and only these have a Robert wake. */
@@ -790,9 +791,11 @@ export function fireIfStill(sessionId: string, key: string, nowMs = Date.now()):
   if (!s || !st || s.status !== "live") return null;
   if (driveKey(sessionId, st.phase, st.since) !== key) return null; // moved on during the grace
   if (nowMs - st.since > maxAgeMs()) return null;
+  // A Ship terminal's every stop is the operator's merge/deploy call (ship-guard.ts): never Robert's.
+  if (isShipTerminal(s)) return null;
   const kind = driveKind(st, context(s));
   if (!kind) return null;
-  if (nowMs - (operatorTyped.get(sessionId) ?? 0) < OPERATOR_OWNS_MS) return null;
+  if (operatorOwns(sessionId, nowMs)) return null;
   if (failoverOwns(sessionId)) return null;
   // A Lead's worker stopping is the Lead's news, not Robert's (LEADS.md: "A Lead's workers stop → the
   // Lead is woken, not Robert"). Same grace and operator-owns checks above; its own dedupe/caps below.
@@ -858,7 +861,7 @@ export function onStatus(sessionId: string, st: TermStatus | null | undefined): 
 
 function armTimer(sessionId: string, st: TermStatus, s: Session | undefined): void {
   const prev = timers.get(sessionId);
-  const kind = s && s.status === "live" ? driveKind(st, context(s)) : null;
+  const kind = s && s.status === "live" && !isShipTerminal(s) ? driveKind(st, context(s)) : null;
   // Not his to watch (see watched) → no timer. Lead-owned workers still arm (Lead inbox / orphan /
   // escalate); waiting-on-robert always arms: that is the agent asking.
   if (!kind || (s && !watched(s) && kind !== "robert")) {
@@ -898,6 +901,11 @@ export function chargeFleetWake(nowMs = Date.now()): boolean {
   if (!underCaps([], global, nowMs, { perSession: 1, global: setting<number>("robert.per_hour") })) return false;
   global = [...global, nowMs].filter((t) => nowMs - t < HOUR);
   return true;
+}
+
+/** The operator typed into it within OPERATOR_OWNS_MS: it is his, the daemon keeps its hands off. */
+export function operatorOwns(sessionId: string, nowMs = Date.now()): boolean {
+  return nowMs - (operatorTyped.get(sessionId) ?? 0) < OPERATOR_OWNS_MS;
 }
 
 export function noteDriveInput(sessionId: string, by: string, atMs = Date.now()): void {

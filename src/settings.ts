@@ -287,6 +287,12 @@ defineSetting({
   default: () => process.env.CHRONOS_ROBERT_SWEEP !== "0",
 });
 defineSetting({
+  key: "robert.ship_loop", group: "Robert", level: "both", type: "bool", env: "CHRONOS_ROBERT_SHIP_LOOP",
+  label: "Offer ready PRs",
+  help: "A green PR whose terminal closed (or sat idle 2h) gets one Ship terminal per workspace that asks you once whether to merge and deploy it. Off: PRs are still tracked, nothing opens.",
+  default: () => process.env.CHRONOS_ROBERT_SHIP_LOOP !== "0",
+});
+defineSetting({
   key: "robert.prompts", group: "Robert", level: "both", type: "bool", env: "CHRONOS_TERMINAL_PROMPTS",
   label: "Answer orange prompts",
   help: "Robert picks an option on a terminal's on-screen question when it is in scope.",

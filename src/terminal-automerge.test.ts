@@ -28,17 +28,21 @@ function fakeGh(views: Record<string, View>, calls: string[][]) {
 }
 const merges = (calls: string[][]) => calls.filter((c) => c[1] === "merge").map((c) => c[2]);
 
-test("records only for auto_merge_prs workspaces, first sighting wins", () => {
+test("records in every live workspace (not archived ones), first sighting wins", () => {
   const on = mkWs(true);
   const off = mkWs(false);
+  const gone = mkWs(false);
+  workspaces.update(gone.id, { archived: true } as any);
   const a = sessions.create({ workspace_id: on.id, cwd: "/tmp", backend: "claude-code" });
   const b = sessions.create({ workspace_id: on.id, cwd: "/tmp", backend: "claude-code" });
   const c = sessions.create({ workspace_id: off.id, cwd: "/tmp", backend: "claude-code" });
+  const d = sessions.create({ workspace_id: gone.id, cwd: "/tmp", backend: "claude-code" });
   const url = prUrl();
   assert.equal(recordSessionPrs(a, [url, "https://evil.example/pull/1"]), 1);
   assert.equal(recordSessionPrs(b, [url]), 0);
   assert.equal(sessionPrs.get(url)?.session_id, a.id);
-  assert.equal(recordSessionPrs(c, [prUrl()]), 0);
+  assert.equal(recordSessionPrs(c, [prUrl()]), 1, "tracked without auto-merge — the ship loop offers it");
+  assert.equal(recordSessionPrs(d, [prUrl()]), 0);
 });
 
 test("harvest picks PR links out of a live terminal's feed", () => {
@@ -102,7 +106,7 @@ test("no CI: waits out the grace window, then gives up without merging", async (
   assert.deepEqual(merges(calls), []);
 });
 
-test("flag off: open rows are left alone", async () => {
+test("flag off: tracked, never merged — and re-read on the slow cadence, not every pass", async () => {
   const ws = mkWs(true);
   const s = sessions.create({ workspace_id: ws.id, cwd: "/tmp", backend: "claude-code" });
   const url = prUrl();
@@ -111,5 +115,37 @@ test("flag off: open rows are left alone", async () => {
   const calls: string[][] = [];
   fakeGh({ [url]: { state: "OPEN" } }, calls);
   await pollSessionPrs();
-  assert.deepEqual(calls.filter((c) => c[2] === url), []);
+  assert.deepEqual(calls.filter((c) => c[2] === url), [], "just recorded: not due yet");
+  await pollSessionPrs(Date.now() + 6 * 60_000);
+  assert.equal(calls.filter((c) => c[2] === url).length, 1);
+  assert.deepEqual(merges(calls), []);
+  const row = sessionPrs.get(url)!;
+  assert.equal(row.state, "open");
+  assert.equal(row.ci_state, "passing");
+});
+
+test("no auto-merge: records review, draft and title; no CI after the grace is ready-without-CI, not skipped", async () => {
+  const ws = mkWs(false);
+  const s = sessions.create({ workspace_id: ws.id, cwd: "/tmp", backend: "claude-code" });
+  const [nocI, review] = [prUrl(), prUrl()];
+  recordSessionPrs(s, [nocI, review]);
+  const created = new Date(Date.now() + 60_000).toISOString();
+  setGh(async (args) => {
+    if (args[0] === "api") return "leo";
+    const u = args[2];
+    return JSON.stringify({
+      state: "OPEN", isDraft: u === review, author: { login: "leo" }, createdAt: created, title: `t ${u.split("/").pop()}`,
+      reviewDecision: u === review ? "CHANGES_REQUESTED" : "", mergeable: "MERGEABLE",
+      statusCheckRollup: u === nocI ? [] : [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+    });
+  });
+  await pollSessionPrs(Date.parse(created) + 11 * 60_000);
+  const a = sessionPrs.get(nocI)!, b = sessionPrs.get(review)!;
+  assert.equal(a.state, "open");
+  assert.equal(a.no_ci, 1);
+  assert.equal(a.ci_state, null);
+  assert.equal(a.title, `t ${nocI.split("/").pop()}`);
+  assert.equal(b.review_decision, "CHANGES_REQUESTED");
+  assert.equal(b.draft, 1);
+  assert.equal(b.mergeable, "MERGEABLE");
 });

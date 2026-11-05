@@ -18,6 +18,7 @@ import { maybeLearnProse } from "./prose.js";
 import { maybeExpireIdeas, maybeMineIdeas } from "./ideas.js";
 import { pollDeliveries } from "./delivery.js";
 import { harvestSessionPrs, pollSessionPrs } from "./terminal-automerge.js";
+import { SHIP_BOOT_GRACE_SEC, shipPass } from "./ship-loop.js";
 import { reapDoneWorktrees } from "./worktrees.js";
 import { pruneMemoryUsage } from "./memory-usage.js";
 import { sweepColdTier } from "./cold-tier.js";
@@ -629,14 +630,20 @@ export function startMonitor() {
     }, CONFIG.ciPollSec * 1000).unref?.();
     console.log(`[monitor] fast CI poll every ${CONFIG.ciPollSec}s while a PR is open`);
 
-    // Desk terminals' own PRs (auto_merge_prs workspaces): harvest new links, then merge the green ones.
+    // Desk terminals' own PRs, every workspace: harvest new links, poll them (auto_merge_prs
+    // workspaces merge the green ones), then offer what is ready in a Ship terminal (ship-loop.ts).
     let termBusy = false;
     setInterval(async () => {
       if (termBusy) return;
       termBusy = true;
       try {
         harvestSessionPrs(focusEvents);
-        if (sessionPrs.hasOpen()) await pollSessionPrs();
+        if (sessionPrs.hasOpen()) {
+          await pollSessionPrs();
+          // Not in the first minutes after a restart: terminals are still being revived then, and an
+          // originating terminal on its way back must not read as closed.
+          if (process.uptime() > SHIP_BOOT_GRACE_SEC) await shipPass();
+        }
       } catch (e: any) { console.warn("[monitor] terminal automerge", e?.message ?? e); }
       finally { termBusy = false; }
     }, CONFIG.ciPollSec * 1000).unref?.();

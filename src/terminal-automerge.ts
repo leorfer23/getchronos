@@ -1,18 +1,24 @@
 /**
- * Auto-merge for PRs a Desk terminal opened, per workspace (`workspaces.auto_merge_prs`).
+ * The PRs Desk terminals open: tracked in every workspace, auto-merged in the ones that ask for it
+ * (`workspaces.auto_merge_prs`).
  *
  * Tickets are retired, so delivery.ts's ticket poll never sees a Desk terminal's PR — the terminal
  * just runs `gh pr create`. This module is the replacement:
  *
  *   harvest — PR URLs a terminal produced (its Focus feed, or what the Desk read off its screen via
  *             /sessions/:id/artifacts) land in `session_prs`, first sighting wins.
- *   poll    — every open row: `gh pr view`; CI green → `gh pr merge --squash`; merged/closed → done.
+ *   poll    — every open row: `gh pr view`; merged/closed → done. In an auto-merge workspace CI green →
+ *             `gh pr merge --squash`. Everywhere else the poll only records what it read (CI, review,
+ *             draft, title): a green PR whose terminal has closed is src/ship-loop.ts's to offer.
  *
  * "Opened by this terminal" is enforced, not assumed: a feed also carries PRs the agent merely quoted,
- * so a row is only ever merged when the PR's author is the workspace's own gh account AND it was
- * created after the terminal started. Anything else is marked `skipped` with the reason.
+ * so a row only stays open when the PR's author is the workspace's own gh account AND it was created
+ * after the terminal started. Anything else is marked `skipped` with the reason — in every workspace,
+ * because the ship loop must not offer a teammate's PR either.
  *
  * Never merges: drafts, red or pending CI, repos with no CI at all (null rollup = nobody checked it).
+ * Outside auto-merge workspaces a repo with no CI is not given up on: `no_ci` marks it, and the ship
+ * loop asks the operator, which is exactly what "merge by hand" meant.
  * `gh` is injectable so tests never shell out (CLAUDE.md).
  */
 import fs from "node:fs";
@@ -41,6 +47,11 @@ export function setGh(fn: GhFn | null): void {
 // A PR with no checks yet may just be CI that has not registered — wait this long before deciding
 // the repo has no CI and giving up on it.
 const NO_CI_GRACE_MS = 10 * 60_000;
+// A row only tracked (not auto-merged) has nobody waiting on it by the second: re-read it this often.
+// Auto-merge rows keep the ciPollSec cadence they always had.
+const TRACK_POLL_MS = 5 * 60_000;
+// gh calls per pass, whatever the backlog: the oldest-polled rows go first, the rest next pass.
+const MAX_VIEWS = 20;
 // Ended terminals are harvested once, for this long after they end (their feed is a transcript read).
 const ENDED_HARVEST_MS = 2 * 60 * 60_000;
 // A PR may be created a little before the session row's timestamp settles (clock skew, resume).
@@ -65,11 +76,11 @@ function sessionCwd(s: Session): string {
   return os.homedir(); // `gh pr view <url>` needs no checkout; any dir works
 }
 
-/** Record PR URLs a terminal produced. No-op unless its workspace has auto-merge on. */
+/** Record PR URLs a terminal produced (any live workspace; an archived one is left alone). */
 export function recordSessionPrs(s: Session, urls: string[]): number {
   if (!s.workspace_id) return 0;
   const ws = workspaces.get(s.workspace_id);
-  if (!ws?.auto_merge_prs) return 0;
+  if (!ws || ws.archived) return 0;
   const cwd = sessionCwd(s);
   let n = 0;
   for (const url of urls) {
@@ -80,11 +91,11 @@ export function recordSessionPrs(s: Session, urls: string[]): number {
 
 const harvestedEnded = new Set<string>();
 
-/** Sweep live (and just-ended) terminals of auto-merge workspaces for PR links in their feed. */
+/** Sweep live (and just-ended) terminals of every workspace for PR links in their feed. */
 export function harvestSessionPrs(eventsOf: (id: string) => FocusEvent[], nowMs = Date.now()): number {
   let n = 0;
   for (const ws of workspaces.list()) {
-    if (!ws.auto_merge_prs || ws.archived) continue;
+    if (ws.archived) continue;
     for (const s of sessions.list({ workspace_id: ws.id, limit: 50 })) {
       if (s.status !== "live") {
         const ended = s.ended_at ? Date.parse(s.ended_at) : 0;
@@ -104,24 +115,36 @@ type PrView = {
   author?: { login?: string };
   createdAt?: string;
   statusCheckRollup?: any[];
+  reviewDecision?: string | null;
+  mergeable?: string | null;
+  title?: string | null;
 };
 
 const failAlerted = new Set<string>();
 
-/** Poll every open row once; merge the green ones. Returns the URLs merged this pass. */
+/**
+ * Poll the open rows once, least recently polled first: record what each PR is now, and in an
+ * auto-merge workspace merge the green ones. Returns the URLs merged this pass.
+ */
 export async function pollSessionPrs(nowMs = Date.now()): Promise<string[]> {
   const merged: string[] = [];
   const day = new Date(nowMs).toISOString().slice(0, 10);
-  for (const row of sessionPrs.open()) {
+  let views = 0;
+  for (const row of sessionPrs.open(MAX_VIEWS * 3)) {
+    if (views >= MAX_VIEWS) break;
     const ws = workspaces.get(row.workspace_id);
-    if (!ws?.auto_merge_prs) continue; // flag turned off: leave the row, merge nothing
+    if (!ws) continue;
+    const auto = !!ws.auto_merge_prs;
+    if (!auto && (ws.archived || nowMs - Date.parse(row.updated_at) < TRACK_POLL_MS)) continue;
+    views++;
     const cwd = fs.existsSync(row.cwd) ? row.cwd : os.homedir();
     const env = childEnv(ws);
 
     let v: PrView;
     try {
-      v = JSON.parse(await gh(["pr", "view", row.url, "--json", "state,isDraft,author,createdAt,statusCheckRollup"], cwd, env));
+      v = JSON.parse(await gh(["pr", "view", row.url, "--json", "state,isDraft,author,createdAt,statusCheckRollup,reviewDecision,mergeable,title"], cwd, env));
     } catch (e: any) {
+      sessionPrs.touch(row.url); // to the back of the line, so one broken PR cannot hold up the rest
       const k = `${row.url}:${day}:view`;
       if (!failAlerted.has(k)) {
         failAlerted.add(k);
@@ -135,10 +158,10 @@ export async function pollSessionPrs(nowMs = Date.now()): Promise<string[]> {
       sessionPrs.update(row.url, { state: state === "MERGED" ? "merged" : "closed" });
       continue;
     }
-    if (state !== "OPEN") continue;
+    if (state !== "OPEN") { sessionPrs.touch(row.url); continue; }
 
     const viewer = await viewerLogin(ws, cwd);
-    if (!viewer) continue;
+    if (!viewer) { sessionPrs.touch(row.url); continue; }
     if (v.author?.login !== viewer) {
       sessionPrs.update(row.url, { state: "skipped", skip_reason: `author ${v.author?.login ?? "?"} is not ${viewer}` });
       continue;
@@ -151,11 +174,20 @@ export async function pollSessionPrs(nowMs = Date.now()): Promise<string[]> {
     }
 
     const ci = ciRollup(v.statusCheckRollup);
-    if (ci !== row.ci_state) sessionPrs.update(row.url, { ci_state: ci });
+    const graceOver = Number.isFinite(created) && nowMs - created > NO_CI_GRACE_MS;
+    // Every poll writes, so updated_at moves and the next pass starts with somebody else.
+    sessionPrs.update(row.url, {
+      ci_state: ci,
+      title: v.title ? String(v.title).slice(0, 300) : row.title,
+      review_decision: v.reviewDecision ? String(v.reviewDecision) : null,
+      mergeable: v.mergeable ? String(v.mergeable) : null,
+      draft: v.isDraft ? 1 : 0,
+      no_ci: ci === null && graceOver ? 1 : 0,
+    });
+    if (!auto) continue; // tracked only: the ship loop decides what reaches the operator
+
     if (ci === null) {
-      if (Number.isFinite(created) && nowMs - created > NO_CI_GRACE_MS) {
-        sessionPrs.update(row.url, { state: "skipped", skip_reason: "repo has no CI — merge by hand" });
-      }
+      if (graceOver) sessionPrs.update(row.url, { state: "skipped", skip_reason: "repo has no CI — merge by hand" });
       continue;
     }
     if (ci !== "passing" || v.isDraft) continue;
