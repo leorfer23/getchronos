@@ -120,7 +120,9 @@ export function heldElsewhere(row: SessionPr, live: Session[], feed: (id: string
 
 /**
  * The `## Standing orders` section of the workspace's brief, verbatim (heading matched in any case;
- * it ends at the next `## `). Null when the brief or the section is absent or empty.
+ * it ends at the next `## `). Null when the brief or the section is absent or empty. The brief seeds
+ * the section with empty labels ("- Ship:", "- Never:") for the operator to fill: an unfilled label is
+ * not an order, so a section of only those counts as empty and the "no after-merge steps" rule applies.
  */
 export function standingOrders(body: string | null | undefined): string | null {
   if (!body) return null;
@@ -130,6 +132,7 @@ export function standingOrders(body: string | null | undefined): string | null {
   const out: string[] = [];
   for (const l of lines.slice(start + 1)) {
     if (/^## /.test(l)) break;
+    if (/^\s*[-*]\s*[^:]{1,40}:\s*$/.test(l)) continue; // an empty label
     out.push(l);
   }
   const text = out.join("\n").trim();

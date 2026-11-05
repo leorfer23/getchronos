@@ -108,6 +108,10 @@ test("standingOrders: the section verbatim, case-insensitive, up to the next ## 
   assert.equal(standingOrders(body), "- after merge: `npm run deploy`\n### detail\nverify /health");
   assert.equal(standingOrders("## Standing orders\n\n## Next\n"), null);
   assert.equal(standingOrders("# no section"), null);
+  // The brief's seed template: labels nobody filled are not orders.
+  const seeded = "## Standing orders\n- Ship:\n- After merge:\n- Robert may do alone:\n- Ask first:\n- Never:\n\n## Recently\n";
+  assert.equal(standingOrders(seeded), null);
+  assert.equal(standingOrders(seeded.replace("- Ship:", "- Ship: merge, then deploy")), "- Ship: merge, then deploy");
   assert.equal(standingOrders(null), null);
 });
 
