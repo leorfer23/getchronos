@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import fs from "node:fs";
+import { worktreeRootFor } from "./worktree-core.js";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { CONFIG } from "./config.js";
@@ -148,7 +149,7 @@ import { RepoGitError, resolveRepoGitFields } from "./repo-git.js";
 import type { GoalKind, LessonState, Session } from "./types.js";
 import { redactConnectorConfig, publicTrigger } from "./redact.js";
 import { sharedRepoViews } from "./shared-repos.js";
-import { requireAdmin, tokenlessGate, tokenlessMode, tokenlessReport, tokenOk, callerScope, checkScope, checkRepoScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
+import { checkToken, requireAdmin, tokenlessGate, tokenlessMode, tokenlessReport, tokenOk, callerScope, checkScope, checkRepoScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
 import { wsByIdOrSlug, wsRefs } from "./ws-ref.js";
 import { findHost, hostOnline } from "./hosts/index.js";
 import { RemoteHost } from "./hosts/remote.js";
@@ -521,6 +522,31 @@ export function adoptLead(toLeadId: string, fromLeadId: string): { workers: numb
   return { workers, slices, events };
 }
 
+/**
+ * Why a non-operator may not open a terminal pointing at these (null = it may). Everything named
+ * must belong to `wsId`: its repo (or one shared into it), its ticket, its session, and a cwd inside
+ * one of its repos, their worktree roots, or its landing dir.
+ */
+export function spawnWallRefusal(
+  wsId: string,
+  b: { repo_id?: string | null; ticket_id?: string | null; resumeId?: string | null; cwd?: string | null },
+): string | null {
+  const own = [...repos.list(wsId), ...repos.sharedWith(wsId)];
+  if (b.repo_id && !own.some((r) => r.id === b.repo_id)) return "repo not found in this workspace";
+  if (b.ticket_id && tickets.get(b.ticket_id)?.workspace_id !== wsId) return "ticket not found in this workspace";
+  if (b.resumeId && sessions.get(b.resumeId)?.workspace_id !== wsId) return "session not found in this workspace";
+  if (b.cwd) {
+    let real: string;
+    try { real = fs.realpathSync(b.cwd); } catch { return "cwd not found"; }
+    const roots = [
+      ...own.flatMap((r) => [r.path, worktreeRootFor(r.path)]),
+      workspaces.get(wsId)?.default_dir ?? null,
+    ].filter((x): x is string => !!x).map((x) => { try { return fs.realpathSync(x); } catch { return x; } });
+    if (!roots.some((root) => real === root || real.startsWith(root + path.sep))) return "cwd is outside this workspace";
+  }
+  return null;
+}
+
 export function startServer() {
   const app = express();
   // express.json() for everything, EXCEPT a file dropped on a terminal, which is parsed as raw bytes
@@ -618,6 +644,14 @@ export function startServer() {
       if (req.body?.workspace_id && req.body.workspace_id !== scope.ws)
         return res.status(403).json({ error: "workspace token does not match requested workspace" });
       req.body = { ...req.body, workspace_id: scope.ws };
+    }
+    // The wall for anyone but the operator: everything the new terminal points at must be this
+    // workspace's — a repo, a ticket, a session to revive, a directory. A Lead's worker used to open
+    // with read/write in another client's checkout, or revive another workspace's ended session.
+    if (scope.ws !== null) {
+      const wall = spawnWallRefusal(scope.ws, req.body ?? {});
+      if (wall) return res.status(404).json({ error: wall });
+      if (req.body) delete req.body.agentSessionId; // a raw CLI transcript id has no workspace to check
     }
     const lead = leadScope(req);
     // No nesting (LEADS.md): a Lead is Robert's deputy for one goal, not a spawner of other Leads.
@@ -1340,7 +1374,7 @@ export function startServer() {
   });
   // Desk right-click → Promote to Lead: the same terminal, reopened under its own id as a Lead
   // (terminal.ts promoteToLead). No nesting, as for `POST /sessions`: a Lead may not make a Lead.
-  api.post("/sessions/:id/promote-lead", validate(ResizeSchema), async (req, res) => {
+  api.post("/sessions/:id/promote-lead", requireAdmin, validate(ResizeSchema), async (req, res) => {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
@@ -2052,13 +2086,13 @@ export function startServer() {
   // untouched on disk and still readable as ordinary notes; see MEMORY_AGENTS), injected into
   // that agent's system prompt every turn. The agent writes its own memory mid-conversation, which
   // is the whole point — recording a fact costs it one curl, not a request to the operator.
-  api.get("/agents/:name/memory", (req, res) => {
+  api.get("/agents/:name/memory", requireAdmin, (req, res) => {
     const name = req.params.name.toLowerCase();
     if (!isMemoryAgent(name)) return res.status(404).json({ error: `no memory for agent '${name}'` });
     const n = agentMemory.agentMemoryNote(name, false);
     res.json(n ? publicNote(n) : { agent: name, body: "", empty: true });
   });
-  api.post("/agents/:name/memory", validate(AgentMemoryAppendSchema), (req, res) => {
+  api.post("/agents/:name/memory", requireAdmin, validate(AgentMemoryAppendSchema), (req, res) => {
     const name = req.params.name.toLowerCase();
     if (!isMemoryAgent(name)) return res.status(404).json({ error: `no memory for agent '${name}'` });
     try {
@@ -2067,7 +2101,7 @@ export function startServer() {
       res.status(400).json({ error: String(e?.message ?? e) });
     }
   });
-  api.put("/agents/:name/memory", validate(AgentMemoryRewriteSchema), (req, res) => {
+  api.put("/agents/:name/memory", requireAdmin, validate(AgentMemoryRewriteSchema), (req, res) => {
     const name = req.params.name.toLowerCase();
     if (!isMemoryAgent(name)) return res.status(404).json({ error: `no memory for agent '${name}'` });
     try {
@@ -2080,7 +2114,7 @@ export function startServer() {
   // The stow pass: tiered decay, a token budget, and a cold archive instead of a delete
   // (src/stow.ts). Same door as the memory routes above — the agent curates its own memory — and
   // the receipt it returns is what it reports back to the operator.
-  api.post("/agents/:name/stow", validate(StowSchema), (req, res) => {
+  api.post("/agents/:name/stow", requireAdmin, validate(StowSchema), (req, res) => {
     const name = req.params.name.toLowerCase();
     if (!isMemoryAgent(name)) return res.status(404).json({ error: `no memory for agent '${name}'` });
     try {
@@ -2089,7 +2123,7 @@ export function startServer() {
       res.status(400).json({ error: String(e?.message ?? e) });
     }
   });
-  api.get("/agents/:name/memory/report", (req, res) => {
+  api.get("/agents/:name/memory/report", requireAdmin, (req, res) => {
     const name = req.params.name.toLowerCase();
     if (!isMemoryAgent(name)) return res.status(404).json({ error: `no memory for agent '${name}'` });
     res.json(memoryReport(name));
@@ -2183,7 +2217,7 @@ export function startServer() {
     return fh ? findHost(fh) ?? null : hostById(LOCAL_HOST_ID);
   };
   api.get("/machine", (req, res) => {
-    if (!checkScope(req, res, null)) return;
+    if (!checkToken(req, res)) return;
     const host = callerHost(req);
     if (!host) return res.status(409).json({ error: "the forwarding host is not registered on this brain" });
     const { load, admission, samples } = host.vitals();
@@ -2215,7 +2249,7 @@ export function startServer() {
     return host?.slots ?? null;
   };
   api.post("/machine/slots", validate(HeavySlotSchema), async (req, res) => {
-    if (!checkScope(req, res, null)) return;
+    if (!checkToken(req, res)) return;
     const heavySlots = slotsFor(req, res);
     if (!heavySlots) return;
     // The ticket is minted HERE, before the await, so the hang-up handler below can name this exact
@@ -2236,14 +2270,14 @@ export function startServer() {
     res.json({ ...grant, slots: heavySlots.size() });
   });
   api.put("/machine/slots/:id", (req, res) => {
-    if (!checkScope(req, res, null)) return;
+    if (!checkToken(req, res)) return;
     const heavySlots = slotsFor(req, res);
     if (!heavySlots) return;
     if (!heavySlots.beat(req.params.id)) return res.status(404).json({ error: "slot not held (reclaimed?)" });
     res.json({ ok: true });
   });
   api.delete("/machine/slots/:id", (req, res) => {
-    if (!checkScope(req, res, null)) return;
+    if (!checkToken(req, res)) return;
     const heavySlots = slotsFor(req, res);
     if (!heavySlots) return;
     res.json({ released: heavySlots.release(req.params.id) });
@@ -2561,6 +2595,10 @@ export function startServer() {
     const cur = jobs.get(req.params.id);
     if (!cur) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, cur.workspace_id)) return;
+    // Moving a job between workspaces hands its next run another client's token, vars and account.
+    if (req.body && "workspace_id" in req.body && req.body.workspace_id !== cur.workspace_id && !tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) {
+      return res.status(403).json({ error: "only the operator moves a job to another workspace" });
+    }
     const spawnErr = jobPatchSpawnError(cur, req.body);
     if (spawnErr) return res.status(400).json({ error: spawnErr });
     const job = jobs.update(req.params.id, req.body);
@@ -4201,6 +4239,15 @@ export function startServer() {
     const cur = tickets.get(req.params.id);
     if (!cur) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, cur.workspace_id)) return;
+    // file_path is where the daemon itself reads and writes the ticket, outside any sandbox: nobody
+    // repoints it over HTTP (it read ~/chronos/.admin-token for whoever asked). And a ticket's repo is
+    // one of ITS workspace's repos — or a dispatch would run inside another client's checkout.
+    if (req.body && "file_path" in req.body) delete req.body.file_path;
+    if (req.body?.repo_id) {
+      const r = repos.get(req.body.repo_id);
+      const ok = !!r && (r.workspace_id === cur.workspace_id || repos.sharesOf(r.id).includes(cur.workspace_id));
+      if (!ok) return res.status(404).json({ error: "repo not found in this ticket's workspace" });
+    }
     try {
       const t = updateTicket(req.params.id, req.body);
       if (!t) return res.status(404).json({ error: "not found" });
@@ -4242,7 +4289,7 @@ export function startServer() {
   // Deliberately unscoped: full cross-workspace visibility IS the design (no channels, no DMs),
   // so board reads/writes are open like ticket notes. Author is provenance, not authentication —
   // same trust model as TicketNoteSchema's `by` on this localhost-only daemon.
-  api.get("/board", (req, res) => {
+  api.get("/board", requireAdmin, (req, res) => {
     // ?ticket=<id> → the posts cross-linked to that ticket (the ticket page's board section).
     if (typeof req.query.ticket === "string") {
       return res.json(board.forTicket(req.query.ticket).map((p) => ({ ...p, mentions: JSON.parse(p.mentions || "[]") })));
@@ -4252,13 +4299,13 @@ export function startServer() {
     res.json(feed.map((p) => ({ ...p, mentions: JSON.parse(p.mentions || "[]") })));
   });
 
-  api.get("/board/:id", (req, res) => {
+  api.get("/board/:id", requireAdmin, (req, res) => {
     const thread = board.thread(req.params.id);
     if (!thread.length) return res.status(404).json({ error: "not found" });
     res.json(thread.map((p) => ({ ...p, mentions: JSON.parse(p.mentions || "[]") })));
   });
 
-  api.post("/board", validate(NewBoardPostSchema), (req, res) => {
+  api.post("/board", requireAdmin, validate(NewBoardPostSchema), (req, res) => {
     if (req.body.ticket_id && !tickets.get(req.body.ticket_id))
       return res.status(400).json({ error: "ticket_id not found" });
     try {

@@ -230,8 +230,15 @@ test("tokenless gate, deny mode: refused with 401 — and a WRONG admin token co
 test("tokenless gate: identified callers and the public paths always pass", () => {
   withMode("deny", () => {
     assert.equal(runGate(gateReq("/board", { "x-mc-admin": CONFIG.adminToken })).passed, true);
-    assert.equal(runGate(gateReq("/sessions", { "x-mc-workspace-token": "anything" })).passed, true, "callerScope judges the token");
-    assert.equal(runGate(gateReq("/leads/me/events", { "x-mc-lead": "anything" })).passed, true);
+    const w = workspaces.create({ slug: "gate-ws", name: "Gate", config_dir: "/tmp/gate" } as any);
+    assert.equal(runGate(gateReq("/sessions", { "x-mc-workspace-token": w.token! })).passed, true, "a real workspace token");
+    // A header is a claim, not an identity: tokens nobody issued are refused in every mode.
+    const fakeWs = runGate(gateReq("/sessions", { "x-mc-workspace-token": "anything" }));
+    assert.equal(fakeWs.passed, false);
+    assert.equal(fakeWs.status, 401);
+    const fakeLead = runGate(gateReq("/board", { "x-mc-lead": "x" }));
+    assert.equal(fakeLead.passed, false, "x-mc-lead: x no longer walks past the gate");
+    assert.equal(fakeLead.status, 401);
     for (const p of ["/health", "/push/vapid", "/triggers/hook/abc123"]) assert.equal(runGate(gateReq(p)).passed, true, p);
   });
   withMode("allow", () => assert.equal(runGate(gateReq("/board")).passed, true));

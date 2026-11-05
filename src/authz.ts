@@ -104,7 +104,15 @@ function isTokenless(req: express.Request): boolean {
  * trusted (callerScope); everything else without a token is recorded, and refused in `deny` mode.
  */
 export function tokenlessGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
-  if (forwardedHost(req) !== null || !isTokenless(req)) return next();
+  if (forwardedHost(req) !== null) return next();
+  // A header is a claim, not an identity: a workspace or Lead token nobody issued is refused outright
+  // (any mode) — otherwise `x-mc-lead: x` walked past this gate onto every unscoped route.
+  if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) {
+    const ws = req.get("x-mc-workspace-token");
+    if (ws && !workspaces.getByToken(ws)) { res.status(401).json({ error: "invalid workspace token" }); return; }
+    if (req.get("x-mc-lead") && !leadScope(req)) { res.status(401).json({ error: "invalid lead token" }); return; }
+  }
+  if (!isTokenless(req)) return next();
   if (TOKENLESS_PUBLIC.some((re) => re.test(req.path))) return next();
   const mode = tokenlessMode();
   if (mode === "allow") return next();
@@ -176,10 +184,18 @@ export function leadMayType(
 }
 // 404 (not 403) so a scoped caller can't distinguish "wrong workspace" from "doesn't exist". Writes
 // the response and returns false when the caller should stop (invalid token, or workspace mismatch).
+/** Just "is this a valid identity" (401 when not) — for routes with no one row to own (the machine pool). */
+export function checkToken(req: express.Request, res: express.Response): boolean {
+  if (callerScope(req) === null) { res.status(401).json({ error: "invalid workspace token" }); return false; }
+  return true;
+}
+
 export function checkScope(req: express.Request, res: express.Response, ownerWsId: string | null | undefined): boolean {
   const scope = callerScope(req);
   if (scope === null) { res.status(401).json({ error: "invalid workspace token" }); return false; }
-  if (scope.ws !== null && ownerWsId != null && ownerWsId !== scope.ws) {
+  // A row with NO workspace (null — an operator session, a ticket-less review) is the operator's:
+  // never a workspace token's. `undefined` still means "nothing found", which the route 404s itself.
+  if (scope.ws !== null && (ownerWsId === null || (ownerWsId !== undefined && ownerWsId !== scope.ws))) {
     res.status(404).json({ error: "not found" });
     return false;
   }
