@@ -20,8 +20,11 @@
  *    A full seat cap leaves the rows for later and says so once, not every pass.
  *  - **Auto-merge clients are left out:** their green PRs merge by themselves.
  *  - `robert.ship_loop` off: rows are still tracked; nothing opens and nothing is typed.
+ *  - **Backs off where it is ignored** (src/proactive-score.ts): a workspace whose Ship terminals went
+ *    mostly unanswered this week gets none — opened or typed into — until that improves.
  */
 import { briefNote } from "./briefs.js";
+import { proactiveAllowed } from "./proactive-score.js";
 import { isStopped, operatorOwns } from "./robert-drive.js";
 import { settingOn } from "./settings.js";
 import { SHIP_BY, isShipTerminal } from "./ship-guard.js";
@@ -230,6 +233,8 @@ export type ShipDeps = {
   openAsks?: (id: string) => number;
   enabled?: (wsId: string) => boolean;
   orders?: (wsId: string) => string | null;
+  /** proactive-score's gate for kind `ship` in this workspace. */
+  allowed?: (wsId: string, nowMs: number) => boolean;
 };
 
 let opened: number[] = [];
@@ -262,6 +267,7 @@ export async function shipPass(nowMs = Date.now(), deps: ShipDeps = {}): Promise
     openAsks: deps.openAsks ?? ((id: string) => asks.openForSession(id).length),
     enabled: deps.enabled ?? ((ws: string) => settingOn("robert.ship_loop", ws)),
     orders: deps.orders ?? ((ws: string) => standingOrders(briefNote(ws, false)?.body)),
+    allowed: deps.allowed ?? ((ws: string, now: number) => proactiveAllowed(SHIP_BY, ws, now)),
   };
   const out: ShipResult = { opened: [], typed: [], offered: [] };
   const rows = sessionPrs.unoffered(new Date(nowMs - READY_WINDOW_MS).toISOString());
@@ -274,6 +280,8 @@ export async function shipPass(nowMs = Date.now(), deps: ShipDeps = {}): Promise
   for (const [wsId, cands] of byWs) {
     const ws = workspaces.get(wsId);
     if (!ws || ws.archived || ws.auto_merge_prs || !d.enabled(wsId)) continue;
+    // Rows stay un-offered, so a recovered week offers them then (within READY_WINDOW_MS).
+    if (!d.allowed(wsId, nowMs)) continue;
     const live = sessions.list({ workspace_id: wsId, status: "live", limit: 200 });
     const ready = cands.filter((r) => {
       const o = sessions.get(r.session_id);

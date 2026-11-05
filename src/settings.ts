@@ -293,6 +293,12 @@ defineSetting({
   default: () => process.env.CHRONOS_ROBERT_SHIP_LOOP !== "0",
 });
 defineSetting({
+  key: "robert.proactive_autotune", group: "Robert", level: "both", type: "bool", env: "CHRONOS_PROACTIVE_AUTOTUNE",
+  label: "Back off ignored offers",
+  help: "Terminals the daemon opens on its own are scored by whether you engaged with them (`mc proactive`). When Ship or Robert's proactive terminals here went mostly ignored this week (8+ decided, under 30% engaged or useful), they stop opening until that improves. Off: they always open.",
+  default: () => process.env.CHRONOS_PROACTIVE_AUTOTUNE !== "0",
+});
+defineSetting({
   key: "robert.prompts", group: "Robert", level: "both", type: "bool", env: "CHRONOS_TERMINAL_PROMPTS",
   label: "Answer orange prompts",
   help: "Robert picks an option on a terminal's on-screen question when it is in scope.",

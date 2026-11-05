@@ -7,12 +7,13 @@ import {
   shipBrief, shipGoal, shipPass, standingOrders, type ShipDeps,
 } from "./ship-loop.js";
 import { SHIP_BY } from "./ship-guard.js";
-import { sessions, sessionPrs, workspaces } from "./store.js";
+import { db, sessions, sessionPrs, workspaces } from "./store.js";
+import { resetProactiveScore } from "./proactive-score.js";
 import { settingOn, writeSetting } from "./settings.js";
 import type { SessionPr } from "./store/session-prs.js";
 import type { TermStatus } from "./term-status.js";
 
-beforeEach(() => resetShipLoop());
+beforeEach(() => { resetShipLoop(); resetProactiveScore(); });
 
 const HOUR = 60 * 60_000;
 const rnd = () => Math.random().toString(36).slice(2, 8);
@@ -302,6 +303,49 @@ test("robert.ship_loop off: nothing opens or is typed, rows stay tracked; on by 
   const calls = fresh();
   await shipPass(Date.now(), deps(calls, { enabled: realSetting }));
   assert.equal(mine(calls), 1);
+});
+
+test("allowed() false: the workspace is skipped before opening or typing; rows stay un-offered", async () => {
+  const ws = mkWs();
+  const origin = mkSess(ws.id);
+  sessions.end(origin.id);
+  const url = greenRow(ws.id, origin.id);
+  const asked: string[] = [];
+  const calls = fresh();
+  await shipPass(Date.now(), deps(calls, { enabled: only(ws.id), allowed: (id) => (asked.push(id), false) }));
+  assert.deepEqual(asked, [ws.id]);
+  assert.equal(calls.opened.length, 0);
+  assert.equal(sessionPrs.get(url)?.ship_offered_at, null, "a recovered week offers it then");
+});
+
+test("the real gate: Ship terminals ignored this week → none opened or typed; engaged enough → back on", async () => {
+  const ws = mkWs();
+  // Eight earlier Ship terminals, all ended without him typing a key: 0/8 decided.
+  const past = Array.from({ length: 8 }, () => {
+    const s = mkSess(ws.id, { created_by: SHIP_BY });
+    sessions.end(s.id);
+    return s.id;
+  });
+  const origin = mkSess(ws.id);
+  sessions.end(origin.id);
+  const url = greenRow(ws.id, origin.id);
+  const calls = fresh();
+  await shipPass(Date.now(), deps(calls, { enabled: only(ws.id) }));
+  assert.equal(calls.opened.length, 0, "backed off: no new Ship terminal");
+
+  // A live idle Ship terminal is not typed into either.
+  const ship = mkSess(ws.id, { created_by: SHIP_BY, goal: "Ship ready PRs: acme/repo#1" });
+  const now = Date.now();
+  await shipPass(now, deps(calls, { enabled: only(ws.id), statuses: { [ship.id]: st("your_turn", now - HOUR) } }));
+  assert.equal(calls.sent.length, 0, "backed off: nothing typed");
+  assert.equal(sessionPrs.get(url)?.ship_offered_at, null);
+
+  // He answered three of them after all: 3/8 = 37.5% ≥ 30% → offers resume.
+  db.prepare("UPDATE sessions SET operator_inputs=2 WHERE id IN (?,?,?)").run(past[0], past[1], past[2]);
+  await shipPass(now, deps(calls, { enabled: only(ws.id), statuses: { [ship.id]: st("your_turn", now - HOUR) } }));
+  assert.equal(calls.sent.length, 1);
+  assert.equal(calls.sent[0][0], ship.id);
+  assert.ok(sessionPrs.get(url)?.ship_offered_at);
 });
 
 test("auto-merge workspaces are never offered — they merge their own", async () => {

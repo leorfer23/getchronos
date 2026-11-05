@@ -824,6 +824,10 @@ export interface Session {
    *  one, so it is working in a shared checkout. Preferred over `cwd` when reopening. */
   worktree_path: string | null;
   worktree_branch: string | null;
+  /** How many times the operator's own input (Desk pane keystrokes, composer, his `mc session send`)
+   *  reached this terminal, and when last — persisted debounced by src/proactive-score.ts. */
+  operator_inputs?: number;
+  operator_last_in?: string | null;
   // A standing order to re-read this terminal on a clock: Robert looks, then reports on Telegram.
   /**
    * Operator opted Robert into driving this terminal (stops, orange prompts). Off by default — he

@@ -341,6 +341,9 @@ const HELP = `mc — Mission Control backlog CLI
   mc hook claude|cursor|grok  (run by the CLI's lifecycle hooks — not by hand)
   mc statusline claude        (Claude's statusLine — reports usage-limit %, prints "5h 34% · week 71%")
   mc usage                    subscription usage per CLI/profile (Claude 5h/week, Grok week, Cursor —)
+  mc proactive [--days N] [--workspace S] [--json]
+                             terminals the daemon opened on its own, per workspace × kind: opened · engaged
+                             (you typed in) · useful (done without you) · ignored · rate; BACKED OFF = stopped
   mc session list [--workspace ID]   live terminals: id, computer, backend, role, ticket, title
   mc whoami [--json]                 where THIS terminal runs: computer (MC_HOST_NAME), workspace, repo,
                                      session, cwd, api — on another computer, localhost and files are its own
@@ -909,6 +912,27 @@ function askCap(question) {
     if (cmd === "statusline") return await statusline();
     if (cmd === "usage") return await usage("json" in opt);
     if (cmd === "whoami") return await whoami("json" in opt);
+    // Was it worth opening? Every terminal the daemon opened on its own, per workspace × kind:
+    // engaged (the operator typed into it) · useful (done/hand-off without him) · ignored · pending.
+    // `BACKED OFF` = a gated kind (ship, proactive) that stopped opening there until the week improves.
+    if (cmd === "proactive") {
+      const qs = new URLSearchParams();
+      if (opt.days) qs.set("days", String(Number(opt.days) || die("--days takes a number: mc proactive --days 14")));
+      const wsq = opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
+      const r = await req("GET", "/proactive/stats?" + qs.toString());
+      if ("json" in opt) return console.log(JSON.stringify(r, null, 2));
+      if (!r.rows.length) return console.log(`(no daemon-opened terminals in the last ${r.days}d)`);
+      const wsW = Math.max(...r.rows.map((x) => (x.workspace || "-").length));
+      const kW = Math.max(...r.rows.map((x) => x.kind.length));
+      return console.log([
+        `last ${r.days}d — terminals the daemon opened on its own` + (r.counted_since ? ` (counted since ${r.counted_since.slice(0, 16).replace("T", " ")} UTC)` : ""),
+        ...r.rows.map((x) =>
+          `${(x.workspace || "-").padEnd(wsW)}  ${x.kind.padEnd(kW)}  opened ${x.opened} · engaged ${x.engaged} · useful ${x.useful} · ignored ${x.ignored}` +
+          (x.pending ? ` · pending ${x.pending}` : "") +
+          ` · rate ${x.rate === null ? "—" : Math.round(x.rate * 100) + "%"}` +
+          (x.backed_off ? "  BACKED OFF" : x.below_bar && !x.gated ? "  (below the bar — measured only, not gated)" : "")),
+      ].join("\n"));
+    }
 
     if (cmd === "pdf") {
       const file = pos[1] || die("usage: mc pdf <file.pdf>");
