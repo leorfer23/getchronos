@@ -68,8 +68,29 @@ export function hostSuffix(s: { host_id?: string | null; status: string }, nameO
 
 export function fleetLine(workspace_id?: string | null): string {
   const head = fleetHostsLine();
-  const body = fleetBody(workspace_id);
+  // Workspaces never mix: one project's Robert sees its own terminals in full; the fleet-wide view
+  // (no workspace) is a count per project — no goal, title or screen line of any client.
+  const body = workspace_id ? fleetBody(workspace_id) : fleetCounts();
   return head ? `${head}\n${body}` : body;
+}
+
+/** Per project: open terminals and how many need the operator. Names only — no client content. */
+export function fleetCounts(): string {
+  const rows = sessions.list({ status: "live", limit: 400 });
+  if (!rows.length) return `FLEET NOW: no open terminals.`;
+  const by = new Map<string, { open: number; needs: number }>();
+  for (const s of rows) {
+    const name = s.workspace_id ? workspaces.get(s.workspace_id)?.name ?? "—" : "—";
+    const st = statusOf(s.id);
+    const phase = st?.phase ?? (getAgent(s.id)?.state === "blocked" ? "blocked" : "working");
+    const c = by.get(name) ?? { open: 0, needs: 0 };
+    c.open++;
+    if ((RANK[phase] ?? 9) <= 1) c.needs++;
+    by.set(name, c);
+  }
+  const lines = [...by.entries()].sort((a, b) => b[1].needs - a[1].needs || b[1].open - a[1].open)
+    .map(([n, c]) => `- ${n}: ${c.open} open${c.needs ? ` · ${c.needs} need the operator` : ""}`);
+  return `FLEET NOW (counts only — each project's details live with that project's Robert):\n${lines.join("\n")}`;
 }
 
 function fleetBody(workspace_id?: string | null): string {

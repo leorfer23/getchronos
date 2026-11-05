@@ -27,7 +27,7 @@ test("what you say is an ordinary turn, flagged as voice", () => {
   assert.match(html, /queueAsk\(text, !!barge && OV\.busy, true\)/);
   assert.match(html, /if \(VC\.on\) body\.voice = true;/);
   assert.match(api, /const voice = !!req\.body\.voice;/);
-  assert.match(api, /\{ voice, turn: turnId, focus: runWs \? null : ws \}/);
+  assert.match(api, /\{ voice, turn: turnId \}/);
   assert.match(agent, /opts\?\.voice \? VOICE_TURN/);
 });
 

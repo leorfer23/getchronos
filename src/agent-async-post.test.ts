@@ -29,7 +29,7 @@ function agentRoute(): string {
 test("POST /agent accepts immediately and runs the manager detached", () => {
   const route = agentRoute();
   // Ask stays synchronous — nothing to wait for on the bus.
-  assert.match(route, /if \(turn\.ask\) \{\s*return res\.json\(\{ reply: askLine/);
+  assert.match(route, /if \(turn\.ask && named\.length < 2\) \{\s*return res\.json\(\{ reply: askLine/);
   // Accepted BEFORE askManagerWeb: the HTTP response must not wait on the model.
   const acceptAt = route.indexOf("res.json({ accepted: true, turn: turnId, ws, how: turn.how })");
   const runAt = route.indexOf("await askManagerWeb(");

@@ -93,12 +93,12 @@ test("POST /agent routes, refuses to guess, and answers with where it landed", (
   assert.match(api, /selected: req\.body\.ws \?\? null/);
   assert.match(api, /stagedSessionId: req\.body\.session \?\? null/);
   // An ask returns candidates instead of running a manager.
-  assert.match(api, /if \(turn\.ask\) \{[\s\S]*?ask: \{ why: turn\.ask\.why, candidates: turn\.ask\.candidates \}/);
+  assert.match(api, /if \(turn\.ask && named\.length < 2\) \{[\s\S]*?ask: \{ why: turn\.ask\.why, candidates: turn\.ask\.candidates \}/);
   // Accepted at once with a turn id; the manager runs detached and the row is stored under the
   // routed workspace. `prompt` is `text` plus any attachment paths; the stored `you` stays clean.
   assert.match(api, /res\.json\(\{ accepted: true, turn: turnId, ws, how: turn\.how \}\)/);
   assert.match(api, /void \(async \(\) => \{/);
-  assert.match(api, /askManagerWeb\(\s*prompt,\s*\(t, kind\) => bus\.publish\(\{ topic: "agent\.delta", text: t, kind, ws, client, turn: turnId \}\),\s*runWs,\s*\{ voice, turn: turnId, focus: runWs \? null : ws \}/);
+  assert.match(api, /askManagerWeb\(\s*prompt,\s*\(t, kind\) => bus\.publish\(\{ topic: "agent\.delta", text: t, kind, ws, client, turn: turnId \}\),\s*runWs,\s*\{ voice, turn: turnId \}/);
   assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote, engine\)/);
   assert.match(api, /topic: "agent\.push"/);
   // The reply must NOT ride the HTTP response — that is what the tunnel used to cut.
@@ -148,16 +148,20 @@ test("the Desk renders one thread with a chip per row, routed by the daemon — 
   assert.match(html, /if \(r\?\.how === "ask"\)/);
 });
 
-test("Robert is told he reaches every project — the router's pick is a focus, never a fence", () => {
+test("workspaces never mix: a routed turn runs on that project's own Robert, the shop fans out", () => {
   const threads = fs.readFileSync(path.join(process.cwd(), "agents/_blocks/threads.md"), "utf8");
   const coord = fs.readFileSync(path.join(process.cwd(), "agents/_blocks/coordinator.md"), "utf8");
-  assert.match(threads, /There is no project you lack power over/);
-  assert.match(threads, /Never tell him to re-send with `#all`/);
-  assert.doesNotMatch(threads, /ask him to repeat it with `#all`/);
-  assert.match(coord, /CROSS-PROJECT WORK IS YOURS/);
-  assert.match(api, /const runWs = turn\.routed && turn\.how !== "tag" \? null : ws;/);
-  assert.match(api, /focus: runWs \? null : ws/);
-  assert.match(tg, /const runWs = focusWs \? null : threadWs;/);
+  assert.match(threads, /ONE ROBERT PER PROJECT/);
+  assert.match(threads, /Workspaces never mix/);
+  assert.match(threads, /reply exactly QUIET/);
+  assert.match(threads, /Never tell him to re-send with tags/);
+  assert.match(coord, /CROSS-PROJECT WORK — workspaces never mix/);
+  assert.doesNotMatch(coord, /CROSS-PROJECT WORK IS YOURS/);
+  assert.match(api, /const runWs = ws;/);
+  assert.match(api, /askFleetFanout\(prompt, fanout/);
+  assert.doesNotMatch(api, /focus: runWs \? null : ws/);
+  assert.match(tg, /const runWs = threadWs;/);
+  assert.doesNotMatch(tg, /everywhere: true/);
   for (const surface of ["agents/robert/web.md", "agents/robert/telegram.md"])
     assert.match(fs.readFileSync(path.join(process.cwd(), surface), "utf8"), /\{\{> threads\}\}/, surface);
 });

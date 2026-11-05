@@ -11,7 +11,7 @@ import { noteClaudeStreamEvent } from "../usage-meter.js";
 import { routeConfigDir } from "../profile-route.js";
 import { CONFIG } from "../config.js";
 import { bus, type BusEvent } from "../bus.js";
-import { agentChat, chat as chatLog, kv, workspaces } from "../store.js";
+import { agentChat, chat as chatLog, db, kv, workspaces } from "../store.js";
 import { getBackend } from "../backends/index.js";
 import { sandboxWrap, type SandboxMode } from "../sandbox.js";
 import { agentContext } from "../skills.js";
@@ -654,16 +654,13 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
   const body = turn.text; // the #tag never reaches the model
   // Auto-routed (no #tag, no /conv pick): the fleet-wide Robert takes it, focused on the router's pick —
   // same as the Desk's POST /agent. The row still files under threadWs.
-  const focusWs = turn.routed && turn.how !== "tag" && threadWs ? workspaces.get(threadWs) : undefined;
-  const runWs = focusWs ? null : threadWs;
+  // Workspaces never mix: the turn runs on the routed project's own Robert, never the fleet-wide one.
+  const runWs = threadWs;
   // Where it landed, when he did not say so himself — the thread is one, the conversations are not.
   const stamp = turn.ws && turn.how !== "tag" && turn.how !== "selected" ? `#${workspaces.get(turn.ws)?.slug ?? "?"} · ` : "";
-  const focusLine = focusWs
-    ? `FOCUS — the router thinks this is about ${focusWs.name} (#${focusWs.slug}, workspace_id ${focusWs.id}). Start there; act on any other project the request touches.\n\n`
-    : "";
-  // Shared thread recap so web/brief history is available when the operator switches channels.
-  const recap = focusWs ? chatLog.contextBlock({ limit: 12, everywhere: true }) : chatLog.contextBlock({ limit: 12, workspaceId: runWs });
-  const prompt = fleetLine(runWs) + "\n\n" + focusLine + (recap || "") + body;
+  // This project's own thread recap only — never the interleaved one (workspaces never mix).
+  const recap = chatLog.contextBlock({ limit: 12, workspaceId: runWs });
+  const prompt = fleetLine(runWs) + "\n\n" + (recap || "") + body;
   const ask: Ask = { id, chat, prompt, msgId };
   asks.set(id, ask);
   ensureTyping(chat);
@@ -1468,6 +1465,61 @@ export function warmWebManager(wsId?: string | null) {
 export const VOICE_TURN =
   "(VOICE — the operator is talking to you on the Desk voice call. What follows is speech-to-text: names of projects, terminals and people may be misheard, so match them generously against the fleet and the briefs, and if two things fit, ask which. Your reply is READ ALOUD: first sentence = the outcome or your one question; at most three short sentences in total; plain spoken words — no markdown, lists, tables, ids, keys, paths, URLs or emoji. Clear commands you execute directly as always, then say what you did. Anything destructive, outward-facing or ambiguous: ask one short yes/no question he can answer out loud, and act on his spoken yes. UI lines still go after the reply; they are not read out.)";
 
+/** Projects with something going on: a live terminal, or one opened in the last 3 days. */
+export function activeWorkspaceIds(limit = 8, nowMs = Date.now()): string[] {
+  const since = new Date(nowMs - 3 * 86_400_000).toISOString();
+  const rows = db
+    .prepare(
+      `SELECT workspace_id, MAX(created_at) AS last, SUM(status = 'live') AS live FROM sessions
+       WHERE workspace_id IS NOT NULL AND (status = 'live' OR created_at >= ?)
+       GROUP BY workspace_id ORDER BY live DESC, last DESC`,
+    )
+    .all(since) as Array<{ workspace_id: string }>;
+  return rows.map((r) => r.workspace_id).filter((id) => { const w = workspaces.get(id); return !!w && !(w as any).archived; }).slice(0, limit);
+}
+
+export const FANOUT_QUIET = "QUIET";
+const FANOUT_PARALLEL = 4;
+
+/**
+ * A message for the whole shop ("¿cómo venimos?", "cerrá lo terminado") or for several named
+ * projects. Workspaces never mix, so no single model reads two clients: the message goes to each
+ * project's OWN Robert (its profile, brief, thread) with "answer and act for this project only", and
+ * the replies are stitched here, in code. A project with nothing to say answers QUIET and is left out.
+ */
+export async function askFleetFanout(
+  text: string,
+  wsIds: string[],
+  opts: { turn?: string; ask?: typeof askManagerWeb } = {},
+): Promise<{ reply: string; steps: RobertStep[]; engine: string }> {
+  const ask = opts.ask ?? askManagerWeb;
+  const out: Array<{ name: string; reply: string | null; steps: RobertStep[]; err?: string }> = [];
+  const queue = [...new Set(wsIds)].filter((id) => workspaces.get(id));
+  const worker = async () => {
+    for (let id = queue.shift(); id; id = queue.shift()) {
+      const w = workspaces.get(id)!;
+      const prompt =
+        `FLEET-WIDE MESSAGE — the operator sent this to every project's Robert at once. Answer and act ONLY ` +
+        `for ${w.name} (this project); never mention, read or touch another project. If nothing in it ` +
+        `concerns ${w.name}, reply exactly ${FANOUT_QUIET}. Keep it to 1–4 lines.\n\n${text}`;
+      try {
+        const r = await ask(prompt, undefined, id, { turn: opts.turn });
+        out.push({ name: w.name, reply: r.reply, steps: r.steps });
+      } catch (e: any) {
+        out.push({ name: w.name, reply: null, steps: [], err: String(e?.message ?? e).slice(0, 120) });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(FANOUT_PARALLEL, queue.length) }, worker));
+  const order = new Map(wsIds.map((id, i) => [workspaces.get(id)?.name, i]));
+  out.sort((a, b) => (order.get(a.name) ?? 99) - (order.get(b.name) ?? 99));
+  const said = out.filter((o) => o.err || (o.reply && o.reply.replace(/[`*.\s]/g, "").toUpperCase() !== FANOUT_QUIET));
+  const reply = said.length
+    ? said.map((o) => `**${o.name}** — ${o.err ? `no answer (${o.err})` : o.reply!.trim()}`).join("\n\n")
+    : "Nothing needs you in any project right now.";
+  return { reply, steps: out.flatMap((o) => o.steps), engine: "per project" };
+}
+
 export async function askManagerWeb(
   text: string,
   onDelta?: AgentDelta,
@@ -1476,6 +1528,9 @@ export async function askManagerWeb(
   // (wsId null) with that project named as where to start — never a fence (agents/_blocks/threads.md).
   opts?: { model?: string; voice?: boolean; turn?: string; label?: string; focus?: string | null },
 ): Promise<{ reply: string; actions: UiAction[]; steps: RobertStep[]; turn: string; engine: string }> {
+  // Workspaces never mix: a turn the router pinned on a project runs on THAT project's Robert — its
+  // own Claude profile, brief, recap and fleet — never on the fleet-wide one holding every client.
+  if (!wsId && opts?.focus && workspaces.get(opts.focus)) wsId = opts.focus;
   const key = wsKey(wsId);
   rotateWebIfIdle(key);
   // Every tool call he makes becomes a timestamped step: published live, returned for the chat row.
@@ -1507,14 +1562,9 @@ export async function askManagerWeb(
   const realWsId = key === "default" ? null : key;
   // The live fleet first, then a recap of this workspace's thread (web + any Telegram/briefing rows
   // in it, cut at the last divider), then what he said.
-  const focusWs = !realWsId && opts?.focus ? workspaces.get(opts.focus) : undefined;
-  const focusLine = focusWs
-    ? `FOCUS — the router thinks this is about ${focusWs.name} (#${focusWs.slug}, workspace_id ${focusWs.id}). Start there; act on any other project the request touches.\n\n`
-    : "";
-  const recap = focusWs
-    ? chatLog.contextBlock({ limit: 12, everywhere: true })
-    : chatLog.contextBlock({ limit: 12, workspaceId: realWsId });
-  const prompt = fleetLine(realWsId) + "\n\n" + focusLine + (recap || "") + (opts?.voice ? VOICE_TURN + "\n\n" : "") + text;
+  // This project's own thread recap only — never the interleaved one (workspaces never mix).
+  const recap = chatLog.contextBlock({ limit: 12, workspaceId: realWsId });
+  const prompt = fleetLine(realWsId) + "\n\n" + (recap || "") + (opts?.voice ? VOICE_TURN + "\n\n" : "") + text;
   const reply = await withProviderFallback({
     key: acctKey(`web:${key}`, m),
     primary: () => m.turn(prompt, onDelta, undefined, model),

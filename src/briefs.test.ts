@@ -28,19 +28,27 @@ test("a brief is one note per workspace, seeded with the sections, created on fi
   assert.match(n.file_path, /mc-briefs-/);
 });
 
-test("the prompt block carries only written briefs — a seed page is not an understanding", () => {
-  assert.equal(briefsBlock(null), "");
+test("a workspace's prompt carries only its own written brief — a seed page is not an understanding", () => {
+  assert.equal(briefsBlock(acme), "");
   rewriteBrief(globex, BRIEF_SEED);
-  assert.equal(briefsBlock(null), "", "an untouched seed says nothing");
+  assert.equal(briefsBlock(globex), "", "an untouched seed says nothing");
   rewriteBrief(acme, "# Robert — brief\n\n## What the operator wants (goals)\nShip the menu report by Friday\n");
-  const all = briefsBlock(null);
-  assert.match(all, /YOUR STANDING UNDERSTANDING/);
-  assert.match(all, /### Acme \(workspace /);
-  assert.match(all, /Ship the menu report by Friday/);
-  assert.doesNotMatch(all, /Globex/);
-  // Scoped to a workspace: that page only.
+  const mine = briefsBlock(acme);
+  assert.match(mine, /YOUR STANDING UNDERSTANDING/);
+  assert.match(mine, /### Acme \(workspace /);
+  assert.match(mine, /Ship the menu report by Friday/);
+  assert.doesNotMatch(mine, /Globex/);
   assert.doesNotMatch(briefsBlock(globex), /Acme/);
-  assert.match(briefsBlock(acme), /Acme/);
+});
+
+test("workspaces never mix: the fleet-wide prompt is a directory, never any client's brief", () => {
+  rewriteBrief(acme, "# Robert — brief\n\n## What the operator wants (goals)\nShip the menu report by Friday\n");
+  rewriteBrief(globex, "# Robert — brief\n\n## What the operator wants (goals)\nGlobex secret goal\n");
+  const all = briefsBlock(null);
+  assert.match(all, /PROJECTS —/);
+  assert.match(all, /Acme \(#acme, workspace /);
+  assert.match(all, /Globex \(#globex, workspace /);
+  assert.doesNotMatch(all, /Ship the menu report|Globex secret goal/);
 });
 
 test("the stamp moves on every write, so a warm Robert recycles at the next turn", () => {
@@ -115,13 +123,10 @@ test("an untouched seed from before Standing orders existed is still a seed", ()
   const oldSeed = "# Robert — brief\n\n## What this is\n\n## What the operator wants (goals)\n\n## How work is done here\n\n## Recently\n\n## Next\n";
   const n = briefNote(globex)!;
   db.prepare("UPDATE notes SET body = ? WHERE id = ?").run(oldSeed, n.id);
-  assert.equal(briefsBlock(null), "");
+  assert.equal(briefsBlock(globex), "");
 });
 
-test("unscoped, one long brief no longer crowds the other workspaces out of the prompt", () => {
+test("a long brief still reaches its own Robert with its goals first", () => {
   rewriteBrief(acme, `# Robert — brief\n\n## What the operator wants (goals)\nAcme goal\n\n## What this is\n${"z".repeat(18000)}\n`);
-  rewriteBrief(globex, `# Robert — brief\n\n## What the operator wants (goals)\nGlobex goal\n`);
-  const all = briefsBlock(null);
-  assert.match(all, /Acme goal/);
-  assert.match(all, /Globex goal/);
+  assert.match(briefsBlock(acme), /Acme goal/);
 });
