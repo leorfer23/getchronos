@@ -22,6 +22,7 @@ import { enqueueWake, QUIET_REPLY, SWEEP_KEY, WAKE_ATTEMPT_CAP } from "./wake-qu
 import { isStopped } from "./robert-drive.js";
 import { statusOf, type TermStatus } from "./term-status.js";
 import { settingOn } from "./settings.js";
+import { selfwakeOnce } from "./robert-selfwake.js";
 
 type Probe = (id: string) => TermStatus | null;
 let probe: Probe = (id) => statusOf(id);
@@ -54,10 +55,27 @@ export function sweepSay(wsName: string, working: number, everyMin: number): str
 /** One pass: queue a sweep for every workspace with work in flight. Returns the workspace ids swept. */
 export function sweepOnce(everyMin = CONFIG.robertSweepMin): string[] {
   const swept: string[] = [];
+  // One self-wake per pass across every workspace: the first pass after a deploy sees every fact as
+  // new, and eight Robert turns at once is the burst the quiet path exists to avoid. The rest wait
+  // a pass (their look is still due).
+  let selfwoke = false;
   for (const ws of workspaces.list()) {
-    if (!settingOn("robert.enabled", ws.id) || !settingOn("robert.sweep", ws.id)) continue;
+    if (!settingOn("robert.enabled", ws.id)) continue;
     const working = workingIn(ws.id);
-    if (!working) continue;
+    if (!working) {
+      // Nothing running here: the self-wake's look (robert-selfwake.ts) — no model unless something changed.
+      if (selfwoke) continue;
+      try {
+        if (selfwakeOnce(ws) === null) {
+          selfwoke = true;
+          console.log(`[robert-selfwake] ${ws.slug}: something changed — Robert looks`);
+        }
+      } catch (e) {
+        console.warn("[robert-selfwake]", ws.slug, e);
+      }
+      continue;
+    }
+    if (!settingOn("robert.sweep", ws.id)) continue;
     const key = `${SWEEP_KEY}${ws.id}`;
     // A sweep is a snapshot: one that failed its way to parked is stale, and left unacked it would
     // absorb every later sweep for this workspace (same key) and silence it for good.

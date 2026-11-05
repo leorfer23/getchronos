@@ -287,6 +287,23 @@ defineSetting({
   default: () => process.env.CHRONOS_ROBERT_SWEEP !== "0",
 });
 defineSetting({
+  key: "robert.proactive", group: "Robert", level: "both", type: "bool", env: "CHRONOS_ROBERT_PROACTIVE",
+  label: "Start work when nothing is running",
+  help: "When nothing works here and something changed (a PR, a red job, a terminal left waiting, a new Next item), Robert looks once and either opens ONE terminal or stays quiet. Never a message.",
+  default: () => process.env.CHRONOS_ROBERT_PROACTIVE !== "0",
+});
+defineSetting({
+  key: "robert.proactive_hours", group: "Robert", level: "both", type: "string", env: "CHRONOS_ROBERT_PROACTIVE_HOURS",
+  label: "Hours he may start work", help: "Local hours, start-end (\"09-21\"; \"22-06\" wraps midnight).",
+  default: () => process.env.CHRONOS_ROBERT_PROACTIVE_HOURS ?? "09-21",
+});
+defineSetting({
+  key: "robert.proactive_every_min", group: "Robert", level: "both", type: "int", min: 5, max: 240,
+  env: "CHRONOS_ROBERT_PROACTIVE_EVERY_MIN",
+  label: "Look at a quiet workspace every (min)", help: "Only a look: no model runs unless something changed since the last one.",
+  default: () => Number(process.env.CHRONOS_ROBERT_PROACTIVE_EVERY_MIN ?? 30),
+});
+defineSetting({
   key: "robert.ship_loop", group: "Robert", level: "both", type: "bool", env: "CHRONOS_ROBERT_SHIP_LOOP",
   label: "Offer ready PRs",
   help: "A green PR whose terminal closed (or sat idle 2h) gets one Ship terminal per workspace that asks you once whether to merge and deploy it. Off: PRs are still tracked, nothing opens.",

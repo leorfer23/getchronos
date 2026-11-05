@@ -176,6 +176,8 @@ export function wakeSection(row: RobertWake): string {
   try {
     say = row.payload ? ((JSON.parse(row.payload) as { say?: string }).say ?? null) : null;
   } catch {}
+  // A sweep or a self-wake carries its own rules, QUIET included; "post one or two lines" would contradict them.
+  if (say && row.key.startsWith(SWEEP_KEY)) return `${OP_PREFIX}${say}${repeat}`;
   return (
     `${OP_PREFIX}${say ?? `something happened that needs a call: ${row.topic} (${row.key})`} the operator did NOT ask you ` +
     `anything; you are being woken because this needs a call. Post ONE or TWO lines: what it is, and the call you ` +
