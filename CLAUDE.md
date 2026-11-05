@@ -96,7 +96,7 @@ comes from a real shipped bug or a destroyed checkout. Read before writing code.
   `npm test` (~100s, in-memory DB; run it in the background). Watch for accidental reverts of files you didn't touch.
 - **Deploy = `npm run deploy` only** (build + restart). launchd runs `dist/`, so editing
   `src/` without deploying changes nothing. Check the fleet is idle first:
-  `curl -s localhost:7777/api/agents/rollup`.
+  `curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" localhost:7777/api/agents/rollup` (every API call names its caller — a tokenless one is refused).
 - Kill a run with `POST /runs/:id/kill` (`/stop` does not exist).
 
 ## Architecture entry points
