@@ -1285,6 +1285,37 @@
   @media (max-width: 600px) { .st-row:not(.b) { flex-wrap:wrap; } .st-row.b .st-c { width:auto; } .st-c { max-width:none; width:100%; justify-content:flex-start; } .st-chips { justify-content:flex-start; } }
   #dlg-jobs { width:100vw; height:100vh; max-width:none; max-height:none; margin:0; border:0; border-radius:0; box-shadow:none; background:var(--bg); }
   #dlg-jobs::backdrop { background:var(--bg); }
+  /* ── Services (SERVICES.md): always-on processes — list left, one service + its live output right ── */
+  #dlg-svc { width:100vw; height:100vh; max-width:none; max-height:none; margin:0; border:0; border-radius:0; box-shadow:none; background:var(--bg); }
+  #dlg-svc::backdrop { background:var(--bg); }
+  .svc-chip .sd, .sv-row .sd, .sv-h .sd { width:8px; height:8px; border-radius:50%; background:var(--ok); flex:none; }
+  .svc-chip.warn .sd, .sv-row.warn .sd, .sv-h.warn .sd { background:var(--warn); }
+  .svc-chip.bad .sd, .sv-row.bad .sd, .sv-h.bad .sd { background:var(--danger); }
+  .svc-chip.off .sd, .sv-row.off .sd, .sv-h.off .sd { background:var(--faint); }
+  .svc-chip { gap:7px; }
+  .svc-chip.bad { border-color:var(--danger); color:var(--danger); background:var(--danger-soft); }
+  .sv-hint { color:var(--muted); font-size:13px; } .sv-hint code { font-size:12.5px; }
+  .sv-list { width:340px; flex:none; border-right:1px solid var(--line); overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:4px; }
+  .sv-row { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:9px; cursor:pointer; border:1px solid transparent; }
+  .sv-row:hover { background:var(--surface-2); }
+  .sv-row.on { background:var(--surface); border-color:var(--line); box-shadow:var(--shadow); }
+  .sv-row .t { flex:1; min-width:0; }
+  .sv-row .n { font-weight:650; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sv-row .m { font-size:12.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
+  .sv-row .sw { display:inline-flex; align-items:center; gap:4px; } .sv-row .sw i { width:7px; height:7px; border-radius:2px; }
+  .sv-empty { color:var(--muted); padding:24px 14px; line-height:1.5; }
+  .sv-main { flex:1; min-width:0; display:flex; flex-direction:column; min-height:0; }
+  .sv-h { display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--surface); flex-wrap:wrap; }
+  .sv-h h3 { margin:0; font-size:18px; }
+  .sv-h .st { color:var(--muted); font-size:13.5px; font-variant-numeric:tabular-nums; }
+  .sv-h.bad .st { color:var(--danger); }
+  .sv-h .sp { flex:1; }
+  .sv-meta { display:flex; flex-wrap:wrap; gap:4px 18px; padding:8px 16px 9px; border-bottom:1px solid var(--line); background:var(--surface); font-size:13px; color:var(--muted); }
+  .sv-meta span { min-width:0; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sv-meta code { font-size:12.5px; color:var(--ink); }
+  .sv-err { padding:8px 16px; background:var(--danger-soft); color:var(--danger); font-size:13.5px; border-bottom:1px solid var(--line); }
+  .sv-log { flex:1; min-height:0; position:relative; background:var(--term-bg); }
+  @media (max-width:800px) { .jv-body:has(.sv-list) { flex-direction:column; } .sv-list { width:auto; max-height:34vh; border-right:0; border-bottom:1px solid var(--line); } }
   .jv { display:flex; flex-direction:column; height:100%; min-height:0; font-size:14.5px; position:relative; }
   .jv-bar { display:flex; align-items:center; gap:10px; padding:0 16px; height:52px; flex:none; background:var(--surface); border-bottom:1px solid var(--line); white-space:nowrap; }
   .jv-bar .back { border:0; background:none; color:var(--muted); font-size:14.5px; padding:4px 8px; border-radius:7px; }
@@ -1627,6 +1658,7 @@
   <div class="wordmark">desk<span>.</span></div>
   <div class="counts" id="counts"></div>
   <span class="sp"></span>
+  <button class="mchip svc-chip" id="svc-chip" hidden></button>
   <button class="mchip" id="mac" hidden></button>
   <div class="usage" id="usage" title="Subscription usage — click for every profile and window"></div>
   <div class="tools">
@@ -1741,6 +1773,7 @@
   <a href="/altitude" id="lnk-altitude">📊 Altitude</a>
   <div class="sep"></div>
   <button id="btn-jobs">⏱ Jobs</button>
+  <button id="btn-services">◉ Services</button>
   <button id="btn-hosts">🖥 Computers</button>
   <button id="btn-briefs">📋 Briefs</button>
   <button id="btn-memory">🧠 Memory</button>
@@ -2018,6 +2051,23 @@
         <div class="jv-bulk" id="jv-bulk" hidden></div>
       </section>
       <aside class="jv-dr" id="jv-dr" hidden></aside>
+    </div>
+  </div>
+</dialog>
+
+<!-- Services (SERVICES.md): always-on processes the daemon keeps running — a bot, a local API. Left:
+     every service with its state. Right: the one picked — switch, restart, deploy — and its live output. -->
+<dialog id="dlg-svc">
+  <div class="jv">
+    <header class="jv-bar">
+      <button class="back" id="svc-close" title="Back to the Desk (esc)">‹ Desk</button>
+      <h2>Services</h2>
+      <span class="sp"></span>
+      <span class="sv-hint">Kept running by the daemon, started again at every boot · add one with <code>mc service add</code></span>
+    </header>
+    <div class="jv-body">
+      <section class="sv-list" id="sv-list"></section>
+      <section class="sv-main" id="sv-main"></section>
     </div>
   </div>
 </dialog>
@@ -6299,6 +6349,7 @@ qs("#keys-close").onclick = () => qs("#dlg-keys").close();
 // A /desk#reopen=<id> link selects an active terminal or revives a dormant one from SQLite.
 async function openFromHash() {
   if (location.hash === "#jobs") return openJobs();
+  if (location.hash === "#services") return openServices();
   if (location.hash === "#settings") return openSettings();
   const m = /#reopen=([0-9a-f-]{8,})/.exec(location.hash);
   if (!m) return;
@@ -7147,6 +7198,149 @@ function onJobEvent(e) {
 // Ages and "in 12m" drift: repaint the rows twice a minute while the page is up.
 setInterval(() => { if (jv.open && J.loaded) { renderJobList(); renderKpis(); } }, 30000);
 qs("#btn-jobs").onclick = () => openJobs();
+// ── ◉ Services (SERVICES.md, src/services.ts) ────────────────────────────────────────────────────
+// Always-on processes the daemon keeps running. The bar chip says at a glance whether they are up;
+// the page lists them, and the one picked shows its switch, restart/deploy and its live output (a
+// read-only xterm tailing GET /services/:id/logs — the output is a pty's, colours and all).
+const SV = { list: [], sel: null, x: null, from: 0, pollT: 0, pollBusy: false, act: false };
+const svDlg = qs("#dlg-svc");
+// ok = on and up · warn = restarting · bad = on but down · off = switched off
+const svHealth = (s) => (!s.enabled ? "off" : s.status === "running" ? "ok" : s.status === "backoff" ? "warn" : "bad");
+const svAgo = (ms) => { const s = Math.round(ms / 1000); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 172800 ? `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m` : `${Math.floor(s / 86400)}d`; };
+function svState(s) {
+  if (s.status === "running") return `up ${s.uptime_ms != null ? svAgo(s.uptime_ms) : ""}${s.rss_mb != null ? ` · ${s.rss_mb} MB · ${s.cpu}% CPU` : ""}`;
+  if (s.status === "backoff") return `restarting${s.next_start_at ? " at " + new Date(s.next_start_at).toLocaleTimeString() : ""} · restart ${s.restarts}`;
+  if (!s.enabled) return "off";
+  if (s.status === "crashed") return "down — " + (s.last_error || "crashed") + (s.next_start_at ? ` · trying again at ${new Date(s.next_start_at).toLocaleTimeString()}` : "");
+  return s.status;
+}
+async function loadServices() {
+  try { SV.list = await api("/services"); } catch { return; }
+  renderSvcChip();
+  if (svDlg.open) renderSvc();
+}
+function renderSvcChip() {
+  const el = qs("#svc-chip"), L = SV.list;
+  el.hidden = !L.length;
+  if (!L.length) return;
+  const on = L.filter((s) => s.enabled), bad = on.filter((s) => svHealth(s) === "bad"), warn = on.filter((s) => svHealth(s) === "warn");
+  const h = bad.length ? "bad" : warn.length ? "warn" : on.length ? "ok" : "off";
+  const odd = bad.length ? bad : warn;
+  const label = odd.length === 1 ? `${odd[0].name} ${h === "bad" ? "down" : "restarting"}` : odd.length ? `${odd.length} services ${h === "bad" ? "down" : "restarting"}` :
+    L.length === 1 ? L[0].name : `${on.length}/${L.length} services`;
+  el.className = "mchip svc-chip " + h;
+  el.innerHTML = `<i class="sd"></i>${esc(label)}`;
+  el.title = L.map((s) => `${s.name} (${wsLabel(s.workspace_id)}): ${svState(s)}`).join("\n") + "\nClick for Services";
+}
+async function openServices(id) {
+  if (!svDlg.open) svDlg.showModal();
+  if (location.hash !== "#services") history.replaceState(null, "", "#services");
+  await loadServices();
+  const pick = id || SV.sel || SV.list.find((s) => svHealth(s) === "bad")?.id || SV.list[0]?.id || null;
+  selectSvc(pick);
+}
+svDlg.addEventListener("close", () => {
+  clearInterval(SV.pollT); SV.pollT = 0;
+  if (location.hash === "#services") history.replaceState(null, "", location.pathname);
+});
+qs("#svc-close").onclick = () => svDlg.close();
+qs("#btn-services").onclick = () => openServices();
+qs("#svc-chip").onclick = () => openServices();
+function renderSvc() {
+  const L = SV.list;
+  qs("#sv-list").innerHTML = L.length ? L.map((s) => `<div class="sv-row ${svHealth(s)}${s.id === SV.sel ? " on" : ""}" data-svc="${esc(s.id)}">
+      <i class="sd"></i><div class="t"><div class="n">${esc(s.name)}</div>
+      <div class="m"><span class="sw">${wsDot(s.workspace_id)}${esc(wsLabel(s.workspace_id))}</span> · ${esc(svState(s))}</div></div></div>`).join("")
+    : `<div class="sv-empty">No services yet. A service is a command the daemon keeps running all day — a Slack bot, a local API — started again at every boot.<br><br><code>mc service add &lt;name&gt; --workspace &lt;slug&gt; --cwd &lt;dir&gt; --command "&lt;cmd&gt;" --start</code></div>`;
+  renderSvcHead();
+}
+function renderSvcHead() {
+  const s = SV.list.find((x) => x.id === SV.sel);
+  const main = qs("#sv-main");
+  if (!s) { main.innerHTML = ""; return; }
+  if (!main.querySelector(".sv-log")) {
+    main.innerHTML = `<div class="sv-top"></div><div class="sv-log" id="sv-log"></div>`;
+    SV.x = null;
+  }
+  const h = svHealth(s);
+  const meta = (label, v, mono = true) => (v == null || v === "" ? "" : `<span title="${esc(v)}">${label} ${mono ? `<code>${esc(v)}</code>` : esc(v)}</span>`);
+  const exit = s.last_exit_at && s.status !== "running" ? `${s.last_exit_signal || "exit " + s.last_exit_code} at ${new Date(s.last_exit_at).toLocaleTimeString()}` : null;
+  main.querySelector(".sv-top").innerHTML = `
+    <div class="sv-h ${h}"><i class="sd"></i><h3>${esc(s.name)}</h3><span class="st">${esc(wsLabel(s.workspace_id))} · ${esc(h === "bad" ? "down" : svState(s))}</span><span class="sp"></span>
+      ${s.ref ? `<button class="btn" data-sva="deploy" title="Check ${esc(s.ref)} out in ${esc(s.cwd)} and restart">Deploy ${esc(s.ref)}</button>` : ""}
+      <button class="btn" data-sva="restart" ${SV.act ? "disabled" : ""}>Restart</button>
+      <button class="btn ${s.enabled ? "" : "primary"}" data-sva="${s.enabled ? "stop" : "start"}" ${SV.act ? "disabled" : ""}>${s.enabled ? "Turn off" : "Turn on"}</button>
+    </div>
+    ${s.last_error && h !== "ok" ? `<div class="sv-err">${esc(s.last_error)}</div>` : ""}
+    <div class="sv-meta">${meta("", s.command)}${meta("in", s.cwd)}${s.ref ? meta("ref", s.ref) : ""}${meta("restart", s.restart, false)}
+      ${meta("env", s.env_keys.join(", "))}${meta("last", exit, false)}${meta("log", s.log_file)}</div>`;
+}
+function svTerm() {
+  if (SV.x) return SV.x;
+  const host = qs("#sv-log");
+  const term = new Terminal({
+    fontSize: Math.max(11, (S.font || 14) - 1), fontFamily: 'ui-monospace,"SF Mono",Menlo,monospace', cursorBlink: false, disableStdin: true,
+    scrollback: 5000, convertEol: false, allowProposedApi: true,
+    theme: { background: getComputedStyle(document.documentElement).getPropertyValue("--term-bg").trim() || undefined,
+      foreground: getComputedStyle(document.documentElement).getPropertyValue("--term-ink").trim() || undefined },
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  try { TermLinks.register(term, (ev, uri) => { if (ev.button === 0 && /^https?:\/\//i.test(uri)) window.open(uri, "_blank", "noopener,noreferrer"); }); } catch {}
+  term.open(host);
+  try { fit.fit(); } catch {}
+  const ro = new ResizeObserver(() => { try { fit.fit(); } catch {} });
+  ro.observe(host);
+  SV.x = { term, fit, ro };
+  return SV.x;
+}
+async function selectSvc(id) {
+  SV.sel = id;
+  clearInterval(SV.pollT); SV.pollT = 0;
+  if (SV.x) { try { SV.x.ro.disconnect(); SV.x.term.dispose(); } catch {} SV.x = null; qs("#sv-main").innerHTML = ""; }
+  renderSvc();
+  if (!id) return;
+  SV.from = 0;
+  await svPoll(true);
+  SV.pollT = setInterval(() => svPoll(false), 1000);
+}
+async function svPoll(first) {
+  if (SV.pollBusy || !SV.sel || !svDlg.open) return;
+  SV.pollBusy = true;
+  const id = SV.sel;
+  try {
+    const r = await api(`/services/${id}/logs` + (first ? "?tail=64000" : `?from=${SV.from}`));
+    if (id !== SV.sel) return;
+    const x = svTerm();
+    if (r.truncated && !first) x.term.reset();
+    if (r.data) x.term.write(r.data);
+    SV.from = r.to;
+  } catch (e) { if (e.status === 404) { SV.sel = null; loadServices(); } }
+  finally { SV.pollBusy = false; }
+}
+qs("#sv-list").addEventListener("click", (e) => { const r = e.target.closest("[data-svc]"); if (r && r.dataset.svc !== SV.sel) selectSvc(r.dataset.svc); });
+qs("#sv-main").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-sva]");
+  if (!b || SV.act) return;
+  const s = SV.list.find((x) => x.id === SV.sel);
+  if (!s) return;
+  const a = b.dataset.sva;
+  SV.act = true; renderSvcHead();
+  try {
+    const r = await api(`/services/${s.id}/${a}`, { method: "POST" });
+    if (a === "deploy" && r.deployed) toast(`${s.name}: ${r.deployed.from.slice(0, 7)} → ${r.deployed.to.slice(0, 7)}${r.deployed.restarted ? ", restarted" : ""}`);
+    else toast(`${s.name}: ${a === "stop" ? "off" : a === "start" ? "on" : "restarted"}`);
+  } catch (err) { toast(`${s.name}: ${errMsg(err)}`); }
+  finally { SV.act = false; await loadServices(); }
+});
+// Uptime ticks: repaint the head every 15s while the page is up; the chip follows the bus.
+setInterval(() => { if (svDlg.open) loadServices(); }, 15000);
+function onServiceEvent(e) {
+  if (e.topic === "service.alarm") toast(`◉ ${e.name}: ${e.reason}`);
+  clearTimeout(onServiceEvent.t);
+  onServiceEvent.t = setTimeout(loadServices, 300);
+}
+loadServices();
 // ── ⚙ Settings (src/settings.ts) ─────────────────────────────────────────────────────────────────
 // One page for every knob: "All workspaces" is the global level, a workspace chip shows what that
 // workspace runs with and lets it differ. Every control saves on change; "reset" drops back to what
@@ -8620,6 +8814,7 @@ const BUS_TOPICS = [
   "host.online", "host.offline", "host.updated", "host.inventory",
   "ask.created", "ask.answered",
   "artifact.created", "artifact.updated", "artifact.event",
+  "service.changed", "service.alarm",
   "inbox.updated",
 ].join(",");
 function connectBus() {
@@ -8770,6 +8965,7 @@ function connectBus() {
     if (e.topic === "jot.followup") { const j = S.jots.find((x) => x.id === e.jot_id); toast("⏰ follow-up opened" + (j ? ": " + j.title.slice(0, 60) : "")); loadSoon(); }
     if (e.topic === "launch.updated" || e.topic === "launch.ran") loadSoon();
     if (e.topic === "run.started" || e.topic === "run.ended" || e.topic === "job.updated") onJobEvent(e);
+    if (e.topic === "service.changed" || e.topic === "service.alarm") onServiceEvent(e);
   };
   ws.onclose = () => setTimeout(connectBus, 2500);
 }

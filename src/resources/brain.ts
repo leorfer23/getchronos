@@ -17,7 +17,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { CONFIG } from "../config.js";
 import { bus } from "../bus.js";
 import { localHost } from "../hosts/local.js";
-import { jobs, runs, sessions, workspaces } from "../store.js";
+import { jobs, runs, services, sessions, workspaces } from "../store.js";
 import { currentLoad, localHeavyPool, setSlotBudget } from "../machine.js";
 import { setting } from "../settings.js";
 import { sendInput, sessionActivity } from "../terminal.js";
@@ -32,14 +32,26 @@ import {
 
 let reaper: Reaper | null = null;
 let ladder: Ladder | null = null;
-/** Owner id → workspace, for the life of the owner (a session/run never changes workspace). */
+/** Owner id → workspace, for the life of the owner (a session/run/service never changes workspace). */
 const wsCache = new Map<string, string | null>();
+/** Live pty id → is it a service? A service's row exists before its pty does, so one lookup settles it. */
+const serviceCache = new Map<string, boolean>();
+
+function isService(id: string): boolean {
+  let v = serviceCache.get(id);
+  if (v === undefined) {
+    try { v = !!services.get(id); } catch { v = false; }
+    serviceCache.set(id, v);
+  }
+  return v;
+}
 
 function workspaceOf(kind: Root["kind"], id: string): string | null {
   if (wsCache.has(id)) return wsCache.get(id)!;
   let ws: string | null = null;
   try {
     if (kind === "session") ws = sessions.get(id)?.workspace_id ?? null;
+    else if (kind === "service") ws = services.get(id)?.workspace_id ?? null;
     else {
       const run = runs.get(id);
       ws = run ? jobs.get(run.job_id)?.workspace_id ?? null : null;
@@ -56,7 +68,7 @@ async function brainRoots(): Promise<Root[]> {
   const roots: Root[] = [];
   for (const l of live) {
     if (!l.pid) continue;
-    const kind = l.kind === "pty" ? "session" : "run";
+    const kind: Root["kind"] = l.kind === "pty" ? (isService(l.id) ? "service" : "session") : "run";
     roots.push({ kind, id: l.id, pid: l.pid, startedAt: l.started_at, workspaceId: workspaceOf(kind, l.id) });
   }
   const ids = new Set(roots.map((r) => r.id));
@@ -67,6 +79,7 @@ async function brainRoots(): Promise<Root[]> {
     for (const o of reaper?.ledger.owners.values() ?? []) if (o.id === id) { owning = true; break; }
     if (!owning) wsCache.delete(id);
   }
+  for (const id of serviceCache.keys()) if (!ids.has(id) && !wsCache.has(id)) serviceCache.delete(id);
   return roots;
 }
 
@@ -98,6 +111,8 @@ function activeWorkspaces(): string[] {
  */
 const TYPING_QUIET_MS = 30_000;
 function tellOwner(o: Owner, text: string): string | null {
+  // A service is a plain process, not an agent: there is no one in it to read a warning.
+  if (o.kind === "service") return "a service has no agent to tell";
   if (o.kind === "session") {
     const lastIn = sessionActivity(o.id).last_in;
     if (lastIn != null && Date.now() - lastIn < TYPING_QUIET_MS) return `defer: typed into ${Math.round((Date.now() - lastIn) / 1000)}s ago`;
@@ -193,7 +208,7 @@ export function startProcReaper(): void {
         rss_mb: e.rssMb,
         cmd: e.cmd,
         owner_kind: e.owner?.kind ?? null,
-        ...(e.owner?.kind === "run" ? { run_id: e.owner.id } : { session_id: e.owner?.id ?? null }),
+        ...(e.owner?.kind === "run" ? { run_id: e.owner.id } : e.owner?.kind === "service" ? { service_id: e.owner.id } : { session_id: e.owner?.id ?? null }),
         workspace_id: e.owner?.workspaceId ?? null,
       }),
   });

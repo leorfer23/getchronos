@@ -33,6 +33,7 @@ import { startMachineGovernor } from "./machine.js";
 import { startProcReaper } from "./resources/brain.js";
 import { startBrowserPool } from "./resources/browser-pool.js";
 import { startVpn } from "./vpn.js";
+import { startServices } from "./services.js";
 import { startAwake } from "./awake.js";
 import { startWatches } from "./watches.js";
 import { startDayHeartbeat, startStandup } from "./heartbeat.js";
@@ -92,6 +93,9 @@ startMachineGovernor();
 startProcReaper();
 startBrowserPool();
 startVpn();
+// Services (SERVICES.md): every enabled always-on process starts again — after the reaper, so the
+// ledger is sampling before the first one spawns.
+startServices();
 reloadSchedules();
 startServer();
 // Hosts (HOSTS.md): the LAN listener for `chronos host` links — a no-op unless CHRONOS_HOST_LISTEN is set.

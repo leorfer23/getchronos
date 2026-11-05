@@ -2183,6 +2183,43 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     up: (db) => db.exec(`ALTER TABLE workspaces ADD COLUMN vpn_config TEXT;`),
   },
 
+  {
+    version: 152,
+    name: "services — always-on processes the daemon keeps running (SERVICES.md)",
+    // A service is not an agent: a plain command (a Slack bot on Socket Mode, a local API, a watcher)
+    // the operator wants up all day. `enabled` is the switch — 1 = keep it running, and start it again
+    // at every boot; `status` is what is true right now. The runtime columns (pid…restarts) are the
+    // supervisor's (src/services.ts) and are reconciled at boot, since a daemon restart ends every pty.
+    // Defined by the operator only (admin-gated routes): the command runs as the daemon's user, with
+    // the workspace's env, outside the agent sandbox — the same trust as a launchd agent.
+    up: (db) => db.exec(`
+      CREATE TABLE services (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        description TEXT,
+        command TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        env TEXT,
+        ref TEXT,
+        restart TEXT NOT NULL DEFAULT 'always',
+        enabled INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'stopped',
+        pid INTEGER,
+        started_at TEXT,
+        next_start_at TEXT,
+        last_exit_code INTEGER,
+        last_exit_signal TEXT,
+        last_exit_at TEXT,
+        restarts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (workspace_id, name)
+      );
+      CREATE INDEX idx_services_ws ON services(workspace_id);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

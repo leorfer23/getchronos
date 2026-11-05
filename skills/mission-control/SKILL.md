@@ -382,6 +382,15 @@ processes behind. In order:
 3. **Never launch your own** Chrome, Chromium or Puppeteer/Playwright browser (`puppeteer.launch`,
    `chromium.launch`, wrangler's local Browser Rendering).
 
+## Always-on services — `mc service`
+
+Your workspace may run **services**: processes the daemon keeps up all day (a Slack bot, a local
+API). They are not terminals. `mc service ls` shows each one's state, uptime, CPU/RAM and restarts.
+`mc service logs <name> [-f]` shows its output, the first place to look when one misbehaves. Defining,
+restarting or deploying one is the operator's: when a change you made needs a restart or a deploy,
+say so in your hand-off (`mc service restart <name>` / `mc service deploy <name>`). **Never kill a
+service's process yourself.** The daemon would start it again, and that is a restart nobody asked for.
+
 ## A workspace VPN — `mc vpn`
 
 Some workspaces reach their private hosts (databases, internal APIs) only over a VPN the operator
