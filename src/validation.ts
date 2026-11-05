@@ -325,6 +325,12 @@ export const BriefRewriteSchema = AgentMemoryRewriteSchema;
 // daemon did not see (a call, a decision, work done outside a terminal). Same one-line discipline as
 // an auto entry, so the ledger reads the same however it was written.
 const worklogItems = z.array(z.string().trim().min(1).max(240)).max(5).optional();
+// Robert's self-wake opening ONE terminal (src/robert-selfwake.ts openProactive): the daemon caps it.
+export const ProactiveOpenSchema = z.object({
+  workspace_id: z.string().trim().min(1).max(80),
+  goal: z.string().trim().min(3).max(400),
+  description: z.string().max(4000).nullable().optional(),
+});
 export const WorklogEntrySchema = z.object({
   what: z.string().trim().min(1).max(240),
   outcome: z.string().trim().min(1).max(240),

@@ -69,6 +69,7 @@ import { focusEfficiencySnapshot } from "./focus.js";
 import { sessionArtifacts } from "./session-artifacts.js";
 import { findMedia, mediaMime, sessionMedia } from "./session-media.js";
 import { recordSessionPrs } from "./terminal-automerge.js";
+import { openProactive } from "./robert-selfwake.js";
 import { isShipTerminal } from "./ship-guard.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
@@ -157,7 +158,7 @@ import {
   OpenSessionSchema, ResizeSchema, SessionPatchSchema, SessionGoalsSchema, SessionGoalPatchSchema, SessionInputSchema, SessionStatusSchema, SessionProgressSchema, SessionHookSchema, UsageReportSchema,
   AgentNameSchema, AgentReportSchema, AgentWaitSchema,
   NewNoteSchema, PatchNoteSchema, LearnSchema, RememberSchema, ProseSampleSchema, ProseGuideSchema, AgentMemoryAppendSchema, BriefAppendSchema, BriefRewriteSchema, AgentMemoryRewriteSchema, StowSchema,
-  WorklogEntrySchema, WorklogBackfillSchema,
+  WorklogEntrySchema, WorklogBackfillSchema, ProactiveOpenSchema,
   NewJobSchema, PatchJobSchema, BulkJobsSchema,
   NewTriggerSchema, PatchTriggerSchema,
   NewWatchSchema, PatchWatchSchema,
@@ -2983,6 +2984,17 @@ export function startServer() {
       attempt_cap: WAKE_ATTEMPT_CAP,
       beacon_age_ms: wakeBeaconAgeMs(),
     });
+  });
+
+  // Robert's self-wake opens at most one terminal through here; the caps are the daemon's, not his.
+  api.post("/robert/proactive", requireAdmin, validate(ProactiveOpenSchema), async (req, res) => {
+    try {
+      const r = await openProactive(req.body, (o) => openSession(o));
+      if (!r.ok) return res.status(r.status).json({ error: r.error });
+      res.status(201).json({ id: r.id });
+    } catch (e: any) {
+      res.status(503).json({ error: String(e?.message ?? e) });
+    }
   });
 
   api.post("/robert/wakes/:id/ack", requireAdmin, (req, res) => {
