@@ -262,6 +262,8 @@ export const CONFIG = {
   worklog: (process.env.CHRONOS_WORKLOG ?? "1") !== "0",
   // How many "## Recently" lines a brief keeps. Older ones roll off — the ledger still has them.
   briefRecentlyMax: Number(process.env.CHRONOS_BRIEF_RECENTLY_MAX ?? 12),
+  // POST /tickets/:id/push-comment refuses (no-send.ts): no agent posts comments. Tests flip it.
+  noSendComments: process.env.CHRONOS_NO_SEND_COMMENTS !== "0",
   // How many open "## Next" items a brief keeps. The oldest roll off — every one is still in the
   // worklog ledger as that entry's `pending:` / `next:` line. Uncapped, Next grew past 1,000 items.
   briefNextMax: Number(process.env.CHRONOS_BRIEF_NEXT_MAX ?? 25),

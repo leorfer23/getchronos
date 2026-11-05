@@ -244,5 +244,5 @@ test("the wall: a self-wake ticket opens a terminal only in the workspace it was
   const say = JSON.parse(wakes().at(-1).payload).say as string;
   const tk = /"ticket":"([a-f0-9]{16})"/.exec(say)?.[1];
   assert.ok(tk);
-  assert.equal(redeemTicket(tk), b.id);
+  assert.equal(redeemTicket(tk, NOW), b.id, "redeemed on the same clock the wake was issued on");
 });

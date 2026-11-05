@@ -1,4 +1,5 @@
 import { CONFIG } from "../config.js";
+import { claudeDenyArgs, NO_SEND_RULE } from "../no-send.js";
 import type { Job } from "../types.js";
 import { CREDIT_WALL_RE, jsonLine, type AgentBackend, type NormalizedEvent, type OneShotOpts, type RateLimit, type RunResult, type SpawnSpec } from "./types.js";
 
@@ -6,9 +7,10 @@ import { CREDIT_WALL_RE, jsonLine, type AgentBackend, type NormalizedEvent, type
 function flagTail(job: Job): string[] {
   const args: string[] = [];
   if (job.allowed_tools) args.push("--allowed-tools", job.allowed_tools);
-  if (job.disallowed_tools) args.push("--disallowed-tools", job.disallowed_tools);
+  // No agent ever sends (no-send.ts): the job's own denies ride in the same single flag.
+  args.push(...claudeDenyArgs(job.disallowed_tools));
   args.push("--model", job.model || CONFIG.defaultModel);
-  if (job.append_system) args.push("--append-system-prompt", job.append_system);
+  args.push("--append-system-prompt", [NO_SEND_RULE, job.append_system].filter(Boolean).join("\n\n"));
   if (job.max_budget_usd != null) args.push("--max-budget-usd", String(job.max_budget_usd));
   if (job.add_dirs) {
     try {
@@ -78,6 +80,7 @@ export const claudeBackend: AgentBackend = {
     if (!inheritProfileMcp) args.push("--strict-mcp-config");
     if (maxBudgetUsd != null) args.push("--max-budget-usd", String(maxBudgetUsd));
     args.push("--dangerously-skip-permissions");
+    args.push(...claudeDenyArgs()); // a one-shot helper reads untrusted text: it must not be able to send either
     if (model) args.push("--model", model);
     if (resumeSessionId) args.push("--resume", resumeSessionId);
     return { cmd: CONFIG.claudeBin, args, env: { CLAUDE_CONFIG_DIR: configDir } };
@@ -90,7 +93,7 @@ export const claudeBackend: AgentBackend = {
     // boundary (see sandbox.ts), same as the headless path.
     // --no-chrome: the operator's profile has Claude-in-Chrome on by default, which makes every Desk
     // terminal pop a Chrome window at boot. A wall of agents must not open browsers on the desktop.
-    const a: string[] = ["--dangerously-skip-permissions", "--no-chrome"];
+    const a: string[] = ["--dangerously-skip-permissions", "--no-chrome", ...claudeDenyArgs()];
     if (model) a.push("--model", model);
     if (appendSystem) a.push("--append-system-prompt", appendSystem);
     for (const d of addDirs ?? []) a.push("--add-dir", d); // reach sibling repos in the workspace

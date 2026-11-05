@@ -1,4 +1,5 @@
 import { humanizeStep, type RobertStep } from "../robert-steps.js";
+import { claudeDenyArgs } from "../no-send.js";
 import { onSettingChange } from "../settings.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import os from "node:os";
@@ -1046,6 +1047,8 @@ export class WarmManager {
       ...(this.opts.mcpConfig ? ["--mcp-config", this.opts.mcpConfig] : []),
       ...(this.opts.inheritProfileMcp ? [] : ["--strict-mcp-config"]),
       "--dangerously-skip-permissions",
+      // Robert never sends either (no-send.ts): he loads every profile MCP, so the deny is what stops it.
+      ...claudeDenyArgs(),
       "--model", this.opts.model,
       // budget covers the whole process lifetime (up to maxTurns turns), not one message
       "--max-budget-usd", String(CONFIG.agent.maxBudgetUsd * this.opts.maxTurns),

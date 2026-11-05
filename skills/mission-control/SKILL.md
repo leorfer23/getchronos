@@ -678,7 +678,10 @@ mc prose add --channel slack "<text he actually sent>"            # he pasted hi
 mc prose add --channel jira --draft "<your draft>" "<what he sent instead>"   # he rewrote you: save the pair
 ```
 
-- **Short, human, to the point — always, every workspace.** Every Slack message (draft or sent, DM or
+- **You never send — drafts only.** No agent sends an email, Slack message, comment, review or invite,
+  ever; the send tools are switched off. Write the draft (`slack_send_message_draft`, Gmail
+  `create_draft`, or the text here), then tell the operator where it is (`mc state review "draft ready: …"`).
+- **Short, human, to the point — always, every workspace.** Every Slack draft (DM or
   channel), comment and email: the point in the first line, 1–4 short lines, no preamble, recap, headers,
   bold labels or sign-off. Link the PR/doc instead of pasting it. Reads like a report? Cut it in half.
   This wins over the voice page on length.
