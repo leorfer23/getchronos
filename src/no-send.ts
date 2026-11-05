@@ -20,6 +20,11 @@
  * the operator set up jobs that keep trackers current. Comments are.
  */
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { installCursorHooks } from "./term-hooks.js";
+
 /** Send-type tools, by the name each MCP server gives them. */
 const SEND_TOOLS = [
   // Slack (Slack's MCP and the claude.ai Slack connector): posting, reacting, creating things people see.
@@ -51,8 +56,8 @@ const KNOWN_SERVERS = [
   "claude_ai_Google_Calendar", "box", "claude_ai_Box",
 ];
 
-/** Shell spellings of a send. Substring globs (rtk rewrites `gh` to `rtk gh`). */
-const SEND_BASH = [
+/** Shell spellings of a send. Substring globs (rtk rewrites `gh` to `rtk gh`). scripts/mc NO_SEND_BASH mirrors it. */
+export const SEND_BASH = [
   "*gh pr comment*", "*gh pr review*", "*gh issue comment*", "*gh api*comments*", "*gh api*reviews*",
   "*chat.postMessage*", "*chat.scheduleMessage*", "*chat.postEphemeral*", "*hooks.slack.com*",
   "*api.telegram.org*", "*gmail.googleapis.com*send*", "*messages/send*", "*drafts/send*",
@@ -98,6 +103,73 @@ export function grokDenyArgs(): string[] {
     out.push("--deny", `Bash(${p})`);
   }
   return out;
+}
+
+/**
+ * Cursor CLI (`cursor-agent`): no deny flag, so the MCP rules live in its config dir's
+ * `cli-config.json` (`permissions.deny`, read at start): `Mcp(*:<tool>)` per send tool, any server.
+ * Verified live: a denied MCP tool is refused under `--force`. Cursor's `Shell(...)` rules match only
+ * a command's first word (a `gh pr comment` rule never fired, live), so the shell spellings are refused
+ * by a beforeShellExecution hook instead (term-hooks.ts cursorHooks → `mc hook no-send`).
+ */
+export function cursorNoSendRules(): string[] {
+  const out = new Set<string>();
+  for (const t of SEND_TOOLS) out.add(`Mcp(*:${t})`);
+  out.add("Shell(sendmail)");
+  return [...out];
+}
+
+/** cursor-agent's config dir: CURSOR_CONFIG_DIR, else ~/.cursor. */
+export function cursorConfigDir(envDir?: string | null, home = os.homedir()): string {
+  return envDir?.trim() ? envDir.trim().replace(/^~(?=\/|$)/, home) : path.join(home, ".cursor");
+}
+
+/**
+ * Put the deny rules into a cursor config dir's cli-config.json, keeping everything else in it. Run
+ * before every cursor spawn: cursor rewrites this file itself, so a rule is re-added if it went.
+ * Returns how many rules it added. Never throws (a spawn must not die on it); logs instead.
+ */
+export function ensureCursorNoSend(envDir?: string | null, home = os.homedir()): number {
+  // Tests spawn cursor with the real home: never rewrite the operator's configs from a test run.
+  if (process.env.CHRONOS_TEST && home === os.homedir()) return 0;
+  const dir = cursorConfigDir(envDir, home);
+  const file = path.join(dir, "cli-config.json");
+  // The shell half: the beforeShellExecution hook, with cursor's other Chronos hooks (merged, never
+  // clobbered) — in ~/.cursor and in the workspace's own dir, like the card hooks (terminal.ts).
+  for (const d of new Set([path.join(home, ".cursor"), dir])) {
+    try { installCursorHooks(d); } catch (e) { console.warn(`[no-send] cursor hooks not installed in ${d}: ${String((e as Error)?.message ?? e)}`); }
+  }
+  try {
+    let cfg: any = { version: 1, permissions: { allow: [], deny: [] } };
+    if (fs.existsSync(file)) cfg = JSON.parse(fs.readFileSync(file, "utf8"));
+    cfg.permissions ??= {};
+    cfg.permissions.allow ??= [];
+    const deny: string[] = Array.isArray(cfg.permissions.deny) ? cfg.permissions.deny : [];
+    const missing = cursorNoSendRules().filter((r) => !deny.includes(r));
+    if (!missing.length) return 0;
+    cfg.permissions.deny = [...deny, ...missing];
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.chronos-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
+    fs.renameSync(tmp, file);
+    return missing.length;
+  } catch (e) {
+    console.warn(`[no-send] could not write cursor deny rules to ${file}: ${String((e as Error)?.message ?? e)}`);
+    return 0;
+  }
+}
+
+/**
+ * opencode: an inline config layer (OPENCODE_CONFIG_CONTENT, its highest-precedence layer) that denies
+ * the send tools by name (`<server>_<tool>`) and the shell spellings. Deny holds under `--auto`.
+ */
+export function opencodeNoSendConfig(): string {
+  const permission: Record<string, unknown> = {};
+  for (const t of SEND_TOOLS) permission[`*_${t}`] = "deny";
+  const bash: Record<string, string> = {};
+  for (const p of SEND_BASH) bash[p] = "deny";
+  permission.bash = bash;
+  return JSON.stringify({ permission });
 }
 
 /** The rule in words, for every agent's system prompt. The CLI enforces it; this says what to do instead. */

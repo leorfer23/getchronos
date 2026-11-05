@@ -598,6 +598,13 @@ const checksText = (s2) => (s2.done_when || []).map((c, i) => `   ${i + 1}. ${(s
  * handful of card events and posts it. Outside a Chronos terminal (no MC_SESSION) it does nothing.
  * It must never get in the agent's way: no stderr, exit 0, and cursor gets the "allow" it expects.
  */
+// The shell spellings of a send — the same list as SEND_BASH in src/no-send.ts (a test keeps them equal).
+const NO_SEND_BASH = [
+  "*gh pr comment*", "*gh pr review*", "*gh issue comment*", "*gh api*comments*", "*gh api*reviews*",
+  "*chat.postMessage*", "*chat.scheduleMessage*", "*chat.postEphemeral*", "*hooks.slack.com*",
+  "*api.telegram.org*", "*gmail.googleapis.com*send*", "*messages/send*", "*drafts/send*",
+  "*sendmail *", "*mc comment*", "*push-comment*",
+];
 async function hook(backend, mode) {
   // Its own stdin read: readStdin()'s safety timer would hold every hook — and the agent's turn — open 250ms.
   const raw = await new Promise((resolve) => {
@@ -611,6 +618,17 @@ async function hook(backend, mode) {
   let j = {};
   try { j = JSON.parse(raw || "{}"); } catch {}
   const name = String(j.hook_event_name || j.hookEventName || "").toLowerCase();
+  // `mc hook no-send` — cursor's beforeShellExecution (src/no-send.ts): a shell spelling of a send is
+  // refused, everything else passes. Not gated on MC_SESSION: every cursor run, inside Chronos or not.
+  if (backend === "no-send") {
+    const line = String(j.command || "");
+    const hit = NO_SEND_BASH.find((g) => new RegExp("^" + g.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$", "is").test(line));
+    process.stdout.write(JSON.stringify(hit
+      ? { permission: "deny", user_message: `Chronos blocked a send (${hit}). Agents leave drafts.`,
+          agent_message: "NEVER SEND: this command posts a message, comment or review. Write a draft instead (in this terminal or a file) and tell the operator where it is." }
+      : { permission: "allow" }));
+    return;
+  }
   const reply = () => {
     if (backend !== "cursor") return;
     if (name === "beforesubmitprompt") process.stdout.write('{"continue":true}');

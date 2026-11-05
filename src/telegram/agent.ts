@@ -542,7 +542,7 @@ function clearChatSession(chat: number) {
 
 const MAX_ASKS = 3; // ponytail: single global cap; single-operator daemon, per-chat would be the same
 
-type Ask = { id: string; chat: number; prompt: string; msgId: number; child?: ChildProcess; warm?: WarmManager; aborted?: boolean };
+type Ask = { id: string; chat: number; prompt: string; msgId: number; child?: ChildProcess; warm?: WarmManager; aborted?: boolean; ws?: string | null };
 const asks = new Map<string, Ask>();
 let askSeq = 0;
 
@@ -663,7 +663,7 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
   // This project's own thread recap only — never the interleaved one (workspaces never mix).
   const recap = chatLog.contextBlock({ limit: 12, workspaceId: runWs });
   const prompt = fleetLine(runWs) + "\n\n" + (recap || "") + body;
-  const ask: Ask = { id, chat, prompt, msgId };
+  const ask: Ask = { id, chat, prompt, msgId, ws: runWs };
   asks.set(id, ask);
   ensureTyping(chat);
   try {
@@ -685,6 +685,8 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
         // Telegram propose-and-confirm: no CHRONOS_ADMIN on primary or fallback — only his project's
         // read-only credential, so his reads still name him.
         ...(runWs ? { extraEnv: { CHRONOS_READ_TOKEN: robertToken(runWs, "ro"), MC_AGENT_NAME: "robert", MC_WORKSPACE: runWs } } : {}),
+        // A fallback engine keeps his walls: his dir, the deny list, his workspace's env.
+        ...robertSandbox(runWs),
         killPrimary: () => {
           m.kill();
           if (runWs) tgWsWarm.delete(`${chat}:${wsKey(runWs)}`);
@@ -701,6 +703,8 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
         system: robertPrompt("telegram"),
         prompt,
         wsId: runWs,
+        ...(runWs ? { profileDir: webProfileDir(runWs), extraEnv: { CHRONOS_READ_TOKEN: robertToken(runWs, "ro"), MC_AGENT_NAME: "robert", MC_WORKSPACE: runWs } } : {}),
+        ...robertSandbox(runWs),
       });
     }
     const scan = scanProposal(reply || "");
@@ -816,28 +820,32 @@ export function spawnManager(opts: {
   system?: string;                       // defaults to the Telegram propose-and-confirm persona
   extraEnv?: Record<string, string>;     // e.g. CHRONOS_ADMIN for the execute-directly web persona
   model?: string;                        // override CONFIG.agent.model (voice uses a faster one)
+  /** A project's turn: that workspace's Robert profile, dir, walls and env (robertSandbox). Absent → the operator's. */
+  wsId?: string | null;
 }): Promise<string> {
   const backend = getBackend(CONFIG.agent.backend ?? "claude-code");
-  const profileDir = CONFIG.profiles[CONFIG.agent.profile] ?? CONFIG.profiles.claude;
+  const wall = robertSandbox(opts.wsId);
+  const profileDir = opts.wsId ? webProfileDir(opts.wsId) : CONFIG.profiles[CONFIG.agent.profile] ?? CONFIG.profiles.claude;
+  const cwd = wall.cwd ?? process.cwd();
   const spec = backend.oneShot({
     prompt: opts.prompt,
     system: opts.system ?? robertPrompt("telegram"),
     model: opts.model || CONFIG.agent.model || null,
     configDir: profileDir,
-    cwd: process.cwd(),
+    cwd,
     resumeSessionId: opts.resumeSessionId,
     allowedTools: [MANAGER_TOOLS, ...profileMcpTools(profileDir)].join(","),
     maxBudgetUsd: CONFIG.agent.maxBudgetUsd,
     inheritProfileMcp: true, // the chief of everything runs on the operator's own MCP inventory
   });
 
-  const { cmd, cmdArgs } = sandboxWrap("guard", process.cwd(), [], profileDir, [], spec.cmd, spec.args);
+  const { cmd, cmdArgs } = sandboxWrap("guard", cwd, wall.addDirs ?? [], profileDir, wall.denyDirs ?? [], spec.cmd, spec.args);
 
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, cmdArgs, {
-      cwd: process.cwd(),
-      // Operator's personal daemon-level agent — intentionally keeps full env (not client-scoped).
-      env: { ...process.env, ...spec.env, ...(opts.extraEnv ?? {}) },
+      cwd,
+      // The operator's personal daemon-level agent keeps the full env; a project's turn gets its workspace's.
+      env: { ...(wall.baseEnv ?? process.env), ...spec.env, ...(opts.extraEnv ?? {}) },
       stdio: ["ignore", "pipe", "pipe"],
     });
     opts.onChild?.(child);
@@ -887,6 +895,8 @@ function spawnAgent(ask: Ask, model?: string): Promise<string> {
     resumeSessionId: null, // parallel one-shot: detached, never overwrites the stored session
     onChild: (c) => { ask.child = c; },
     model,
+    // A routed turn is that project's Robert, read-only, walled like his warm manager.
+    ...(ask.ws ? { wsId: ask.ws, extraEnv: { CHRONOS_READ_TOKEN: robertToken(ask.ws, "ro"), MC_AGENT_NAME: "robert", MC_WORKSPACE: ask.ws } } : {}),
   });
 }
 
@@ -1641,6 +1651,8 @@ export async function askManagerWeb(
     // or a degraded turn silently loses the workspace default the primary had.
     extraEnv: { CHRONOS_ADMIN: robertCredential(realWsId), MC_AGENT_NAME: "robert", ...(realWsId ? { MC_WORKSPACE: realWsId } : {}) },
     profileDir: m.profileDir,
+    // A fallback engine keeps his walls: his dir, the deny list, his workspace's env.
+    ...robertSandbox(realWsId),
     onDelta,
     // `prompt` already carries this thread's recap, so only the declaration needs carrying.
     agent: { name: "Robert", tools: MANAGER_TOOLS },

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { INBOX_AUTO_RULES, inboxAutoDenyArgs, isInboxAuto } from "./inbox-guard.js";
-import { mergeDeny, NO_SEND_RULE } from "./no-send.js";
+import { ensureCursorNoSend, mergeDeny, NO_SEND_RULE } from "./no-send.js";
 import path from "node:path";
 import os from "node:os";
 import type { WebSocket } from "ws";
@@ -763,6 +763,7 @@ export async function openSession(
   if (!remote) {
     installMcSkill(configDir); // claude agents: skill in the config dir
     installCardHooks(backend.name, configDir, childEnv(ws).CURSOR_CONFIG_DIR);
+    if (backend.name === "cursor-agent") ensureCursorNoSend(childEnv(ws).CURSOR_CONFIG_DIR); // no agent sends (no-send.ts)
     // claude asks "trust this folder?" on its first visit to any cwd, and a seeded terminal has no one
     // to tap Yes — answer it here, in the profile, before the spawn (see claude-trust.ts).
     if (backend.name === "claude-code" && ensureTrustedCwd(configDir, cwd) === "added")
@@ -1804,6 +1805,8 @@ async function syncAllAgentsMd() {
 export async function startTerminals() {
   ensurePtyHelper();
   installMcCli();
+  // No agent sends: every cursor config dir in use gets the deny rules + send hook up front (no-send.ts).
+  for (const d of new Set([undefined, ...workspaces.list().map((w) => childEnv(w).CURSOR_CONFIG_DIR).filter(Boolean)])) ensureCursorNoSend(d);
   try {
     const { installRtkRewriteScript } = await import("./efficiency-tools.js");
     installRtkRewriteScript();
