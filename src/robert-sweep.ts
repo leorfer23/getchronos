@@ -55,13 +55,21 @@ export function sweepSay(wsName: string, working: number, everyMin: number): str
 /** One pass: queue a sweep for every workspace with work in flight. Returns the workspace ids swept. */
 export function sweepOnce(everyMin = CONFIG.robertSweepMin): string[] {
   const swept: string[] = [];
+  // One self-wake per pass across every workspace: the first pass after a deploy sees every fact as
+  // new, and eight Robert turns at once is the burst the quiet path exists to avoid. The rest wait
+  // a pass (their look is still due).
+  let selfwoke = false;
   for (const ws of workspaces.list()) {
     if (!settingOn("robert.enabled", ws.id)) continue;
     const working = workingIn(ws.id);
     if (!working) {
       // Nothing running here: the self-wake's look (robert-selfwake.ts) — no model unless something changed.
+      if (selfwoke) continue;
       try {
-        if (selfwakeOnce(ws) === null) console.log(`[robert-selfwake] ${ws.slug}: something changed — Robert looks`);
+        if (selfwakeOnce(ws) === null) {
+          selfwoke = true;
+          console.log(`[robert-selfwake] ${ws.slug}: something changed — Robert looks`);
+        }
       } catch (e) {
         console.warn("[robert-selfwake]", ws.slug, e);
       }

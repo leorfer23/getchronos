@@ -44,7 +44,8 @@ function reset() {
 function quietWs() {
   const w = ws();
   const s = term(w.id);
-  db.prepare("UPDATE sessions SET status='ended', created_at=? WHERE id=?").run(new Date(NOW - HOUR).toISOString(), s.id);
+  // Real clock, not NOW: sweepOnce reads Date.now(), and a fixed date would make this workspace dormant next week.
+  db.prepare("UPDATE sessions SET status='ended', created_at=? WHERE id=?").run(new Date(Date.now() - HOUR).toISOString(), s.id);
   return w;
 }
 
@@ -194,4 +195,14 @@ test("capRefusal: the daily cap counts proactive terminals across every workspac
   } finally {
     if (prev === undefined) delete process.env.CHRONOS_PROACTIVE_PER_DAY; else process.env.CHRONOS_PROACTIVE_PER_DAY = prev;
   }
+});
+
+test("sweepOnce: at most one self-wake per pass across workspaces — the post-deploy burst is spread out", () => {
+  reset();
+  const a = quietWs(), b = quietWs();
+  for (const w of [a, b]) rewriteBrief(w.id, BRIEF_SEED.replace("## Next\n", "## Next\n- [ ] one thing\n"));
+  sweepOnce(5);
+  assert.equal(wakes().length, 1, "one this pass");
+  sweepOnce(5);
+  assert.equal(wakes().length, 2, "the other one next pass; the first is not due again yet");
 });
