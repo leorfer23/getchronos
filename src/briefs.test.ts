@@ -49,3 +49,79 @@ test("the stamp moves on every write, so a warm Robert recycles at the next turn
   assert.notEqual(briefStamp(), before);
   assert.equal(listBriefs().filter((b) => b.note).length, 1);
 });
+
+// ───────────────────────── a brief Robert can act on ─────────────────────────
+
+const { normalizeBrief, capNext, briefPromptBody, STANDING_TEMPLATE } = await import("./briefs.js");
+
+test("a repeated heading is folded into the first one, not stapled on again", () => {
+  rewriteBrief(acme, BRIEF_SEED);
+  appendBrief(acme, "Abby signs off every PR", "How work is done here");
+  appendBrief(acme, "Deploys go through staging first", "how work is done here");
+  appendBrief(acme, "2026-11-04 · the export · shipped", "Recently");
+  appendBrief(acme, "chase the vendor for the API key", "Next");
+  const b = briefNote(acme, false)!.body;
+  assert.equal(b.match(/^## How work is done here$/gm)?.length, 1);
+  assert.equal(b.match(/^## Recently$/gm)?.length, 1);
+  assert.equal(b.match(/^## Next$/gm)?.length, 1);
+  assert.match(b, /## How work is done here\nAbby signs off every PR\nDeploys go through staging first/);
+  assert.match(b, /## Recently\n- 2026-11-04 · the export · shipped/);
+  assert.match(b, /## Next\n- \[ \] chase the vendor for the API key/);
+});
+
+test("a page that already collected duplicates heals on its next write, newest line kept", () => {
+  const dupes = Array.from({ length: 30 }, (_, i) => `\n## Recently\n- 2026-10-${String(i + 1).padStart(2, "0")} · old ${i} · done\n`).join("");
+  const sick = `# Robert — brief\n\n## Recently\n- 2026-09-01 · first · done\n\n## Next\n- [ ] one\n${dupes}\n## Next\n- [ ] two\n`;
+  const healed = normalizeBrief(sick);
+  assert.equal(healed.match(/^## Recently$/gm)?.length, 1);
+  assert.equal(healed.match(/^## Next$/gm)?.length, 1);
+  assert.match(healed, /## Next\n- \[ \] one\n- \[ \] two/);
+  assert.equal(healed.match(/^- \d{4}-/gm)?.length, 12, "Recently back under its cap");
+  assert.equal(normalizeBrief(healed), healed, "idempotent");
+  // The worklog's own write must not lose its new line to the folding.
+  rewriteBrief(acme, BRIEF_SEED);
+  const fresh = briefNote(acme, false)!;
+  db.prepare("UPDATE notes SET body = ? WHERE id = ?").run(sick, fresh.id);
+  appendBrief(acme, "2026-11-05 · today's work · shipped", "Recently");
+  assert.match(briefNote(acme, false)!.body, /2026-11-05 · today's work · shipped/);
+});
+
+test("Next is a queue, not an archive: newest open items and the last few ticked survive", () => {
+  const items = [
+    ...Array.from({ length: 40 }, (_, i) => `- [ ] item ${i}`),
+    ...Array.from({ length: 8 }, (_, i) => `- [x] done ${i}`),
+  ];
+  const kept = capNext(items, 25);
+  assert.equal(kept.filter((l) => l.startsWith("- [ ]")).length, 25);
+  assert.equal(kept[0], "- [ ] item 15", "the oldest open items rolled off");
+  assert.deepEqual(kept.filter((l) => l.startsWith("- [x]")), ["- [x] done 3", "- [x] done 4", "- [x] done 5", "- [x] done 6", "- [x] done 7"]);
+});
+
+test("Standing orders: added where missing, empty labels never reach the prompt, filled ones lead it", () => {
+  const old = `# Robert — brief\n\n## What this is\nA menu app\n\n## How work is done here\nPRs to main\n\n## Recently\n- 2026-11-01 · x · done\n`;
+  const n = normalizeBrief(old);
+  assert.match(n, /## How work is done here\nPRs to main\n\n## Standing orders\n- Ship:/);
+  assert.doesNotMatch(briefPromptBody(n, 3000), /Standing orders|- Never:/, "an unfilled template says nothing");
+
+  const filled = n.replace("- Ship:", "- Ship: merge, then npm run deploy").replace("- Never:", "- Never: post in client channels");
+  const prompt = briefPromptBody(filled + `\n## Next\n${"- [ ] filler item that is long enough\n".repeat(60)}`, 600);
+  assert.ok(prompt.length <= 600);
+  assert.match(prompt, /## Standing orders\n- Ship: merge, then npm run deploy\n- Never: post in client channels/);
+  assert.doesNotMatch(prompt, /Robert may do alone:/);
+  assert.ok(STANDING_TEMPLATE.length === 5);
+});
+
+test("an untouched seed from before Standing orders existed is still a seed", () => {
+  const oldSeed = "# Robert — brief\n\n## What this is\n\n## What the operator wants (goals)\n\n## How work is done here\n\n## Recently\n\n## Next\n";
+  const n = briefNote(globex)!;
+  db.prepare("UPDATE notes SET body = ? WHERE id = ?").run(oldSeed, n.id);
+  assert.equal(briefsBlock(null), "");
+});
+
+test("unscoped, one long brief no longer crowds the other workspaces out of the prompt", () => {
+  rewriteBrief(acme, `# Robert — brief\n\n## What the operator wants (goals)\nAcme goal\n\n## What this is\n${"z".repeat(18000)}\n`);
+  rewriteBrief(globex, `# Robert — brief\n\n## What the operator wants (goals)\nGlobex goal\n`);
+  const all = briefsBlock(null);
+  assert.match(all, /Acme goal/);
+  assert.match(all, /Globex goal/);
+});

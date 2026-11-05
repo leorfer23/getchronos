@@ -236,3 +236,16 @@ test("since accepts 7d / 36h / an ISO date", () => {
   assert.equal(sinceIso("2026-09-01", now), "2026-09-01T00:00:00.000Z");
   assert.equal(sinceIso("nonsense", now), "2026-09-05T12:00:00.000Z", "a bad spec falls back to a week");
 });
+
+test("a scheduled job that ran clean goes to the ledger only; a failed one still reaches the brief", async () => {
+  const { isRoutineRun } = await import("./worklog.js");
+  assert.equal(isRoutineRun({ trigger_type: "cron" }, "success"), true);
+  assert.equal(isRoutineRun({ trigger_type: "cron" }, "failed"), false);
+  assert.equal(isRoutineRun({ trigger_type: "manual" }, "success"), false);
+
+  rewriteBrief(acme, BRIEF_SEED);
+  writeEntry(acme, { what: "inbox triage", outcome: "ran clean", pending: [], next: ["re-check cursor"] }, new Date(), { ledgerOnly: true });
+  const b = briefNote(acme, false)!.body;
+  assert.doesNotMatch(b, /inbox triage|re-check cursor/, "the brief never heard of it");
+  assert.match(readWorklog(acme)[0].what, /inbox triage/, "the ledger did");
+});

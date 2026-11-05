@@ -20,15 +20,34 @@ import type { Note } from "./types.js";
 export const BRIEF_SLUG = "robert-brief";
 export const RECENTLY = "Recently";
 export const NEXT = "Next";
+export const GOALS = "What the operator wants (goals)";
+export const HOW = "How work is done here";
+export const STANDING = "Standing orders";
 const BRIEF_TITLE = "Robert — brief";
 const PER_WS_CAP = 3000;   // one brief in the prompt
-const ALL_CAP = 14000;     // every brief, for the unscoped desk Robert
+const ALL_CAP = 20000;     // every brief, for the unscoped desk Robert (fair share each)
+/** Ticked Next items kept so a recent closure is still visible; older ones are history (the ledger). */
+const NEXT_TICKED_KEEP = 5;
+
+/**
+ * The operator's rules for one workspace, in OpenClaw's standing-order shape (scope, triggers,
+ * approval gates): what "ship it" means here, what follows a merge, and where Robert's hands stop.
+ * Empty labels are left in the page as a prompt to fill them and never reach the model.
+ */
+export const STANDING_TEMPLATE = [
+  "- Ship:",
+  "- After merge:",
+  "- Robert may do alone:",
+  "- Ask first:",
+  "- Never:",
+];
 
 export const BRIEF_SEED =
   `# ${BRIEF_TITLE}\n\n` +
   `## What this is\n\n` +
-  `## What the operator wants (goals)\n\n` +
-  `## How work is done here\n\n` +
+  `## ${GOALS}\n\n` +
+  `## ${HOW}\n\n` +
+  `## ${STANDING}\n${STANDING_TEMPLATE.join("\n")}\n\n` +
   `## Recently\n\n` +
   `## Next\n`;
 
@@ -51,19 +70,40 @@ export function briefStamp(): string {
   return listBriefs().map((b) => b.note?.updated_at ?? "").join("|");
 }
 
+/**
+ * Add a fact under a heading. appendNote() would staple a SECOND "## <heading>" onto the end of the
+ * page every time — that is how a live brief collected sixty "## Recently" sections — so a heading
+ * the page already has gets the fact inside it, and Recently/Next go through their own merges.
+ */
 export function appendBrief(workspace_id: string, fact: string, heading?: string): Note {
   const n = briefNote(workspace_id);
   if (!n) throw new Error("workspace not found");
-  return appendNote(n.id, fact.trim(), heading);
+  const text = fact.trim();
+  const h = heading?.trim();
+  if (!h) return appendNote(n.id, text);
+  const today = new Date().toISOString().slice(0, 10);
+  if (sameHeading(h, RECENTLY)) return rewriteBrief(workspace_id, mergeRecently(n.body, text));
+  if (sameHeading(h, NEXT)) {
+    const items = text.split("\n").map((l) => nextItemText(l)).filter(Boolean);
+    return rewriteBrief(workspace_id, mergeNext(n.body, items, { what: "a note", date: today }));
+  }
+  const lines = n.body.split("\n");
+  const r = sectionRange(lines, h);
+  if (!r) return appendNote(n.id, text, h);
+  const kept = lines.slice(r.start, r.end);
+  while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
+  return rewriteBrief(workspace_id, spliceSection(lines, r, [...kept, text]));
 }
 
+/** Every write lands normalized: one section per heading, Recently and Next within their caps. */
 export function rewriteBrief(workspace_id: string, body: string): Note {
   const n = briefNote(workspace_id);
   if (!n) throw new Error("workspace not found");
-  return updateNote(n.id, { body });
+  return updateNote(n.id, { body: normalizeBrief(body) });
 }
 
-const isSeed = (n: Note) => n.body.trim() === BRIEF_SEED.trim();
+// Normalized first: a page seeded before Standing orders existed is still an untouched seed.
+const isSeed = (n: Note) => normalizeBrief(n.body).trim() === BRIEF_SEED.trim();
 
 // ───────────────────────────── the two living sections ─────────────────────────────
 // "Recently" and "Next" are the only parts of a brief anything but a human writes, and the worklog
@@ -71,8 +111,12 @@ const isSeed = (n: Note) => n.body.trim() === BRIEF_SEED.trim();
 // "## Recently" onto the end of the page each time, so these do section surgery instead: the
 // operator's prose in the other headings is never touched, and the two lists stay lists.
 
-const headingRe = (h: string) => new RegExp(`^##\\s+${h}\\s*$`, "i");
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Escaped: "What the operator wants (goals)" is a heading, and its parentheses are not a group.
+const headingRe = (h: string) => new RegExp(`^##\\s+${escapeRe(h.trim())}\\s*$`, "i");
 const isHeading = (l: string) => /^##\s+/.test(l);
+const headingName = (l: string) => (l.match(/^##\s+(.*)$/)?.[1] ?? "").trim().toLowerCase();
+const sameHeading = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 function sectionRange(lines: string[], heading: string): { start: number; end: number } | null {
   const at = lines.findIndex((l) => headingRe(heading).test(l.trim()));
@@ -98,7 +142,8 @@ function spliceSection(lines: string[], r: { start: number; end: number }, items
 
 /** Newest-last log of what shipped, capped: older lines roll off into the worklog ledger. */
 export function mergeRecently(body: string, line: string, max = CONFIG.briefRecentlyMax): string {
-  const lines = (body || "").split("\n");
+  // Normalized first, so the new line lands in the one Recently and is not cut by folding duplicates.
+  const lines = normalizeBrief(body || "").split("\n");
   const r = ensureSection(lines, RECENTLY);
   const kept = lines.slice(r.start, r.end).map((l) => l.trimEnd()).filter(Boolean);
   kept.push(line.trim().startsWith("-") ? line.trim() : `- ${line.trim()}`);
@@ -125,7 +170,7 @@ export function mergeNext(
   add: string[],
   ctx: { what: string; date: string; ticket?: string | null },
 ): string {
-  const lines = (body || "").split("\n");
+  const lines = normalizeBrief(body || "").split("\n");
   const r = ensureSection(lines, NEXT);
   const items = lines.slice(r.start, r.end).map((l) => l.trimEnd()).filter(Boolean);
   const key = ctx.ticket ? new RegExp(`\\b${ctx.ticket.replace(/[^\w-]/g, "")}\\b`) : null;
@@ -146,32 +191,117 @@ export function mergeNext(
     if (ticked.some((l) => similarity(nextItemText(l), item) >= NEXT_DEDUPE)) continue;
     ticked.push(`- [ ] ${item} (from ${ctx.what}, ${ctx.date})`);
   }
-  return spliceSection(lines, r, ticked);
+  return spliceSection(lines, r, capNext(ticked));
+}
+
+const isTicked = (l: string) => /^\s*[-*]\s*\[[xX]\]/.test(l);
+
+/**
+ * Next is a queue Robert works from, not an archive: the newest `max` open items and the last few
+ * ticked ones, in their original order. What rolls off is still in the worklog ledger.
+ */
+export function capNext(items: string[], max = CONFIG.briefNextMax): string[] {
+  const keep = new Set<number>();
+  let open = 0, done = 0;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (isTicked(items[i])) { if (done++ < NEXT_TICKED_KEEP) keep.add(i); }
+    else if (open++ < Math.max(1, max)) keep.add(i);
+  }
+  return items.filter((_, i) => keep.has(i));
 }
 
 /**
- * The brief as Robert should read it when it no longer fits his budget. renderNotes drops a note
- * WHOLE when it overruns, so a brief that grows past PER_WS_CAP would vanish from the prompt
- * entirely — taking the two sections he needs most with it. Recently + Next go first (trimmed from
- * their oldest lines if either alone is over budget), then the operator's standing prose fills
- * whatever is left.
+ * One section per heading, in first-seen order, with a repeat's lines folded into the first —
+ * then Recently and Next cut to their caps, and a Standing orders section where there is none.
+ * Idempotent, so it runs on every write and on every read into the prompt.
+ */
+export function normalizeBrief(body: string): string {
+  const text = (body || "").replace(/\r\n/g, "\n");
+  const pre: string[] = [];
+  const order: string[] = [];
+  const sections = new Map<string, { heading: string; lines: string[] }>();
+  let cur: string[] = pre;
+  for (const l of text.split("\n")) {
+    if (isHeading(l)) {
+      const key = headingName(l);
+      let s = sections.get(key);
+      if (!s) {
+        s = { heading: l.trim(), lines: [] };
+        sections.set(key, s);
+        order.push(key);
+      }
+      cur = s.lines;
+      continue;
+    }
+    cur.push(l);
+  }
+  if (!order.length) return text;
+
+  const tidy = (ls: string[]) => {
+    const out = ls.map((l) => l.trimEnd());
+    while (out.length && !out[0].trim()) out.shift();
+    while (out.length && !out[out.length - 1].trim()) out.pop();
+    return out;
+  };
+  const items = (ls: string[]) => ls.map((l) => l.trimEnd()).filter((l) => l.trim());
+
+  const recently = sections.get(RECENTLY.toLowerCase());
+  if (recently) recently.lines = items(recently.lines).slice(-Math.max(1, CONFIG.briefRecentlyMax));
+  const next = sections.get(NEXT.toLowerCase());
+  if (next) next.lines = capNext(items(next.lines));
+
+  if (!sections.has(STANDING.toLowerCase())) {
+    // Beside the operator's other rules: after "How work is done here", else before Recently.
+    const after = order.indexOf(HOW.toLowerCase());
+    const before = order.indexOf(RECENTLY.toLowerCase());
+    const at = after >= 0 ? after + 1 : before >= 0 ? before : order.length;
+    sections.set(STANDING.toLowerCase(), { heading: `## ${STANDING}`, lines: [...STANDING_TEMPLATE] });
+    order.splice(at, 0, STANDING.toLowerCase());
+  }
+
+  const parts: string[] = [];
+  const head = tidy(pre);
+  if (head.length) parts.push(head.join("\n"));
+  for (const key of order) {
+    const s = sections.get(key)!;
+    const ls = tidy(s.lines);
+    parts.push(ls.length ? `${s.heading}\n${ls.join("\n")}` : s.heading);
+  }
+  return parts.join("\n\n") + "\n";
+}
+
+/** Standing orders minus the labels nobody filled in — an empty "- Never:" is not a rule. */
+function filledStanding(lines: string[]): string[] {
+  return lines.filter((l, i) => i === 0 || (l.trim() && !/^\s*[-*]\s*[^:]{1,40}:\s*$/.test(l)));
+}
+
+/**
+ * The brief as Robert should read it. Normalized first (one section per heading, capped lists),
+ * empty sections and unfilled Standing-order labels left out — they say nothing. When it still
+ * does not fit his budget, renderNotes would drop the note WHOLE, so the sections he acts on go
+ * first: Standing orders, goals, Next, Recently (each trimmed from its oldest lines if alone over
+ * budget), then the operator's other prose fills whatever is left.
  */
 export function briefPromptBody(body: string, cap: number): string {
-  const text = (body || "").trim();
   if (cap <= 0) return "";
-  if (text.length <= cap) return text;
-
   const blocks: string[][] = [];
-  for (const l of text.split("\n")) {
+  for (const l of normalizeBrief(body || "").trim().split("\n")) {
     if (isHeading(l) || !blocks.length) blocks.push([]);
     blocks[blocks.length - 1].push(l);
   }
-  const nameOf = (b: string[]) => (b[0].match(/^##\s+(.*)$/)?.[1] ?? "").trim().toLowerCase();
-  const head = blocks.filter((b) => !isHeading(b[0]));
-  const priority = [RECENTLY, NEXT]
-    .map((h) => blocks.find((b) => nameOf(b) === h.toLowerCase()))
+  const nameOf = (b: string[]) => headingName(b[0]);
+  const kept = blocks
+    .map((b) => (nameOf(b) === STANDING.toLowerCase() ? filledStanding(b) : b))
+    .map((b) => { const c = [...b]; while (c.length && !c[c.length - 1].trim()) c.pop(); return c; })
+    .filter((b) => b.length && (!isHeading(b[0]) || b.slice(1).some((l) => l.trim())));
+  const text = kept.map((b) => b.join("\n")).join("\n\n");
+  if (text.length <= cap) return text;
+
+  const head = kept.filter((b) => !isHeading(b[0]));
+  const priority = [STANDING, GOALS, NEXT, RECENTLY]
+    .map((h) => kept.find((b) => nameOf(b) === h.toLowerCase()))
     .filter((b): b is string[] => !!b);
-  const rest = blocks.filter((b) => isHeading(b[0]) && !priority.includes(b));
+  const rest = kept.filter((b) => isHeading(b[0]) && !priority.includes(b));
 
   const out: string[] = [];
   let used = 0;
@@ -202,9 +332,13 @@ export function briefsBlock(workspace_id?: string | null): string {
   let used = 0;
   const parts: string[] = [];
   const cap = workspace_id ? PER_WS_CAP : ALL_CAP;
+  // Unscoped, every workspace gets a fair share: one long brief used to take the whole budget and
+  // leave the workspaces after it out of Robert's prompt entirely.
+  const share = workspace_id ? cap : Math.min(PER_WS_CAP, Math.floor(ALL_CAP / rows.length));
   for (const b of rows) {
     // Headroom for the title line renderNotes adds, so the reordered body is what actually fits.
-    const body = briefPromptBody(b.note!.body, cap - used - b.note!.title.length - 120);
+    const room = Math.min(share, cap - used) - b.note!.title.length - 120;
+    const body = briefPromptBody(b.note!.body, room);
     const r = renderNotes([{ ...b.note!, body }], "brief", cap, b.workspace_id, used);
     if (!r.text) break;
     parts.push(`\n\n### ${b.name} (workspace ${b.workspace_id})${r.text}`);
@@ -213,6 +347,9 @@ export function briefsBlock(workspace_id?: string | null): string {
   }
   return (
     `YOUR STANDING UNDERSTANDING OF EACH PROJECT — written by the operator, kept current by you. ` +
-    `Treat the goals as his goals and act on them without being told again:` + parts.join("")
+    `Treat the goals as his goals and act on them without being told again. Its Standing orders are his ` +
+    `rules for that workspace and outrank your defaults: "Robert may do alone" you do without asking, ` +
+    `"Ask first" you hand up, "Never" you never do, "Ship" / "After merge" are the steps there. ` +
+    `Only he writes Standing orders — propose a change, do not make it:` + parts.join("")
   );
 }
