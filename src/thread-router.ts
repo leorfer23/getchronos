@@ -83,6 +83,8 @@ const FLEET_INTENT: RegExp[] = [
   /\b(standup|daily|resumen general|overview|pulse|brief me|briefing|rollup)\b/i,
   /\bhow('?s| is) (it going|everything|the shop|the fleet)\b/i,
   /\bc[oó]mo (va|vamos|anda) (todo|la cosa|el d[ií]a)\b/i,
+  /\bc[oó]mo venimos\b/i,
+  /\ben qu[eé] estamos\b/i,
 ];
 
 // A greeting or a thanks routes like any other message but must never MOVE the sticky workspace:

@@ -658,6 +658,14 @@ async function hook(backend, mode) {
     if (all.length) ev.questions = all;
   } else if (name === "pretooluse" && /^ExitPlanMode$/i.test(tool)) ev = { event: "ask", question: "approve the plan?", options: ["yes", "no"] };
   else if (name === "posttooluse" && /^(AskUserQuestion|ask_user_question|ask_user|ExitPlanMode)$/i.test(tool)) ev = { event: "answered" };
+  // An agent left a Slack/Gmail draft (it never sends — no-send.ts): the daemon tells the operator.
+  else if (name === "posttooluse" && /^mcp__.+__(slack_send_message_draft|create_draft|update_draft)$/.test(tool)) {
+    const one = (s, n) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+    const label = /slack_send_message_draft$/.test(tool)
+      ? `Slack draft → ${one(input.channel_name || input.channel || input.channel_id || input.user_id || "Slack", 60)}${input.message || input.text ? ": " + one(input.message || input.text, 90) : ""}`
+      : `Email draft${input.to ? " → " + one(Array.isArray(input.to) ? input.to.join(", ") : input.to, 60) : ""}${input.subject ? " · " + one(input.subject, 80) : ""}`;
+    ev = { event: "draft", label, tool: { name: tool.slice(0, 200) } };
+  }
   // Claude's fires only when it opens its "Do you want to proceed?" menu, and that menu stays until
   // someone answers it. Its pending tool's ⏺ blinks the whole time, so the pty never goes quiet and
   // the screen-read prompt never comes: this hook is how Focus learns there is something to approve.

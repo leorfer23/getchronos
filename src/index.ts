@@ -52,6 +52,7 @@ import { startTerminalPrompts } from "./terminal-prompts.js";
 import { startRobertDrive } from "./robert-drive.js";
 import { startInboxAutoDispatch } from "./inbox-autodispatch.js";
 import { startRobertSweep } from "./robert-sweep.js";
+import { startDraftNotify } from "./draft-notify.js";
 import { startTerminalFailover } from "./terminal-failover.js";
 import { startWorklog } from "./worklog.js";
 import { startCloudReconcile } from "./cloud-reconcile.js";
@@ -122,6 +123,8 @@ startTerminalPrompts();
 startRobertDrive();
 // While terminals work, a look over each busy workspace every few minutes (CHRONOS_ROBERT_SWEEP_MIN).
 startRobertSweep();
+// Every draft an agent leaves (it never sends) is announced on the operator's Telegram (draft-notify.ts).
+startDraftNotify();
 startTerminalFailover();
 // Standing watches on single terminals + the deadlines that stop a question sitting with Robert forever.
 startDeskWatch();

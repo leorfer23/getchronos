@@ -308,9 +308,10 @@ test("claude: a PostToolUse on every tool hands the agent its stale board — no
   const dir = tmp();
   installClaudeHooks(dir);
   const post = JSON.parse(fs.readFileSync(path.join(dir, "settings.json"), "utf8")).hooks.PostToolUse;
-  assert.equal(post.length, 2);
-  assert.equal(post[1].matcher, undefined, "every tool");
-  assert.equal(post[1].hooks[0].command, nudgeCmd);
+  assert.equal(post.length, 3, "ask tools, draft tools (draft-notify.ts), and the nudge");
+  assert.equal(post[1].matcher, "mcp__.*__(slack_send_message_draft|create_draft|update_draft)");
+  assert.equal(post[2].matcher, undefined, "every tool");
+  assert.equal(post[2].hooks[0].command, nudgeCmd);
   assert.equal(installClaudeHooks(dir), "noop", "a reinstall does not stack a second one");
   assert.ok(!grokHooksToml().includes("nudge"), "grok gets no nudge: only claude reads additionalContext");
   // The throttle itself, in a real shell: a stand-in mc writes one file per call.
