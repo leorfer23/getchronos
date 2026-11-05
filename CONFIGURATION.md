@@ -636,6 +636,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_CODEX_BIN` | `"codex"` | `src/config.ts` |
 | `CHRONOS_CONNECTOR_SYNC_MIN` | `30` | `src/config.ts` |
 | `CHRONOS_CONNECTOR_SYNC_RETAIN` | `2000` | `src/config.ts` |
+| `CHRONOS_CRON_CATCHUP_HOURS` | `24` | `src/config.ts` |
 | `CHRONOS_CURSOR_BIN` | `"cursor-agent"` | `src/config.ts` |
 | `CHRONOS_DAILY_BUDGET` | `0` | `src/config.ts` |
 | `CHRONOS_DAY_HEARTBEAT` | `"1"` | `src/config.ts` |

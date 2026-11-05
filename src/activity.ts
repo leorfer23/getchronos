@@ -23,7 +23,7 @@ function actorFor(e: any): string {
     if (name.startsWith("ticket:")) return "ai:builder";
     if (name.startsWith("review:")) return "ai:reviewer";
     const src = run?.trigger_src ?? "";
-    if (src === "cron") return "cron";
+    if (src === "cron" || src.startsWith("cron:")) return "cron"; // cron:catchup too
     if (src === "manual") return "human";
     if (src.startsWith("telegram:")) return "telegram";
     if (src.startsWith("trigger:")) return src; // "trigger:<name>"

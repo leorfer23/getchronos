@@ -303,5 +303,6 @@ test("the scheduler records every fire that started no run — a refused dispatc
   const src = fs.readFileSync(path.join(process.cwd(), "src/scheduler.ts"), "utf8");
   assert.match(src, /noteSkip\(job\.id, "inflight", /);
   assert.match(src, /noteSkip\(job\.id, "gate", skip\)/);
-  assert.match(src, /const r = dispatch\(job\.id, "cron"\);\s+if \("error" in r\) \{[\s\S]{0,120}noteSkip\(job\.id, "refused", r\.error\)/);
+  assert.match(src, /\(\) => fireCron\(job, "cron"\)/);
+  assert.match(src, /const r = dispatch\(job\.id, trigger\);\s+if \("error" in r\) \{[\s\S]{0,120}noteSkip\(job\.id, "refused", r\.error\)/);
 });
