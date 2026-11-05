@@ -19,6 +19,7 @@ import { nameError as varNameError, expiryFromHours } from "./store/workspace-va
 import { answerAsk, notifyAskCreated, resolveAsk, waitForAskAnswer } from "./asks.js";
 import { holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { operatorAnswered, operatorKeys } from "./ask-in-terminal.js";
+import { handTyped, noteOperatorInput, proactiveStats } from "./proactive-score.js";
 import { deliverPending, resolveMessageTarget, sendMessage } from "./messages.js";
 import { egressCfg, egressPort, syncEgress } from "./egress.js";
 import { createSkill, skillBody, skillRef, patchSkill, appendSkill, setSkillStatus, removeSkill, useSkill } from "./skills.js";
@@ -954,6 +955,10 @@ export function startServer() {
     }
     const err = sendInput(req.params.id, req.body, req.body.by || "operator");
     if (err) return res.status(err.startsWith("rate limit") ? 429 : 409).json({ error: err });
+    // His hand, counted for src/proactive-score.ts: the admin token with no other `by` (Desk composer,
+    // Focus buttons, phone, his own `mc session send`). Robert and agents send their own `by`
+    // (MC_AGENT_NAME); a Lead is never admin here, whatever its body claims.
+    if (admin && (req.body.by || "operator") === "operator") noteOperatorInput(s.id);
     // The operator answering from the Desk composer / Focus buttons — never Robert's or a Lead's typing.
     const submitted = req.body.enter !== false && (req.body.text || req.body.key === "enter" || req.body.keys?.includes("enter"));
     if (admin && (req.body.by || "operator") === "operator" && submitted)
@@ -2349,6 +2354,13 @@ export function startServer() {
     res.json({ from, to, rows });
   });
 
+  // Was each daemon-opened terminal worth opening (src/proactive-score.ts, `mc proactive`). Admin
+  // reads every workspace; a workspace token reads only its own — naming another is a 404 (CLAUDE.md #4).
+  api.get("/proactive/stats", (req, res) => {
+    const r = proactiveStats(callerScope(req), { days: req.query.days, workspace: req.query.workspace });
+    res.status(r.status).json(r.body);
+  });
+
   // ── Altitude: the fleet from above ──────────────────────────────────────────────────────────
   // One window, every breakdown, one payload (src/analytics.ts). This is what /altitude draws and
   // what `mc altitude` prints — the surface and the CLI must never diverge by re-deriving numbers.
@@ -2861,6 +2873,9 @@ export function startServer() {
     const by = lead ? `lead:${lead.leadId.slice(0, 8)}` : req.body.by || "human";
     const out = await answerAsk(ask.id, req.body.answer, by);
     if (!out.ok) return res.status(out.status ?? 409).json({ error: out.error });
+    // His answer from the Desk or phone to a terminal's question is engagement with that terminal,
+    // same as typing it into the pane (src/proactive-score.ts). Robert answers with by "robert".
+    if (ask.session_id && by === "operator" && tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) noteOperatorInput(ask.session_id);
     res.json(out.ask);
   });
 
@@ -5207,6 +5222,10 @@ export function startServer() {
       try { m = JSON.parse(raw.toString()); } catch { return; }
       if (m.t === "in") {
         writeTo(id, m.d);
+        // An attached pane's keystrokes are only ever his: /term needs the admin token and no agent
+        // or daemon hand types through a websocket (they all use sendInput). Scored by proactive-score.ts
+        // — typing only: xterm's own replies (cursor reports, focus, mouse) start with ESC and do not count.
+        if (handTyped(m.d)) noteOperatorInput(id);
         // His Enter in this pane answers the question it holds (src/ask-in-terminal.ts).
         if (typeof m.d === "string") void operatorKeys(id, m.d)?.catch((e) => console.warn("[ask-in-terminal]", e?.message ?? e));
       }
