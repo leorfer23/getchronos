@@ -21,7 +21,52 @@ export function tokenOk(got: string | undefined | null, expected: string): boole
 /** The admin-token gate for every admin-only route (api.ts mounts it; hostRoutes/barRoutes take it). */
 export function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return next();
+  // A project's Robert (robertToken): admin inside his own workspace, on the routes he uses, and
+  // nothing outside it — robertGate (robert-scope.ts) checks the route and who owns what it touches.
+  const rb = robertScopeOf(req.get("x-mc-admin"));
+  if (rb && forwardedHost(req) === null && robertGate(req, rb)) return next();
   res.status(403).json({ error: ADMIN_REQUIRED });
+}
+
+// ───────────────────── a project's Robert: admin of ONE workspace ─────────────────────
+// Every workspace has its own Robert (its own profile, brief, thread). He used to carry the global
+// admin token, so nothing but his prompt kept him inside his project. His credential is now derived
+// per workspace — HMAC(admin token, "robert:<role>:<workspace>") — so it needs no storage, rotates
+// with the admin token, and names exactly one workspace. `rw` acts (web/Desk); `ro` only reads
+// (Telegram's propose-and-confirm Robert). Sent in the same x-mc-admin header, so his prompts, `mc`
+// and curl habits work unchanged.
+export type RobertRole = "rw" | "ro";
+export type RobertScope = { ws: string; role: RobertRole };
+export function robertToken(wsId: string, role: RobertRole = "rw"): string {
+  return crypto.createHmac("sha256", CONFIG.adminToken).update(`robert:${role}:${wsId}`).digest("hex");
+}
+const robertCache = new Map<string, RobertScope>();
+/** The workspace a Robert token belongs to, or null. Constant-time against every workspace's tokens. */
+export function robertScopeOf(tok: string | undefined | null): RobertScope | null {
+  if (!tok || tok.length !== 64 || !/^[0-9a-f]+$/.test(tok)) return null;
+  const hit = robertCache.get(tok);
+  if (hit && workspaces.get(hit.ws)) return hit;
+  for (const w of workspaces.list(true)) {
+    for (const role of ["rw", "ro"] as const) {
+      if (tokenOk(tok, robertToken(w.id, role))) {
+        const s = { ws: w.id, role };
+        robertCache.set(tok, s);
+        return s;
+      }
+    }
+  }
+  return null;
+}
+type RobertGate = (req: express.Request, rb: RobertScope) => boolean;
+let robertGate: RobertGate = () => false; // fail closed until api.ts installs the real one
+export function setRobertGate(fn: RobertGate): void {
+  robertGate = fn;
+}
+/** The operator, or the rw Robert of `wsId` — for handlers that check a privilege inline. */
+export function operatorOrRobertOf(req: express.Request, wsId: string | null | undefined): boolean {
+  if (tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return true;
+  const rb = robertScopeOf(req.get("x-mc-admin"));
+  return !!rb && rb.role === "rw" && !!wsId && rb.ws === wsId && forwardedHost(req) === null;
 }
 
 /**
@@ -59,7 +104,7 @@ export function operatorMayCloseTerminal(req: express.Request, res: express.Resp
 // closing the loopback-reachable gap where an agent sandboxed for workspace A could otherwise
 // reach workspace B's tickets/jobs/sessions/runs/attachments/reviews. The admin token (dashboard)
 // and requests presenting neither header stay unrestricted, same as before this ticket.
-export type CallerScope = { ws: string | null } | null; // { ws: null } = admin/unrestricted; null = invalid token
+export type CallerScope = { ws: string | null; robert?: RobertRole } | null; // { ws: null } = admin/unrestricted; null = invalid token
 
 // ───────────────────── tokenless requests: the hole in the wall, being closed ─────────────────────
 // "No token from this Mac = the operator" let ANY local process — every sandboxed agent included —
@@ -97,6 +142,7 @@ function noteTokenless(req: express.Request): void {
 /** True when the request names no identity the daemon can check (a WRONG admin token counts as none). */
 function isTokenless(req: express.Request): boolean {
   if (tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return false;
+  if (robertScopeOf(req.get("x-mc-admin"))) return false;
   return !req.get("x-mc-workspace-token") && !req.get("x-mc-lead");
 }
 /**
@@ -107,6 +153,12 @@ export function tokenlessGate(req: express.Request, res: express.Response, next:
   if (forwardedHost(req) !== null) return next();
   // A header is a claim, not an identity: a workspace or Lead token nobody issued is refused outright
   // (any mode) — otherwise `x-mc-lead: x` walked past this gate onto every unscoped route.
+  // A read-only Robert (Telegram's) reads, and only reads — his writes are proposals the operator taps.
+  const rbo = robertScopeOf(req.get("x-mc-admin"));
+  if (rbo?.role === "ro" && req.method !== "GET" && req.method !== "HEAD") {
+    res.status(403).json({ error: "read-only Robert: propose it, the operator confirms" });
+    return;
+  }
   if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) {
     const ws = req.get("x-mc-workspace-token");
     if (ws && !workspaces.getByToken(ws)) { res.status(401).json({ error: "invalid workspace token" }); return; }
@@ -129,6 +181,10 @@ export function callerScope(req: express.Request): CallerScope {
   // "no token on loopback = the operator" rule below: that rule is about THIS Mac's processes.
   const forwarded = forwardedHost(req) !== null;
   if (!forwarded && tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return { ws: null };
+  if (!forwarded) {
+    const rb = robertScopeOf(req.get("x-mc-admin"));
+    if (rb) return { ws: rb.ws, robert: rb.role };
+  }
   const tok = req.get("x-mc-workspace-token");
   // `Origin: null` is a sandboxed iframe (an artifact page, src/artifacts.ts) or a file:// page — a
   // browser context, never one of this Mac's own processes, so it never gets the tokenless pass.
@@ -164,6 +220,7 @@ export function leadScope(req: express.Request): LeadScope {
 export function spawnRefusal(scope: CallerScope, lead: LeadScope): string | null {
   if (scope === null) return "invalid workspace token";
   if (scope.ws === null) return null;
+  if (scope.robert === "rw") return null; // his own workspace: POST /sessions pins workspace_id to scope.ws
   if (lead && lead.ws === scope.ws) return null;
   return "only a Lead, Robert or the operator opens terminals — need more hands? `mc ask-robert`";
 }

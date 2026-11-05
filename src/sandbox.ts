@@ -165,10 +165,16 @@ export function buildProfile(
   // After everything, the re-grants included: no cwd, add-dir or sandbox_allow opens Chronos's own
   // host-link state (config.ts → sandbox.sealed).
   const seal = [rule("deny", "file-read*", sealed), rule("deny", "file-write*", sealed)];
-  const own = [cwd, ...addDirs];
+  // The session's own Claude profile is always its own, even when another workspace's account
+  // shares the same dir (its transcripts are written there).
+  const own = [cwd, ...addDirs, configDir].filter(Boolean) as string[];
   // Static protected project dirs + dynamic per-workspace isolation deny (other workspaces' roots).
   // `own` is re-granted after, so a job scoped INTO its own repo still works.
-  const projectDeny = [...projectDirs, ...denyDirs];
+  const projectDeny = [...projectDirs, ...denyDirs].filter((d) => !own.includes(d));
+  // …except another workspace's place NESTED inside one of ours (its notes under the Chronos
+  // checkout, say): re-denied after the re-grant, or `own` would open it right back up.
+  const nested = projectDeny.filter((d) => own.some((o) => d.startsWith(o.endsWith("/") ? o : o + "/")));
+  const reDeny = nested.length ? [rule("deny", "file-read*", nested), rule("deny", "file-write*", nested)] : [];
 
   if (mode === "guard") {
     // Run normally, but deny other project dirs (yield to own cwd) and secrets (absolute).
@@ -179,6 +185,7 @@ export function buildProfile(
       rule("deny", "file-write*", projectDeny),
       rule("allow", "file-read*", own),
       rule("allow", "file-write*", own),
+      ...reDeny,
       ...readonlyRules(readonlyDirs, addDirs),
       rule("deny", "file-read*", secrets),
       rule("deny", "file-write*", secrets),
@@ -217,6 +224,7 @@ export function buildProfile(
     ...readonlyRules(readonlyDirs, addDirs),
     rule("deny", "file-read*", projectDeny),
     rule("allow", "file-read*", [...own, ...readonlyDirs]),
+    ...reDeny,
     rule("deny", "file-read*", secrets),
     rule("deny", "file-write*", secrets),
     // Same re-grant as guard, last for the same reason. Without it a strict workspace could never

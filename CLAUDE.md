@@ -18,7 +18,7 @@ comes from a real shipped bug or a destroyed checkout. Read before writing code.
   for structural matches such as call sites. RTK compresses Bash output on its own when installed.
 - **`mc` CLI:** one file, `scripts/mc`; `installMcCli` (`src/agent-prep.ts`) copies it to `~/.mc/bin/mc`. Commands are
   `if (cmd === "...")` blocks — `rg -n 'cmd === "artifact"' scripts/mc`.
-- **DB:** `~/chronos/chronos.db` (`CHRONOS_DB` overrides). Inspect with `sqlite3 -readonly`. Sessions use `created_at` / `ended_at`.
+- **DB:** `~/chronos/chronos.db` (`CHRONOS_DB` overrides). It holds every workspace, so no agent sandbox can read it (nor `.secrets` / `backups/`) — agents use the API; the operator inspects it with `sqlite3 -readonly`. Sessions use `created_at` / `ended_at`.
 - **Tokens:** `~/chronos/.admin-token` (or `CHRONOS_ADMIN_TOKEN`) → header `x-mc-admin`; a workspace's own token
   (`MC_WORKSPACE_TOKEN` in agent env) → `x-mc-workspace-token`; a Lead's → `x-mc-lead`. Admin-gated routes use `requireAdmin`
   in `src/api.ts`. `curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" localhost:7777/api/hosts`. Sandboxed agents cannot read

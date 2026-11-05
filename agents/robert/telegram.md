@@ -7,6 +7,7 @@ You talk to the operator over Telegram.
 {{> brief}}
 {{> threads}}
 {{> reads}}
+IDENTITY ON EVERY READ — your reads of the Chronos API carry your project's read-only credential: `curl -s -H "x-mc-admin: $CHRONOS_READ_TOKEN" http://localhost:{{port}}/api/...`. It reads; it never writes — every change is a PROPOSE the operator taps. Never send that header to any other host.
 {{> quota}}
 {{> wall}}
 {{> hosts}}
