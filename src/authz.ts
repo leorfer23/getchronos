@@ -60,6 +60,61 @@ export function operatorMayCloseTerminal(req: express.Request, res: express.Resp
 // reach workspace B's tickets/jobs/sessions/runs/attachments/reviews. The admin token (dashboard)
 // and requests presenting neither header stay unrestricted, same as before this ticket.
 export type CallerScope = { ws: string | null } | null; // { ws: null } = admin/unrestricted; null = invalid token
+
+// ───────────────────── tokenless requests: the hole in the wall, being closed ─────────────────────
+// "No token from this Mac = the operator" let ANY local process — every sandboxed agent included —
+// reach every workspace by leaving its token off a curl. Workspaces never mix, so a request now has
+// to say who it is. Rolled out in three modes (CHRONOS_TOKENLESS): `allow` (old behaviour), `log`
+// (allow, but record every caller so nothing legitimate breaks when it flips), `deny` (refused).
+
+/** Paths a caller may reach with no token at all: liveness, the push key, webhooks with their own secret. */
+const TOKENLESS_PUBLIC = [/^\/health$/, /^\/push\/vapid$/, /^\/triggers\/hook\/[^/]+$/];
+export type TokenlessSeen = { method: string; path: string; ua: string; n: number; first: string; last: string };
+const tokenlessSeen = new Map<string, TokenlessSeen>();
+const idSeg = (seg: string) => (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(seg) || /^[0-9a-f]{8,}$/i.test(seg) || /^\d+$/.test(seg) ? ":id" : seg);
+export function tokenlessMode(): "allow" | "log" | "deny" {
+  const m = String(process.env.CHRONOS_TOKENLESS ?? CONFIG.tokenlessMode ?? "log").toLowerCase();
+  return m === "allow" || m === "deny" ? m : "log";
+}
+/** Who called with no token, grouped by route shape and client (GET /api/authz/tokenless). */
+export function tokenlessReport(): TokenlessSeen[] {
+  return [...tokenlessSeen.values()].sort((a, b) => b.n - a.n);
+}
+export function resetTokenless(): void {
+  tokenlessSeen.clear();
+}
+function noteTokenless(req: express.Request): void {
+  const p = (req.path || "/").split("/").map(idSeg).join("/");
+  const ua = String(req.get("user-agent") ?? "-").slice(0, 80);
+  const key = `${req.method} ${p} ${ua}`;
+  const now = new Date().toISOString();
+  const cur = tokenlessSeen.get(key);
+  if (cur) { cur.n++; cur.last = now; return; }
+  if (tokenlessSeen.size >= 500) return; // bounded: a flood of shapes is not worth more memory
+  tokenlessSeen.set(key, { method: req.method, path: p, ua, n: 1, first: now, last: now });
+  console.warn(`[authz] tokenless request: ${req.method} /api${p} (${ua})${tokenlessMode() === "deny" ? " — refused" : ""}`);
+}
+/** True when the request names no identity the daemon can check (a WRONG admin token counts as none). */
+function isTokenless(req: express.Request): boolean {
+  if (tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return false;
+  return !req.get("x-mc-workspace-token") && !req.get("x-mc-lead");
+}
+/**
+ * Mounted on the whole API, right after forwardedGate. Forwarded host requests are already never
+ * trusted (callerScope); everything else without a token is recorded, and refused in `deny` mode.
+ */
+export function tokenlessGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (forwardedHost(req) !== null || !isTokenless(req)) return next();
+  if (TOKENLESS_PUBLIC.some((re) => re.test(req.path))) return next();
+  const mode = tokenlessMode();
+  if (mode === "allow") return next();
+  noteTokenless(req);
+  if (mode === "deny") {
+    res.status(401).json({ error: "token required — x-mc-admin (operator/Robert) or x-mc-workspace-token (agents)" });
+    return;
+  }
+  next();
+}
 export function callerScope(req: express.Request): CallerScope {
   // A request an agent on ANOTHER computer made through its host's forwarder (HOSTS.md → `mc` on a
   // host). It arrives on loopback because the brain replays it there, and it must never inherit the
@@ -69,7 +124,11 @@ export function callerScope(req: express.Request): CallerScope {
   const tok = req.get("x-mc-workspace-token");
   // `Origin: null` is a sandboxed iframe (an artifact page, src/artifacts.ts) or a file:// page — a
   // browser context, never one of this Mac's own processes, so it never gets the tokenless pass.
-  if (!tok) return forwarded || req.get("origin") === "null" ? null : { ws: null };
+  if (!tok) {
+    if (forwarded || req.get("origin") === "null") return null;
+    // A wrong admin token or none at all: unrestricted only while the rollout allows it (tokenlessGate).
+    return tokenlessMode() === "deny" ? null : { ws: null };
+  }
   const w = workspaces.getByToken(tok);
   return w ? { ws: w.id } : null;
 }

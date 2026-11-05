@@ -262,6 +262,8 @@ export const CONFIG = {
   worklog: (process.env.CHRONOS_WORKLOG ?? "1") !== "0",
   // How many "## Recently" lines a brief keeps. Older ones roll off — the ledger still has them.
   briefRecentlyMax: Number(process.env.CHRONOS_BRIEF_RECENTLY_MAX ?? 12),
+  // Requests with no token (authz.ts tokenlessGate): allow | log | deny. `log` records every caller.
+  tokenlessMode: process.env.CHRONOS_TOKENLESS ?? "log",
   // POST /tickets/:id/push-comment refuses (no-send.ts): no agent posts comments. Tests flip it.
   noSendComments: process.env.CHRONOS_NO_SEND_COMMENTS !== "0",
   // How many open "## Next" items a brief keeps. The oldest roll off — every one is still in the
