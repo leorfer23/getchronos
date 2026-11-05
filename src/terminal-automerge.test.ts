@@ -1,13 +1,21 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { harvestSessionPrs, pollSessionPrs, recordSessionPrs, setGh } from "./terminal-automerge.js";
-import { sessions, sessionPrs, workspaces } from "./store.js";
+import { repos, sessions, sessionPrs, workspaces } from "./store.js";
+import { clearPrOwnershipCache, setRemoteReader } from "./pr-ownership.js";
 
 after(() => setGh(null));
 
 const rnd = () => Math.random().toString(36).slice(2, 8);
-const mkWs = (on: boolean) =>
-  workspaces.create({ slug: `am-${rnd()}`, name: "am", config_dir: "/tmp/cfg", auto_merge_prs: on } as any);
+setRemoteReader(() => null);
+after(() => setRemoteReader(null));
+/** A workspace that owns acme/repo — the wall (pr-ownership.ts) only tracks a workspace's own repos. */
+const mkWs = (on: boolean) => {
+  const w = workspaces.create({ slug: `am-${rnd()}`, name: "am", config_dir: "/tmp/cfg", auto_merge_prs: on } as any);
+  repos.create({ workspace_id: w.id, name: "repo", path: "/tmp/acme-repo", git_remote: "https://github.com/acme/repo.git" } as any);
+  clearPrOwnershipCache();
+  return w;
+};
 const prUrl = () => `https://github.com/acme/repo/pull/${Math.floor(Math.random() * 1e6)}`;
 
 type View = { state: string; isDraft?: boolean; author?: string; createdAt?: string; checks?: any[] | null };
@@ -148,4 +156,26 @@ test("no auto-merge: records review, draft and title; no CI after the grace is r
   assert.equal(b.review_decision, "CHANGES_REQUESTED");
   assert.equal(b.draft, 1);
   assert.equal(b.mergeable, "MERGEABLE");
+});
+
+test("the wall: a PR from another workspace's repo is never tracked, polled or merged here", async () => {
+  const mine = mkWs(true);
+  const other = workspaces.create({ slug: `other-${rnd()}`, name: "other", config_dir: "/tmp/cfg2" } as any);
+  repos.create({ workspace_id: other.id, name: "theirs", path: "/tmp/initech", git_remote: "git@github.com:initech/app.git" } as any);
+  clearPrOwnershipCache();
+  const s = sessions.create({ workspace_id: mine.id, cwd: "/tmp", goal: "x" } as any);
+  const foreign = `https://github.com/initech/app/pull/${Math.floor(Math.random() * 1e6)}`;
+  const stray = `https://github.com/nobody/thing/pull/${Math.floor(Math.random() * 1e6)}`;
+  assert.equal(recordSessionPrs(s, [foreign, stray]), 0, "quoted, not ours: not recorded");
+  assert.equal(sessionPrs.get(foreign), undefined);
+
+  // A row recorded before the wall existed is skipped on its next poll — before any gh call or merge.
+  sessionPrs.record({ url: foreign, session_id: s.id, workspace_id: mine.id, cwd: "/tmp" });
+  const calls: string[][] = [];
+  fakeGh({ [foreign]: { state: "OPEN" } }, calls);
+  const merged = await pollSessionPrs();
+  assert.ok(!merged.includes(foreign));
+  assert.equal(sessionPrs.get(foreign)?.state, "skipped");
+  assert.match(sessionPrs.get(foreign)?.skip_reason ?? "", /not this workspace's: initech\/app belongs to another workspace/);
+  assert.ok(!calls.some((c) => c.includes(foreign)), "never even viewed under this workspace's gh account");
 });

@@ -21,6 +21,7 @@
  * What he may start is bounded by the workspace's Standing orders (briefs.ts): the terminal does the
  * work up to the first thing they say to ask about, and asks there.
  */
+import { randomUUID } from "node:crypto";
 import { CONFIG } from "./config.js";
 import { briefNote, nextItemText, normalizeBrief } from "./briefs.js";
 import { jobHealth } from "./job-check.js";
@@ -124,7 +125,33 @@ export function changed(before: string[], now: string[]): string[] {
   return now.filter((l) => !was.has(l));
 }
 
-export function selfwakeSay(ws: Pick<Workspace, "id" | "name">, fresh: string[], total: number): string {
+/**
+ * A self-wake's one-time ticket. The terminal it may open is bound to the workspace the wake was
+ * for: Robert holds the admin token, and without this a look at one client could open a terminal —
+ * carrying that client's context — in another (the wall). Single use, expires with the look.
+ */
+const TICKET_TTL_MS = 2 * HOUR;
+const ticketKey = (t: string) => `selfwake.ticket.${t}`;
+export function issueTicket(wsId: string, nowMs = Date.now()): string {
+  const t = randomUUID().replace(/-/g, "").slice(0, 16);
+  kv.set(ticketKey(t), JSON.stringify({ ws: wsId, at: nowMs }));
+  return t;
+}
+/** The workspace a ticket was issued for, consuming it; null when unknown, used or expired. */
+export function redeemTicket(t: string | null | undefined, nowMs = Date.now()): string | null {
+  if (!t || !/^[a-f0-9]{16}$/.test(t)) return null;
+  const raw = kv.get(ticketKey(t));
+  if (!raw) return null;
+  kv.del(ticketKey(t));
+  try {
+    const v = JSON.parse(raw) as { ws: string; at: number };
+    return nowMs - v.at <= TICKET_TTL_MS ? v.ws : null;
+  } catch {
+    return null;
+  }
+}
+
+export function selfwakeSay(ws: Pick<Workspace, "id" | "name">, fresh: string[], total: number, ticket = "<ticket>"): string {
   const shown = fresh.slice(0, 15);
   return (
     `SELF-WAKE · ${ws.name} — nothing is working here, and since your last look this is new ` +
@@ -133,7 +160,7 @@ export function selfwakeSay(ws: Pick<Workspace, "id" | "name">, fresh: string[],
     `\n\nNobody asked you. Decide ONE move, or none — this workspace's brief (goals, Standing orders, Next) is above:\n` +
     `- START: one change above (or one Next item) has a concrete next step the operator would want started without ` +
     `being asked → open ONE terminal: \`curl -s -X POST http://localhost:${CONFIG.port}/api/robert/proactive ` +
-    `-H "x-mc-admin: $CHRONOS_ADMIN" -H "content-type: application/json" -d '{"workspace_id":"${ws.id}",` +
+    `-H "x-mc-admin: $CHRONOS_ADMIN" -H "content-type: application/json" -d '{"workspace_id":"${ws.id}","ticket":"${ticket}",` +
     `"goal":"<one finish line>","description":"<why now, where to look, which Standing orders apply>"}'\`. ` +
     `Its goal does the work up to the first thing the Standing orders say to ask about, and asks him in that ` +
     `terminal. Drafts, never sends. The daemon refuses past its caps; a refusal is final for this look.\n` +
@@ -197,14 +224,14 @@ export function selfwakeOnce(ws: Workspace, nowMs = Date.now()): string | null {
     key: `${SELFWAKE_KEY}${ws.id}`,
     subject: null,
     workspace_id: ws.id,
-    payload: { say: selfwakeSay(ws, fresh, now.length), fresh: fresh.length },
+    payload: { say: selfwakeSay(ws, fresh, now.length, issueTicket(ws.id, nowMs)), fresh: fresh.length },
   });
   return null;
 }
 
 // ──────────────────────────── the one move: open a terminal ────────────────────────────
 
-export type ProactiveOpen = { workspace_id: string; goal: string; description?: string | null };
+export type ProactiveOpen = { workspace_id: string; ticket?: string | null; goal: string; description?: string | null };
 export type Opener = (opts: Parameters<typeof import("./terminal.js").openSession>[0]) => Promise<{ id: string }>;
 /** A gate from outside (the engagement score) — true = this kind may open here now. */
 export type Allowed = (kind: string, wsId: string, nowMs: number) => boolean;
@@ -221,6 +248,9 @@ export async function openProactive(
   const nowMs = opts.nowMs ?? Date.now();
   const ws = workspaces.get(req.workspace_id) ?? workspaces.list().find((w) => w.slug === req.workspace_id);
   if (!ws || ws.archived) return { ok: false, status: 404, error: "workspace not found" };
+  // Only the look that was FOR this workspace may open here (issueTicket): never across the wall.
+  const ticketWs = redeemTicket(req.ticket, nowMs);
+  if (ticketWs !== ws.id) return { ok: false, status: 403, error: "no valid self-wake ticket for this workspace" };
   if (!settingOn("robert.proactive", ws.id)) return { ok: false, status: 409, error: "proactive work is off for this workspace" };
   const cap = capRefusal(ws.id, nowMs);
   if (cap) return { ok: false, status: 429, error: cap };
