@@ -192,7 +192,7 @@ export function shipBrief(wsName: string, rows: SessionPr[], orders: string | nu
       : `## Standing orders\nThis workspace's brief has no "Standing orders" section — there are no after-merge steps. Do not deploy anything unless he tells you how in this terminal.`,
     "",
     "## Protocol — follow it exactly",
-    "1. Prepare, change nothing. For each PR: `gh pr view <url> --json state,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup` and `gh pr diff <url>`. Write 1–3 lines per PR on what it changes, and anything that would stop a merge (conflicts, red CI, changes requested). A PR already merged or closed: say so and drop it.",
+    "1. Prepare, change nothing. For each PR: `mc pr checks <url>` (state, review, mergeable, every CI check) and `gh pr diff <url>`. Write 1–3 lines per PR on what it changes, and anything that would stop a merge (conflicts, red CI, changes requested). A PR already merged or closed: say so and drop it.",
     "2. Ask the operator ONE question in this terminal, with your recommendation — say what you will do on yes (merge only, or merge and the deploy the Standing orders describe):",
     '   `mc ask-robert "¿Mergeo y deployo #264 y #266? Recomiendo sí: CI verde, sin conflictos." --options "sí,no,más tarde" --operator --wait 0`',
     "   Then end your turn with the per-PR lines and the question as the last thing on screen. He answers by typing here.",

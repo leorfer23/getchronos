@@ -5,6 +5,7 @@ import { workspaces } from "./store.js";
 import { buildProfile, ensureWsTicketsDir, workspaceSandboxAllow } from "./sandbox.js";
 import { clampSandbox } from "./spawn-guard.js";
 import { worktreeRootFor } from "./worktree-core.js";
+import { operatorGhDir } from "./gh-env.js";
 
 /**
  * The Seatbelt profile for a CLI the operator starts by hand (`claude-<client>` in a plain terminal),
@@ -38,8 +39,11 @@ export function launcherProfile(workspaceId: string, configDir: string): string 
     ...DEFAULT_PROFILE_HISTORY.map((p) => path.join(defaultDir, p)),
     path.join(os.homedir(), ".claude.json"),
   ];
+  // The operator's own gh login stays readable here: he started this CLI in his own shell, which
+  // carries no workspace token (a Desk terminal of a token workspace gets its token instead).
+  const opGh = operatorGhDir();
   const deny = [
-    ...new Set(workspaces.isolationDenyDirs(ws.id).flatMap((p) => [p, worktreeRootFor(p)])),
+    ...new Set(workspaces.isolationDenyDirs(ws.id).filter((p) => p !== opGh).flatMap((p) => [p, worktreeRootFor(p)])),
     ...otherProfiles,
     ...defaultHistory,
   ];

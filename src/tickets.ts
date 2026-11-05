@@ -1197,7 +1197,7 @@ async function dispatchCiFixRaw(id: string): Promise<{ job_id: string; run_id?: 
     `PR: ${t.pr_url}\n` +
     `You are on the PR's branch "${branch}". Steps:\n` +
     `1. \`git pull --rebase\` to get the latest branch state.\n` +
-    `2. Inspect the failure: \`gh pr checks ${t.pr_url}\` lists the checks; \`gh run view --log-failed\` (or the failing run's URL) shows why. Read the actual error, don't guess.\n` +
+    `2. Inspect the failure: \`mc pr checks ${t.pr_url}\` lists the checks; \`gh run view --log-failed\` (or the failing run's URL) shows why. Read the actual error, don't guess.\n` +
     `3. Fix the root cause in the code. Run the repo's checks locally to confirm green before pushing.\n` +
     `4. Commit and \`git push\` to the SAME branch — do NOT open a new PR; the push re-triggers CI on the existing one.\n` +
     `5. Append a timestamped note under "## Work log" of the ticket file describing the fix.\n` +
@@ -1269,7 +1269,7 @@ async function dispatchMergeGateRaw(id: string): Promise<{ job_id: string; run_i
     `could not see:\n` +
     `1. \`git pull --rebase\` — then check whether ${repo.default_branch} moved underneath this branch and whether ` +
     `the change still makes sense against it. Report conflicts rather than forcing past them.\n` +
-    `2. \`gh pr checks ${t.pr_url}\` — if any check is red, that is blocking.\n` +
+    `2. \`mc pr checks ${t.pr_url}\` — if any check is red, that is blocking.\n` +
     `3. \`gh pr diff ${t.pr_url}\` — read the final diff. Does it do what ${t.key} asked, and nothing else? ` +
     `Watch for debug leftovers, absolute paths from this machine, secrets, and files that should not be committed.\n` +
     `${gateHint}` +

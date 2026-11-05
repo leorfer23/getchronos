@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Workspace } from "./types.js";
 import { parseEnvFile } from "./env-file.js";
 import { workspaceVars } from "./store/workspace-vars.js";
+import { stripOwnToken, withOwnGhDir } from "./gh-env.js";
 
 // Re-exported for the ~few call sites that already imported it from here. The parser itself lives
 // in env-file.ts — this module reads the store, and boot must not pull the store in that early.
@@ -60,5 +61,17 @@ export function childEnv(ws: Workspace | null | undefined): NodeJS.ProcessEnv {
   }
   if (ws.git_name) { env.GIT_AUTHOR_NAME = ws.git_name; env.GIT_COMMITTER_NAME = ws.git_name; }
   if (ws.git_email) { env.GIT_AUTHOR_EMAIL = ws.git_email; env.GIT_COMMITTER_EMAIL = ws.git_email; }
-  return env;
+  // A workspace with its own GitHub token reads gh's config from its own dir: the operator's
+  // (~/.config/gh) is denied to it (gh-env.ts).
+  return withOwnGhDir(env, ws.slug);
+}
+
+/**
+ * The env the DAEMON (not an agent) reads a workspace's PR state and CI with. Fine-grained tokens
+ * cannot read check runs, so this drops the workspace's token and reads with the operator's login.
+ * Writes (push, PR create, merge) keep the workspace's own credential: use childEnv for those.
+ */
+export function ghReadEnv(ws: Workspace | null | undefined): NodeJS.ProcessEnv {
+  const env = childEnv(ws);
+  return ws ? stripOwnToken(env, ws.slug) : env;
 }

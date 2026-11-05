@@ -61,6 +61,7 @@ import { launcherProfile } from "./launcher-sandbox.js";
 import { jobCreateSpawnError, jobPatchSpawnError } from "./spawn-guard.js";
 import { approve, merge, requestChanges, dismiss, dispatchReview, applyVerdict, ensureReviewForTicket } from "./reviews.js";
 import { isPrUrl, mergePrForTicket } from "./delivery.js";
+import { prChecks } from "./pr-checks.js";
 import { deployStatus, queueSelfDeployManual, readPending } from "./self-deploy.js";
 import { operationalHealth } from "./operational-health.js";
 import { gateMode, quotaSnapshot, recentDecisions } from "./quota-gate.js";
@@ -585,6 +586,21 @@ export function startServer() {
     } catch (e: any) {
       res.status(500).json({ error: String(e?.message ?? e) });
     }
+  });
+
+  // `mc pr checks <url>`: a PR's state and CI for an agent whose workspace runs on a fine-grained
+  // GitHub token (no Checks permission exists for those). Only a PR of the caller's own workspace.
+  api.get("/prs/checks", async (req, res) => {
+    const scope = callerScope(req);
+    if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    const wsKey = scope.ws ?? (typeof req.query.workspace === "string" ? req.query.workspace : null);
+    if (!wsKey) return res.status(400).json({ error: "workspace required (?workspace=<id|slug>)" });
+    const ws = workspaces.get(wsKey) ?? workspaces.getBySlug(wsKey);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+    const r = await prChecks(ws, String(req.query.url ?? ""));
+    if (!r.ok) return res.status(r.status).json({ error: r.error });
+    const { ok: _ok, ...body } = r;
+    res.json(body);
   });
 
   // Repos the Cursor GitHub App can see for this workspace — the spawn picker's disable/tooltip

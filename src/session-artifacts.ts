@@ -24,7 +24,7 @@
  */
 import os from "node:os";
 import { execFileTimed } from "./exec.js";
-import { childEnv } from "./child-env.js";
+import { ghReadEnv } from "./child-env.js";
 import { artifacts, repos, tickets, workspaces } from "./store.js";
 import { ciRollup } from "./delivery.js";
 import type { FocusEvent } from "./focus.js";
@@ -254,7 +254,7 @@ export async function sessionArtifacts(s: Session, events: FocusEvent[], onScree
     const ws = s.workspace_id ? workspaces.get(s.workspace_id) : undefined;
     const states = await prStates(lookup.map((p) => p.url), {
       cwd: repo?.path || s.cwd || os.homedir(),
-      env: childEnv(ws),
+      env: ghReadEnv(ws), // a read: see child-env.ts ghReadEnv
     });
     for (const p of lookup) {
       const st = states.get(p.url);

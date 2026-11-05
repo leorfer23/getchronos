@@ -24,6 +24,7 @@ import { agentDef, agentPrompt } from "../agent-defs.js";
 import { widgetPromptBlock } from "../widgets/index.js";
 import { askLine, commitTurn, resolveTurnSmart, type Route } from "../thread-router.js";
 import { robertToken } from "../authz.js";
+import { childEnv } from "../child-env.js";
 import { send, sendChatAction, esc } from "./api.js";
 import { kb, type Btn } from "./keyboards.js";
 import { getActiveExec } from "./active-exec.js";
@@ -973,6 +974,10 @@ type WarmOpts = {
   denyDirs?: string[];
   /** Extra dirs it may read and write (a project's Robert: his own home, ~/.mc/robert/<slug>). */
   addDirs?: string[];
+  /** The env he starts from. Absent → the daemon's own (the fleet-wide Robert). A project's Robert
+   *  gets his workspace's (childEnv, like its terminals): its own GitHub token, none of the daemon's
+   *  secrets (bot tokens, relay, tunnel credentials). */
+  baseEnv?: NodeJS.ProcessEnv;
   // JSON for --mcp-config (AgentDef.mcp). Absent → --strict-mcp-config with nothing to load, i.e.
   // no MCP servers at all, which is what every executive got before agents could declare a bundle.
   mcpConfig?: string;
@@ -1064,7 +1069,7 @@ export class WarmManager {
     );
     const child = spawn(cmd, cmdArgs, {
       cwd,
-      env: { ...process.env, CLAUDE_CONFIG_DIR: profileDir, ...(this.opts.extraEnv ?? {}) },
+      env: { ...(this.opts.baseEnv ?? process.env), CLAUDE_CONFIG_DIR: profileDir, ...(this.opts.extraEnv ?? {}) },
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child = child;
@@ -1484,13 +1489,13 @@ export const VOICE_TURN =
  * dir of his own — never the daemon's checkout, which holds every client), walled off from every
  * other workspace's repos, notes, tickets and Claude transcripts like any of his workspace's agents.
  */
-export function robertSandbox(wsId: string | null | undefined): { cwd?: string; addDirs?: string[]; denyDirs?: string[] } {
+export function robertSandbox(wsId: string | null | undefined): { cwd?: string; addDirs?: string[]; denyDirs?: string[]; baseEnv?: NodeJS.ProcessEnv } {
   if (!wsId) return {};
   const w = workspaces.get(wsId);
   let cwd = w?.default_dir && fs.existsSync(w.default_dir) ? w.default_dir : null;
   const home = robertHome(wsId);
   if (!cwd) cwd = home;
-  return { cwd, addDirs: [home], denyDirs: workspaces.isolationDenyDirs(wsId) };
+  return { cwd, addDirs: [home], denyDirs: workspaces.isolationDenyDirs(wsId), baseEnv: childEnv(w) };
 }
 
 /** ~/.mc/robert/<slug>: a project's Robert's own dir — the files handed to his turns land here. */

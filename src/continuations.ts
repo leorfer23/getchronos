@@ -52,7 +52,7 @@ import os from "node:os";
 import { CONFIG } from "./config.js";
 import { bus } from "./bus.js";
 import { desktop } from "./notify.js";
-import { childEnv } from "./child-env.js";
+import { childEnv, ghReadEnv } from "./child-env.js";
 import { execFileTimed } from "./exec.js";
 import { dispatch } from "./dispatcher.js";
 import { baseJobName } from "./job-name.js";
@@ -372,7 +372,8 @@ export function setViewPr(fn: ViewPrFn | null): void {
 function ghContext(wsId: string): { cwd: string; env: NodeJS.ProcessEnv } {
   const ws = workspaces.get(wsId);
   const repo = repos.list(wsId).find((r) => r.path && fs.existsSync(r.path));
-  return { cwd: repo?.path || ws?.default_dir || os.homedir(), env: childEnv(ws) };
+  // Reads only (state, reviews, CI): the operator's login — a workspace's fine-grained token cannot read check runs.
+  return { cwd: repo?.path || ws?.default_dir || os.homedir(), env: ghReadEnv(ws) };
 }
 
 /** The snapshot every later look is compared against. Best effort: no gh, no baseline (= "from zero"). */
