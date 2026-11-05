@@ -467,8 +467,9 @@ if let s = ProcessInfo.processInfo.environment["MC_APP_TEST_WEDGE"], let secs = 
 // A Spotlight-style panel over whatever app is in front (static/bar.html): ask Robert, or send what
 // is on screen to a new terminal in the workspace it belongs to (src/capture.ts). Three ways in, one
 // panel:
-//   · the hotkey (⌘⇧Space; `defaults write sh.chronos.app barHotkey "ctrl+opt+space"`, "off" = none) —
-//     carries what was copied in the last two minutes; pressed again while the panel is up, it talks;
+//   · the trigger — a tap of the right ⌘ on its own, or ⌥⇧Space (`defaults write sh.chronos.app
+//     barHotkey "rcmd, ctrl+opt+space"`; "off" = none) — carries what was copied in the last two
+//     minutes; pressed again while the panel is up, it talks;
 //   · Services → "Send to Chronos" on selected text or a file, in any app that offers Services;
 //   · chronos://capture?text=…&url=…&file=… — Shot's "Send to Chronos", or anything else on this Mac.
 // It is a non-activating panel: the app in front stays in front (and stays what the capture names),
@@ -637,15 +638,10 @@ final class Bar: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NSWindo
     "org.mozilla.firefox", "com.apple.Safari", "com.brave.Browser", "company.thebrowser.Browser", "com.microsoft.edgemac",
   ]
 
-  func axTrusted() -> Bool {
-    if AXIsProcessTrusted() { return true }
-    if !UserDefaults.standard.bool(forKey: "barAskedAccessibility") {
-      UserDefaults.standard.set(true, forKey: "barAskedAccessibility")
-      let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-      return AXIsProcessTrustedWithOptions(opts)
-    }
-    return false
-  }
+  // Never asks from here: a permission dialog over the panel takes its focus and the panel closes on
+  // the spot — which is exactly how the first ⌘⇧Space ever pressed looked like "nothing happens".
+  // The ask happens once at launch instead (see the triggers at the bottom of this file).
+  func axTrusted() -> Bool { AXIsProcessTrusted() }
 
   func axAttr(_ el: AXUIElement, _ name: String) -> CFTypeRef? {
     var out: CFTypeRef?
@@ -775,7 +771,13 @@ let urlHandler = URLHandler()
 NSAppleEventManager.shared().setEventHandler(urlHandler, andSelector: #selector(URLHandler.handle(_:reply:)),
                                              forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
 
-// "cmd+shift+space", "ctrl+opt+k", … or "off". Carbon's RegisterEventHotKey needs no Accessibility grant.
+// What opens the bar: a comma-separated list in `barHotkey` (or MC_BAR_HOTKEY), default
+// "rcmd, opt+shift+space":
+//   · a combination — "opt+shift+space", "ctrl+opt+k" — is a Carbon RegisterEventHotKey: no permission
+//     needed, but the first app to register a combination owns it, silently (⌘⇧Space is 1Password's);
+//   · "rcmd" / "ropt" — a TAP of the right ⌘ / ⌥ on its own: pressed and released within 350ms with no
+//     other key, click or modifier in between, so ⌘C typed with the right hand never opens anything.
+//     It is read from a global event monitor, which macOS only feeds once Chronos has Accessibility.
 func parseHotkey(_ spec: String) -> (UInt32, UInt32)? {
   let parts = spec.lowercased().split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces) }
   guard let key = parts.last, parts.count >= 2 else { return nil }
@@ -802,11 +804,46 @@ func parseHotkey(_ spec: String) -> (UInt32, UInt32)? {
   guard let c = code, mods != 0 else { return nil }
   return (UInt32(c), mods)
 }
+
+/// A tap of one modifier key on its own. Fed every flagsChanged / keyDown / mouse-down this app sees.
+final class ModifierTap {
+  let keyCode: UInt16
+  let flag: NSEvent.ModifierFlags
+  let fire: () -> Void
+  var downAt: TimeInterval?
+  var clean = false
+  init(keyCode: Int, flag: NSEvent.ModifierFlags, fire: @escaping () -> Void) {
+    self.keyCode = UInt16(keyCode); self.flag = flag; self.fire = fire
+  }
+  func handle(_ e: NSEvent) {
+    guard e.type == .flagsChanged else { clean = false; return }
+    let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function, .help])
+    guard e.keyCode == keyCode else { clean = false; return }
+    if mods.contains(flag) {
+      clean = mods == flag // the only modifier down
+      downAt = e.timestamp
+    } else if let d = downAt {
+      if clean && e.timestamp - d < 0.35 { fire() }
+      downAt = nil
+      clean = false
+    }
+  }
+}
+
 var barHotKeyRef: EventHotKeyRef?
+var barTaps: [ModifierTap] = []
+var barMonitors: [Any] = []
 let hotkeySpec = ProcessInfo.processInfo.environment["MC_BAR_HOTKEY"]
-  ?? UserDefaults.standard.string(forKey: "barHotkey") ?? "cmd+shift+space"
-if hotkeySpec.lowercased() != "off" {
-  if let (code, mods) = parseHotkey(hotkeySpec) {
+  ?? UserDefaults.standard.string(forKey: "barHotkey") ?? "rcmd, opt+shift+space"
+func barLog(_ s: String) { FileHandle.standardError.write(("[mc-app] " + s + "\n").data(using: .utf8)!) }
+
+for item in hotkeySpec.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces).lowercased() }) where !item.isEmpty && item != "off" {
+  switch item {
+  case "rcmd": barTaps.append(ModifierTap(keyCode: kVK_RightCommand, flag: .command) { bar.hotkey() })
+  case "ropt": barTaps.append(ModifierTap(keyCode: kVK_RightOption, flag: .option) { bar.hotkey() })
+  default:
+    guard barHotKeyRef == nil else { barLog("bar hotkey \"\(item)\" ignored — one combination at a time"); continue }
+    guard let (code, mods) = parseHotkey(item) else { barLog("bar hotkey \"\(item)\" not understood — e.g. rcmd, opt+shift+space"); continue }
     var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
     InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
       DispatchQueue.main.async { bar.hotkey() }
@@ -814,9 +851,26 @@ if hotkeySpec.lowercased() != "off" {
     }, 1, &spec, nil, nil)
     let id = EventHotKeyID(signature: OSType(0x4D434252), id: 1) // 'MCBR'
     let st = RegisterEventHotKey(code, mods, id, GetApplicationEventTarget(), 0, &barHotKeyRef)
-    if st != noErr { FileHandle.standardError.write("[mc-app] bar hotkey \(hotkeySpec) not registered (\(st))\n".data(using: .utf8)!) }
-  } else {
-    FileHandle.standardError.write("[mc-app] bar hotkey \"\(hotkeySpec)\" not understood — e.g. cmd+shift+space\n".data(using: .utf8)!)
+    if st != noErr { barLog("bar hotkey \(item) not registered (\(st))") }
+  }
+}
+
+// A tap is read from event monitors: the global one sees every other app (only with Accessibility),
+// the local one this app's own windows — the Desk and the panel itself, where the tap means "talk".
+if !barTaps.isEmpty {
+  let mask: NSEvent.EventTypeMask = [.flagsChanged, .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+  let feed = { (e: NSEvent) in for t in barTaps { t.handle(e) } }
+  if let g = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: feed) { barMonitors.append(g) }
+  if let l = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { feed($0); return $0 }) { barMonitors.append(l) }
+  // Without Accessibility the global monitor gets nothing: ask once per launch — here, never over the
+  // panel — and say so in the log. A grant given later reaches the running monitor; if it does not,
+  // `launchctl kickstart -k gui/$(id -u)/sh.chronos.app` re-arms it.
+  if !AXIsProcessTrusted() {
+    barLog("the right-⌘ tap needs Accessibility for Chronos (System Settings → Privacy & Security → Accessibility)")
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+      let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+      _ = AXIsProcessTrustedWithOptions(opts)
+    }
   }
 }
 
