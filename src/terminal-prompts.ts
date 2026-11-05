@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
 import { sessions, workspaces } from "./store.js";
+import { noteOperatorInput } from "./proactive-score.js";
 import type { Session } from "./types.js";
 import type { DeskPrompt, PromptOption } from "./desk-prompt.js";
 import { enqueueWake, TERMINAL_PROMPT_KEY } from "./wake-queue.js";
@@ -303,11 +304,13 @@ export function answerPromptTap(sess8: string, choice: string): { ok: boolean; t
   if (p.kind === "yn") {
     const letter = choice === "y" ? "y" : "n";
     const err = sendInput(s.id, { text: letter, enter: true }, "operator");
+    if (!err) noteOperatorInput(s.id); // his tap on Telegram: engagement (src/proactive-score.ts)
     return err ? { ok: false, text: err } : { ok: true, text: letter };
   }
   const o = p.options?.[Number(choice)];
   if (!o) return { ok: false, text: "that option is no longer on the screen" };
   const err = sendInput(s.id, { keys: keysForOption(o) }, "operator");
+  if (!err) noteOperatorInput(s.id);
   return err ? { ok: false, text: err } : { ok: true, text: o.label };
 }
 

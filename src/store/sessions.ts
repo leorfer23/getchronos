@@ -417,6 +417,10 @@ export const sessions = {
     params.push(id);
     db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id=?`).run(...params);
   },
+  /** The operator's own input reached this terminal `n` more times, the last at `atIso` (src/proactive-score.ts). */
+  addOperatorInputs(id: string, n: number, atIso: string) {
+    db.prepare("UPDATE sessions SET operator_inputs = operator_inputs + ?, operator_last_in = ? WHERE id = ?").run(n, atIso, id);
+  },
   // `reason` only when the daemon ended it on purpose (failover). COALESCE: the pty's own onExit
   // ends the row again a moment later with no reason, and must not wipe the one just written.
   end(id: string, reason?: string | null) {

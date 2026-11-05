@@ -2238,6 +2238,27 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       ALTER TABLE session_prs ADD COLUMN ship_session_id TEXT;`),
   },
 
+  {
+    version: 154,
+    name: "sessions operator engagement — did the operator ever type into a terminal the daemon opened",
+    // The daemon opens terminals on its own (inbox, ship, job-check, follow-up, Robert…), and whether
+    // the operator ever answered one lived only in memory (robert-drive's operatorTyped, terminal.ts
+    // last_in), so it died with every restart. src/proactive-score.ts counts, per workspace × kind,
+    // how many he engaged with — and backs the newest proactive openers off where he ignores them.
+    // Written debounced (≤1 write per terminal per 30s), never per keystroke. Rows older than this
+    // migration never recorded his typing, so they would all read "ignored": `proactive.counted_since`
+    // (only on a DB that already had terminals) keeps the score from judging them.
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE sessions ADD COLUMN operator_inputs INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE sessions ADD COLUMN operator_last_in TEXT;
+        CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at);`);
+      db.prepare(
+        "INSERT OR IGNORE INTO kv (key,value) SELECT 'proactive.counted_since', ? WHERE EXISTS (SELECT 1 FROM sessions)",
+      ).run(new Date().toISOString());
+    },
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

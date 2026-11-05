@@ -138,3 +138,19 @@ test("mc browser status prints the machine's browser and the caller's leases", a
   assert.match(r.out, /browser running \(pid 42\) · chrome-headless-shell 153\.0 · contexts 1\/8 \(4\/workspace fair share\)/);
   assert.match(r.out, /abcdef01\s+npm run e2e/);
 });
+
+test("mc proactive: one line per workspace × kind, BACKED OFF where gated", async () => {
+  const row = (kind, o) => ({ workspace_id: "w1", workspace: "acme", kind, opened: 0, engaged: 0, useful: 0, ignored: 0, pending: 0, decided: 0, rate: null, gated: false, backed_off: false, below_bar: false, ...o });
+  const r = await withApi(() => ({
+    days: 7, workspace_id: null,
+    rows: [
+      row("inbox", { opened: 23, engaged: 4, useful: 3, ignored: 14, pending: 2, decided: 21, rate: 7 / 21 }),
+      row("ship", { opened: 9, engaged: 1, ignored: 8, decided: 9, rate: 1 / 9, gated: true, backed_off: true, below_bar: true }),
+    ],
+  }), ["proactive", "--days", "7", "--workspace", "acme"]);
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(r.seen, ["GET /api/proactive/stats?days=7&workspace=acme"]);
+  assert.match(r.out, /acme {2}inbox {2}opened 23 · engaged 4 · useful 3 · ignored 14 · pending 2 · rate 33%/);
+  assert.match(r.out, /acme {2}ship {3}opened 9 · engaged 1 · useful 0 · ignored 8 · rate 11% {2}BACKED OFF/);
+  assert.match(run("--help").stdout, /mc proactive \[--days N\]/);
+});

@@ -264,3 +264,21 @@ test("migration 140 adds chat_messages.reply_to + reply_quote, existing rows unt
   assert.equal(row.reply_quote, null);
   db.close();
 });
+
+test("migration 154: engagement columns default to untouched; counting starts now only on a DB with terminals", () => {
+  const since = (d: Database.Database) => (d.prepare("SELECT value FROM kv WHERE key='proactive.counted_since'").get() as any)?.value;
+  const fresh = new Database(":memory:");
+  applyUpTo(fresh, 154);
+  assert.equal(since(fresh), undefined, "a fresh DB has nothing to discount");
+  fresh.close();
+
+  const old = new Database(":memory:");
+  applyUpTo(old, 153);
+  old.prepare("INSERT INTO sessions (id, cwd, backend, status, created_at) VALUES ('s1', '/tmp', 'claude-code', 'ended', '2026-11-01T00:00:00.000Z')").run();
+  applyUpTo(old, 154);
+  const row = old.prepare("SELECT operator_inputs, operator_last_in FROM sessions WHERE id='s1'").get() as any;
+  assert.equal(row.operator_inputs, 0);
+  assert.equal(row.operator_last_in, null);
+  assert.ok(since(old), "older rows never recorded his typing: they are not judged");
+  old.close();
+});
