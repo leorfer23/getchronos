@@ -30,6 +30,12 @@ defineSetting({
   default: () => (process.env.CHRONOS_DESK_SKILLS_FULL ?? "mission-control").split(",").map((s) => s.trim()).filter(Boolean),
 });
 defineSetting({
+  key: "desk.skills_synced", group: "Limits", level: "both", type: "list", env: "CHRONOS_DESK_SKILLS_SYNCED",
+  label: "Your claude.ai skills",
+  help: "Skills you made on claude.ai, which sync into the account but are not on disk — so they get listed by name only too.",
+  default: () => (process.env.CHRONOS_DESK_SKILLS_SYNCED ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+});
+defineSetting({
   key: "desk.mcp_deny", group: "Limits", level: "both", type: "list", env: "CHRONOS_DESK_MCP_DENY",
   label: "MCP servers kept out of terminals",
   help: "Server names a claude terminal here never loads — its own (`slack`) or a claude.ai connector by display name (`claude.ai Gmail`). Each loaded server's tool names ride on every request.",
@@ -56,13 +62,14 @@ defineSetting({
 
 /**
  * Skills Claude Code ships or syncs from claude.ai, which are not on disk in the profile. A name it
- * does not have is ignored, so the list may run ahead of or behind a CLI version harmlessly.
+ * does not have is ignored, so the list may run ahead of or behind a CLI version harmlessly. Skills an
+ * operator made on claude.ai themselves are theirs, not the product's: `desk.skills_synced`.
  */
 export const SHIPPED_SKILLS = [
   "dataviz", "claude-api", "update-config", "keybindings-help", "simplify", "fewer-permission-prompts",
   "loop", "schedule", "run", "workflow-authoring", "plugin-authoring", "security-review", "init",
   "docs", "docx", "pptx", "xlsx", "pdf", "google-workspace", "computer-use", "built-in-browser",
-  "chrome-browser", "anthropic-skills:deep-research", "skill-creator", "morning", "shareout", "import-memory",
+  "chrome-browser", "anthropic-skills:deep-research", "skill-creator", "morning", "import-memory",
 ];
 
 /** Every skill and command a profile has on disk, plus the shipped ones. */
@@ -88,7 +95,8 @@ export function skillOverrides(names: string[], full: string[]): Record<string, 
 export function leanClaudeArgs(configDir: string, workspaceId: string | null): string[] {
   const settings: Record<string, unknown> = {};
   if (setting<boolean>("desk.lean_skills", workspaceId)) {
-    const o = skillOverrides(skillNames(configDir), setting<string[]>("desk.skills_full", workspaceId) ?? []);
+    const names = [...skillNames(configDir), ...(setting<string[]>("desk.skills_synced", workspaceId) ?? [])];
+    const o = skillOverrides(names, setting<string[]>("desk.skills_full", workspaceId) ?? []);
     if (Object.keys(o).length) settings.skillOverrides = o;
   }
   // A denylist merges with any the profile has and nothing overrides a match (Claude Code's managed-mcp rules).
