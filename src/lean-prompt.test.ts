@@ -7,12 +7,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import "./store.js";
+import { workspaces } from "./store.js";
 import { _resetSettingsCache, writeSetting } from "./settings.js";
 import { leanClaudeArgs, leanClaudeEnv, SHIPPED_SKILLS, skillNames, skillOverrides } from "./lean-prompt.js";
 
 beforeEach(() => {
-  for (const k of ["desk.lean_skills", "desk.artifact_tool", "desk.lean_tools", "desk.skills_full", "desk.mcp_deny", "desk.claudeai_connectors"]) writeSetting(k, null);
+  for (const k of ["desk.lean_skills", "desk.artifact_tool", "desk.lean_tools", "desk.skills_full", "desk.skills_synced", "desk.mcp_deny", "desk.claudeai_connectors"]) writeSetting(k, null);
   _resetSettingsCache();
 });
 
@@ -47,6 +47,22 @@ test("args: one --settings with the overrides by default; none when lean skills 
   assert.equal(o["mission-control"], undefined, "kept in full by default");
   writeSetting("desk.lean_skills", false);
   assert.deepEqual(leanClaudeArgs(dir, null), []);
+});
+
+test("synced skills: the operator's own claude.ai skills go name-only too, globally or for one workspace", () => {
+  const dir = profile();
+  const o = (ws: string | null) => JSON.parse(leanClaudeArgs(dir, ws)[1]).skillOverrides;
+  assert.equal(o(null)["my-own-skill"], undefined, "none by default");
+  writeSetting("desk.skills_synced", ["my-own-skill"]);
+  assert.equal(o(null)["my-own-skill"], "name-only");
+  writeSetting("desk.skills_synced", ["mission-control"]);
+  assert.equal(o(null)["mission-control"], undefined, "a skill kept in full stays in full");
+  writeSetting("desk.skills_synced", null);
+  const ws = workspaces.create({ slug: "lean-synced", name: "Lean synced", config_dir: dir }).id;
+  writeSetting("desk.skills_synced", ["ws-only-skill"], ws);
+  assert.equal(o(ws)["ws-only-skill"], "name-only");
+  assert.equal(o(null)["ws-only-skill"], undefined);
+  writeSetting("desk.skills_synced", null, ws);
 });
 
 test("env: workflows and /loop off by default, the Artifact tool only when switched off", () => {
