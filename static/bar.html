@@ -499,7 +499,9 @@ async function speak(text) {
     const url = URL.createObjectURL(await r.blob());
     const a = VC.audio || (VC.audio = new Audio());
     a.src = url;
-    a.playbackRate = Number((() => { try { return localStorage.getItem("desk-voice-speed"); } catch { return null; } })()) || 1.5;
+    // Natural pace unless he chose otherwise on the Desk's speed chip (same key, same origin).
+    a.preservesPitch = true;
+    a.playbackRate = Number((() => { try { return localStorage.getItem("desk-voice-speed"); } catch { return null; } })()) || 1;
     a.onended = () => URL.revokeObjectURL(url);
     await a.play().catch(() => {});
   } catch {}

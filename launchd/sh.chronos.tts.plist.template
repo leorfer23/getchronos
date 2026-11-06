@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Robert's local voice: Kokoro-82M on MLX (scripts/tts-server.py), 127.0.0.1:7779 only.
+       Installed by scripts/install-tts.sh; /api/speak falls back to `say` while it is down. -->
+  <key>Label</key>
+  <string>sh.chronos.tts</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.mc/tts/venv/bin/python</string>
+    <string>__REPO_DIR__/scripts/tts-server.py</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HF_HUB_DISABLE_TELEMETRY</key>
+    <string>1</string>
+    <!-- The model and voices were fetched by install-tts.sh: never reach the network at start. -->
+    <key>HF_HUB_OFFLINE</key>
+    <string>1</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <!-- A crash loop (a model that will not load) retries every 30s instead of every 10. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/tts.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/tts.err.log</string>
+</dict>
+</plist>

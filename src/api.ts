@@ -133,7 +133,7 @@ import {
 import { runCommandLine } from "./commands.js";
 import { flowData } from "./flow.js";
 import { transcribe, audioFilename, transcribeFailure } from "./transcribe.js";
-import { speak, voiceFor, listVoices } from "./speak.js";
+import { speak, voiceFor, listVoices, neuralHealth } from "./speak.js";
 import { activeWorkspaceIds, askFleetFanout, askManagerWeb, handFilesTo, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurnSmart, setSticky } from "./thread-router.js";
 import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type LeadEvent } from "./store.js";
@@ -4847,17 +4847,18 @@ export function startServer() {
     }
   });
 
-  // Voice call, the other half: Robert's sentences → the Mac's Premium voice → AAC the page plays.
+  // Voice call, the other half: Robert's sentences → his voice (Kokoro when installed, else the Mac's
+  // best `say` voice; src/speak.ts) → audio the page plays. The engine rides a header for debugging.
   api.post("/speak", requireAdmin, validate(SpeakSchema), async (req, res) => {
     try {
-      const audio = await speak(req.body.text, req.body.lang ?? "en");
-      res.set({ "content-type": "audio/mp4", "cache-control": "no-store" }).send(audio);
+      const out = await speak(req.body.text, req.body.lang ?? "en");
+      res.set({ "content-type": out.mime, "cache-control": "no-store", "x-voice-engine": out.engine }).send(out.audio);
     } catch (e: any) {
       res.status(500).json({ error: String(e?.message ?? e) });
     }
   });
   api.get("/voices", requireAdmin, async (_req, res) => {
-    res.json({ en: await voiceFor("en"), es: await voiceFor("es"), installed: (await listVoices()).filter((v) => v.premium) });
+    res.json({ en: await voiceFor("en"), es: await voiceFor("es"), installed: (await listVoices()).filter((v) => v.premium), neural: await neuralHealth() });
   });
 
   // Hub open → pre-boot the persistent voice manager so the first utterance skips CLI startup.

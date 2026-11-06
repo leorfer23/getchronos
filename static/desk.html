@@ -6371,7 +6371,7 @@ const DICT = { rec: null, id: null, busy: false }; // terminal dictation (see di
 const VC = { on: false, ctx: null, stream: null, src: null, node: null, rate: 48000, seg: null, pre: [], preMs: 0, noise: 0.01, deafUntil: 0,
   sending: 0, chain: Promise.resolve(), audio: null, speakQ: [], playing: null, turn: null, buf: "", spoken: new Set(), pick: null, shown: "", connecting: false,
   bargeMs: 0, muted: null, recent: [],
-  speed: (() => { try { return Number(localStorage.getItem("desk-voice-speed")) || 1.5; } catch { return 1.5; } })(),
+  speed: (() => { try { return Number(localStorage.getItem("desk-voice-speed")) || 1; } catch { return 1; } })(),
   lang: (() => { try { return localStorage.getItem("desk-voice-lang") || "en"; } catch { return "en"; } })() };
 // Robert writes markdown; an 8-char id in his text is a terminal he is talking about — it becomes a
 // chip that puts that terminal on the stage. Sanitized: this is model output landing in the page.

@@ -829,6 +829,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_TIMEOUT` | `3600` | `src/config.ts` |
 | `CHRONOS_TRANSCRIBE_MODEL` | — | `src/transcribe.ts` |
 | `CHRONOS_TRANSCRIBE_URL` | — | `src/telegram.test.ts` |
+| `CHRONOS_TTS_URL` | `"http://127.0.0.1:7779"` (Kokoro, `scripts/tts-server.py`); `off` = `say` only | `src/speak.ts` |
 | `CHRONOS_VAPID_FILE` | `path.join` | `src/push.ts` |
 | `CHRONOS_VERIFY_MODE` | `"enforce"` | `src/config.ts` |
 | `CHRONOS_VOICE_EN` | best installed male voice, else `"Zoe (Premium)"` | `src/speak.ts` |
