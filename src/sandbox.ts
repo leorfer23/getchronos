@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CONFIG } from "./config.js";
 import { resolveTicketsDir } from "./repo-root.js";
+import { ancestorsUnder, type HomeWall } from "./home-wall.js";
 
 export type SandboxMode = "off" | "guard" | "strict";
 
@@ -137,6 +138,25 @@ function readonlyRules(readonlyDirs: string[], granted: string[]): string[] {
   return [rule("deny", "file-write*", readonlyDirs), rule("allow", "file-write*", regrant), rule("deny", "file-write*", sealed)];
 }
 
+/**
+ * A client profile's reads under $HOME as an allow list (home-wall.ts): close $HOME, let stat and
+ * realpath walk down to what is allowed, then open exactly that. Placed right after
+ * `(allow default)` so every rule after it — another workspace's repo, the secrets, the seal — still
+ * wins inside an allowed dir. `own` is everything the spawn already counts as its own (cwd, add-dirs,
+ * read-only checkouts, its sandbox_allow): it is on the list without the caller repeating it.
+ */
+function homeWallRules(wall: HomeWall | null, own: string[]): string[] {
+  if (!wall) return [];
+  const allow = [...new Set([...wall.allow, ...own])];
+  const ancestors = ancestorsUnder(allow, wall.home);
+  return [
+    `(deny file-read* (subpath ${q(wall.home)}))`,
+    `(allow file-read-metadata ${ancestors.map((a) => `(literal ${q(a)})`).join(" ")})`,
+    rule("allow", "file-read*", allow),
+    rule("deny", "file-write*", wall.noWrite),
+  ];
+}
+
 // Build an SBPL profile string for a job, or null for passthrough (off / unsupported platform).
 export function buildProfile(
   mode: SandboxMode,
@@ -151,7 +171,9 @@ export function buildProfile(
   readonlyDirs: string[] = [],
   // Secrets paths THIS workspace is trusted with, re-granted after the global deny. Always from
   // `workspaceSandboxAllow()`, never straight from a request body — see that function.
-  allowSecrets: string[] = []
+  allowSecrets: string[] = [],
+  // A client profile's $HOME read allow list (home-wall.ts `homeWallFor`); null = not walled.
+  homeWall: HomeWall | null = null
 ): string | null {
   if (mode === "off" || !sandboxAvailable()) {
     // Egress enforce still wants a kernel wall even when filesystem sandboxing is "off": emit a
@@ -175,12 +197,14 @@ export function buildProfile(
   // checkout, say): re-denied after the re-grant, or `own` would open it right back up.
   const nested = projectDeny.filter((d) => own.some((o) => d.startsWith(o.endsWith("/") ? o : o + "/")));
   const reDeny = nested.length ? [rule("deny", "file-read*", nested), rule("deny", "file-write*", nested)] : [];
+  const wall = homeWallRules(homeWall, [...own, ...readonlyDirs, ...allowSecrets]);
 
   if (mode === "guard") {
     // Run normally, but deny other project dirs (yield to own cwd) and secrets (absolute).
     return [
       "(version 1)",
       "(allow default)",
+      ...wall,
       rule("deny", "file-read*", projectDeny),
       rule("deny", "file-write*", projectDeny),
       rule("allow", "file-read*", own),
@@ -204,8 +228,8 @@ export function buildProfile(
   const writeDirs = [
     ...own,
     configDir,
-    `${home}/.claude`,
-    `${home}/.claude.json`,
+    // A walled client profile writes its own config dir, never the default profile (home-wall.ts).
+    ...(homeWall ? [] : [`${home}/.claude`, `${home}/.claude.json`]),
     `${home}/.grok`, // grok CLI session/memory state (shared login; no per-workspace config dir)
     `${home}/.config/opencode`, // opencode config (provider/gateway) + auth
     `${home}/.local/share/opencode`, // opencode auth.json + session store (shared; no per-ws config dir)
@@ -219,6 +243,7 @@ export function buildProfile(
   return [
     "(version 1)",
     "(allow default)",
+    ...wall,
     '(deny file-write* (subpath "/"))',
     rule("allow", "file-write*", writeDirs),
     ...readonlyRules(readonlyDirs, addDirs),
@@ -247,9 +272,10 @@ export function sandboxWrap(
   args: string[],
   lockEgress = false,
   readonlyDirs: string[] = [],
-  allowSecrets: string[] = []
+  allowSecrets: string[] = [],
+  homeWall: HomeWall | null = null
 ): { cmd: string; cmdArgs: string[] } {
-  const profile = buildProfile(mode, cwd, addDirs, configDir, denyDirs, lockEgress, readonlyDirs, allowSecrets);
+  const profile = buildProfile(mode, cwd, addDirs, configDir, denyDirs, lockEgress, readonlyDirs, allowSecrets, homeWall);
   if (!profile) {
     if (mode !== "off" && !sandboxAvailable())
       console.warn(`[sandbox] '${mode}' requested but sandbox-exec unavailable — running unsandboxed`);

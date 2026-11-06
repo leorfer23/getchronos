@@ -69,7 +69,7 @@ describe("launcherProfile", () => {
     assert.equal(cat(path.join(ownCfg, "settings.json")).status, 0);
   });
 
-  test("a workspace with its own GitHub token: the operator's gh login is denied", { skip: noSandbox }, () => {
+  test("a workspace with its own GitHub token: the operator's gh login is denied, its own gh dir is read", { skip: noSandbox }, () => {
     const env = path.join(tmp, "tok.env");
     fs.writeFileSync(env, "GH_TOKEN=github_pat_test\n");
     const tok = workspaces.create({ slug: `tok-${randomUUID().slice(0, 6)}`, name: "tok", config_dir: ownCfg, sandbox_mode: "guard", secrets_file: env } as any);
@@ -77,6 +77,14 @@ describe("launcherProfile", () => {
     const opGh = path.join(os.homedir(), ".config", "gh");
     const denies = p.split("\n").filter((l) => l.startsWith("(deny file-read*"));
     assert.ok(denies.some((l) => l.includes(`(subpath "${opGh}")`)), "the operator's login must be in a read deny");
+    const allows = p.split("\n").filter((l) => l.startsWith("(allow file-read*"));
+    assert.ok(!allows.some((l) => l.includes(`(subpath "${opGh}")`)), "and never in a read allow");
+    assert.ok(allows.some((l) => l.includes(path.join(os.homedir(), ".mc", "gh", tok.slug))));
+  });
+
+  test("a client profile's launcher is walled: $HOME closed, then its own places opened", { skip: noSandbox }, () => {
+    const p = launcherProfile(mine.id, ownCfg)!;
+    assert.ok(p.includes(`(deny file-read* (subpath "${os.homedir()}"))`));
   });
 
   test("a workspace whose floor is off gets no profile", () => {

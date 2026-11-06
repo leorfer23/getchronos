@@ -5,6 +5,7 @@ import { workspaces } from "./store.js";
 import { buildProfile, ensureWsTicketsDir, workspaceSandboxAllow } from "./sandbox.js";
 import { clampSandbox } from "./spawn-guard.js";
 import { worktreeRootFor } from "./worktree-core.js";
+import { workspaceHomeWall } from "./home-wall-ws.js";
 
 /**
  * The Seatbelt profile for a CLI the operator starts by hand (`claude-<client>` in a plain terminal),
@@ -55,5 +56,6 @@ export function launcherProfile(workspaceId: string, configDir: string): string 
     false,
     [],
     workspaceSandboxAllow(ws.sandbox_allow),
+    workspaceHomeWall(ws, own),
   );
 }
