@@ -91,7 +91,7 @@ or not. The default profile is not walled. Desk terminals, dispatched jobs and h
 ```bash
 # Machine-specific things every client profile needs (an MCP wrapper kept in ~/.claude, say).
 # Colon-separated, ~/ allowed. One client's own store goes in that workspace's sandbox_allow instead.
-CHRONOS_HOME_ALLOW_EXTRA=~/.claude/mcp-wrappers:~/.claude/chrome-agent-mcp.sh
+CHRONOS_HOME_ALLOW_EXTRA=~/.claude/mcp-wrappers:~/.claude/browser-mcp.sh
 
 # Leave named workspaces unwalled (a second personal profile, a test profile). `off` disables it.
 CHRONOS_HOME_WALL_SKIP=lab,scratch
