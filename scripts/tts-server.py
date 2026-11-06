@@ -56,6 +56,10 @@ def log(msg: str) -> None:
 
 t0 = time.time()
 model = load_model(MODEL)
+# Voices from the model's own repo — the one install-tts.sh downloads. Left unset, mlx-audio fetches
+# them from its default voice repo instead: a second source, and a download this service cannot make
+# (HF_HUB_OFFLINE=1), so a fresh install would start with no voice at all.
+model.repo_id = MODEL
 RATE = int(model.sample_rate)
 
 
