@@ -9,6 +9,7 @@
 //   npm run install:launchd            # daemon only
 //   npm run install:launchd -- --all   # daemon + whisper + cloudflared (skips ones not set up)
 //   npm run install:launchd -- --print # render to stdout, install nothing
+//   npm run install:launchd -- --only sh.chronos.tts   # that one agent, nothing else restarted
 
 import fs from "node:fs";
 import os from "node:os";
@@ -19,6 +20,9 @@ import { ffmpegProblem } from "../bin/ffmpeg-check.mjs";
 const argv = process.argv.slice(2);
 const printOnly = argv.includes("--print");
 const all = argv.includes("--all");
+// --only <label>: install that one agent and touch nothing else — the daemon included, which every
+// other mode bootouts and reloads (a restart of every terminal's supervisor).
+const only = argv.includes("--only") ? argv[argv.indexOf("--only") + 1] : null;
 
 const home = os.homedir();
 const uid = process.getuid();
@@ -57,6 +61,16 @@ const AGENTS = [
       const ff = ffmpegProblem();
       if (ff) return `${ff} — whisper-server --convert needs a working ffmpeg (brew reinstall ffmpeg)`;
       subs.__WHISPER_MODEL__ = models[models.length - 1];
+      return null;
+    },
+  },
+  {
+    // Robert's local neural voice (scripts/tts-server.py, Kokoro on MLX). Installed by
+    // scripts/install-tts.sh, which also fetches the model; /api/speak falls back to `say` without it.
+    label: "sh.chronos.tts",
+    precondition: () => {
+      const py = path.join(home, ".mc", "tts", "venv", "bin", "python");
+      if (!fs.existsSync(py)) return "no ~/.mc/tts/venv (bash scripts/install-tts.sh)";
       return null;
     },
   },
@@ -102,8 +116,12 @@ function render(label) {
 fs.mkdirSync(logDir, { recursive: true });
 if (!printOnly) fs.mkdirSync(agentDir, { recursive: true });
 
+if (only && !AGENTS.some((a) => a.label === only)) {
+  console.error(`[launchd] no agent ${only} — one of: ${AGENTS.map((a) => a.label).join(", ")}`);
+  process.exit(1);
+}
 for (const agent of AGENTS) {
-  if (!agent.required && !all) continue;
+  if (only ? agent.label !== only : !agent.required && !all) continue;
   if (agent.precondition) {
     const why = agent.precondition();
     if (why) {

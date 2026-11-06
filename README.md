@@ -121,8 +121,14 @@ Blank terminal (no seed): empty ⏎. Full spawn dialog (cwd, brief, kind): ⇧N.
 
 ```bash
 npm run install:launchd          # renders launchd/*.plist.template for this machine and loads it
-npm run install:launchd -- --all # also whisper, cloudflared — skips whatever isn't installed
+npm run install:launchd -- --all # also whisper, cloudflared, tts — skips whatever isn't installed
 ```
+
+Robert's voice (`/api/speak`, read out on the Desk's voice call and the Mac bar) is macOS `say` out of the
+box. On an Apple Silicon Mac, `bash scripts/install-tts.sh` (from the live checkout) adds a local neural
+voice — Kokoro-82M on MLX, Spanish `em_alex` / English `am_michael`, served by `scripts/tts-server.py` on
+127.0.0.1:7779 as the launchd agent `sh.chronos.tts`; `say` stays the fallback whenever it is down. The
+script pins every Python dependency to releases at least two weeks old and downloads safetensors only.
 
 The plists are generated rather than committed, because a committed one hardcodes another machine's
 home directory, checkout path and node binary. The installer records the **absolute path of the node
