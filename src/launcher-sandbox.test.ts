@@ -69,6 +69,16 @@ describe("launcherProfile", () => {
     assert.equal(cat(path.join(ownCfg, "settings.json")).status, 0);
   });
 
+  test("a workspace with its own GitHub token: the operator's gh login is denied", { skip: noSandbox }, () => {
+    const env = path.join(tmp, "tok.env");
+    fs.writeFileSync(env, "GH_TOKEN=github_pat_test\n");
+    const tok = workspaces.create({ slug: `tok-${randomUUID().slice(0, 6)}`, name: "tok", config_dir: ownCfg, sandbox_mode: "guard", secrets_file: env } as any);
+    const p = launcherProfile(tok.id, ownCfg)!;
+    const opGh = path.join(os.homedir(), ".config", "gh");
+    const denies = p.split("\n").filter((l) => l.startsWith("(deny file-read*"));
+    assert.ok(denies.some((l) => l.includes(`(subpath "${opGh}")`)), "the operator's login must be in a read deny");
+  });
+
   test("a workspace whose floor is off gets no profile", () => {
     const off = workspaces.create({ slug: `off-${randomUUID().slice(0, 6)}`, name: "off", config_dir: path.join(tmp, "cfg-off"), sandbox_mode: "off" } as any);
     assert.equal(launcherProfile(off.id, ownCfg), null);
