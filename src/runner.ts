@@ -37,6 +37,7 @@ import { agentContext } from "./skills.js";
 import { baseJobName } from "./job-name.js";
 import { jobRepo } from "./job-repo.js";
 import { childEnv } from "./child-env.js";
+import { workspaceHomeWall } from "./home-wall-ws.js";
 import { egressEnforced, egressEnv, egressLocked, egressPolicy } from "./egress.js";
 import { clampSandbox } from "./spawn-guard.js";
 import { gatesPassed, parseGates, runGates } from "./gates.js";
@@ -413,7 +414,9 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
     const allowSecrets = workspaceSandboxAllow(
       job.workspace_id ? (workspaces.get(job.workspace_id)?.sandbox_allow ?? null) : null,
     );
-    const sandboxed = sandboxWrap(sandboxMode, job.cwd, addDirs, profileDir, denyDirs, backend.bin(), args, egressLocked(job.workspace_id), readonlyDirs, allowSecrets);
+    // …and the same $HOME read allow list, when the workspace is on a client profile (home-wall.ts).
+    const homeWall = ws ? workspaceHomeWall(ws, profileDir) : null;
+    const sandboxed = sandboxWrap(sandboxMode, job.cwd, addDirs, profileDir, denyDirs, backend.bin(), args, egressLocked(job.workspace_id), readonlyDirs, allowSecrets, homeWall);
     // Headless runs get the same `nice` a Desk terminal does (src/machine.ts): a dispatched build is
     // no less able to fork a full vitest pool, and the operator's UI outranks both.
     const { cmd, cmdArgs } = niceWrap(sandboxed.cmd, sandboxed.cmdArgs);
