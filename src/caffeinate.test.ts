@@ -1,11 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { batteryPct, shouldHold, startCaffeinate } from "./caffeinate.js";
+import { batteryPct, isDarkWake, shouldHold, startCaffeinate } from "./caffeinate.js";
 
 test("batteryPct reads the internal battery's charge from pmset -g ps", () => {
   assert.equal(batteryPct("Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t80%; discharging; 5:01 remaining present: true"), 80);
   assert.equal(batteryPct("Now drawing from 'AC Power'\n"), null, "a desktop Mac");
+});
+
+test("isDarkWake reads pmset -g systemstate: no Graphics capability = a dark wake", () => {
+  assert.equal(isDarkWake("Current System Capabilities are: CPU Graphics Audio Network \nCurrent Power State: 4\n"), false, "a full wake");
+  assert.equal(isDarkWake("Current System Capabilities are: CPU Network \nCurrent Power State: 4\n"), true, "a maintenance dark wake");
+  assert.equal(isDarkWake("Current System Capabilities are: CPU Disk Network \n"), true);
+  assert.equal(isDarkWake(""), false, "unreadable output never holds work");
+  assert.equal(isDarkWake("Current System Capabilities are: \n"), false);
 });
 
 test("shouldHold: work + AC holds; on battery only when the policy says so, and above the floor", () => {

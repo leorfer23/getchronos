@@ -2,7 +2,7 @@ import { test, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { db, jobs, repos, runs, tickets, workspaces } from "./store.js";
-import { dispatch, status, setExecutor, setStopBackendResolver, stopRun } from "./dispatcher.js";
+import { dispatch, status, setExecutor, setStopBackendResolver, setWakeProbe, stopRun } from "./dispatcher.js";
 import { CONFIG } from "./config.js";
 import type { CloudBackend } from "./backends/types.js";
 import type { Job, RunStatus } from "./types.js";
@@ -422,6 +422,31 @@ test("per-workspace max_concurrent leaves extra runs queued while another ws pro
   release();
   await settle();
   assert.equal(runs.list(a2.id)[0].status, "success"); // starts once the slot frees
+});
+
+// reap-stale-worktrees-personal, 26 of 30 nights: a cron caught up inside a few-second dark wake
+// started, froze when the Mac slept again, and its watchdog killed it on a later blip.
+test("a run dispatched in a dark wake stays queued until the Mac fully wakes", async () => {
+  let dark = true;
+  setWakeProbe(() => dark);
+  try {
+    program(() => ({ status: "success" }));
+    const j = mkJob();
+    const r = dispatch(j.id, "cron");
+    assert.ok(!("error" in r) && r.status === "queued");
+    await flushMicro();
+    mock.timers.tick(60_000);
+    await flushMicro();
+    assert.equal(calls, 0, "nothing starts while the Mac is in a dark wake");
+    assert.equal(runs.list(j.id)[0].status, "queued");
+    dark = false;
+    mock.timers.tick(60_000);
+    await settle();
+    assert.equal(calls, 1, "the held run starts on the first look after a full wake");
+    assert.equal(runs.list(j.id)[0].status, "success");
+  } finally {
+    setWakeProbe(null);
+  }
 });
 
 test("chain depth is capped to prevent infinite loops", async () => {
