@@ -3,137 +3,152 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<meta name="theme-color" content="#10140F">
+<meta name="theme-color" content="#0C0F0B">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Chronos">
+<meta name="apple-mobile-web-app-title" content="Robert">
 <link rel="manifest" href="/phone.webmanifest">
 <link rel="icon" href="/phone-icon.png">
-<link rel="apple-touch-icon" href="/phone-icon.png">
-<title>Chronos</title>
-<meta name="chronos-build" content="2026-09-26a">
+<link rel="apple-touch-icon" href="/phone-icon-512.png">
+<title>Robert</title>
+<meta name="chronos-build" content="2026-11-09r">
 <style>
   :root {
     --bg:#0C0F0B; --surface:#151A16; --surface-2:#1E2520; --raised:#262E28; --ink:#E9EFEA; --muted:#98A59D;
     --faint:#7C8880; --line:#273029; --accent:#56B693; --accent-ink:#0D1511; --accent-soft:#1C3A2E;
-    --warn:#E0B44C; --warn-soft:#3A2F10; --danger:#E8705F; --danger-soft:#3D1F1A; --blue:#6FA8DC;
-    --term-bg:#0C0F0B; --r:18px; --tap:52px;
-    --sat:env(safe-area-inset-top,0px); --sab:env(safe-area-inset-bottom,0px);
+    --warn:#E0B44C; --warn-soft:#3A2F10; --danger:#E8705F; --danger-soft:#3D1F1A; --blue:#6FA8DC; --blue-soft:#18283A;
+    --decide:#B795F2; --term-bg:#0C0F0B; --r:18px; --tap:52px;
+    --sat:env(safe-area-inset-top,0px); --sab:env(safe-area-inset-bottom,0px); --sal:env(safe-area-inset-left,0px); --sar:env(safe-area-inset-right,0px);
   }
+  /* The keyboard is up: it covers the home indicator, so the bottom inset would be a gap above it. */
+  body.kb { --sab:0px; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { height:100%; margin:0; overscroll-behavior:none; }
   body { background:var(--bg); color:var(--ink); font:17px/1.4 -apple-system,system-ui,Roboto,"Segoe UI",sans-serif;
     -webkit-font-smoothing:antialiased; }
   .mono { font-family:ui-monospace,"Roboto Mono",Menlo,monospace; font-variant-numeric:tabular-nums; }
   button { font:inherit; color:inherit; background:none; border:0; padding:0; cursor:pointer; touch-action:manipulation; }
+  button:disabled { opacity:.38; cursor:default; }
   input,textarea,select { font:inherit; color:inherit; }
   [hidden] { display:none !important; }
+  svg { display:block; }
 
-  #app { position:fixed; inset:0; display:flex; flex-direction:column; }
+  #app { position:fixed; left:0; right:0; top:0; height:100%; display:flex; flex-direction:column; padding-left:var(--sal); padding-right:var(--sar); }
   .view { flex:1; min-height:0; display:flex; flex-direction:column; }
 
-  /* ── home ─────────────────────────────────────────────────────────────────── */
-  .home-scroll { flex:1; overflow-y:auto; padding:calc(var(--sat) + 14px) 16px calc(var(--sab) + 24px); -webkit-overflow-scrolling:touch; }
-  .brand { display:flex; align-items:center; justify-content:space-between; margin:4px 0 14px; }
-  .brand h1 { margin:0; font-size:30px; font-weight:800; letter-spacing:-.02em; }
-  .brand .sub { color:var(--muted); font-size:15px; }
-  .brand .tools { display:flex; align-items:center; gap:10px; }
-  .brand .ic-sm { width:44px; height:44px; border-radius:50%; background:var(--surface); font-size:20px; display:flex; align-items:center; justify-content:center; color:var(--muted); }
-  .strip { display:flex; gap:8px; overflow-x:auto; scrollbar-width:none; margin:0 -16px 16px; padding:0 16px 2px; }
-  .strip::-webkit-scrollbar { display:none; }
-  .strip .chip { flex:none; height:42px; padding:0 14px; font-size:15px; }
-  .strip .chip .c { display:inline-flex; gap:5px; align-items:center; font-size:13px; color:inherit; opacity:.85; }
-  .strip .chip .c i { width:7px; height:7px; border-radius:50%; display:inline-block; }
-  .strip .chip.on .c i { box-shadow:0 0 0 1.5px var(--accent-ink); }
-  .dot { width:10px; height:10px; border-radius:50%; background:var(--faint); flex:none; }
-  .dot.working { background:var(--accent); box-shadow:0 0 0 3px rgba(86,182,147,.18); animation:pulse 1.6s ease-in-out infinite; }
-  .dot.waiting { background:var(--warn); }
-  .dot.blocked { background:var(--danger); }
-  .dot.done { background:var(--blue); }
-  /* The seven phases (src/term-status.ts) — same colours as the Desk rail. */
-  .dot.blocked { background:var(--danger); }
-  .dot.decide { background:#B795F2; }
-  .dot.review { background:var(--accent); animation:none; box-shadow:none; }
-  .dot.your_turn { background:var(--warn); }
-  .dot.stalled { background:var(--faint); box-shadow:0 0 0 2px var(--warn-soft); }
-  .dot.waiting { background:transparent; box-shadow:inset 0 0 0 2px var(--blue); }
-  .dot.working { background:#5CC3D8; box-shadow:0 0 0 3px rgba(92,195,216,.18); }
-  .card .meta .ph { font-weight:700; letter-spacing:.03em; }
-  .card .meta .ph.blocked { color:var(--danger); } .card .meta .ph.decide { color:#B795F2; }
-  .card .meta .ph.review { color:var(--accent); } .card .meta .ph.your_turn { color:var(--warn); }
-  .card .meta .ph.waiting { color:var(--blue); } .card .meta .ph.working { color:#5CC3D8; }
-  .card.needs.decide { background:linear-gradient(135deg, var(--surface) 0%, #2C2340 140%); border-color:#4A3A6A; }
-  @keyframes pulse { 50% { box-shadow:0 0 0 6px rgba(86,182,147,.08); } }
+  /* ── home: the conversation ───────────────────────────────────────────────── */
+  .top { flex:none; display:flex; align-items:center; gap:8px; padding:calc(var(--sat) + 6px) 8px 6px 18px; }
+  .top .who { flex:1; min-width:0; }
+  .top .who b { display:block; font-size:21px; font-weight:800; letter-spacing:-.01em; }
+  .top .who small { display:block; color:var(--muted); font-size:13px; min-height:17px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .top .who small.warn { color:var(--warn); }
+  .ic { width:var(--tap); height:var(--tap); display:flex; align-items:center; justify-content:center; border-radius:14px; color:var(--muted); flex:none; }
+  .ic:active { background:var(--surface); }
+  .upd { height:34px; padding:0 14px; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-size:14px; font-weight:700; }
 
-  .big { height:60px; border-radius:var(--r); font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; gap:10px; }
-  .big.primary { background:var(--accent); color:var(--accent-ink); }
-  .big.secondary { background:var(--surface-2); color:var(--ink); }
-  .big:active, .card:active, .chip:active, .qk:active, .row:active { transform:scale(.98); filter:brightness(1.12); }
+  /* What is waiting for him: one compact entry, the next decision on it. */
+  .qentry { flex:none; margin:2px 12px 6px; display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:center; text-align:left;
+    padding:12px 14px; border-radius:18px; background:linear-gradient(135deg, var(--surface) 0%, var(--warn-soft) 170%); border:1px solid #4A3D18; }
+  .qentry:active { filter:brightness(1.12); }
+  .qentry .n { width:34px; height:34px; border-radius:50%; background:var(--warn); color:var(--bg); font-weight:800; font-size:16px; display:flex; align-items:center; justify-content:center; font-variant-numeric:tabular-nums; }
+  .qentry .tx { min-width:0; }
+  .qentry .tx b { display:block; font-size:16px; }
+  .qentry .tx span { display:block; color:var(--muted); font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .qentry .chev { color:var(--faint); }
 
-  section.group { margin-bottom:22px; }
-  .group h2 { margin:0 0 10px; font-size:13px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); display:flex; align-items:center; gap:8px; }
-  .group h2 .n { background:var(--surface-2); color:var(--ink); border-radius:999px; padding:1px 9px; font-size:12px; }
-  .group h2 button { margin-left:auto; color:var(--accent); font-size:14px; font-weight:600; text-transform:none; letter-spacing:0; }
-  .cards { display:flex; flex-direction:column; gap:10px; }
-  .card { width:100%; text-align:left; background:var(--surface); border-radius:var(--r); padding:14px 16px; display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:center; min-height:72px; }
-  .card.needs { background:linear-gradient(135deg, var(--surface) 0%, var(--warn-soft) 140%); border:1px solid #4A3D18; }
-  .card.needs.blocked { background:linear-gradient(135deg, var(--surface) 0%, var(--danger-soft) 140%); border-color:#5A2A22; }
-  .card > span, .row > span { min-width:0; overflow-wrap:anywhere; }
-  .card .title { font-size:17px; font-weight:700; line-height:1.25; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
-  .card .meta { color:var(--muted); font-size:14px; margin-top:3px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .card .prompt { margin-top:8px; color:var(--warn); font-size:15px; line-height:1.3; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; }
-  .card.blocked .prompt { color:var(--danger); }
-  .card.decide .prompt { color:#B795F2; }
-  .card .chev { color:var(--faint); font-size:22px; }
-  .card .tag { color:var(--ws,var(--muted)); background:transparent; padding:0; font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; font-weight:800; }
-  /* A Lead's workers, in the space their cards would have taken. */
-  .card .wk { font-size:12px; font-weight:700; color:var(--muted); font-variant-numeric:tabular-nums; }
-  .card .one { margin-top:6px; color:var(--muted); font-size:14.5px; line-height:1.3; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
-  .card.fin { border:1px solid #2E5A47; }
-  .card .answers button.go { background:var(--accent); color:var(--accent-ink); }
-  .card .answers { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; grid-column:1 / -1; }
-  .card .answers button { height:44px; padding:0 16px; border-radius:12px; background:var(--accent-soft); color:var(--accent); font-size:15.5px; font-weight:700; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .card .answers button.no { background:var(--danger-soft); color:var(--danger); }
-  .card .answers button.more { background:var(--surface-2); color:var(--muted); }
-  .card.needs { grid-template-rows:auto auto; }
-  .card.ended { opacity:.75; }
-  .tag { background:var(--surface-2); color:var(--muted); border-radius:6px; padding:1px 7px; font-size:12.5px; font-weight:600; }
-  .empty { color:var(--faint); padding:18px 6px; text-align:center; font-size:15px; }
+  /* This phone cannot be reached when something gets stuck: one clear step to fix that, every launch. */
+  .nrow { flex:none; margin:2px 12px 6px; display:flex; align-items:center; gap:12px; padding:12px 14px; border-radius:18px; background:linear-gradient(135deg, var(--surface) 0%, var(--blue-soft) 170%); border:1px solid #23405F; }
+  .nrow .ni { width:34px; height:34px; border-radius:50%; background:var(--blue); color:var(--bg); display:flex; align-items:center; justify-content:center; flex:none; }
+  .nrow .tx { flex:1; min-width:0; }
+  .nrow .tx b { display:block; font-size:16px; }
+  .nrow .tx span { display:block; color:var(--muted); font-size:14px; line-height:1.35; }
+  .nrow .go { flex:none; height:40px; padding:0 16px; border-radius:999px; background:var(--blue); color:var(--bg); font-weight:800; font-size:15px; }
+  .nrow .no { flex:none; width:32px; height:40px; color:var(--faint); font-size:18px; }
+  .chat { flex:1; min-height:0; overflow-y:auto; padding:10px 14px 12px; display:flex; flex-direction:column; gap:10px; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+  .chat .hello { margin:auto; text-align:center; color:var(--faint); font-size:16px; line-height:1.5; padding:24px; }
+  .chat .hello b { display:block; color:var(--muted); font-size:18px; margin-bottom:4px; }
+  .bub { max-width:86%; padding:11px 15px; border-radius:20px; font-size:16.5px; line-height:1.42; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .bub.you { align-self:flex-end; background:var(--accent); color:var(--accent-ink); border-bottom-right-radius:6px; }
+  .bub.rob { align-self:flex-start; background:var(--surface-2); border-bottom-left-radius:6px; white-space:normal; }
+  .bub.rob a { color:var(--accent); overflow-wrap:anywhere; }
+  .bub.rob p { margin:0 0 8px; } .bub.rob p:last-child { margin:0; }
+  .bub.rob pre { background:var(--bg); padding:10px; border-radius:10px; overflow-x:auto; font-size:13.5px; }
+  .bub.rob code { font-family:ui-monospace,"Roboto Mono",Menlo,monospace; font-size:14.5px; }
+  .bub.rob ul, .bub.rob ol { margin:0 0 8px; padding-left:22px; }
+  .bub.rob h1, .bub.rob h2, .bub.rob h3, .bub.rob h4 { font-size:1em; margin:0 0 6px; }
+  /* A terminal he names is a chip: tap opens it. */
+  .bub.rob a[href^="#sel="] { display:inline-flex; align-items:center; gap:4px; max-width:240px; padding:0 10px; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-size:14px; font-weight:700; text-decoration:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; vertical-align:-4px; line-height:26px; }
+  .bub.you.queued { opacity:.55; }
+  .bub.you .unsent { display:block; margin-top:6px; font-size:13px; font-weight:700; text-decoration:underline; }
+  .bub.pending { color:var(--muted); min-width:58px; }
+  .bub.pending:empty::after { content:""; display:inline-block; width:34px; height:10px; background:radial-gradient(circle, var(--muted) 45%, transparent 50%) 0 50%/11px 10px repeat-x; animation:dots 1.2s steps(4) infinite; }
+  @keyframes dots { 0% { width:0; } 100% { width:34px; } }
+  @media (prefers-reduced-motion: reduce) { .bub.pending:empty::after { animation:none; width:34px; } }
+  .bub.long:not(.open) { max-height:15.5em; overflow:hidden; -webkit-mask-image:linear-gradient(#000 78%, transparent); mask-image:linear-gradient(#000 78%, transparent); }
+  .chat .more-line { align-self:flex-start; margin:-6px 0 0 6px; color:var(--accent); font-size:14px; font-weight:700; padding:4px 8px; }
+  .chat .day { align-self:center; color:var(--faint); font-size:12.5px; }
+  .pick { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .pick button { height:40px; padding:0 14px; border-radius:999px; background:var(--surface); display:inline-flex; align-items:center; gap:8px; font-size:15px; font-weight:700; }
+  .pick button i { width:9px; height:9px; border-radius:50%; background:var(--c); }
+  /* The Ask widget (static/ask-card.js), when Robert hands a question into the thread. */
+  .bub.ak-only { padding:0; background:transparent; width:88%; }
+  .askc { border-left:3px solid var(--warn); border-radius:14px; background:var(--surface); padding:12px 14px; white-space:normal; font-size:16px; line-height:1.4; }
+  .askc.sending { opacity:.55; pointer-events:none; }
+  .ak-h { display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--muted); }
+  .ak-i { width:20px; height:20px; flex:none; border-radius:50%; background:var(--warn); color:var(--bg); font-size:13px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; }
+  .ak-who { flex:1; min-width:0; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ak-age { flex:none; color:var(--faint); }
+  .ak-q { margin-top:6px; font-size:17px; font-weight:700; overflow-wrap:anywhere; }
+  .ak-note { margin-top:6px; font-size:14.5px; color:var(--muted); }
+  .ak-ops { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .ak-ops button { min-height:44px; max-width:100%; padding:0 16px; border-radius:999px; background:var(--surface-2); font-size:15.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ak-f { display:flex; gap:8px; margin-top:10px; }
+  .ak-f input { flex:1; min-width:0; min-height:44px; padding:0 14px; border-radius:12px; border:1px solid var(--line); background:var(--bg); font-size:16px; outline:none; }
+  .ak-f button { flex:none; min-height:44px; padding:0 16px; border-radius:12px; background:var(--accent); color:var(--accent-ink); font-size:15.5px; font-weight:700; }
+  .askc.done { display:flex; align-items:baseline; gap:8px; padding:9px 14px; border-left-color:var(--accent); font-size:15px; color:var(--muted); }
+  .askc.done.gone { border-left-color:var(--faint); }
+  .askc.done .ak-ok { color:var(--accent); font-weight:800; flex:none; }
+  .askc.done .ak-q1 { flex:1 1 55%; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .askc.done .ak-a { flex:0 1 auto; min-width:0; max-width:45%; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
-  .ptr { height:0; overflow:hidden; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:14px; transition:height .18s; }
-  .ptr.on { height:44px; }
-  /* The one bar: open work, or talk to Robert. Everything else is a tap into a card. */
-  .hbar { display:flex; gap:10px; padding:10px 16px calc(var(--sab) + 12px); background:var(--surface); border-top:1px solid var(--line); }
-  .hbar .big { flex:1; }
+  /* ── the dock: the call (when it is on) over the composer + the talk button ── */
+  .dock { flex:none; background:var(--bg); padding:0 0 calc(var(--sab) + 10px); }
+  .call { display:flex; flex-direction:column; align-items:center; padding:14px 18px 6px; position:relative; }
+  .orb { width:112px; height:112px; border-radius:50%; position:relative; display:flex; align-items:center; justify-content:center; --lvl:0; }
+  .orb::before { content:""; position:absolute; inset:0; border-radius:50%; background:radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--oc) 70%, white) 0%, var(--oc) 46%, color-mix(in srgb, var(--oc) 55%, var(--bg)) 100%);
+    transform:scale(calc(.72 + var(--lvl) * .28)); transition:transform .09s linear; box-shadow:0 0 0 calc(var(--lvl) * 16px) color-mix(in srgb, var(--oc) 22%, transparent); }
+  .orb { --oc:var(--accent); }
+  .call[data-state="connecting"] .orb, .call[data-state="paused"] .orb { --oc:#56625A; }
+  .call[data-state="speaking"] .orb { --oc:var(--blue); }
+  .call[data-state="thinking"] .orb, .call[data-state="transcribing"] .orb { --oc:var(--decide); }
+  .call[data-state="listening"] .orb::before { animation:breathe 2.6s ease-in-out infinite; }
+  .call[data-state="speaking"] .orb::before { animation:talk .5s ease-in-out infinite alternate; }
+  .call[data-state="thinking"] .orb::after, .call[data-state="transcribing"] .orb::after, .call[data-state="connecting"] .orb::after { content:""; position:absolute; inset:-7px; border-radius:50%; border:3px solid transparent; border-top-color:var(--oc); animation:spin 1s linear infinite; }
+  @keyframes breathe { 50% { transform:scale(.8); } }
+  @keyframes talk { from { transform:scale(.8); } to { transform:scale(.95); } }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .orb::before, .orb::after { animation:none !important; } }
+  .call-st { margin-top:12px; font-size:21px; font-weight:800; letter-spacing:-.01em; }
+  .call-sub { margin-top:4px; min-height:42px; max-width:100%; text-align:center; color:var(--muted); font-size:15.5px; line-height:1.35; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .call-mute { position:absolute; right:14px; top:14px; width:48px; height:48px; border-radius:50%; background:var(--surface); color:var(--muted); display:flex; align-items:center; justify-content:center; }
+  .call-mute.on { background:var(--warn-soft); color:var(--warn); }
+  .call[data-state="paused"] .orb { cursor:pointer; }
 
-  /* ── motion ───────────────────────────────────────────────────────────────── */
-  @keyframes in-right { from { transform:translateX(24px); opacity:0; } to { transform:none; opacity:1; } }
-  @keyframes in-left  { from { transform:translateX(-24px); opacity:0; } to { transform:none; opacity:1; } }
-  @keyframes fade-in  { from { opacity:0; } to { opacity:1; } }
-  .view.in-right { animation:in-right .2s ease-out; }
-  .view.in-left  { animation:in-left .2s ease-out; }
-  .view.fade     { animation:fade-in .18s ease-out; }
-  @media (prefers-reduced-motion: reduce) { .view { animation:none !important; } }
-  .skel { background:linear-gradient(90deg, var(--surface) 0%, var(--surface-2) 50%, var(--surface) 100%); background-size:200% 100%; animation:shimmer 1.2s linear infinite; border-radius:var(--r); }
-  @keyframes shimmer { from { background-position:200% 0; } to { background-position:-200% 0; } }
-  .skel.card { height:74px; }
-  .skel.row { height:58px; border-radius:14px; }
-
-  /* ── shared chrome (Focus + Robert) ───────────────────────────────────────── */
-  .thead { padding:calc(var(--sat) + 8px) 8px 8px; display:grid; grid-template-columns:var(--tap) 1fr var(--tap); align-items:center; gap:4px; background:var(--surface); border-bottom:1px solid var(--line); }
-  .thead .ic { width:var(--tap); height:var(--tap); display:flex; align-items:center; justify-content:center; font-size:26px; border-radius:14px; }
-  .thead .tt { min-width:0; text-align:center; }
-  .thead .tt b { display:block; font-size:16.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .thead .tt small { display:flex; justify-content:center; align-items:center; gap:6px; color:var(--muted); font-size:13px; }
-  .composer { display:flex; gap:8px; align-items:flex-end; padding:8px 12px calc(var(--sab) + 10px); background:var(--surface); position:relative; }
-  .composer textarea { flex:1; min-height:48px; max-height:140px; resize:none; border-radius:16px; border:1px solid var(--line); background:var(--bg); padding:12px 14px; font-size:17px; line-height:1.3; outline:none; }
-  .composer textarea:focus { border-color:var(--accent); }
-  .composer .mic { width:48px; height:48px; border-radius:50%; background:var(--surface-2); color:var(--ink); font-size:22px; display:flex; align-items:center; justify-content:center; flex:none; user-select:none; -webkit-user-select:none; }
-  .composer .mic.rec { background:var(--danger); color:#fff; animation:recpulse 1s ease-in-out infinite; }
-  .composer .mic.busy { background:var(--warn-soft); color:var(--warn); }
+  .composer { display:flex; gap:10px; align-items:flex-end; padding:8px 12px 0; position:relative; }
+  .composer textarea { flex:1; min-width:0; min-height:52px; max-height:150px; resize:none; border-radius:26px; border:1px solid var(--line); background:var(--surface); padding:14px 18px; font-size:17px; line-height:1.3; outline:none; }
+  .composer textarea:focus { border-color:var(--accent); background:var(--bg); }
+  .composer textarea::placeholder { color:var(--faint); }
+  .talk { width:64px; height:64px; flex:none; border-radius:50%; background:var(--accent); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:none; box-shadow:0 6px 22px rgba(86,182,147,.25); }
+  .talk:active { transform:scale(.96); }
+  .talk.live { background:var(--danger); color:#fff; box-shadow:0 6px 22px rgba(232,112,95,.3); }
+  .talk.rec { background:var(--danger); color:#fff; animation:recpulse 1s ease-in-out infinite; }
+  .talk.busy { background:var(--warn-soft); color:var(--warn); }
+  .send { width:64px; height:64px; flex:none; border-radius:50%; background:var(--accent); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; }
+  .mic { width:48px; height:48px; border-radius:50%; background:var(--surface-2); color:var(--ink); display:flex; align-items:center; justify-content:center; flex:none; user-select:none; -webkit-user-select:none; touch-action:none; }
+  .mic.rec { background:var(--danger); color:#fff; animation:recpulse 1s ease-in-out infinite; }
+  .mic.busy { background:var(--warn-soft); color:var(--warn); }
   @keyframes recpulse { 50% { box-shadow:0 0 0 10px rgba(232,112,95,.25); } }
-  .mic { touch-action:none; }
   #recbar { position:fixed; left:8px; right:8px; bottom:calc(var(--sab) + 8px); z-index:80; display:flex; align-items:center; gap:12px; padding:10px; background:var(--raised); border:1px solid var(--line); border-radius:22px; box-shadow:0 -6px 28px rgba(0,0,0,.45); }
   #recbar button { height:58px; border-radius:18px; font-size:18px; font-weight:800; flex:none; }
   #rb-cancel { width:58px; background:var(--surface-2); color:var(--ink); font-size:22px; }
@@ -150,15 +165,202 @@
   .rb-lvl i { width:4px; height:30px; border-radius:2px; background:var(--danger); transform:scaleY(.1); transition:transform .09s linear; }
   #recbar:not([data-state="rec"]) .rb-lvl { display:none; }
   @keyframes recblink { 50% { opacity:.3; } }
-  .composer .send { width:48px; height:48px; border-radius:50%; background:var(--accent); color:var(--accent-ink); font-size:22px; display:flex; align-items:center; justify-content:center; flex:none; }
-  .composer .send:disabled { opacity:.35; }
-  .field.row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-  .field .hint { font-weight:500; text-transform:none; letter-spacing:0; color:var(--faint); }
+  .rbar { padding:8px 14px 0; }
 
-  /* ── focus screen ─────────────────────────────────────────────────────────── */
-  .fhead { grid-template-columns:var(--tap) 1fr var(--tap); }
+  /* ── the approval deck ────────────────────────────────────────────────────── */
+  .deck { position:fixed; inset:0; z-index:30; background:var(--bg); display:flex; flex-direction:column; padding-left:var(--sal); padding-right:var(--sar); }
+  .deck.in { animation:rise .22s ease-out; }
+  @keyframes rise { from { transform:translateY(24px); opacity:0; } to { transform:none; opacity:1; } }
+  @media (prefers-reduced-motion: reduce) { .deck.in { animation:none; } }
+  .dk-head { flex:none; display:flex; align-items:center; gap:10px; padding:calc(var(--sat) + 6px) 14px 6px 6px; }
+  .dk-x { width:var(--tap); height:var(--tap); display:flex; align-items:center; justify-content:center; color:var(--muted); border-radius:14px; }
+  .dk-pos { font-size:15px; font-weight:700; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .dk-dots { margin-left:auto; display:flex; gap:6px; }
+  /* The call stays visible over the deck: a small orb, what it is doing, and the hang-up. */
+  .dk-call { margin-left:auto; display:inline-flex; align-items:center; gap:8px; height:36px; padding:0 4px 0 12px; border-radius:999px; background:var(--surface); font-size:14px; font-weight:700; --oc:var(--accent); }
+  .dk-call + .dk-dots { margin-left:10px; }
+  .dk-call i { width:12px; height:12px; border-radius:50%; background:var(--oc); }
+  .dk-call[data-state="speaking"] { --oc:var(--blue); } .dk-call[data-state="thinking"], .dk-call[data-state="transcribing"] { --oc:var(--decide); } .dk-call[data-state="paused"], .dk-call[data-state="connecting"] { --oc:#56625A; }
+  .dk-call[data-state="listening"] i, .dk-call[data-state="speaking"] i { animation:breathe 1.4s ease-in-out infinite; }
+  .dk-hang { width:30px; height:30px; border-radius:50%; background:var(--danger); color:#fff; display:flex; align-items:center; justify-content:center; }
+  .dk-dots i { width:7px; height:7px; border-radius:50%; background:var(--line); }
+  .dk-dots i.on { background:var(--ink); }
+  .dk-track { flex:1; min-height:0; display:flex; overflow-x:auto; overflow-y:hidden; scroll-snap-type:x mandatory; scrollbar-width:none; overscroll-behavior-x:contain; }
+  .dk-track::-webkit-scrollbar { display:none; }
+  .qcard { flex:0 0 100%; min-width:0; scroll-snap-align:center; scroll-snap-stop:always; display:flex; flex-direction:column; }
+  .qc-scroll { flex:1; min-height:0; overflow-y:auto; padding:8px 20px 28px; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+  .qc-top { display:flex; align-items:center; gap:10px; font-size:13px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+  .qc-ws { display:inline-flex; align-items:center; gap:7px; color:var(--ink); }
+  .qc-ws::before { content:""; width:9px; height:9px; border-radius:50%; background:var(--c); }
+  .qc-kind { color:var(--accent); }
+  .qc-kind.k-question, .qc-kind.k-draft { color:var(--decide); } .qc-kind.k-blocked { color:var(--danger); } .qc-kind.k-review { color:var(--blue); }
+  .qc-age { margin-left:auto; color:var(--faint); letter-spacing:0; font-weight:600; text-transform:none; }
+  .qc-asked { margin-top:16px; color:var(--muted); font-size:15px; line-height:1.4; overflow-wrap:anywhere; }
+  .qc-asked span { display:block; font-size:12px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; color:var(--faint); margin-bottom:2px; }
+  .qc-verdict { margin:10px 0 0; font-size:24px; line-height:1.24; font-weight:800; letter-spacing:-.015em; overflow-wrap:anywhere; }
+  .qc-verdict.long { font-size:20px; line-height:1.3; }
+  .qc-sec { margin-top:20px; }
+  .qc-h { font-size:12px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; color:var(--faint); margin-bottom:8px; display:flex; gap:8px; align-items:baseline; }
+  .qc-h em { font-style:normal; letter-spacing:0; text-transform:none; font-weight:600; color:var(--faint); }
+  .ck { width:100%; display:grid; grid-template-columns:28px auto 1fr; gap:8px; align-items:baseline; text-align:left; padding:11px 12px; border-radius:14px; background:var(--surface); margin-bottom:6px; font-size:15.5px; }
+  .ck i { font-style:normal; font-weight:900; text-align:center; }
+  .ck b { font-weight:700; white-space:nowrap; }
+  .ck span { color:var(--muted); min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ck.pass i { color:var(--accent); } .ck.fail i { color:var(--danger); } .ck.part i { color:var(--warn); } .ck.none i { color:var(--faint); }
+  .ck.fail { background:linear-gradient(135deg, var(--surface) 0%, var(--danger-soft) 160%); }
+  .ck.real { border:1px solid var(--line); }
+  .ck-raw { margin:-2px 0 8px 36px; color:var(--muted); font-size:14.5px; line-height:1.45; }
+  .ck-raw div { padding:3px 0; overflow-wrap:anywhere; }
+  .ba { position:relative; border-radius:16px; overflow:hidden; background:#000; touch-action:pan-y; user-select:none; -webkit-user-select:none; min-height:120px; margin:0 auto; }
+  .ba img { display:block; width:100%; height:100%; object-fit:contain; object-position:center top; pointer-events:none; -webkit-user-drag:none; }
+  .ba img.gone { min-height:160px; }
+  .ba-a { position:absolute; inset:0; clip-path:inset(0 0 0 var(--x)); }
+  .ba-a img { width:100%; height:100%; max-height:none; object-fit:contain; object-position:center top; }
+  .ba-div { position:absolute; top:0; bottom:0; left:var(--x); width:2px; margin-left:-1px; background:#fff; box-shadow:0 0 8px rgba(0,0,0,.5); pointer-events:none; }
+  .ba-div span { position:absolute; top:50%; left:50%; width:40px; height:40px; margin:-20px 0 0 -20px; border-radius:50%; background:#fff; color:#111; display:flex; align-items:center; justify-content:center; box-shadow:0 2px 10px rgba(0,0,0,.4); }
+  .ba-tag { position:absolute; top:10px; padding:3px 9px; border-radius:999px; background:rgba(0,0,0,.6); color:#fff; font-size:12px; font-weight:800; letter-spacing:.04em; pointer-events:none; }
+  .ba-tag.l { left:10px; } .ba-tag.r { right:10px; }
+  .ba-cap { position:absolute; left:10px; bottom:10px; padding:3px 9px; border-radius:999px; background:rgba(0,0,0,.6); color:#fff; font-size:12px; pointer-events:none; }
+  .ba-full { position:absolute; right:8px; bottom:8px; width:44px; height:44px; border-radius:50%; background:rgba(0,0,0,.6); color:#fff; font-size:20px; display:flex; align-items:center; justify-content:center; }
+  .qc-singles { display:flex; gap:10px; overflow-x:auto; margin-top:10px; scrollbar-width:none; }
+  .qc-singles .sg { flex:none; width:44%; border-radius:12px; overflow:hidden; background:#000; position:relative; }
+  .qc-singles img { display:block; width:100%; height:auto; }
+  .qc-singles span { position:absolute; left:6px; bottom:6px; padding:2px 8px; border-radius:999px; background:rgba(0,0,0,.6); color:#fff; font-size:12px; }
+  .qc-hint { margin-top:8px; color:var(--faint); font-size:13px; text-align:center; }
+  .qc-pr { display:grid; grid-template-columns:1fr auto; gap:2px 10px; align-items:center; padding:12px 14px; border-radius:14px; background:var(--surface); color:var(--ink); text-decoration:none; margin-bottom:6px; }
+  .qc-pr svg { grid-row:1 / 3; grid-column:2; color:var(--accent); }
+  .pr-t { font-weight:700; font-size:15.5px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .pr-m { color:var(--muted); font-size:14px; }
+  .pr-m .add { color:var(--accent); } .pr-m .del { color:var(--danger); }
+  .qc-pr.nolink { display:block; }
+  .q-opts { display:flex; flex-direction:column; gap:10px; margin-top:20px; }
+  .q-opt { min-height:56px; padding:12px 18px; border-radius:16px; background:var(--surface-2); text-align:left; font-size:17px; font-weight:700; line-height:1.3; overflow-wrap:anywhere; }
+  .q-opt:active { background:var(--accent); color:var(--accent-ink); }
+  .q-note { margin-top:16px; padding:10px 12px; border-radius:12px; background:var(--surface); color:var(--muted); font-size:15px; }
+  .q-note b { color:var(--ink); }
+  .qc-draft .dr-to { display:flex; align-items:baseline; gap:8px; font-size:16px; }
+  .dr-to span { font-size:12px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; color:var(--faint); }
+  .dr-to i { margin-left:auto; font-style:normal; color:var(--muted); font-size:14px; }
+  .dr-sub { margin-top:6px; font-weight:700; }
+  .dr-text { margin-top:12px; padding:16px 16px 16px 18px; border-radius:4px 16px 16px 4px; background:var(--surface); border-left:3px solid var(--decide); white-space:pre-wrap; overflow-wrap:anywhere; font-size:17px; line-height:1.5; user-select:text; -webkit-user-select:text; }
+  .dr-text.partial { color:var(--muted); }
+  .dr-miss { margin-top:10px; color:var(--warn); font-size:14.5px; font-weight:700; }
+  .dr-where { margin-top:10px; color:var(--muted); font-size:14px; }
+  .dr-where a { color:var(--accent); font-weight:700; }
+  .qc-blocked { color:var(--muted); font-size:15.5px; line-height:1.45; }
+  .qc-more summary { cursor:pointer; color:var(--accent); font-weight:700; font-size:15px; list-style:none; padding:6px 0; }
+  .qc-more summary::-webkit-details-marker { display:none; }
+  .qc-more ul { margin:4px 0 0; padding-left:22px; color:var(--muted); font-size:15px; }
+  .qc-sum { color:var(--ink); font-size:15.5px; line-height:1.45; }
+  .qc-sum p { margin:0 0 8px; }
+  .qc-sum a { color:var(--accent); }
+  .qc-note { margin-top:18px; padding:10px 12px; border-radius:12px; background:var(--surface); color:var(--muted); font-size:14.5px; line-height:1.4; }
+  .qc-term { margin-top:22px; display:inline-flex; align-items:center; gap:4px; color:var(--faint); font-size:14.5px; font-weight:700; padding:6px 0; }
+  .dk-bar { flex:none; display:flex; gap:10px; padding:10px 14px calc(var(--sab) + 12px); border-top:1px solid var(--line); background:var(--bg); }
+  .db { flex:1; height:56px; border-radius:16px; background:var(--surface-2); font-size:17px; font-weight:800; }
+  .db.later { flex:.8; color:var(--muted); }
+  .db.yes { flex:1.4; background:var(--accent); color:var(--accent-ink); }
+  .db.no { color:var(--danger); }
+  .db:active:not(:disabled) { transform:scale(.97); }
+  .dk-empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; color:var(--muted); }
+  .dk-empty b { font-size:22px; color:var(--ink); }
+
+  /* ── the before/after viewer, full screen ─────────────────────────────────── */
+  .pv { position:fixed; inset:0; z-index:60; background:#000; display:flex; flex-direction:column; color:#fff; --pull:0; opacity:calc(1 - var(--pull) * .6); user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+  .pv.out { opacity:0; transition:opacity .16s; }
+  .pv-top { flex:none; display:flex; align-items:center; gap:10px; padding:calc(var(--sat) + 6px) 12px 6px 6px; }
+  .pv-x { width:var(--tap); height:var(--tap); display:flex; align-items:center; justify-content:center; color:#fff; }
+  .pv-cap { font-weight:700; }
+  .pv-seg { display:flex; background:rgba(255,255,255,.12); border-radius:999px; padding:3px; }
+  .pv-seg button { height:34px; padding:0 16px; border-radius:999px; font-size:14px; font-weight:800; color:rgba(255,255,255,.75); }
+  .pv-seg button.on { background:#fff; color:#000; }
+  .pv-z { margin-left:auto; font-size:14px; font-weight:700; color:rgba(255,255,255,.7); font-variant-numeric:tabular-nums; }
+  .pv-stage { flex:1; min-height:0; position:relative; overflow:hidden; touch-action:none; }
+  .pv-lay { position:absolute; inset:0; }
+  .pv-lay img { position:absolute; left:0; top:0; width:100%; height:100%; object-fit:contain; transform-origin:0 0; pointer-events:none; -webkit-user-drag:none; }
+  .pv-lay.a { clip-path:inset(0 0 0 var(--x)); }
+  .pv-div { position:absolute; top:0; bottom:0; left:var(--x); width:2px; margin-left:-1px; background:#fff; }
+  .pv-div span { position:absolute; top:50%; left:50%; width:48px; height:48px; margin:-24px 0 0 -24px; border-radius:50%; background:#fff; color:#111; display:flex; align-items:center; justify-content:center; }
+  .pv-tag { position:absolute; top:12px; padding:4px 10px; border-radius:999px; background:rgba(0,0,0,.6); font-size:13px; font-weight:800; pointer-events:none; }
+  .pv-tag.l { left:12px; } .pv-tag.r { right:12px; }
+  .pv-stage.flip .pv-div { display:none; }
+  .pv-stage.flip .pv-lay.a { clip-path:none; }
+  .pv-stage.flip.showb .pv-lay.a { visibility:hidden; }
+  .pv-stage.flip .pv-tag.l { display:none; } .pv-stage.flip.showb .pv-tag.l { display:block; } .pv-stage.flip.showb .pv-tag.r { display:none; }
+  .pv-hint { flex:none; text-align:center; padding:8px 12px calc(var(--sab) + 12px); color:rgba(255,255,255,.6); font-size:13px; }
+
+  /* ── terminals (behind ⋯) ─────────────────────────────────────────────────── */
+  .thead { padding:calc(var(--sat) + 8px) 8px 8px; display:grid; grid-template-columns:var(--tap) 1fr var(--tap); align-items:center; gap:4px; background:var(--surface); border-bottom:1px solid var(--line); }
+  .thead .ic { color:var(--ink); }
+  .thead .tt { min-width:0; text-align:center; }
+  .thead .tt b { display:block; font-size:16.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .thead .tt small { display:flex; justify-content:center; align-items:center; gap:6px; color:var(--muted); font-size:13px; }
+  .home-scroll { flex:1; overflow-y:auto; padding:14px 16px calc(var(--sab) + 24px); -webkit-overflow-scrolling:touch; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--faint); flex:none; }
+  .dot.working { background:#5CC3D8; box-shadow:0 0 0 3px rgba(92,195,216,.18); }
+  .dot.blocked { background:var(--danger); }
+  .dot.decide { background:var(--decide); }
+  .dot.review { background:var(--accent); }
+  .dot.your_turn { background:var(--warn); }
+  .dot.stalled { background:var(--faint); box-shadow:0 0 0 2px var(--warn-soft); }
+  .dot.waiting { background:transparent; box-shadow:inset 0 0 0 2px var(--blue); }
+  .dot.done { background:var(--blue); }
+  .card .meta .ph { font-weight:700; letter-spacing:.03em; }
+  .card .meta .ph.blocked { color:var(--danger); } .card .meta .ph.decide { color:var(--decide); }
+  .card .meta .ph.review { color:var(--accent); } .card .meta .ph.your_turn { color:var(--warn); }
+  .card .meta .ph.waiting { color:var(--blue); } .card .meta .ph.working { color:#5CC3D8; }
+  .card.needs.decide { background:linear-gradient(135deg, var(--surface) 0%, #2C2340 140%); border-color:#4A3A6A; }
+  .big { height:60px; border-radius:var(--r); font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; gap:10px; }
+  .big.primary { background:var(--accent); color:var(--accent-ink); }
+  .big.secondary { background:var(--surface-2); color:var(--ink); }
+  .big:active, .card:active, .chip:active, .row:active { transform:scale(.98); filter:brightness(1.12); }
+  section.group { margin-bottom:22px; }
+  .group h2 { margin:0 0 10px; font-size:13px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); display:flex; align-items:center; gap:8px; }
+  .group h2 .n { background:var(--surface-2); color:var(--ink); border-radius:999px; padding:1px 9px; font-size:12px; }
+  .group h2 .n:empty { display:none; }
+  .group h2 button { margin-left:auto; color:var(--accent); font-size:14px; font-weight:600; text-transform:none; letter-spacing:0; }
+  .cards { display:flex; flex-direction:column; gap:10px; }
+  .card { width:100%; text-align:left; background:var(--surface); border-radius:var(--r); padding:14px 16px; display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:center; min-height:72px; }
+  .card.needs { background:linear-gradient(135deg, var(--surface) 0%, var(--warn-soft) 140%); border:1px solid #4A3D18; grid-template-rows:auto auto; }
+  .card.needs.blocked { background:linear-gradient(135deg, var(--surface) 0%, var(--danger-soft) 140%); border-color:#5A2A22; }
+  .card > span { min-width:0; overflow-wrap:anywhere; }
+  .card .title { font-size:17px; font-weight:700; line-height:1.25; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .card .meta { color:var(--muted); font-size:14px; margin-top:3px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .card .prompt { margin-top:8px; color:var(--warn); font-size:15px; line-height:1.3; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; }
+  .card.blocked .prompt { color:var(--danger); }
+  .card.decide .prompt { color:var(--decide); }
+  .card .chev { color:var(--faint); font-size:22px; }
+  .card .tag { color:var(--ws,var(--muted)); background:transparent; padding:0; font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; font-weight:800; }
+  .card .wk { font-size:12px; font-weight:700; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .card .one { margin-top:6px; color:var(--muted); font-size:14.5px; line-height:1.3; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .card.fin { border:1px solid #2E5A47; }
+  .card .answers { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; grid-column:1 / -1; }
+  .card .answers button { height:44px; padding:0 16px; border-radius:12px; background:var(--accent-soft); color:var(--accent); font-size:15.5px; font-weight:700; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .card .answers button.go { background:var(--accent); color:var(--accent-ink); }
+  .card .answers button.no { background:var(--danger-soft); color:var(--danger); }
+  .card .answers button.more { background:var(--surface-2); color:var(--muted); }
+  .card.ended { opacity:.75; }
+  .tag { background:var(--surface-2); color:var(--muted); border-radius:6px; padding:1px 7px; font-size:12.5px; font-weight:600; }
+  .empty { color:var(--faint); padding:18px 6px; text-align:center; font-size:15px; }
+  .ptr { height:0; overflow:hidden; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:14px; transition:height .18s; }
+  .ptr.on { height:44px; }
+  .skel { background:linear-gradient(90deg, var(--surface) 0%, var(--surface-2) 50%, var(--surface) 100%); background-size:200% 100%; animation:shimmer 1.2s linear infinite; border-radius:var(--r); }
+  @keyframes shimmer { from { background-position:200% 0; } to { background-position:-200% 0; } }
+  .skel.card { height:74px; }
+
+  /* ── motion ───────────────────────────────────────────────────────────────── */
+  @keyframes in-right { from { transform:translateX(24px); opacity:0; } to { transform:none; opacity:1; } }
+  @keyframes in-left  { from { transform:translateX(-24px); opacity:0; } to { transform:none; opacity:1; } }
+  @keyframes fade-in  { from { opacity:0; } to { opacity:1; } }
+  .view.in-right { animation:in-right .2s ease-out; }
+  .view.in-left  { animation:in-left .2s ease-out; }
+  .view.fade     { animation:fade-in .18s ease-out; }
+  @media (prefers-reduced-motion: reduce) { .view { animation:none !important; } }
+
+  /* ── one terminal (Focus) ─────────────────────────────────────────────────── */
   .fstrips { background:var(--surface); border-bottom:1px solid var(--line); }
-  .fstrips .strip { margin:0; padding:8px 12px 10px; }
+  .strip { display:flex; gap:8px; overflow-x:auto; scrollbar-width:none; padding:8px 12px 10px; }
+  .strip::-webkit-scrollbar { display:none; }
   .tchip { flex:none; height:40px; padding:0 12px; border-radius:12px; background:var(--surface-2); font-size:14px; font-weight:600; display:inline-flex; align-items:center; gap:7px; max-width:230px; }
   .tchip span.l { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .tchip.on { background:var(--raised); box-shadow:inset 0 0 0 1.5px var(--accent); }
@@ -170,38 +372,27 @@
   .vchip.diff b { color:var(--accent); font-weight:700; } .vchip.diff i { color:var(--danger); font-style:normal; }
   .fscroll { flex:1; min-height:0; overflow-y:auto; padding:14px 16px 24px; -webkit-overflow-scrolling:touch; touch-action:pan-y; }
   .fgoal { flex:none; padding:10px 16px 12px; background:var(--surface); border-bottom:1px solid var(--line); }
-  .fgoal[hidden] { display:none; }
   .fgoal .ghead { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
   .fgoal .lbl { font-size:12px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); flex:1; }
-  .fgoal .ghead button { border:0; background:none; color:var(--accent); font:inherit; font-size:14px; font-weight:700; padding:4px 0; }
+  .fgoal .ghead button { color:var(--accent); font-size:14px; font-weight:700; padding:4px 0; }
   .fgoal .gt { font-size:17px; font-weight:700; line-height:1.35; }
   .fgoal .gt.muted { font-weight:500; color:var(--muted); }
   .fgoal .gsub { color:var(--muted); font-size:13.5px; margin-top:6px; }
   .frow { display:grid; grid-template-columns:64px 1fr; gap:8px 10px; align-items:start; padding:8px 0; border-bottom:1px solid var(--line); }
   .frow:last-child { border-bottom:0; }
   .frow time { font-size:11.5px; color:var(--faint); font-variant-numeric:tabular-nums; line-height:1.3; padding-top:3px; }
-  .fblock.factivity .lbl { display:flex; align-items:center; gap:8px; }
   .fblock .lbl time { margin-left:auto; font-weight:500; text-transform:none; letter-spacing:0; color:var(--faint); font-size:12px; }
-  .rwork { flex:none; display:flex; align-items:center; gap:10px; padding:8px 14px; background:var(--surface); border-top:1px solid var(--line); color:var(--muted); font-size:14.5px; }
-  .rwork[hidden] { display:none; }
-  .rwork .dots { display:inline-flex; gap:3px; }
-  .rwork .dots i { width:5px; height:5px; border-radius:50%; background:var(--accent); opacity:.35; }
-  body.blink .rwork .dots i:nth-child(1) { opacity:1; } body.blink .rwork .dots i:nth-child(2) { opacity:.7; } body.blink .rwork .dots i:nth-child(3) { opacity:.4; }
   .fstatus { display:flex; align-items:center; gap:10px; flex-wrap:nowrap; margin-bottom:14px; min-width:0; }
-  .fstatus .st { flex:none; }
-  .fstatus .st { display:inline-flex; align-items:center; gap:8px; font-weight:800; font-size:17px; }
+  .fstatus .st { flex:none; display:inline-flex; align-items:center; gap:8px; font-weight:800; font-size:17px; }
   .fstatus .bits { color:var(--muted); font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
   .fblock { background:var(--surface); border-radius:var(--r); padding:14px 16px; margin-bottom:12px; }
   .fblock .lbl { display:flex; justify-content:space-between; align-items:center; font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; font-weight:700; }
-  .fblock .lbl button { color:var(--accent); font-size:13px; text-transform:none; letter-spacing:0; font-weight:700; min-height:28px; }
+  .fblock .lbl button { color:var(--accent); font-size:13px; text-transform:none; letter-spacing:0; font-weight:700; min-height:28px; margin-left:12px; }
   .fblock .t { font-size:16.5px; line-height:1.4; overflow-wrap:anywhere; }
   .fblock .t p { margin:0 0 8px; } .fblock .t p:last-child { margin:0; }
   .fblock .t ul, .fblock .t ol { margin:0 0 8px; padding-left:22px; }
-  .fblock .t a { color:var(--accent); }
   .fblock .t code { font-family:ui-monospace,"Roboto Mono",Menlo,monospace; font-size:14px; }
   .fblock .t pre { background:var(--bg); padding:10px; border-radius:10px; overflow-x:auto; font-size:13px; }
-  .fblock.goal .t { font-weight:700; font-size:18px; }
-  .fblock.goal .sub { color:var(--muted); font-size:14px; margin-top:8px; }
   .fblock .t table { display:block; overflow-x:auto; white-space:nowrap; font-size:13.5px; border-collapse:collapse; max-width:100%; }
   .fblock .t th, .fblock .t td { padding:3px 8px; border-bottom:1px solid var(--line); text-align:left; }
   .fblock .t img { max-width:100%; }
@@ -209,7 +400,6 @@
   .fblock.clamp.over .t { -webkit-mask-image:linear-gradient(#000 82%, transparent); mask-image:linear-gradient(#000 82%, transparent); }
   .fblock .t h1, .fblock .t h2, .fblock .t h3, .fblock .t h4, .fl.say h1, .fl.say h2, .fl.say h3, .fl.say h4 { font-size:1em; font-weight:800; margin:0 0 6px; }
   .fl a, .fblock .t a { color:var(--accent); overflow-wrap:anywhere; }
-  .fblock.clamp.und .t { max-height:8em; }
   .fblock.clamp.open .t { max-height:none; -webkit-mask-image:none; mask-image:none; }
   .fblock.latest { border:1px solid #2E5A47; }
   .fblock.prev { opacity:.8; } .fblock.prev .t { color:var(--muted); }
@@ -242,91 +432,46 @@
   .fa.warn { background:var(--danger-soft); color:var(--danger); }
   .fempty { color:var(--faint); font-size:14.5px; }
   .skel.fl { height:20px; border-radius:6px; margin:8px 0; }
-
-  /* ── robert ───────────────────────────────────────────────────────────────── */
-  .rstrip { display:flex; gap:8px; overflow-x:auto; scrollbar-width:none; padding:10px 14px 4px; background:var(--surface); border-bottom:1px solid var(--line); }
-  .rstrip::-webkit-scrollbar { display:none; }
-  .rstrip .chip { flex:none; height:38px; padding:0 14px; font-size:14.5px; }
-  .chat { flex:1; min-height:0; overflow-y:auto; padding:14px 14px 8px; display:flex; flex-direction:column; gap:10px; -webkit-overflow-scrolling:touch; }
-  .bub { max-width:88%; padding:12px 15px; border-radius:20px; font-size:16.5px; line-height:1.4; white-space:pre-wrap; overflow-wrap:anywhere; }
-  .bub.you { align-self:flex-end; background:var(--accent); color:var(--accent-ink); border-bottom-right-radius:6px; }
-  .bub.rob { align-self:flex-start; background:var(--surface-2); border-bottom-left-radius:6px; white-space:normal; }
-  .bub.rob a { color:var(--accent); overflow-wrap:anywhere; }
-  .bub.rob p { margin:0 0 8px; } .bub.rob p:last-child { margin:0; }
-  .bub.rob pre { background:var(--bg); padding:10px; border-radius:10px; overflow-x:auto; font-size:13.5px; }
-  .bub.rob code { font-family:ui-monospace,"Roboto Mono",Menlo,monospace; font-size:14.5px; }
-  /* A terminal he names is a chip: tap opens its story. */
-  .bub.rob a[href^="#sel="] { display:inline-flex; align-items:center; gap:4px; max-width:240px; padding:0 10px; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-size:14px; font-weight:700; text-decoration:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; vertical-align:-4px; line-height:26px; }
-  .bub.rob a[href^="#sel="]::before { content:"▸"; }
-  .bub.rob ul, .bub.rob ol { margin:0 0 8px; padding-left:22px; }
-  .bub.you.queued { opacity:.55; }
-  .bub.pending { color:var(--muted); }
-  .copytext { user-select:text; -webkit-user-select:text; -webkit-touch-callout:default; white-space:pre-wrap; overflow-wrap:anywhere; font-family:ui-monospace,"Roboto Mono",Menlo,monospace; font-size:12.5px; line-height:1.35; background:var(--bg); color:var(--ink); padding:12px; border-radius:12px; max-height:58vh; overflow:auto; margin:0 0 10px; }
-  .bub.pending:empty::after { content:"thinking…"; }
-  .chat .day { align-self:center; color:var(--faint); font-size:12.5px; }
-  /* The Ask widget (static/ask-card.js) — the Desk's, at thumb size. */
-  #v-robert .thead { grid-template-columns:var(--tap) 1fr auto auto var(--tap); }
-  #v-robert .rmodel { max-width:92px; height:36px; margin-right:2px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font-size:13px; font-weight:700; padding:0 8px; -webkit-appearance:none; appearance:none; }
-  .askn { height:36px; padding:0 13px; border-radius:999px; background:var(--warn-soft); color:var(--warn); font-size:15px; font-weight:800; font-variant-numeric:tabular-nums; }
-  .askn[hidden] { display:none; }
-  .askn.on { background:var(--warn); color:var(--bg); }
-  .askpop { flex:none; max-height:65%; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px; border-bottom:1px solid var(--line); background:var(--bg); -webkit-overflow-scrolling:touch; }
-  .askpop[hidden] { display:none; }
-  .ak-empty { font-size:15px; color:var(--faint); }
-  .bub.ak-only { padding:0; background:transparent; width:88%; }
-  .bub .askc-host + p, .bub p + .askc-host { margin-top:8px; }
-  .askc { border-left:3px solid var(--warn); border-radius:14px; background:var(--surface); padding:12px 14px; white-space:normal; font-size:16px; line-height:1.4; }
-  .askc.sending { opacity:.55; pointer-events:none; }
-  .ak-h { display:flex; align-items:center; gap:8px; font-size:13.5px; color:var(--muted); }
-  .ak-i { width:20px; height:20px; flex:none; border-radius:50%; background:var(--warn); color:var(--bg); font-size:13px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; }
-  .ak-who { flex:1; min-width:0; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .ak-age { flex:none; color:var(--faint); }
-  .ak-q { margin-top:6px; font-size:17px; font-weight:700; overflow-wrap:anywhere; }
-  .ak-note { margin-top:6px; font-size:14.5px; color:var(--muted); }
-  .ak-ops { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
-  .ak-ops button { min-height:44px; max-width:100%; padding:0 16px; border-radius:999px; background:var(--surface-2); font-size:15.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .ak-f { display:flex; gap:8px; margin-top:10px; }
-  .ak-f input { flex:1; min-width:0; min-height:44px; padding:0 14px; border-radius:12px; border:1px solid var(--line); background:var(--bg); font-size:16px; outline:none; }
-  .ak-f button { flex:none; min-height:44px; padding:0 16px; border-radius:12px; background:var(--accent); color:var(--accent-ink); font-size:15.5px; font-weight:700; }
-  .askc.done { display:flex; align-items:baseline; gap:8px; padding:9px 14px; border-left-color:var(--accent); font-size:15px; color:var(--muted); }
-  .askc.done.gone { border-left-color:var(--faint); }
-  .askc.done .ak-ok { color:var(--accent); font-weight:800; flex:none; }
-  .askc.done .ak-q1 { flex:1 1 55%; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .askc.done .ak-a { flex:0 1 auto; min-width:0; max-width:45%; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .askc.done .ak-a i { color:var(--faint); font-style:normal; }
+  .fcomposer { display:flex; gap:8px; align-items:flex-end; padding:8px 12px calc(var(--sab) + 10px); background:var(--surface); }
+  .fcomposer textarea { flex:1; min-height:48px; max-height:140px; resize:none; border-radius:16px; border:1px solid var(--line); background:var(--bg); padding:12px 14px; font-size:17px; line-height:1.3; outline:none; }
+  .fcomposer textarea:focus { border-color:var(--accent); }
+  .fcomposer .send { width:48px; height:48px; }
 
   /* ── sheets ───────────────────────────────────────────────────────────────── */
-  .sheet-bg { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:40; display:flex; align-items:flex-end; }
-  .sheet { width:100%; max-height:92vh; overflow-y:auto; background:var(--surface); border-radius:24px 24px 0 0; padding:12px 18px calc(var(--sab) + 18px); }
-  .sheet { transition:transform .22s ease-out; will-change:transform; touch-action:pan-y; }
-  .sheet.drag { transition:none; }
-  .sheet-bg { transition:background .22s; }
+  .sheet-bg { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:40; display:flex; align-items:flex-end; transition:background .22s; }
   .sheet-bg.closing { background:rgba(0,0,0,0); }
+  .sheet { position:relative; width:100%; max-height:92%; overflow-y:auto; background:var(--surface); border-radius:24px 24px 0 0; padding:12px 18px calc(var(--sab) + 18px); transition:transform .22s ease-out; will-change:transform; touch-action:pan-y; }
+  .sheet.drag { transition:none; }
   .sheet .grab { width:44px; height:5px; border-radius:3px; background:var(--faint); margin:0 auto 14px; }
   .sheet .grab-zone { padding:6px 0 4px; margin:-12px -18px 0; cursor:grab; }
   .sheet .x { position:absolute; top:14px; right:14px; width:44px; height:44px; border-radius:50%; background:var(--surface-2); font-size:20px; display:flex; align-items:center; justify-content:center; color:var(--muted); }
-  .sheet { position:relative; }
-  .sheet h3 { margin:0 0 14px; font-size:22px; font-weight:800; }
+  .sheet h3 { margin:0 0 14px; font-size:22px; font-weight:800; padding-right:48px; }
   .field { margin-bottom:14px; }
   .field label { display:block; font-size:13px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
   .field input, .field textarea, .field select { width:100%; min-height:52px; border-radius:14px; border:1px solid var(--line); background:var(--bg); padding:12px 14px; font-size:17px; outline:none; -webkit-appearance:none; appearance:none; }
   .field textarea { min-height:96px; resize:vertical; }
   .field select { background-image:linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position:calc(100% - 22px) 22px, calc(100% - 16px) 22px; background-size:6px 6px; background-repeat:no-repeat; }
+  .field.row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .field .hint { font-weight:500; text-transform:none; letter-spacing:0; color:var(--faint); }
   .seg { display:flex; gap:8px; flex-wrap:wrap; }
   .chip { height:46px; padding:0 16px; border-radius:999px; background:var(--surface-2); font-size:16px; font-weight:600; display:inline-flex; align-items:center; gap:8px; }
   .chip.on { background:var(--accent); color:var(--accent-ink); }
   .sheet .btns { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px; }
   .sheet .btns .wide { grid-column:1 / -1; }
   .menu { display:flex; flex-direction:column; gap:8px; }
-  .menu button { height:56px; border-radius:16px; background:var(--surface-2); font-size:17px; font-weight:600; display:flex; align-items:center; gap:14px; padding:0 18px; }
-  .menu button .i { font-size:22px; width:28px; text-align:center; }
+  .menu button { min-height:58px; border-radius:16px; background:var(--surface-2); font-size:17px; font-weight:600; display:flex; align-items:center; gap:14px; padding:0 18px; text-align:left; }
+  .menu button .i { width:28px; display:flex; justify-content:center; color:var(--muted); flex:none; }
+  .menu button .n { margin-left:auto; color:var(--muted); font-weight:700; font-variant-numeric:tabular-nums; }
   .menu button.danger { color:var(--danger); }
-  .toggle { display:flex; align-items:center; justify-content:space-between; min-height:60px; padding:0 4px; border-bottom:1px solid var(--line); font-size:17px; font-weight:600; }
+  .menu button.cancel { background:transparent; color:var(--muted); justify-content:center; }
+  .toggle { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:60px; padding:6px 4px; border-bottom:1px solid var(--line); font-size:17px; font-weight:600; }
   .toggle small { display:block; color:var(--muted); font-size:14px; font-weight:500; margin-top:2px; }
   .sw { width:56px; height:32px; border-radius:16px; background:var(--surface-2); position:relative; flex:none; transition:background .15s; }
   .sw::after { content:""; position:absolute; top:3px; left:3px; width:26px; height:26px; border-radius:50%; background:var(--muted); transition:transform .15s, background .15s; }
   .sw.on { background:var(--accent); } .sw.on::after { transform:translateX(24px); background:var(--accent-ink); }
-  .menu button.cancel { background:transparent; color:var(--muted); justify-content:center; }
+  .sgroup { margin:18px 0 4px; font-size:12px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); }
+  .cs-row { display:flex; gap:10px; align-items:center; }
+  .cs-row .big { flex:1; }
   #toast { position:fixed; left:50%; bottom:calc(var(--sab) + 150px); transform:translateX(-50%); background:var(--raised); color:var(--ink); padding:10px 18px; border-radius:14px; font-size:15px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:90; max-width:90vw; text-align:center; display:flex; gap:14px; align-items:center; }
   #toast.show { opacity:1; }
   #toast button { color:var(--accent); font-weight:800; font-size:15px; pointer-events:auto; min-height:32px; }
@@ -334,57 +479,63 @@
 </head>
 <body>
 <div id="app">
-  <!-- ── HOME ─────────────────────────────────────────────────────────────── -->
+  <!-- ── HOME: the conversation with Robert ──────────────────────────────────── -->
   <div id="v-home" class="view">
-    <div class="home-scroll" id="home"><div class="ptr" id="ptr">↻ refreshing…</div>
-      <div class="brand">
-        <div><h1>Chronos</h1><div class="sub" id="brand-sub">connecting…</div></div>
-        <div class="tools"><div class="dot" id="bus-dot" title="live updates"></div><button class="ic-sm" id="btn-settings" aria-label="Settings">⚙</button></div>
+    <header class="top">
+      <div class="who"><b>Robert</b><small id="top-sub"></small></div>
+      <button class="upd" id="upd" hidden>Update</button>
+      <button class="ic" id="btn-more" aria-label="More"><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+    </header>
+    <div class="nrow" id="nrow" hidden><span class="ni"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg></span><span class="tx"><b id="nr-t"></b><span id="nr-s"></span></span><button class="go" id="nr-go" hidden></button><button class="no" id="nr-no" aria-label="Not now">✕</button></div>
+    <button class="qentry" id="qentry" hidden><span class="n" id="qe-n"></span><span class="tx"><b id="qe-t"></b><span id="qe-s"></span></span><span class="chev"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></span></button>
+    <div class="chat" id="chat"></div>
+    <div class="dock" id="dock">
+      <div class="call" id="call" hidden data-state="off">
+        <button class="call-mute" id="call-mute" aria-label="Mute"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+        <div class="orb" id="orb" role="img" aria-label="call state"></div>
+        <div class="call-st" id="call-st"></div>
+        <div class="call-sub" id="call-sub"></div>
       </div>
+      <div class="composer">
+        <textarea id="r-composer" rows="1" placeholder="Message Robert" autocapitalize="sentences" enterkeyhint="send" aria-label="Message Robert"></textarea>
+        <button class="send" id="r-send" aria-label="Send" hidden><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg></button>
+        <button class="talk" id="talk" aria-label="Talk"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── WAITING FOR HIM: the approval deck (static/phone-deck.js) ─────────── -->
+  <div id="v-deck" class="deck" hidden></div>
+
+  <!-- ── TERMINALS (behind ⋯) ─────────────────────────────────────────────── -->
+  <div id="v-terms" class="view" hidden>
+    <div class="thead">
+      <button class="ic" id="t-back" aria-label="Back"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5-7 7 7 7"/></svg></button>
+      <div class="tt"><b>Terminals</b><small id="brand-sub"></small></div>
+      <button class="ic" id="btn-new" aria-label="New terminal"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+    </div>
+    <div class="home-scroll" id="home"><div class="ptr" id="ptr">↻ refreshing…</div>
       <section class="group" id="g-needs"><h2>Needs you <span class="n"></span></h2><div class="cards"><div class="skel card"></div></div></section>
       <section class="group" id="g-finished"><h2>Finished <span class="n"></span><button data-k="close-done" hidden>close done</button></h2><div class="cards"></div></section>
       <section class="group" id="g-working"><h2>Working <span class="n"></span></h2><div class="cards"><div class="skel card"></div></div></section>
     </div>
-    <div class="hbar">
-      <button class="big primary" id="btn-new">＋ New</button>
-      <button class="big secondary" id="btn-robert">💬 Robert</button>
-    </div>
   </div>
 
-  <!-- ── FOCUS ────────────────────────────────────────────────────────────── -->
+  <!-- ── ONE TERMINAL (Focus) ─────────────────────────────────────────────── -->
   <div id="v-focus" class="view" hidden>
     <div class="thead fhead">
-      <button class="ic" id="f-back" aria-label="Back">‹</button>
+      <button class="ic" id="f-back" aria-label="Back"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5-7 7 7 7"/></svg></button>
       <div class="tt"><b id="f-title"></b><small><span class="dot" id="f-dot"></span><span id="f-sub"></span></small></div>
-      <button class="ic" id="f-more" aria-label="More">⋯</button>
+      <button class="ic" id="f-more" aria-label="More"><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
     </div>
     <div class="fstrips"><div class="strip" id="f-strip"></div></div>
     <div class="fgoal" id="f-goal" hidden></div>
     <div class="fscroll" id="f-scroll"><div id="f-body"></div></div>
     <div class="fbar" id="f-bar"></div>
-    <div class="composer">
-      <button class="mic" id="f-mic" aria-label="Talk">🎤</button>
+    <div class="fcomposer">
+      <button class="mic" id="f-mic" aria-label="Talk"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
       <textarea id="f-composer" rows="1" placeholder="Tell the agent…" autocapitalize="sentences" enterkeyhint="send"></textarea>
-      <button class="send" id="f-send" aria-label="Send">➤</button>
-    </div>
-  </div>
-
-  <!-- ── ROBERT ───────────────────────────────────────────────────────────── -->
-  <div id="v-robert" class="view" hidden>
-    <div class="thead">
-      <button class="ic" id="r-back" aria-label="Back">‹</button>
-      <div class="tt"><b>Robert</b><small><span class="dot working" id="r-dot"></span><span id="r-sub">one chat · # to name a project</span></small></div>
-      <select id="r-model" class="rmodel" title="Model Robert uses — chat, wakes, watches" aria-label="Robert model"></select>
-      <button class="askn" id="r-asks" hidden>? 0</button>
-      <button class="ic" id="r-reset" aria-label="New thread" title="New thread">↺</button>
-    </div>
-    <div class="askpop" id="r-askpop" hidden></div>
-    <div class="chat" id="chat"></div>
-    <div class="rwork" id="r-work" hidden><span class="dots"><i></i><i></i><i></i></span><span id="r-work-what">thinking…</span></div>
-    <div class="composer">
-      <button class="mic" id="r-mic" aria-label="Talk">🎤</button>
-      <textarea id="r-composer" rows="1" placeholder="Ask Robert… · #atlas to pin a project" autocapitalize="sentences" enterkeyhint="send"></textarea>
-      <button class="send" id="r-send" aria-label="Send">➤</button>
+      <button class="send" id="f-send" aria-label="Send"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg></button>
     </div>
   </div>
 
@@ -394,23 +545,31 @@
     <div class="rb-mid"><span class="rb-dot"></span><span id="rb-label"></span><span id="rb-time"></span><span class="rb-lvl" id="rb-lvl"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
     <button id="rb-go"></button>
   </div>
-  <div id="toast"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
 </div>
 
 <script src="/ask-card.js"></script>
 <script src="/artifact-view.js"></script>
-<script src="/tag-complete.js"></script>
 <script src="/chat-reply.js"></script>
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
+<script src="/phone-voice.js"></script>
+<script src="/phone-deck.js"></script>
 <script>
-// Chronos on a phone: home (what needs you), Focus (the story of one terminal — no raw PTY), and
-// Robert (one chat, routed by #tags). Same daemon and admin token as /desk.
+// Chronos on a phone: one conversation with Robert (spoken first, typed as an option) and the things
+// waiting for the operator's yes, one card at a time. Terminals, settings and the rest are behind ⋯.
+// Same daemon and admin token as /desk.
 const qs = (s, r = document) => r.querySelector(s);
 const qsa = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const WS_SCHEME = location.protocol === "https:" ? "wss:" : "ws:";
-let TOKEN = localStorage.getItem("mc-token") || null;
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }, del: (k) => { try { localStorage.removeItem(k); } catch {} } };
+let TOKEN = store.get("mc-token") || null;
+// iOS home-screen apps re-ask for the microphone after any navigation, a hash change included, and a
+// navigation stops a live capture (WebKit bug 215884). So on iOS the page never touches history: no
+// back-button entries, no hashes. Android keeps them — its back gesture closes sheets and screens.
+const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+const USE_HISTORY = !IOS;
 // A flaky tunnel throws a network-level TypeError ("Failed to fetch" / "Load failed") before any
 // response arrives — cloudflared usually fails over inside a couple seconds. One retry on a GET
 // rides that out instead of surfacing it as an error; a write is never silently resent.
@@ -438,14 +597,14 @@ function toast(msg, act) {
 // tunnel), every pattern is short, and both stay off until the first touch — Android only lets a
 // page vibrate or make sound after a user gesture, and the AudioContext has to be unlocked by one.
 const fx = (() => {
-  let ctx = null, on = localStorage.getItem("phone-fx") !== "off";
+  let ctx = null, on = store.get("phone-fx") !== "off";
   const unlock = () => { if (!ctx) { try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch {} } if (ctx?.state === "suspended") ctx.resume().catch(() => {}); };
   document.addEventListener("pointerdown", unlock, { capture: true, passive: true });
   document.addEventListener("touchstart", unlock, { capture: true, passive: true });
   const buzz = (p) => { if (on) try { navigator.vibrate?.(p); } catch {} };
   // A note: frequency, length, shape, volume — tiny envelope so nothing clicks or drones.
   const tone = (f, ms, type = "sine", gain = 0.12, at = 0, slideTo = null) => {
-    if (!on || !ctx) return;
+    if (!on || !ctx || ctx.state !== "running") return;
     const t0 = ctx.currentTime + at, o = ctx.createOscillator(), g = ctx.createGain();
     o.type = type; o.frequency.setValueAtTime(f, t0);
     if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0 + ms / 1000);
@@ -454,48 +613,63 @@ const fx = (() => {
   };
   return {
     get on() { return on; },
-    toggle() { on = !on; localStorage.setItem("phone-fx", on ? "on" : "off"); if (on) { unlock(); this.tap(); } return on; },
-    tap()     { buzz(6);  tone(1400, 28, "square", 0.05); },                    // a card, a chip, a key
-    tick()    { buzz(12); tone(900, 40, "triangle", 0.09); },                    // crossed the swipe line
-    success() { buzz([12, 40, 18]); tone(660, 90, "sine", 0.12); tone(990, 140, "sine", 0.12, 0.08); }, // done, opened, saved
-    warn()    { buzz([30, 30, 30]); tone(220, 160, "sawtooth", 0.07, 0, 140); }, // delete, kill
-    send()    { buzz(10); tone(520, 70, "sine", 0.1, 0, 1040); },               // message away
+    toggle() { on = !on; store.set("phone-fx", on ? "on" : "off"); if (on) { unlock(); this.tap(); } return on; },
+    tap()     { buzz(6);  tone(1400, 28, "square", 0.05); },
+    tick()    { buzz(12); tone(900, 40, "triangle", 0.09); },
+    success() { buzz([12, 40, 18]); tone(660, 90, "sine", 0.12); tone(990, 140, "sine", 0.12, 0.08); },
+    warn()    { buzz([30, 30, 30]); tone(220, 160, "sawtooth", 0.07, 0, 140); },
+    send()    { buzz(10); tone(520, 70, "sine", 0.1, 0, 1040); },
     recOn()   { buzz([15, 40, 25]); tone(440, 80, "sine", 0.1); tone(660, 110, "sine", 0.1, 0.09); },
     recOff()  { buzz(15); tone(660, 70, "sine", 0.09); tone(440, 110, "sine", 0.09, 0.08); },
-    ready()   { buzz(8); tone(1200, 60, "triangle", 0.08); },                    // transcript landed
-    reply()   { buzz([10, 60, 10]); tone(880, 80, "sine", 0.09); tone(1320, 160, "sine", 0.09, 0.09); }, // Robert answered
-    needsYou(){ buzz([40, 60, 40, 60, 80]); tone(784, 120, "sine", 0.12); tone(988, 120, "sine", 0.12, 0.13); tone(1175, 220, "sine", 0.12, 0.26); }, // a terminal wants you
+    ready()   { buzz(8); tone(1200, 60, "triangle", 0.08); },
+    reply()   { buzz([10, 60, 10]); tone(880, 80, "sine", 0.09); tone(1320, 160, "sine", 0.09, 0.09); },
+    needsYou(){ buzz([40, 60, 40, 60, 80]); tone(784, 120, "sine", 0.12); tone(988, 120, "sine", 0.12, 0.13); tone(1175, 220, "sine", 0.12, 0.26); },
     fail()    { buzz([60, 40, 60]); tone(180, 220, "square", 0.06, 0, 120); },
   };
 })();
 const fmtAgo = (iso) => { if (!iso) return ""; const m = Math.round((Date.now() - Date.parse(iso)) / 60000); return m < 1 ? "now" : m < 60 ? m + "m" : m < 1440 ? Math.round(m / 60) + "h" : Math.round(m / 1440) + "d"; };
 
+// ── the visible area: the keyboard on iOS overlays the page instead of resizing it ─────────────
+// Pin the app to the visual viewport so the composer rides on top of the keyboard, and drop the
+// home-indicator inset while the keyboard covers it. Android resizes the page itself
+// (interactive-widget=resizes-content); this is then a no-op.
+(() => {
+  const vv = window.visualViewport, app = qs("#app");
+  if (!vv) return;
+  const fit = () => {
+    app.style.height = Math.round(vv.height) + "px";
+    app.style.transform = vv.offsetTop > 0 ? `translateY(${Math.round(vv.offsetTop)}px)` : "";
+    document.body.classList.toggle("kb", innerHeight - vv.height > 120);
+  };
+  vv.addEventListener("resize", fit); vv.addEventListener("scroll", fit); fit();
+})();
+
 // ── state ───────────────────────────────────────────────────────────────────
 const S = {
   workspaces: [], backends: [], sessions: [],
   current: null,          // session id on Focus
-  fontSize: Number(localStorage.getItem("phone-font") || 13),
-  ctrl: false,
+  back: "v-home",         // where Focus goes back to
   loaded: false,
+  busOpen: false,
 };
-// Preferences that are not sound: voice behaviour. Kept next to the fx flag in localStorage.
 const PREFS = {
-  get autoSend() { return localStorage.getItem("phone-autosend") === "on"; },
-  set autoSend(v) { localStorage.setItem("phone-autosend", v ? "on" : "off"); },
-  get lang() { return localStorage.getItem("phone-lang") || ""; },   // "" = let whisper decide
-  set lang(v) { localStorage.setItem("phone-lang", v); },
-  // Claude Code draws its own input box (separator, ❯ prompt, separator, status line) in the last
-  // rows of the pty. We have a composer, so those rows are cropped off the bottom — unless the
-  // agent is showing a menu or a y/n there, which you need to see.
-  // Triage: after Close / Continue / an answer, the next terminal comes up on its own.
-  get advance() { return localStorage.getItem("phone-advance") !== "off"; },
-  set advance(v) { localStorage.setItem("phone-advance", v ? "on" : "off"); },
+  get autoSend() { return store.get("phone-autosend") === "on"; },
+  set autoSend(v) { store.set("phone-autosend", v ? "on" : "off"); },
+  get lang() { return store.get("phone-lang") || ""; },   // "" = let whisper decide
+  set lang(v) { store.set("phone-lang", v); },
+  // Triage in a terminal: after Close / Continue / an answer, the next terminal comes up on its own.
+  get advance() { return store.get("phone-advance") !== "off"; },
+  set advance(v) { store.set("phone-advance", v ? "on" : "off"); },
+  get speed() { return Number(store.get("phone-voice-speed")) || 1; },
+  set speed(v) { store.set("phone-voice-speed", String(v)); },
 };
+// The call speaks one language at a time: the setting, else the phone's own.
+const voiceLang = () => PREFS.lang || (/^es\b/i.test(navigator.language || "") ? "es" : "en");
+const tr = (es, en) => (voiceLang() === "es" ? es : en);
 const wsName = (id) => S.workspaces.find((w) => w.id === id)?.name || "—";
-// One colour per client, the same index-based palette the Desk uses, so a client looks the same on both.
+// One colour per project, the same index-based palette the Desk uses, so a project looks the same on both.
 const WS_COLORS = ["#56B693", "#B392E8", "#E0A44A", "#6FA8DC", "#E486A6", "#9DC45C", "#5CC6C6", "#D98C55"];
 const wsColor = (id) => { const i = S.workspaces.findIndex((w) => w.id === id); return i < 0 ? "var(--muted)" : WS_COLORS[i % WS_COLORS.length]; };
-// Blocked → asked → turn finished → done → working: the order to look at them in, everywhere.
 const askOf = (s) => (s && s.live && (s.state === "waiting" || s.state === "blocked") && s.prompt && typeof s.prompt === "object" && s.prompt.kind !== "turn") ? s.prompt : null;
 // Phases resolved by the daemon (src/term-status.ts); a daemon without them gets the old reading.
 const PH_RANK = { blocked: 0, decide: 1, review: 2, your_turn: 3, stalled: 4, waiting: 5, working: 6 };
@@ -510,24 +684,16 @@ function phaseOf(s) {
 }
 function rank(s) { return PH_RANK[phaseOf(s)] ?? 9; }
 const phaseSince = (s) => (s.status?.since ? s.status.since : s.last_out || Date.parse(s.created_at));
-const needsCount = () => S.sessions.filter((x) => x.live && !isWorker(x) && ["blocked", "decide", "your_turn"].includes(phaseOf(x))).length;
 const byRank = (a, b) => (rank(a) - rank(b)) || (phaseSince(a) - phaseSince(b)) || String(a.created_at).localeCompare(String(b.created_at));
 const byId = (id) => S.sessions.find((s) => s.id === id);
 // Leads only (LEADS.md). A terminal a live Lead opened is that Lead's to drive: its stops wake the
-// Lead, not the operator, and a dozen worker cards is exactly the bloat a phone cannot carry. So the
-// home list shows Leads and ordinary terminals, and a Lead's card carries its workers as a count.
-// An orphaned worker — its Lead ended — is nobody's but yours, and comes back as a card of its own.
+// Lead, not the operator. The lists show Leads and ordinary terminals; a Lead carries its workers as a count.
 const leadLive = (id) => !!id && S.sessions.some((x) => x.id === id && x.live);
 const isWorker = (s) => leadLive(s.lead_id);
 const workersOf = (lead) => S.sessions.filter((w) => w.live && w.lead_id === lead.id);
-// What "close done" may sweep. A Lead that ticked its own goal while its workers are still running
-// is NOT closable: killing it orphans every terminal reporting to it (their stops type into a dead
-// pty). It stays in Finished, and the sweep takes it once the last worker ends.
 const bulkClosable = (s) => s.live && phaseOf(s) === "review" && !(s.role === "lead" && workersOf(s).length > 0);
 const sTitle = (s) => s.title || s.goal || (s.backend ? s.backend + " terminal" : "terminal");
 const ORDER = { blocked: 0, waiting: 1, done: 2, working: 3, ended: 4 };
-// One word per terminal, the same on every screen. A finished turn is not "waiting for you" in the
-// sense of a question — nothing is asked, it just stopped.
 function stateWord(s) {
   if (s.live && s.status && PH_WORD[s.status.phase]) return PH_WORD[s.status.phase];
   if (!s.live) return "Ended";
@@ -538,23 +704,14 @@ function stateWord(s) {
   return !p || p.kind === "turn" ? "Turn finished" : "Waiting for you";
 }
 const REASON = { hitl: "needs you", approval: "approve?", question: "asked you", budget: "budget", gate: "gate", stall: "stalled", recovery: "recover?", review: "review", auth: "login" };
-// What the agent is waiting on, as one line. `prompt` is the daemon's read of the screen: a select
-// menu, a y/n, a free question, or a finished turn (its last printed line).
-function promptText(s) {
-  const p = s.prompt && typeof s.prompt === "object" ? s.prompt : null;
-  if (s.state === "blocked") return (s.state_label || REASON[s.blocked_reason] || "blocked") + (p?.question ? " — " + p.question : "");
-  if (s.state !== "waiting") return null;
-  if (!p || p.kind === "turn") return null; // its "question" is the TUI's last line — the status bar
-  return p.question;
-}
-// Typed input goes through the daemon, not the socket: it types the text and sends Enter on its own
+// Typed input goes through the daemon, not a socket: it types the text and sends Enter on its own
 // tick, because a TUI in bracketed-paste mode reads "text\r" in one burst as a newline INSIDE the
 // paste and never submits it. Same door the Desk's answer boxes use.
 async function input(id, body) {
   const s = byId(id);
-  if (!s || !s.live) return toast("that terminal is gone");
+  if (!s || !s.live) { toast("that terminal is gone"); throw new Error("that terminal is gone"); }
   try { await api("/sessions/" + id + "/input", { method: "POST", body: JSON.stringify({ ...body, by: "operator" }) }); }
-  catch (err) { toast(String(err.message).slice(0, 120)); }
+  catch (err) { toast(String(err.message).slice(0, 120)); throw err; }
 }
 const optionBody = (o) => ({ keys: [...Array(Math.abs(o.offset)).fill(o.offset > 0 ? "down" : "up"), "enter"] });
 
@@ -564,13 +721,51 @@ async function load() {
   const first = !S.loaded;
   S.loaded = true;
   renderHome();
-  badge(needsCount());
   AskCard.recount();
+  PhoneDeck.loadSoon(first ? 0 : 250);
   if (first) document.dispatchEvent(new Event("phone:loaded"));
   renderCurrent();
 }
 
-// ── home ────────────────────────────────────────────────────────────────────
+// ── screens ─────────────────────────────────────────────────────────────────
+// Home is the conversation. Terminals and one terminal's story are pushed over it; on Android each is
+// a history entry so the back gesture walks out of them (never past home).
+function paint(view, dir) {
+  for (const v of qsa(".view")) { v.hidden = v.id !== view; v.classList.remove("in-right", "in-left", "fade"); }
+  const el = qs("#" + view); void el.offsetWidth; if (dir) el.classList.add(dir);
+}
+function show(view, dir) {
+  paint(view, dir);
+  if (!USE_HISTORY) return;
+  const depth = history.state?.depth || 0;
+  if (view === "v-home") { if (depth) history.go(-depth); }
+  else if (!depth) history.pushState({ view, depth: 1 }, "", location.pathname);
+  else history.replaceState({ view, depth: 1 }, "", location.pathname);
+}
+// Back reconciles: every layer whose flag is not in the entry we landed on closes. Each push carries
+// the flags under it ({...history.state, sheet: true}), so closing a sheet over the deck lands on the
+// deck's entry and the deck stays.
+window.addEventListener("popstate", () => {
+  const st = history.state || {};
+  if (PhoneDeck.viewerOpen() && !st.viewer) PhoneDeck.closeViewer(true);
+  if (qs("#sheets").firstChild && !st.sheet) closeSheet(false, null, null, true);
+  if (PhoneDeck.isOpen() && !st.deck) PhoneDeck.close(true);
+  if (!st.view && qs("#v-home").hidden) {
+    S.current = null; F.id = null;
+    paint("v-home", "in-left");
+  }
+});
+function showHome() {
+  S.current = null; F.id = null;
+  show("v-home", "in-left");
+}
+function showTerms() {
+  S.current = null; F.id = null;
+  show("v-terms", "in-right");
+  renderHome();
+}
+
+// ── terminals: needs you → finished → working, answers on the card ──────────
 function renderHome() {
   const live = S.sessions.filter((s) => s.live && !isWorker(s)).sort(byRank);
   const needs = live.filter((s) => rank(s) <= 1);
@@ -578,9 +773,8 @@ function renderHome() {
   const working = live.filter((s) => rank(s) >= 5);
   const n = needs.length;
   qs("#brand-sub").textContent = live.length
-    ? [n ? `${n} need${n === 1 ? "s" : ""} you` : "", fin.length ? `${fin.length} finished` : "", working.length ? `${working.length} in flight` : ""].filter(Boolean).join(" · ")
+    ? [n ? `${n} need${n === 1 ? "s" : ""} you` : "", fin.length ? `${fin.length} finished` : "", working.length ? `${working.length} working` : ""].filter(Boolean).join(" · ")
     : "nothing open";
-
   // Answer right on the card — a select's first choices, Yes/No, or Enter — so most prompts are
   // handled from the list. A finished one gets its two moves: Continue, or Close for good.
   const answers = (s) => {
@@ -594,11 +788,10 @@ function renderHome() {
     else if (p) b = `<button data-ans="open">Reply…</button>`;
     else if (phaseOf(s) === "your_turn") b = `<button data-ans="continue">▶ Continue</button><button data-ans="close" class="go">✓ Close</button>`;
     else if (phaseOf(s) === "review") b = `<button data-ans="close" class="go">✓ Close</button>`;
-    else if (phaseOf(s) === "blocked") b = `<button data-ans="open">⌨ Open</button><button data-ans="esc" class="no">Esc</button>`;
+    else if (phaseOf(s) === "blocked") b = `<button data-ans="open">Open</button><button data-ans="esc" class="no">Esc</button>`;
     return b ? `<span class="answers" data-for="${s.id}">${b}</span>` : "";
   };
-  // What a Lead is running, in the space a worker card would have taken: how many, and how many of
-  // them are sitting on something. Answering those is the Lead's job — this is only so you can see it.
+  // What a Lead is running, in the space a worker card would have taken.
   const leadChip = (s) => {
     if (!s.live || s.role !== "lead") return "";
     const kids = workersOf(s);
@@ -646,10 +839,10 @@ qs("#home").addEventListener("click", async (e) => {
     if (a === "open") { fx.tap(); return openFocus(id); }
     if (a === "close") { fx.tap(); return closeSession(id); }
     fx.send();
-    if (a === "continue") return input(id, { text: "continue", enter: true });
-    if (a === "esc") return input(id, { key: "esc" });
-    if (a.startsWith("yn:")) return input(id, { text: a.slice(3), enter: true });
-    if (a.startsWith("opt:")) { const o = s?.prompt?.options?.[Number(a.slice(4))]; return o ? input(id, optionBody(o)) : openFocus(id); }
+    if (a === "continue") return input(id, { text: "continue", enter: true }).catch(() => {});
+    if (a === "esc") return input(id, { key: "esc" }).catch(() => {});
+    if (a.startsWith("yn:")) return input(id, { text: a.slice(3), enter: true }).catch(() => {});
+    if (a.startsWith("opt:")) { const o = s?.prompt?.options?.[Number(a.slice(4))]; return o ? input(id, optionBody(o)).catch(() => {}) : openFocus(id); }
     return;
   }
   if (t.dataset.open) { fx.tap(); return openFocus(t.dataset.open); }
@@ -676,30 +869,30 @@ qs("#home").addEventListener("click", async (e) => {
   }, { passive: true });
   home.addEventListener("touchend", () => clearTimeout(longT), { passive: true });
 })();
+qs("#t-back").onclick = () => { fx.tap(); showHome(); };
 
 // ── sheets ──────────────────────────────────────────────────────────────────
 // Every sheet closes three ways: tap the dim backdrop, tap ✕, or drag it down — from the handle, or
-// from anywhere in it once its content is scrolled to the top. The sheet follows the finger, and
-// letting go past the line (or with a flick) slides it off; short of that it springs back.
-function sheet(html) {
-  closeSheet();
-  if (!history.state?.sheet) history.pushState({ ...(history.state || {}), sheet: true }, "", location.pathname);
+// from anywhere in it once its content is scrolled to the top.
+function sheet(html, onClose) {
+  // A sheet replacing a sheet (⋯ → Settings) keeps the one history entry: going back on it would land
+  // after the new one is up and close it.
+  if (qs("#sheets").firstChild) closeSheet(false, null, null, true);
+  if (USE_HISTORY && !history.state?.sheet) history.pushState({ ...(history.state || {}), sheet: true }, "", location.pathname);
   const bg = document.createElement("div"); bg.className = "sheet-bg";
+  bg._onClose = onClose || null;
   bg.innerHTML = `<div class="sheet"><div class="grab-zone"><div class="grab"></div></div><button class="x" data-x aria-label="Close">✕</button>${html}</div>`;
   bg.addEventListener("click", (e) => { if (e.target === bg || e.target.closest("[data-x]")) { fx.tap(); closeSheet(); } });
   const sh = qs(".sheet", bg);
   let y0 = 0, dy = 0, t0 = 0, dragging = false;
   sh.addEventListener("touchstart", (e) => {
     const t = e.touches[0]; y0 = t.clientY; dy = 0; t0 = Date.now();
-    // From the handle always; from the body only when there is nothing above to scroll back to.
     dragging = !!e.target.closest(".grab-zone") || sh.scrollTop <= 0;
   }, { passive: true });
   sh.addEventListener("touchmove", (e) => {
     if (!dragging) return;
     dy = e.touches[0].clientY - y0;
     if (dy <= 0) { sh.style.transform = ""; sh.classList.remove("drag"); return; }
-    // A textarea or list inside may want the vertical scroll; once we are clearly dragging the
-    // sheet, take the gesture so the page underneath does not scroll instead.
     if (dy > 10 && e.cancelable) e.preventDefault();
     sh.classList.add("drag"); sh.style.transform = `translateY(${dy}px)`;
   }, { passive: false });
@@ -713,21 +906,59 @@ function sheet(html) {
   qs("#sheets").appendChild(bg);
   return bg;
 }
-function closeSheet(animate = false, sh = null, bg = null) {
+function closeSheet(animate = false, sh = null, bg = null, fromHistory = false) {
   const host = qs("#sheets");
-  const had = !!host.firstChild;
+  const had = host.firstChild;
+  if (had?._onClose) { const f = had._onClose; had._onClose = null; try { f(); } catch {} }
   if (!animate || !sh) host.innerHTML = "";
   else { bg.classList.add("closing"); sh.style.transform = "translateY(110%)"; setTimeout(() => { if (bg.parentNode === host) bg.remove(); }, 230); }
-  // Drop the sheet's history entry so back does not have to be pressed twice. The popstate finds
-  // no sheet left and does nothing.
-  if (had && history.state?.sheet) history.back();
+  // Drop the sheet's history entry so back does not have to be pressed twice.
+  if (had && !fromHistory && USE_HISTORY && history.state?.sheet) history.back();
 }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && qs("#sheets").firstChild) closeSheet(); });
 function confirmSheet(text, label, fn) {
   const b = sheet(`<h3>${esc(text)}</h3><div class="menu"><button class="danger" data-ok><span class="i">!</span>${esc(label)}</button><button class="cancel" data-cancel>Cancel</button></div>`);
   qs("[data-ok]", b).onclick = async () => { fx.tap(); closeSheet(); try { await fn(); } catch (err) { fx.fail(); toast(err.message); } };
-  qs("[data-cancel]", b).onclick = closeSheet;
+  qs("[data-cancel]", b).onclick = () => closeSheet();
 }
+// Words for an approval card's Change / Reply: type them, or hold the mic and say them.
+function composeSheet({ title, placeholder }) {
+  return new Promise((resolve) => {
+    let done = false;
+    const b = sheet(`<h3>${esc(title)}</h3><div class="field"><textarea id="cs-text" rows="3" placeholder="${esc(placeholder || "")}" autocapitalize="sentences"></textarea></div>
+      <div class="cs-row"><button class="mic" id="cs-mic" aria-label="Say it">${MIC_SVG}</button><button class="big primary" id="cs-send">Send</button></div>`, () => { if (!done) resolve(null); });
+    const ta = qs("#cs-text", b);
+    talkMic(qs("#cs-mic", b), dictateInto(ta, () => {}), () => false);
+    qs("#cs-send", b).onclick = () => { const v = ta.value.trim(); if (!v) return ta.focus(); done = true; closeSheet(); resolve(v); };
+    setTimeout(() => ta.focus(), 120);
+  });
+}
+const MIC_SVG = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>`;
+
+// ── ⋯ : everything that is not the conversation or a decision ──────────────
+function moreMenu() {
+  const live = S.sessions.filter((s) => s.live && !isWorker(s)).length;
+  const ico = (d) => `<span class="i"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg></span>`;
+  const b = sheet(`<div class="menu">
+    <button data-m="terms">${ico('<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/>')}Terminals<span class="n">${live || ""}</span></button>
+    <button data-m="new">${ico('<path d="M12 5v14M5 12h14"/>')}New terminal</button>
+    <button data-m="settings">${ico('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>')}Settings</button>
+  </div>`);
+  qs(".menu", b).onclick = (e) => {
+    const m = e.target.closest("[data-m]")?.dataset.m; if (!m) return;
+    fx.tap();
+    if (m === "terms") {
+      // The sheet's history entry becomes the screen's: no back() racing the push.
+      closeSheet(false, null, null, true);
+      if (USE_HISTORY && history.state?.sheet) history.replaceState({ view: "v-terms", depth: 1 }, "", location.pathname);
+      return showTerms();
+    }
+    if (m === "new") return newTermSheet(null);
+    if (m === "settings") return settingsSheet();
+  };
+}
+qs("#btn-more").onclick = () => { fx.tap(); moreMenu(); };
+
 function wsChips(sel) {
   return `<div class="seg" id="ws-seg">${S.workspaces.map((w) => `<button type="button" class="chip${w.id === sel ? " on" : ""}" data-ws="${w.id}">${esc(w.name)}</button>`).join("")}</div>`;
 }
@@ -743,14 +974,14 @@ function backendsFor(wsId) {
 function fillBackendSelect(sel, wsId, prefer) {
   const w = S.workspaces.find((x) => x.id === wsId);
   const list = backendsFor(wsId);
-  const want = prefer || localStorage.getItem("desk-backend:" + (wsId || "")) || w?.default_backend || list[0]?.name || "";
+  const want = prefer || store.get("desk-backend:" + (wsId || "")) || w?.default_backend || list[0]?.name || "";
   sel.innerHTML = list.map((b) => '<option value="' + esc(b.name) + '"' + (b.name === want ? " selected" : "") + ">" + esc(backendLabel(b.name)) + "</option>").join("");
   if (want && ![...sel.options].some((o) => o.value === want) && list[0]) sel.value = list[0].name;
 }
 function fillModelSelect(sel, backend, prefer) {
   const b = S.backends.find((x) => x.name === backend);
   const models = b?.models || [];
-  const want = prefer ?? localStorage.getItem("desk-model:" + (backend || "")) ?? "";
+  const want = prefer ?? store.get("desk-model:" + (backend || "")) ?? "";
   sel.innerHTML = ['<option value="">default</option>'].concat(models.map((m) => '<option value="' + esc(m) + '"' + (m === want ? " selected" : "") + ">" + esc(m) + "</option>")).join("");
   if (want && ![...sel.options].some((o) => o.value === want)) sel.value = "";
 }
@@ -758,18 +989,18 @@ function fillCwdSelect(sel, wsId) {
   const w = S.workspaces.find((x) => x.id === wsId);
   const repos = w?.repos || [];
   if (!repos.length) { sel.innerHTML = '<option value="">default</option>'; return; }
-  const want = localStorage.getItem("desk-cwd:" + (wsId || "")) || w?.default_dir || "";
+  const want = store.get("desk-cwd:" + (wsId || "")) || w?.default_dir || "";
   sel.innerHTML = ['<option value="">default</option>'].concat(repos.map((r) => '<option value="' + esc(r.path) + '"' + (r.path === want ? " selected" : "") + ">" + esc(r.name || r.path) + "</option>")).join("");
 }
 function rememberCli(wsId, backend, model, cwd) {
-  if (wsId && backend) localStorage.setItem("desk-backend:" + wsId, backend);
-  if (backend) localStorage.setItem("desk-model:" + backend, model || "");
-  if (wsId && cwd !== undefined) localStorage.setItem("desk-cwd:" + wsId, cwd || "");
+  if (wsId && backend) store.set("desk-backend:" + wsId, backend);
+  if (backend) store.set("desk-model:" + backend, model || "");
+  if (wsId && cwd !== undefined) store.set("desk-cwd:" + wsId, cwd || "");
 }
 function newTermSheet(wsId) {
   const w0 = S.workspaces.find((w) => w.id === wsId) || S.workspaces[0];
   const b = sheet(`<h3>New terminal</h3>
-    <div class="field"><label>Client</label>${wsChips(w0?.id)}</div>
+    <div class="field"><label>Project</label>${wsChips(w0?.id)}</div>
     <div class="field row2">
       <div><label>CLI</label><select id="f-backend"></select></div>
       <div><label>Model</label><select id="f-model"></select></div>
@@ -837,16 +1068,30 @@ qs("#btn-new").onclick = () => { fx.tap(); newTermSheet(null); };
 function settingsSheet() {
   const row = (k, label, sub, on) => `<div class="toggle"><div>${label}<small>${sub}</small></div><button class="sw${on ? " on" : ""}" data-pref="${k}" aria-label="${label}"></button></div>`;
   const b = sheet(`<h3>Settings</h3>
-    ${row("fx", "Sounds & haptics", "clicks, ticks and a chime when a terminal needs you", fx.on)}
-    ${row("push", "Notifications", "a terminal needs you, or Robert answers — answer from the tray", false)}
-    <div id="push-status" style="color:var(--muted);font-size:14px;margin:-6px 0 10px 4px"></div>
-    ${row("autosend", "Auto-send voice", "release the mic and it sends — no review step", PREFS.autoSend)}
-    ${row("advance", "Next terminal after an action", "Close, Continue or an answer moves you on — swipe through the queue", PREFS.advance)}
-    <div class="field" style="margin-top:14px"><label>Voice language</label><div class="seg" id="lang-seg">
+    <div class="sgroup">Voice</div>
+    <div class="field" style="margin-top:8px"><label>Language</label><div class="seg" id="lang-seg">
       ${[["", "Auto"], ["es", "Español"], ["en", "English"]].map(([v, l]) => `<button type="button" class="chip${PREFS.lang === v ? " on" : ""}" data-lang="${v}">${l}</button>`).join("")}
     </div></div>
-    <p style="color:var(--muted);font-size:14px;margin:6px 0 0">Token stored in this browser only. <button data-forget style="color:var(--danger);font-weight:600">Forget token</button></p>
+    <div class="field"><label>Robert's speaking speed</label><div class="seg" id="speed-seg">
+      ${[1, 1.25, 1.5].map((v) => `<button type="button" class="chip${PREFS.speed === v ? " on" : ""}" data-speed="${v}">${v}×</button>`).join("")}
+    </div></div>
+    ${row("autosend", "Send dictation right away", "hold the mic, let go, and it goes — no review step", PREFS.autoSend)}
+    <div class="sgroup">Robert</div>
+    <div class="field" style="margin-top:8px"><label>Model</label><select id="r-model" aria-label="Robert model"></select></div>
+    <div class="menu"><button data-reset><span class="i">↺</span>Start a new conversation</button></div>
+    <div class="sgroup">This phone</div>
+    ${row("push", "Notifications", "when something needs you — answer from the tray", false)}
+    <div id="push-status" style="color:var(--muted);font-size:14px;margin:6px 0 4px 4px"></div>
+    ${row("fx", "Sounds & haptics", "clicks, ticks and a chime when something needs you", fx.on)}
+    ${row("advance", "Next terminal after an action", "Close, Continue or an answer moves you on", PREFS.advance)}
+    <p style="color:var(--muted);font-size:14px;margin:14px 0 0">Token stored in this browser only. <button data-forget style="color:var(--danger);font-weight:600">Forget token</button></p>
     <p style="color:var(--faint);font-size:13px;margin:14px 0 0;display:flex;justify-content:space-between;align-items:center">build ${esc(document.querySelector('meta[name="chronos-build"]')?.content || "?")} <button data-reload style="color:var(--accent);font-weight:600;font-size:14px">Reload app</button></p>`);
+  loadRobertModel(qs("#r-model", b));
+  qs("#r-model", b).onchange = async (e) => {
+    const model = e.target.value;
+    try { await api("/agent/model", { method: "POST", body: JSON.stringify({ model }) }); toast("Robert → " + model); warmRobert(true); }
+    catch (err) { toast(err.message); loadRobertModel(e.target); }
+  };
   const pushRow = qs('[data-pref="push"]', b), pushStatus = qs("#push-status", b);
   const paintPush = async () => {
     const st = await PUSH.status();
@@ -855,18 +1100,25 @@ function settingsSheet() {
   };
   paintPush();
   b.addEventListener("click", async (e) => {
-    const t = e.target.closest("[data-pref],[data-lang],[data-forget],[data-push-test],[data-reload]"); if (!t) return;
-    if (t.hasAttribute("data-reload")) { fx.tap(); toast("reloading…"); try { const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k))); } catch {} try { const r = await navigator.serviceWorker?.getRegistration(); await r?.update(); } catch {} location.reload(); return; }
+    const t = e.target.closest("[data-pref],[data-lang],[data-speed],[data-forget],[data-push-test],[data-reload],[data-reset]"); if (!t) return;
+    if (t.hasAttribute("data-reload")) { fx.tap(); return reloadApp(); }
+    if (t.hasAttribute("data-reset")) { fx.tap(); return confirmSheet("Start a new conversation with Robert?", "New conversation", async () => { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: R.sticky }) }); store.del("phone-thread"); R.loaded = false; drawThread([]); robertHistory(); toast("new conversation"); }); }
     if (t.hasAttribute("data-push-test")) { fx.tap(); try { const r = await api("/push/test", { method: "POST", body: "{}" }); toast(`sent to ${r.sent} device${r.sent === 1 ? "" : "s"}`); } catch (err) { toast(err.message); } return; }
-    if (t.dataset.pref === "push") { fx.tap(); pushStatus.textContent = "…"; try { await PUSH.toggle(); } catch (err) { fx.fail(); toast(String(err.message).slice(0, 120)); } return paintPush(); }
+    if (t.dataset.pref === "push") { fx.tap(); pushStatus.textContent = "…"; try { await PUSH.toggle(); } catch (err) { fx.fail(); toast(String(err.message).slice(0, 120)); } checkPush(); return paintPush(); }
     if (t.dataset.pref === "fx") { t.classList.toggle("on", fx.toggle()); return; }
     if (t.dataset.pref === "autosend") { PREFS.autoSend = !PREFS.autoSend; fx.tap(); t.classList.toggle("on", PREFS.autoSend); return; }
     if (t.dataset.pref === "advance") { PREFS.advance = !PREFS.advance; fx.tap(); t.classList.toggle("on", PREFS.advance); return; }
-    if (t.dataset.lang !== undefined) { PREFS.lang = t.dataset.lang; fx.tap(); qsa("[data-lang]", b).forEach((c) => c.classList.toggle("on", c === t)); return; }
-    if (t.hasAttribute("data-forget")) { localStorage.removeItem("mc-token"); location.reload(); }
+    if (t.dataset.lang !== undefined) { PREFS.lang = t.dataset.lang; fx.tap(); qsa("[data-lang]", b).forEach((c) => c.classList.toggle("on", c === t)); paintCall(); return; }
+    if (t.dataset.speed) { PREFS.speed = Number(t.dataset.speed); fx.tap(); qsa("[data-speed]", b).forEach((c) => c.classList.toggle("on", c === t)); return; }
+    if (t.hasAttribute("data-forget")) { store.del("mc-token"); location.reload(); }
   });
 }
-qs("#btn-settings").onclick = () => { fx.tap(); settingsSheet(); };
+async function reloadApp() {
+  toast("reloading…");
+  try { const ks = await caches.keys(); await Promise.all(ks.filter((k) => k.startsWith("chronos-shell-")).map((k) => caches.delete(k))); } catch {}
+  try { const r = await navigator.serviceWorker?.getRegistration(); await r?.update(); } catch {}
+  location.reload();
+}
 
 function moreSheet(id = S.current) {
   const s = byId(id); if (!s) return;
@@ -881,14 +1133,14 @@ function moreSheet(id = S.current) {
     if (a === "x") return closeSheet();
     if (a === "done") { closeSheet(); await api("/sessions/" + s.id, { method: "PATCH", body: JSON.stringify({ goal_done: !s.goal_done_at }) }).catch((err) => toast(err.message)); return load(); }
     if (a === "goal") return goalSheet(s);
-    if (a === "kill") { fx.warn(); return confirmSheet("Kill this terminal?", "Kill", async () => { await api("/sessions/" + s.id + "/kill", { method: "POST" }); fx.warn(); toast("killed"); await load(); if (S.current === s.id) showHome(); }); }
+    if (a === "kill") { fx.warn(); return confirmSheet("Kill this terminal?", "Kill", async () => { await api("/sessions/" + s.id + "/kill", { method: "POST" }); fx.warn(); toast("killed"); await load(); if (S.current === s.id) showTerms(); }); }
     if (a === "reopen") { closeSheet(); return reopen(s.id); }
   };
 }
 function goalSheet(s) {
   const b = sheet(`<h3>Goal</h3><div class="field"><textarea id="g-text">${esc(s.goal || "")}</textarea></div>
     <div class="btns"><button class="big secondary" data-cancel>Cancel</button><button class="big primary" id="g-save">Save</button></div>`);
-  qs("[data-cancel]", b).onclick = closeSheet;
+  qs("[data-cancel]", b).onclick = () => closeSheet();
   qs("#g-save", b).onclick = async () => {
     const goal = qs("#g-text", b).value.trim();
     try { await api("/sessions/" + s.id, { method: "PATCH", body: JSON.stringify({ goal: goal || null, goal_source: "human" }) }); closeSheet(); await load(); }
@@ -901,47 +1153,15 @@ async function reopen(id) {
 }
 
 // ── no raw PTY on the phone ─────────────────────────────────────────────────
-// Focus is the only way into a terminal here. The Desk still has the raw screen;
-// this surface answers questions, steers with the composer, and talks to Robert.
+// Focus is the only way into a terminal here. The Desk still has the raw screen.
 function detach() {}
 function attach() {}
 function openTerm(id) { if (id) openFocus(id); }
-function renderTermHead() {}
-function refit() {}
-function applyFont() {}
-function sendRaw() {}
-function crop() {}
-const composer = null; // legacy name; Focus/Robert have their own composers
 
-function paint(view, dir) {
-  for (const v of qsa(".view")) { v.hidden = v.id !== view; v.classList.remove("in-right", "in-left", "fade"); }
-  const el = qs("#" + view); void el.offsetWidth; el.classList.add(dir);
-}
-function show(view, dir, _stack = false) {
-  paint(view, dir);
-  const depth = history.state?.depth || 0;
-  if (view === "v-home") { if (depth) history.go(-depth); }
-  else if (!depth) history.pushState({ view, depth: 1 }, "", location.pathname);
-  else history.replaceState({ view, depth: 1 }, "", location.pathname);
-}
-window.addEventListener("popstate", () => {
-  if (qs("#sheets").firstChild) { qs("#sheets").innerHTML = ""; return; }
-  if (!history.state?.view && qs("#v-home").hidden) {
-    S.current = null; F.id = null;
-    for (const v of qsa(".view")) v.hidden = v.id !== "v-home";
-    qs("#v-home").classList.add("in-left"); renderHome();
-  }
-});
-function showHome() {
-  S.current = null; F.id = null;
-  show("v-home", "in-left");
-  renderHome();
-}
-
-
-// One microphone stream for the page, opened on the first tap and kept warm: getUserMedia is the
-// slow part and paying it per tap ate the first word. Released when the page hides or after two
-// idle minutes, never mid-recording.
+// ── push-to-talk: one mic stream, tap-to-latch / hold-to-talk ───────────────
+// The fallback for when the hands-free call is not wanted (a noisy street, a car indicator that
+// keeps opening the ear): record, transcribe on the Mac, the words land in the composer (or go,
+// with auto-send). Kept warm: getUserMedia is the slow part and paying it per tap ate the first word.
 let micStream = null, micIdleT = 0;
 async function micReady() {
   if (micStream && micStream.getTracks().some((t) => t.readyState === "live")) return micStream;
@@ -966,10 +1186,9 @@ async function wake(on) {
   } catch {}
 }
 const mmss = (ms) => { const t = Math.max(0, Math.floor(ms / 1000)); return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); };
-// The bar floats just above the mic's own row, never over it: the mic (■) stays where the thumb
-// is, so a second tap on it finishes instead of landing on ✕.
+// The bar floats just above the mic's own row, never over it.
 function placeRecbar() {
-  const row = V.mic?.closest(".composer, .steer");
+  const row = V.mic?.closest(".composer, .fcomposer, .cs-row");
   const top = row ? row.getBoundingClientRect().top : innerHeight;
   qs("#recbar").style.bottom = Math.max(8, Math.round(innerHeight - top + 8)) + "px";
 }
@@ -1006,9 +1225,10 @@ function meterOn(stream) {
 function meterOff() { cancelAnimationFrame(V.raf); try { V.src?.disconnect(); } catch {} V.src = null; }
 function voiceReset() {
   clearInterval(V.tick); meterOff();
-  if (V.mic) { V.mic.classList.remove("rec", "busy"); V.mic.textContent = "🎤"; }
+  if (V.mic) { V.mic.classList.remove("rec", "busy"); }
   Object.assign(V, { state: null, mic: null, onText: null, rec: null, chunks: [], blob: null, ctl: null });
   paintRecbar(); wake(false);
+  if (PhoneVoice.on) PhoneVoice.deaf(false);
   clearTimeout(micIdleT); micIdleT = setTimeout(() => { if (!V.state) micRelease(); }, 120000);
 }
 async function voiceStart(mic, onText, sends) {
@@ -1016,6 +1236,8 @@ async function voiceStart(mic, onText, sends) {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast("no microphone access in this browser");
   const gen = ++V.gen;
   Object.assign(V, { state: "starting", mic, onText, sends, chunks: [], keep: true, blob: null });
+  // On a call the ear stops listening while you dictate, or it would hear the same words.
+  if (PhoneVoice.on) PhoneVoice.deaf(true);
   clearTimeout(micIdleT); paintRecbar(); wake(true);
   let stream;
   try { stream = await micReady(); }
@@ -1026,7 +1248,7 @@ async function voiceStart(mic, onText, sends) {
   rec.ondataavailable = (ev) => { if (ev.data.size) V.chunks.push(ev.data); };
   rec.onstop = () => voiceStopped(rec);
   rec.start(250); V.startedAt = Date.now(); V.state = "rec";
-  mic.classList.add("rec"); mic.textContent = "■"; fx.recOn(); meterOn(stream);
+  mic.classList.add("rec"); fx.recOn(); meterOn(stream);
   V.tick = setInterval(() => {
     paintRecbar();
     if (Date.now() - V.startedAt > REC_MAX_MS) { toast("10 minutes — transcribing what you said"); voiceFinish(); }
@@ -1050,14 +1272,14 @@ function voiceStopped(rec) {
   V.rec = null; V.mic?.classList.remove("rec");
   const heldMs = Date.now() - V.startedAt;
   if (!V.keep) { voiceReset(); return toast("cancelled"); }
-  if (heldMs < 500 || blob.size < 2000) { voiceReset(); return toast("too short — tap 🎤, talk, then Send"); }
+  if (heldMs < 500 || blob.size < 2000) { voiceReset(); return toast("too short — hold the mic and talk"); }
   V.blob = blob; V.blobMs = heldMs;
   transcribe();
 }
 async function transcribe() {
   const blob = V.blob;
   V.state = "busy"; V.busyAt = Date.now(); V.ctl = new AbortController();
-  if (V.mic) { V.mic.classList.add("busy"); V.mic.textContent = "…"; }
+  if (V.mic) V.mic.classList.add("busy");
   clearInterval(V.tick); V.tick = setInterval(paintRecbar, 500); paintRecbar(); wake(true);
   const t0 = performance.now();
   try {
@@ -1075,7 +1297,7 @@ async function transcribe() {
     if (err.name === "AbortError") { voiceReset(); return toast("cancelled"); }
     fx.fail(); clearInterval(V.tick);
     V.state = "failed"; V.err = String(err.message || err);
-    if (V.mic) { V.mic.classList.remove("busy"); V.mic.textContent = "🎤"; }
+    if (V.mic) V.mic.classList.remove("busy");
     // The daemon says why (engine down, ffmpeg broken, …): long enough to read, with Retry right there.
     paintRecbar(); toast("transcribe failed: " + V.err.slice(0, 220), { label: "Retry", fn: transcribe });
   }
@@ -1106,21 +1328,13 @@ const dictateInto = (ta, send) => (text) => {
 };
 const autoSend = () => PREFS.autoSend;
 talkMic(qs("#f-mic"), dictateInto(qs("#f-composer"), () => sendFocusComposer()), autoSend);
-talkMic(qs("#r-mic"), dictateInto(qs("#r-composer"), () => askRobert()), autoSend);
-// On the home screen the mic makes a note: the words become the title, you pick the client and save.
 
-// ── focus screen ────────────────────────────────────────────────────────────
-// The default way into a terminal: the story of the work, not its transcript. Ten open terminals
-// is too many to read one screen at a time — this shows, per terminal, the goal, what the agent
-// last said, what it wants from you, and the one or two buttons that settle it. Everything comes
-// from what the daemon already has: the /desk row (goal, state, the prompt read off the screen,
-// usage, diff size) and /sessions/:id/focus (the agent's own transcript, tagged Understanding /
-// narration / Result by focus.ts). Zero extra model calls. No pty is attached here, so browsing
-// stories never resizes a terminal the Desk is showing.
-//
-// Freshness is the whole trick: an agent writes "Result:" at the end of EVERY turn, so the last
-// Result is often the answer to the question before last. Anything shown as the headline must be
-// newer than your last message, or it is labelled as previous.
+// ── focus screen: the story of one terminal ─────────────────────────────────
+// The goal, what the agent last said, what it wants from you, and the one or two buttons that settle
+// it — from what the daemon already has (/desk row + /sessions/:id/focus). No pty is attached, so
+// browsing stories never resizes a terminal the Desk is showing. Freshness is the whole trick: an
+// agent writes "Result:" at the end of EVERY turn, so anything shown as the headline must be newer
+// than your last message, or it is labelled as previous.
 const F = { id: null, events: [], seen: new Set(), loaded: false, all: false, open: new Set(), arm: 0, req: 0 };
 const kTok = (n) => (n >= 1000 ? Math.round(n / 1000) + "k" : String(n));
 const clip = (t, n) => (t.length > n ? t.slice(0, n) + "…" : t);
@@ -1129,11 +1343,10 @@ const norm = (t) => String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").tr
 const isFocusUp = () => !qs("#v-focus").hidden;
 const goalTitle = (s) => s.goal || sTitle(s);
 function renderCurrent() {
-  if (!S.current) return;
+  if (!S.current) { if (!qs("#v-terms").hidden) renderHome(); return; }
   if (isFocusUp()) renderFocus();
 }
 // The triage queue: what needs a decision — blocked, waiting, goal-done — in that order.
-// Working terminals are not in it (nothing to decide yet); they stay one tap away on the strip.
 const QUEUE = new Set(["blocked", "waiting", "done"]);
 function focusOrder(keep) {
   return S.sessions.filter((x) => x.live && QUEUE.has(x.state)).sort((a, b) => (ORDER[a.state] ?? 9) - (ORDER[b.state] ?? 9));
@@ -1149,6 +1362,7 @@ function openFocus(id, dir) {
   const s = byId(id); if (!s) return toast("not found");
   const fromScreen = !!S.current;
   detach();
+  if (!fromScreen) S.back = qs("#v-terms").hidden ? "v-home" : "v-terms";
   S.current = id;
   F.id = id; F.events = []; F.seen = new Set(); F.loaded = false; F.all = false; F.open = new Set(); F.arm = 0;
   show("v-focus", dir || (fromScreen ? "fade" : "in-right"));
@@ -1166,8 +1380,6 @@ let focusT = 0;
 const renderFocusSoon = () => { clearTimeout(focusT); focusT = setTimeout(renderFocus, 120); };
 
 // ── text hygiene ──
-// Your own lines come back with the TUI's chrome (rules, the ❯ prompt), pasted duplicates, and the
-// harness's notifications; the agent's tool lines are mostly `run cd /long/path && …`.
 const SYS_LINE = /^\s*<(task-notification|system-reminder|command-)/;
 const cleanUser = (t) => t.replace(/[─═]{3,}\s*❯?/g, " ").replace(/\s+/g, " ").trim();
 function cleanAct(t) {
@@ -1238,7 +1450,7 @@ function headTail(t) {
   if (paras.length <= 5) return t;
   return paras.slice(0, 2).join("\n\n") + "\n\n…\n\n" + paras.slice(-2).join("\n\n");
 }
-// Link chips out of a text: PR #7, Artifact, or the host. The "did it do good work" glance.
+// Link chips out of a text: PR #7, Artifact, or the host.
 function linkChips(text) {
   const out = [], seen = new Set();
   for (const m of String(text || "").matchAll(/https?:\/\/[^\s)<>"'\]]+/g)) {
@@ -1255,7 +1467,7 @@ function tidyLinks(root) {
   for (const a of qsa("a", root)) {
     const t = a.textContent.trim();
     if (/^https?:\/\//.test(t) && t.length > 40) { try { a.textContent = new URL(t).host + "/…"; } catch {} }
-    a.target = "_blank"; a.rel = "noopener";
+    if (!a.getAttribute("href")?.startsWith("#")) { a.target = "_blank"; a.rel = "noopener"; }
   }
 }
 
@@ -1270,7 +1482,7 @@ function renderFocus() {
   const strip = stripOrder(s.id);
   qs("#f-strip").innerHTML = strip.map((x) => `<button class="tchip${x.id === s.id ? " on" : ""}${x.state === "working" ? " dim" : ""}" data-fs="${x.id}"><span class="dot ${x.state}"></span><span class="l">${esc(clip(goalTitle(x), 26))}</span></button>`).join("");
   qs("#f-strip .tchip.on")?.scrollIntoView({ inline: "center", block: "nearest" });
-  qs("#v-focus .composer").hidden = !s.live;
+  qs("#v-focus .fcomposer").hidden = !s.live;
 
   // Sticky goal above the scroll — always visible while you read activity.
   const started = s.spawn_goal || s.first_prompt || "";
@@ -1307,8 +1519,11 @@ function renderFocus() {
   const la = s.lines_added || u.lines_added, lr = s.lines_removed || u.lines_removed;
   const vchips = (la || lr ? `<span class="vchip diff"><b>+${la || 0}</b> <i>−${lr || 0}</i></span>` : "") + linkChips(headline?.text);
   if (vchips) out += `<div class="vchips">${vchips}</div>`;
+  // A hand-off waiting for his yes lives in the deck: one tap there from here.
+  const waiting = PhoneDeck.forSession(s.id);
+  if (waiting) out += `<section class="fblock fatt"><span class="lbl">Waiting for your yes</span><div class="q">${esc(PhoneDeck.items().find((x) => x.key === waiting)?.verdict || "")}</div><div class="opts"><button data-fa="deck" class="go">Review it</button></div></section>`;
 
-  if (s.live && (s.state === "waiting" || s.state === "blocked")) {
+  if (s.live && (s.state === "waiting" || s.state === "blocked") && !waiting) {
     const q = p?.question && p.kind !== "turn" ? p.question : "";
     if (q || s.state === "blocked") {
       const lbl = s.state === "blocked" ? (s.state_label || REASON[s.blocked_reason] || "blocked")
@@ -1331,7 +1546,6 @@ function renderFocus() {
   if (!F.loaded) out += `<section class="fblock"><span class="lbl">Activity</span><div class="skel fl"></div><div class="skel fl" style="width:70%"></div></section>`;
   else {
     const items = storyItems(evs, s);
-    // Newest first — how the work is going, with clocks so you feel the pace.
     const N = 14;
     const ordered = items.slice().reverse();
     const shown = F.all ? ordered : ordered.slice(0, N);
@@ -1370,8 +1584,7 @@ function renderFocus() {
   }
   qs("#f-bar").innerHTML = bar.join("");
 }
-// The swipe-through: after a decision, the next terminal in the queue is already on screen. Past
-// the end you land on home with what is still running — the loop never wraps silently.
+// The swipe-through: after a decision, the next terminal in the queue is already on screen.
 function advance(fromId, why, undo) {
   if (!PREFS.advance) { renderFocusSoon(); if (why) toast(why, undo); return; }
   const before = focusOrder(fromId), i = Math.max(0, before.findIndex((x) => x.id === fromId));
@@ -1380,7 +1593,7 @@ function advance(fromId, why, undo) {
   if (!next) {
     const working = S.sessions.filter((x) => x.live && x.state === "working" && x.id !== fromId).length;
     toast((why ? why + " · " : "") + "caught up" + (working ? ` · ${working} working` : ""), undo);
-    return showHome();
+    return S.back === "v-terms" ? showTerms() : showHome();
   }
   if (why) toast(`${why} · ${order.length - i} left`, undo);
   openFocus(next.id, "in-right");
@@ -1391,9 +1604,10 @@ async function focusAction(a) {
   if (a === "goal") { fx.tap(); return goalSheet(s); }
   if (a === "reopen") { fx.tap(); return reopen(s.id); }
   if (a === "reply") { fx.tap(); return qs("#f-composer").focus(); }
+  if (a === "deck") { fx.tap(); return PhoneDeck.open(PhoneDeck.forSession(s.id)); }
   if (a === "next") { fx.tick(); return advance(s.id, ""); }
-  if (a === "continue") { fx.send(); input(s.id, { text: "continue", enter: true }); return advance(s.id, "continued"); }
-  if (a === "stop") { fx.warn(); return input(s.id, { key: "esc" }); }
+  if (a === "continue") { fx.send(); input(s.id, { text: "continue", enter: true }).catch(() => {}); return advance(s.id, "continued"); }
+  if (a === "stop") { fx.warn(); return input(s.id, { key: "esc" }).catch(() => {}); }
   if (a === "close") {
     if (s.state === "working" && Date.now() - F.arm > 2500) { F.arm = Date.now(); fx.warn(); renderFocus(); setTimeout(() => { if (F.id === s.id && Date.now() - F.arm >= 2500) renderFocus(); }, 2600); return; }
     F.arm = 0; fx.success();
@@ -1417,8 +1631,8 @@ qs("#f-body").addEventListener("click", (e) => {
   const t = e.target.closest("[data-fa],[data-fopt],[data-fyn],[data-ftype]"); if (!t) return;
   const s = byId(F.id), p = s?.prompt && typeof s.prompt === "object" ? s.prompt : null;
   if (t.dataset.fa) return focusAction(t.dataset.fa);
-  if (t.dataset.fopt !== undefined) { const o = p?.options?.[Number(t.dataset.fopt)]; if (o) { fx.send(); input(s.id, optionBody(o)); advance(s.id, "answered"); } return; }
-  if (t.dataset.fyn) { fx.send(); input(s.id, { text: t.dataset.fyn, enter: true }); return advance(s.id, "answered"); }
+  if (t.dataset.fopt !== undefined) { const o = p?.options?.[Number(t.dataset.fopt)]; if (o) { fx.send(); input(s.id, optionBody(o)).catch(() => {}); advance(s.id, "answered"); } return; }
+  if (t.dataset.fyn) { fx.send(); input(s.id, { text: t.dataset.fyn, enter: true }).catch(() => {}); return advance(s.id, "answered"); }
   if (t.hasAttribute("data-ftype")) { fx.tap(); return qs("#f-composer").focus(); }
 });
 qs("#f-bar").addEventListener("click", (e) => { const t = e.target.closest("[data-fa]"); if (t) focusAction(t.dataset.fa); });
@@ -1428,13 +1642,13 @@ qs("#f-strip").addEventListener("click", (e) => {
   fx.tap();
   if (t.dataset.fs !== F.id) openFocus(t.dataset.fs, "fade");
 });
-qs("#f-back").onclick = () => { fx.tap(); showHome(); };
+qs("#f-back").onclick = () => { fx.tap(); if (S.back === "v-terms") showTerms(); else showHome(); };
 qs("#f-more").onclick = () => { fx.tap(); moreSheet(F.id); };
 const fcomposer = qs("#f-composer");
 function sendFocusComposer() {
   const v = fcomposer.value.trim(); if (!v) return;
   const id = F.id;
-  fx.send(); input(id, { text: v, enter: true });
+  fx.send(); input(id, { text: v, enter: true }).catch(() => {});
   fcomposer.value = ""; fcomposer.style.height = ""; fcomposer.blur();
   advance(id, "sent");
 }
@@ -1455,16 +1669,14 @@ fcomposer.addEventListener("input", () => { fcomposer.style.height = ""; fcompos
   }, { passive: true });
 })();
 
-// ── Robert ──────────────────────────────────────────────────────────────────
-// ONE chat, same as the Desk's: you never pick a conversation — the daemon reads the project out of
-// each line (#tag, ticket key, project name, the bubble you are answering, where the last one landed)
-// and hands it to that project's own Robert, asking only when it cannot tell. No view filter: one
-// timeline, chips on the bubbles show where each line landed. Type `#` to name a project.
-// POST /agent returns at once with a turn id; replies stream on agent.delta and land whole on
-// agent.push. Holding the HTTP response open used to die on the Cloudflare tunnel (~100s). One
-// bubble per turn (R.pend), so two turns streaming at once never mix or cut. R.awaitTurn holds the
-// composer until that push (or a history re-read) so the outbox does not fire early.
-const R = { busy: false, mine: null, mineYou: null, pend: new Map(), seen: new Set(), lost: false, loaded: false, outbox: [], awaitTurn: null, awaitT: 0, sticky: null };
+// ── Robert: the conversation ────────────────────────────────────────────────
+// ONE thread, same as the Desk's: he never picks a conversation — the daemon reads the project out
+// of each line and hands it to that project's own Robert. POST /agent returns at once with a turn
+// id; replies stream on agent.delta and land whole on agent.push. One bubble per turn (R.pend), so
+// two turns streaming at once never mix. R.awaitTurn holds the composer until that push (or a
+// history re-read) so the outbox does not fire early. The thread is drawn from a cache at once, then
+// from /agent/history — and a line still in flight survives a reload (R.pending in storage).
+const R = { busy: false, mine: null, mineYou: null, pend: new Map(), seen: new Set(), lost: false, loaded: false, outbox: [], awaitTurn: null, awaitT: 0, sticky: null, rows: [], lastId: 0, pending: null, voiceTurn: null, pick: null };
 const ourThread = (ws) => !String(ws || "").startsWith("agent:");
 const md = (t) => (window.DOMPurify && window.marked) ? DOMPurify.sanitize(marked.parse(t || "")) : esc(t);
 // An 8-char id in his text is a terminal he is talking about: a chip that opens its story.
@@ -1472,28 +1684,84 @@ function mdRob(text) {
   const withChips = String(text ?? "").replace(/\b([0-9a-f]{8})\b/g, (m, id8) => { const s = byId(id8) || S.sessions.find((x) => x.id.startsWith(id8)); return s ? `[${sTitle(s).slice(0, 36).replace(/[\[\]]/g, "")}](#sel=${s.id})` : m; });
   return md(withChips);
 }
-qs("#chat").addEventListener("click", (e) => { const a = e.target.closest('a[href^="#sel="]'); if (!a) return; e.preventDefault(); fx.tap(); const id = a.getAttribute("href").slice(5); if (byId(id)) openFocus(id); else toast("that terminal is gone"); });
+qs("#chat").addEventListener("click", (e) => {
+  const a = e.target.closest('a[href^="#sel="]');
+  if (a) { e.preventDefault(); fx.tap(); const id = a.getAttribute("href").slice(5); if (byId(id)) openFocus(id); else toast("that terminal is gone"); return; }
+  const more = e.target.closest(".more-line");
+  if (more) { const b = more.previousElementSibling; b?.classList.add("open"); more.remove(); return; }
+  const un = e.target.closest(".unsent");
+  if (un) { const b = un.closest(".bub"); const text = b._raw; un.remove(); b.classList.remove("queued"); if (R.busy) { b.classList.add("queued"); R.outbox.push({ text, el: b, quote: null }); robWork(true); } else deliverRobert(text, b, undefined, null); }
+});
+const chatEl = qs("#chat");
+const atBottom = () => chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 80;
+const toBottom = () => { chatEl.scrollTop = chatEl.scrollHeight; };
+// A long answer folds after a screenful; the words are all there (and all spoken on a call).
+function foldLong(d) {
+  requestAnimationFrame(() => {
+    if (d.classList.contains("rob") && !d.classList.contains("open") && d.scrollHeight > 15.5 * 16.5 * 1.42 + 40 && !d.nextElementSibling?.classList.contains("more-line")) {
+      d.classList.add("long");
+      const m = document.createElement("button"); m.className = "more-line"; m.textContent = "Read all";
+      d.after(m);
+    }
+  });
+}
 function bubble(kind, text) {
-  const log = qs("#chat"); const d = document.createElement("div");
+  const log = chatEl; const d = document.createElement("div");
+  qs(".hello", log)?.remove();
   d.className = "bub " + kind; d._raw = text;
-  if (kind === "rob" || kind.startsWith("rob ")) { d.innerHTML = mdRob(text); ArtifactView.embed(d); AskCard.embed(d); } else d.textContent = text;
-  log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
+  if (kind === "rob" || kind.startsWith("rob ")) { d.innerHTML = mdRob(text); tidyLinks(d); window.ArtifactView?.embed(d); AskCard.embed(d); } else d.textContent = text;
+  const stick = atBottom();
+  log.appendChild(d); if (stick || kind.startsWith("you")) toBottom();
+  if (kind === "rob") foldLong(d);
+  return d;
 }
+function hello() { if (!chatEl.children.length) chatEl.innerHTML = `<div class="hello"><b>${esc(tr("Hablá con Robert.", "Talk to Robert."))}</b>${esc(tr("Tocá el micrófono para una charla manos libres, o escribí.", "Tap the mic for a hands-free conversation, or type."))}</div>`; }
+// The thread from rows (cache or /agent/history), then whatever is still in flight on top.
+function drawThread(rows) {
+  // In flight = drawn here but not a stored row yet (a stored one comes back with the rows).
+  const live = [R.mineYou, R.mine, ...R.pend.values(), ...R.outbox.map((o) => o.el)].filter((x) => x && x.isConnected && !x.dataset.rid);
+  chatEl.innerHTML = "";
+  for (const m of rows) {
+    if (m.source === "divider") continue;
+    if (m.you) RP.quote(RP.mark(bubble("you", m.you), m.id, "you"), ChatReply.fromRow(m));
+    if (m.reply) RP.mark(bubble("rob", m.reply), m.id, "reply");
+  }
+  for (const el of live) chatEl.appendChild(el);
+  hello();
+  toBottom();
+}
+const saveThread = (rows) => store.set("phone-thread", JSON.stringify(rows.slice(-40).map((m) => ({ id: m.id, you: m.you, reply: m.reply, source: m.source, workspace_id: m.workspace_id, reply_to: m.reply_to, reply_quote: m.reply_quote }))));
+const loadThread = () => { try { return JSON.parse(store.get("phone-thread") || "[]") || []; } catch { return []; } };
 async function robertHistory() {
-  if (R.loaded) return; R.loaded = true;
-  qs("#chat").innerHTML = "";
-  try { const h = await api("/agent/history?limit=40&ws=all"); for (const m of h.messages || []) { if (m.source === "divider") continue; if (m.you) RP.quote(RP.mark(bubble("you", m.you), m.id, "you"), ChatReply.fromRow(m)); if (m.reply) RP.mark(bubble("rob", m.reply), m.id, "reply"); } }
-  catch {}
-  qs("#chat").scrollTop = qs("#chat").scrollHeight;
+  if (R.loaded && R.reading) return R.reading;
+  R.reading = (async () => {
+    let h;
+    try { h = await api("/agent/history?limit=40&ws=all"); } catch { return false; }
+    const rows = (h.messages || []).filter((m) => m.source !== "divider");
+    R.loaded = true;
+    recoverPending(rows);
+    const sig = rows.map((m) => m.id + ":" + (m.reply || "").length).join(",");
+    if (sig !== R.sig) { R.sig = sig; drawThread(rows); }
+    R.rows = rows; R.lastId = rows.length ? rows[rows.length - 1].id : 0;
+    saveThread(rows);
+    return true;
+  })();
+  try { return await R.reading; } finally { R.reading = null; }
 }
-function showRobert() {
-  show("v-robert", "in-right");
-  robertHistory();
-  loadRobertModel();
-  warmRobert(true);
+// A line sent before a reload or a dropped socket: when its row shows up, it is done — speak the
+// answer if the call is still on, and free the composer.
+function recoverPending(rows) {
+  const p = R.pending; if (!p) return;
+  const want = norm(p.text);
+  const row = rows.find((m) => m.id > (p.after || 0) && norm(m.you) === want);
+  if (!row) return;
+  setPending(null);
+  if (R.mineYou && !R.mineYou.dataset.rid) { R.mineYou.remove(); }
+  R.mineYou = null; dropMine(); R.pend.clear();
+  if (PhoneVoice.on && p.voice && !R.seen.has("row:" + row.id) && row.reply) { R.seen.add("row:" + row.id); PhoneVoice.final({ reply: row.reply, turn: "row:" + row.id }, true); }
+  if (R.awaitTurn) robRelease(null);
 }
-// Pre-boot Robert's Claude process so the first ask skips cold start. Aggressive: fleet + sticky,
-// on app open, when the app comes back, and again when you open his chat.
+function setPending(p) { R.pending = p; if (p) store.set("phone-pending", JSON.stringify(p)); else store.del("phone-pending"); }
 function warmRobert(force = false) {
   if (!TOKEN) return;
   const now = Date.now();
@@ -1502,8 +1770,8 @@ function warmRobert(force = false) {
   api("/agent/warm", { method: "POST", body: JSON.stringify({ ws: null }) }).catch(() => {});
   if (R.sticky) api("/agent/warm", { method: "POST", body: JSON.stringify({ ws: R.sticky }) }).catch(() => {});
 }
-async function loadRobertModel() {
-  const sel = qs("#r-model"); if (!sel) return;
+async function loadRobertModel(sel) {
+  if (!sel) return;
   try {
     const r = await api("/agent/model");
     const models = r.models?.length ? r.models : ["opus", "sonnet", "fable", "haiku"];
@@ -1511,55 +1779,42 @@ async function loadRobertModel() {
     sel.innerHTML = models.map((m) => '<option value="' + esc(m) + '"' + (m === cur ? " selected" : "") + ">" + esc(m) + "</option>").join("");
   } catch {}
 }
-qs("#r-model").onchange = async () => {
-  const model = qs("#r-model").value;
-  try {
-    await api("/agent/model", { method: "POST", body: JSON.stringify({ model }) });
-    toast("Robert → " + model);
-    warmRobert(true);
-  } catch (e) { toast(e.message); loadRobertModel(); }
-};
-qs("#btn-robert").onclick = () => { fx.tap(); showRobert(); };
-// The Ask widget: cards in his thread, and every open question behind "? N" (static/ask-card.js).
-AskCard.init({ api, toast, sessions: () => S.sessions, askOf, who: (s) => sTitle(s).slice(0, 40), button: qs("#r-asks"), panel: qs("#r-askpop"), log: qs("#chat") });
-ArtifactView.init({ api, toast });
-qs("#r-back").onclick = () => { fx.tap(); show("v-home", "in-left"); renderHome(); };
-qs("#r-reset").onclick = () => confirmSheet(R.sticky ? `Start a new thread with Robert on ${wsName(R.sticky)}?` : "Start a new desk-wide thread with Robert?", "New thread", async () => { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: R.sticky }) }); qs("#chat").innerHTML = ""; R.loaded = false; toast("new thread"); });
+// The Ask widget: when Robert hands a question into the thread it is a live card there; every open
+// question is also a card in the deck (PhoneDeck reads AskCard.collect).
+AskCard.init({ api, toast, sessions: () => S.sessions, askOf, who: (s) => sTitle(s).slice(0, 40), log: chatEl });
+window.ArtifactView?.init({ api, toast });
 const rComposer = qs("#r-composer");
 // Tap a bubble → ↩ → it is quoted above the composer and the next line answers it (static/chat-reply.js).
 const RP = ChatReply({ log: qs("#chat"), input: rComposer, before: rComposer.closest(".composer"), onMissing: () => toast("that message is further back than the chat shows") });
 // This tab's id on each turn: the Desk draws a line it did not type itself (the bus echoes the id).
 const CLIENT = "phone-" + Math.random().toString(36).slice(2, 12);
-// A message typed while he is mid-turn is not lost and not refused: it parks in an outbox (dimmed
-// bubble) and goes out the moment the current turn lands — same as the Desk's composer. The daemon
-// serialises his turns anyway; what was missing was a place on the phone to hold the next one.
-// `ws` on an outbox item is only set when you tapped a project on his "which one?" line — preserve
-// it so a queued pick does not re-ask or land on the sticky of a different turn.
+// What the header says about Robert and the link: nothing when all is well.
 function robWork(on, what) {
-  const strip = qs("#r-work");
-  if (!strip) return;
+  const sub = qs("#top-sub");
   const q = R.outbox.length;
+  const offline = !navigator.onLine;
   const busy = on || R.busy || q > 0;
-  strip.hidden = !busy;
-  const label = what || (R.busy ? "thinking…" : "queued…");
-  qs("#r-work-what").textContent = label + (q ? ` · ${q} waiting` : "");
-  const dot = qs("#r-dot"); if (dot) dot.className = "dot " + (R.busy ? "working" : q ? "waiting" : "ended");
-  const sub = qs("#r-sub"); if (sub && !R.busy && !q) sub.textContent = "one chat · # to name a project";
+  sub.classList.toggle("warn", offline || (!S.busOpen && S.loaded && !!TOKEN));
+  // On a call the orb says what he is doing; the header only speaks up about the link.
+  sub.textContent = offline ? "offline — messages wait here" : (!S.busOpen && S.loaded && TOKEN) ? "reconnecting…" : busy && !PhoneVoice.on ? (what || (R.busy ? "thinking…" : "")) + (q ? ` · ${q} waiting` : "") : "";
+  PhoneVoice.refresh();
 }
-function askRobert() {
+function askRobert(voiced = false) {
   const text = rComposer.value.trim();
   if (!text) return;
-  rComposer.value = ""; rComposer.style.height = "";
+  rComposer.value = ""; rComposer.style.height = ""; store.del("phone-draft"); syncComposer();
   const quote = RP.take();
   fx.send(); const el = RP.quote(bubble("you", text), quote);
-  if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el, quote }); robWork(true, "queued…"); return; }
+  if (voiced) el._voice = true;
+  if (R.busy || !navigator.onLine) { el.classList.add("queued"); R.outbox.push({ text, el, quote }); robWork(true, navigator.onLine ? "queued…" : ""); return; }
   deliverRobert(text, el, undefined, quote);
 }
 function robRelease(turn) {
   if (turn && R.awaitTurn && turn !== R.awaitTurn) return;
   clearTimeout(R.awaitT); R.awaitT = 0; R.awaitTurn = null;
   R.busy = false;
-  const next = R.outbox.shift();
+  if (!R.pending?.lost) setPending(null);
+  const next = navigator.onLine ? R.outbox.shift() : null;
   robWork(!!next, next ? "sending next…" : "");
   reloadSoon();
   if (next) deliverRobert(next.text, next.el, next.ws, next.quote);
@@ -1572,8 +1827,8 @@ function robAwait(turn) {
   // Push lost: re-read the thread and free the composer. Covers a long Opus turn + a quiet bus.
   R.awaitT = setTimeout(() => {
     if (R.awaitTurn !== turn) return;
-    R.awaitTurn = null; R.lost = true; R.loaded = false; R.mine = null; R.pend.clear();
-    robertHistory().finally(() => robRelease(null));
+    R.awaitTurn = null; R.lost = true; R.loaded = false;
+    robertHistory().finally(() => { if (R.mine?.isConnected && !R.mine._raw) { R.mine.textContent = tr("Sin respuesta todavía — si llega, aparece acá.", "No answer yet — if it comes, it lands here."); R.mine.classList.remove("pending"); R.mine = null; } robRelease(null); });
   }, 180_000);
 }
 // `ws` only when you tapped a project on his "which one?" line — that is as explicit as a #tag.
@@ -1583,83 +1838,283 @@ async function deliverRobert(text, el, ws, quote) {
   R.mineYou = el;
   robWork(true, "thinking…");
   if (!R.mine) R.mine = bubble("rob pending", "");
+  setPending({ text, at: Date.now(), after: R.lastId, voice: !!el._voice });
   let hold = false;
   try {
     // `surface: "phone"` keeps sticky off the Desk's thread — both defaulted to "web" before.
     const body = { text, client: CLIENT, surface: "phone" };
     if (ws !== undefined) { body.ws = ws; body.route = false; }
     if (quote) body.replyTo = { id: quote.id, side: quote.side };
+    // Said on the call: his answer is read out, so he answers short and spoken.
+    if (el._voice) body.voice = true;
     const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
-    if (r?.how === "ask") { dropMine(); robWork(false); askWhere(r, text, quote); return; }
+    if (r?.how === "ask") { dropMine(); setPending(null); robWork(false); askWhere(r, text, quote, el._voice); return; }
     if (r?.ws) R.sticky = r.ws;
     // Accepted: keep busy until agent.push for this turn. Bind the pending bubble to the turn id
     // so early deltas keyed on "?" and later ones on the UUID share one bubble.
     if (r?.accepted && r?.turn) {
       const b = R.mine || R.pend.get("?");
       if (b) { R.pend.set(r.turn, b); R.mine = null; R.pend.delete("?"); }
+      if (el._voice && PhoneVoice.on) { R.voiceTurn = r.turn; PhoneVoice.turn(r.turn); }
       robAwait(r.turn); hold = true; return;
     }
     RP.mark(el, r?.id, "you");
     // Legacy sync fallback (older daemon): draw from the POST if the push has not already.
     if (r?.reply && !(r.turn && R.seen.has(r.turn))) { if (r.turn) R.seen.add(r.turn); dropMine(); fx.reply(); RP.mark(bubble("rob", r.reply), r.id, "reply"); }
   } catch (err) {
-    // Accept itself failed. A tunnel timeout should no longer hit a long turn (POST returns before
-    // the manager runs), but if the socket dies mid-accept, keep his bubble and wait on the bus.
+    // Accept itself failed. If the socket died mid-accept the daemon may or may not have it: keep his
+    // bubble, wait on the bus and the history (recoverPending), and offer a resend if nothing comes.
     if (err instanceof TypeError || [502, 503, 504, 520, 521, 522, 523, 524].includes(err.status)) {
       R.lost = true; robAwait("lost"); hold = true;
-      if (R.mine) R.mine.textContent = "still on it — his answer will land here";
-    } else { dropMine(); fx.fail(); bubble("rob", "(failed: " + String(err.message).slice(0, 160) + ")"); }
+      setPending({ ...R.pending, lost: true });
+      if (R.mine) { R.mine.classList.remove("pending"); R.mine.textContent = tr("Se perdió la señal — si le llegó, la respuesta aparece acá.", "Lost the signal — if it reached him, his answer lands here."); }
+      unsentCheck(el, text);
+    } else { dropMine(); setPending(null); fx.fail(); bubble("rob", "(failed: " + String(err.message).slice(0, 160) + ")"); if (PhoneVoice.on) PhoneVoice.say(tr("Eso falló.", "That didn't go through.")); }
   } finally {
     if (!hold) robRelease(null);
   }
 }
+// After a dropped send: once the link is back, give it 20 s to show it arrived (any word from the
+// daemon about it). Nothing → the bubble offers "Resend" — never resent on its own.
+function unsentCheck(el, text) {
+  const t0 = Date.now();
+  const tick = async () => {
+    if (!el.isConnected || el.dataset.rid || !R.pending) return;
+    // Any word from the daemon about this tab's turn since the send: it arrived, it is running.
+    if ((R.heardAt || 0) > t0) return;
+    if (!navigator.onLine || !S.busOpen) return setTimeout(tick, 3000);
+    if (Date.now() - t0 < 20000) return setTimeout(tick, 4000);
+    await robertHistory();
+    if (!R.pending || el.dataset.rid || (R.heardAt || 0) > t0) return;
+    if (!el.querySelector(".unsent")) { const u = document.createElement("span"); u.className = "unsent"; u.textContent = tr("¿No le llegó? Reenviar", "Didn't reach him? Resend"); el.appendChild(u); }
+    if (R.mine?.isConnected && !R.mine._raw) { R.mine.remove(); R.mine = null; }
+    setPending(null); clearTimeout(R.awaitT); R.awaitTurn = null; R.busy = false; robWork(false);
+    if (PhoneVoice.on) PhoneVoice.say(tr("No sé si le llegó. Repetímelo si querés.", "I'm not sure that reached him. Say it again if you like."));
+  };
+  setTimeout(tick, 3000);
+}
 function dropMine() { if (R.mine) { R.mine.remove(); R.mine = null; } }
-// The router could not tell which project: his line, with the projects as chips. A tap re-sends the
-// SAME message there (nothing ran yet, so there is nothing to undo).
-function askWhere(r, text, quote) {
+// The router could not tell which project: his line, with the projects as a colour and a name. A tap
+// (or saying the name, on a call) re-sends the SAME message there — nothing ran yet.
+function askWhere(r, text, quote, voiced) {
   const d = bubble("rob", r.reply);
   const row = document.createElement("div");
-  row.className = "rstrip"; row.style.cssText = "padding:8px 0 0;background:none;border:0;flex-wrap:wrap";
-  row.innerHTML = (r.ask?.candidates || []).map((c) => `<button class="chip" data-ws="${esc(c.ws || "")}">${esc(c.name || c.slug)}</button>`).join("");
-  row.onclick = (e) => {
-    const b = e.target.closest("[data-ws]"); if (!b) return;
-    fx.tap(); row.remove();
-    const picked = b.dataset.ws || null;
+  row.className = "pick";
+  const cands = (r.ask?.candidates || []);
+  row.innerHTML = cands.map((c) => `<button data-ws="${esc(c.ws || "")}" style="--c:${c.ws ? wsColor(c.ws) : "var(--muted)"}"><i></i>${esc(c.slug === "all" ? "Everything" : c.name || c.slug)}</button>`).join("");
+  const go = (picked) => {
+    row.remove(); R.pick = null;
     const el = RP.quote(bubble("you", text), quote);
+    if (voiced) el._voice = true;
     if (R.busy) { el.classList.add("queued"); R.outbox.push({ text, el, quote, ws: picked }); return; }
     deliverRobert(text, el, picked, quote);
   };
-  d.appendChild(row); qs("#chat").scrollTop = qs("#chat").scrollHeight;
+  row.onclick = (e) => { const b = e.target.closest("[data-ws]"); if (!b) return; fx.tap(); go(b.dataset.ws || null); };
+  d.appendChild(row); toBottom();
+  if (PhoneVoice.on) {
+    R.pick = { go, cands };
+    PhoneVoice.say(tr("¿Para cuál? ", "Which one? ") + cands.map((c) => (c.slug === "all" ? tr("todo", "everything") : c.name || c.slug)).join(tr(", o ", ", or ")) + ".");
+  }
 }
-qs("#r-send").onclick = askRobert;
-TagComplete(rComposer, () => S.workspaces);
-rComposer.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askRobert(); } });
-rComposer.addEventListener("input", () => { rComposer.style.height = ""; rComposer.style.height = Math.min(140, rComposer.scrollHeight) + "px"; });
+function syncComposer() {
+  const has = !!rComposer.value.trim();
+  qs("#r-send").hidden = !has;
+  qs("#talk").hidden = has && !PhoneVoice.on;
+}
+qs("#r-send").onclick = () => askRobert();
+rComposer.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); askRobert(); } });
+let draftT = 0;
+rComposer.addEventListener("input", () => {
+  rComposer.style.height = ""; rComposer.style.height = Math.min(150, rComposer.scrollHeight) + "px";
+  syncComposer();
+  clearTimeout(draftT); draftT = setTimeout(() => (rComposer.value ? store.set("phone-draft", rComposer.value) : store.del("phone-draft")), 400);
+});
+rComposer.addEventListener("focus", () => setTimeout(toBottom, 250));
 
-// Keyboard up/down changes the visible area: refit so the pty's rows match what you can see.
+// ── the talk button: tap = the hands-free call, hold = push-to-talk ──────────
+// The call starts inside the click itself (iOS only unlocks sound inside a gesture). Holding the
+// button records instead — the existing push-to-talk — and lets go to finish: the fallback for a
+// noisy street or a car whose indicator keeps opening the ear.
+const talk = qs("#talk");
+(() => {
+  let downAt = 0, holdT = 0, held = false;
+  talk.addEventListener("pointerdown", (e) => {
+    downAt = Date.now(); held = false;
+    try { talk.setPointerCapture(e.pointerId); } catch {}
+    clearTimeout(holdT);
+    if (PhoneVoice.on || V.state) return;
+    holdT = setTimeout(() => { held = true; fx.tick(); voiceStart(talk, dictateInto(rComposer, () => askRobert()), true); }, 380);
+  });
+  const up = (e) => {
+    clearTimeout(holdT);
+    if (held && V.mic === talk) { if (V.state === "rec") voiceFinish(); else if (V.state === "starting") voiceCancel(); }
+  };
+  talk.addEventListener("pointerup", up);
+  talk.addEventListener("pointercancel", up);
+  talk.addEventListener("contextmenu", (e) => e.preventDefault());
+  talk.addEventListener("click", () => {
+    if (held) { held = false; return; }
+    if (V.state) return;
+    if (PhoneVoice.on) { fx.tap(); PhoneVoice.stop(); return; }
+    callStart();
+  });
+})();
+let callNoticeAt = Number(store.get("phone-call-notice") || 0);
+function callStart() {
+  const t0 = performance.now();
+  rComposer.blur();
+  PhoneVoice.start().then((ok) => {
+    if (!ok) return;
+    window.__tapToListen = Math.round(performance.now() - t0);
+    api("/agent/warm", { method: "POST", body: JSON.stringify({ ws: R.sticky || null }) }).catch(() => {});
+    // Something waiting for him, and he has not been told in a while: say so once, in one line.
+    const n = PhoneDeck.items().length;
+    if (PhoneDeck.isOpen()) PhoneDeck.readCurrent();
+    else if (n && Date.now() - callNoticeAt > 15 * 60000) {
+      callNoticeAt = Date.now(); store.set("phone-call-notice", String(callNoticeAt));
+      PhoneVoice.say(n === 1 ? tr("Una cosa espera tu sí. Decí «veamos» para verla.", "One thing is waiting for your yes. Say “let's see” to go through it.") : tr(n + " cosas esperan tu sí. Decí «veamos» para verlas.", n + " things are waiting for your yes. Say “let's see” to go through them."));
+    }
+  });
+}
+const CALL_WORD = {
+  connecting: ["Conectando…", "Connecting…"], listening: ["Te escucho", "Listening"], hearing: ["Te escucho…", "Hearing you…"],
+  transcribing: ["Entendido…", "Got it…"], thinking: ["Robert está en eso", "Robert is on it"], speaking: ["Robert", "Robert"], paused: ["En pausa", "Paused"],
+};
+const PAUSE_WHY = {
+  interrupted: ["Se cortó el audio (una llamada, Siri…). Tocá para seguir.", "Audio was interrupted (a call, Siri…). Tap to carry on."],
+  background: ["La app quedó en segundo plano. Tocá para seguir.", "The app went to the background. Tap to carry on."],
+  "mic lost": ["Se perdió el micrófono. Tocá para seguir.", "The microphone went away. Tap to carry on."],
+};
+let callSub = "";
+function paintCall(st = PhoneVoice.state(), why = "") {
+  const on = st !== "off";
+  qs("#call").hidden = !on;
+  qs("#call").dataset.state = st;
+  talk.classList.toggle("live", on);
+  talk.setAttribute("aria-label", on ? "End the conversation" : "Talk");
+  talk.innerHTML = on ? `<svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="3"/></svg>` : MIC_SVG.replace('width="22" height="22"', 'width="30" height="30"');
+  if (!on) { const dc = qs("#v-deck .dk-call"); if (dc) dc.hidden = true; syncComposer(); return; }
+  const li = voiceLang() === "es" ? 0 : 1; // which half of each [es, en] pair
+  qs("#call-st").textContent = (CALL_WORD[st] || CALL_WORD.listening)[li];
+  const sub = st === "paused" ? (PAUSE_WHY[why] || PAUSE_WHY.interrupted)[li]
+    : st === "speaking" ? callSub
+    : st === "listening" ? (callSub || ["Decí «colgar» para terminar", "Say “hang up” to end"][li])
+    : st === "thinking" ? "" : callSub;
+  qs("#call-sub").textContent = sub;
+  qs("#call-mute").classList.toggle("on", PhoneVoice.muted);
+  const dc = qs("#v-deck .dk-call");
+  if (dc) { dc.hidden = false; dc.dataset.state = st; qs("b", dc).textContent = (CALL_WORD[st] || CALL_WORD.listening)[li]; }
+  syncComposer();
+}
+qs("#call-mute").onclick = () => { fx.tap(); PhoneVoice.setMute(!PhoneVoice.muted); paintCall(); };
+qs("#orb").onclick = () => { if (PhoneVoice.state() === "paused") { fx.tap(); PhoneVoice.resume(); } };
+// Stuck work said into the call (src/stuck-alerts.ts, on the alerts branch). While a call is up the
+// page tells the daemon so every 20 s (and once more on hang-up); an alert addressed to THIS call is
+// said ahead of anything queued, and the daemon hears "spoken" only once the audio has actually played
+// to its end — if it never plays (the call paused, hung up), the alert goes on to the phone instead.
+let presT = 0;
+function presence(live) {
+  clearInterval(presT); presT = 0;
+  const ping = (on) => api("/voice/presence", { method: "POST", body: JSON.stringify({ client: CLIENT, surface: "phone", live: on, lang: voiceLang(), lock: null }) }).catch(() => {});
+  ping(!!live);
+  if (live) presT = setInterval(() => ping(true), 20000);
+}
+function onAlert(e) {
+  if (!PhoneVoice.on || !e.say || (e.client && e.client !== CLIENT)) return;
+  PhoneVoice.say(e.say, { first: true, lang: e.lang === "es" || e.lang === "en" ? e.lang : undefined }).then((played) => {
+    if (played) api("/alerts/" + encodeURIComponent(e.alert_id) + "/spoken", { method: "POST", body: JSON.stringify({ client: CLIENT }) }).catch(() => {});
+  });
+}
+// Words the page answers itself on a call, before anything goes to Robert.
+const VIEW_RE = /^ (veamos|vamos|pendientes|que hay pendiente|que espera|que esta esperando|aprobaciones|revisemos|mostrame|show me|approvals|whats waiting|what s waiting|what is waiting|lets see|let s see|lets review|let s review) $/;
+const vnorm = (t) => " " + String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim() + " ";
+PhoneVoice.init({
+  token: () => TOKEN,
+  lang: voiceLang,
+  speed: () => PREFS.speed,
+  busy: () => R.busy,
+  label: (id8) => { const s = S.sessions.find((x) => x.id.startsWith(id8)); return s ? clip(sTitle(s), 40) : null; },
+  onState: (st, why) => {
+    paintCall(st, why);
+    const on = st !== "off";
+    if (on !== !!presT) presence(on);
+    if (!on) { callSub = ""; R.pick = null; }
+  },
+  onLevel: (lvl) => qs("#orb").style.setProperty("--lvl", lvl),
+  onSubtitle: (t) => { callSub = t; if (PhoneVoice.state() === "speaking") qs("#call-sub").textContent = t; },
+  onError: (m) => { fx.fail(); toast(m); },
+  onStopTurn: () => { if (R.busy) api("/command", { method: "POST", body: JSON.stringify({ line: "stop robert" }) }).catch(() => {}); },
+  onHeard: (text) => {
+    callSub = "“" + text + "”";
+    // 1. A card on screen: the words are for THAT card (bound in phone-deck.js).
+    if (PhoneDeck.voiceAnswer(text)) return;
+    const n = vnorm(text);
+    // 2. Which project, when the router asked: the next words are the pick.
+    if (R.pick) {
+      const c = R.pick.cands.find((c) => (c.slug === "all" ? / (todo|todos|everything|all) /.test(n) : [c.slug, c.name].some((x) => x && n.includes(vnorm(x)))));
+      if (c) return R.pick.go(c.ws || null);
+    }
+    // 3. "Let's see what's waiting" opens the deck and reads the first card.
+    if (VIEW_RE.test(n)) {
+      if (PhoneDeck.items().length) return PhoneDeck.open();
+      return PhoneVoice.say(tr("No hay nada esperando.", "Nothing is waiting."));
+    }
+    // 4. Everything else is a turn for Robert, the same as a typed one.
+    rComposer.value = text;
+    askRobert(true);
+  },
+});
+
+// ── the deck: what is waiting for him ───────────────────────────────────────
+PhoneDeck.init({
+  el: qs("#v-deck"), api, token: () => TOKEN, toast, fx, md, lang: voiceLang, voice: PhoneVoice, history: USE_HISTORY,
+  sessions: () => S.sessions, visible: (s) => !isWorker(s), askOf, wsColor, wsName,
+  input, openTerminal: (id) => { if (byId(id)) openFocus(id); else toast("that terminal is gone"); },
+  compose: composeSheet,
+  onOpen: () => {},
+  onChange: (items) => {
+    const n = items.length, e = qs("#qentry");
+    e.hidden = !n;
+    if (n) {
+      qs("#qe-n").textContent = n;
+      qs("#qe-t").textContent = n === 1 ? "1 waiting for you" : n + " waiting for you";
+      qs("#qe-s").textContent = PhoneDeck.KIND_WORD[items[0].kind] + " · " + items[0].verdict;
+    }
+    badge(n);
+    store.set("phone-queue", JSON.stringify({ n, kind: items[0]?.kind || null, line: items[0]?.verdict || "" }));
+    document.documentElement.dataset.queue = String(n);
+    if (S.current && isFocusUp()) renderFocusSoon();
+  },
+});
+qs("#qentry").onclick = () => { fx.tap(); PhoneDeck.open(); };
 
 // ── live updates ────────────────────────────────────────────────────────────
-const BUS_TOPICS = ["session.status", "session.activity", "agent.state", "session.started", "session.ended", "session.updated", "session.usage", "agent.delta", "agent.push", "ask.created", "ask.answered", "artifact.created", "artifact.updated", "artifact.event", "focus.event"].join(",");
-let busRetry = 1000, reloadT;
+const BUS_TOPICS = ["session.status", "session.activity", "agent.state", "session.started", "session.ended", "session.updated", "session.usage", "agent.delta", "agent.push", "agent.asked", "agent.turn.done", "ask.created", "ask.answered", "artifact.created", "artifact.updated", "artifact.event", "draft.ready", "alert.raised", "focus.event"].join(",");
+let busRetry = 1000, reloadT, bus = null;
 const reloadSoon = () => { clearTimeout(reloadT); reloadT = setTimeout(() => load().catch(() => {}), 250); };
 function connectBus() {
-  if (!TOKEN) return;
-  const ws = new WebSocket(`${WS_SCHEME}//${location.host}/ws?token=${encodeURIComponent(TOKEN)}&topics=${encodeURIComponent(BUS_TOPICS)}`);
+  if (!TOKEN || (bus && bus.readyState <= 1)) return;
+  const ws = bus = new WebSocket(`${WS_SCHEME}//${location.host}/ws?token=${encodeURIComponent(TOKEN)}&topics=${encodeURIComponent(BUS_TOPICS)}`);
   ws.onopen = () => {
-    busRetry = 1000; qs("#bus-dot").className = "dot working";
-    // A turn whose accept or push was missed while the bus was down: reread and free the composer.
-    if (R.lost || R.awaitTurn) {
+    busRetry = 1000; S.busOpen = true; robWork(false);
+    // Anything missed while the bus was down: the list, the queue, and a turn whose push never came.
+    reloadSoon();
+    if (R.lost || R.awaitTurn || R.pending) {
       const waiting = !!R.awaitTurn;
-      R.lost = false; R.loaded = false; R.mine = null; R.pend.clear();
-      robertHistory().finally(() => { if (waiting) robRelease(null); });
+      R.lost = false; R.loaded = false;
+      robertHistory().finally(() => { if (waiting && !R.pending) robRelease(null); });
     }
+    if (navigator.onLine && !R.busy && R.outbox.length) robRelease(null);
   };
-  ws.onclose = () => { qs("#bus-dot").className = "dot"; setTimeout(connectBus, busRetry); busRetry = Math.min(busRetry * 2, 20000); };
+  ws.onclose = () => { if (bus === ws) bus = null; S.busOpen = false; robWork(false); setTimeout(connectBus, busRetry); busRetry = Math.min(busRetry * 2, 20000); };
   ws.onmessage = (ev) => {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     AskCard.onEvent(e);
+    PhoneDeck.onEvent(e);
     if (AskCard.TOPICS.includes(e.topic)) return;
-    if (ArtifactView.TOPICS.includes(e.topic)) return ArtifactView.onEvent(e);
+    if (window.ArtifactView?.TOPICS.includes(e.topic)) return ArtifactView.onEvent(e);
+    if ((e.topic === "agent.delta" || e.topic === "agent.push") && e.client === CLIENT) R.heardAt = Date.now();
+    if (e.topic === "agent.delta" && PhoneVoice.on && e.client === CLIENT) PhoneVoice.delta(e);
     if (e.topic === "agent.delta") {
       // Only his words: thinking and tool lines are not the answer.
       const mine = e.client === CLIENT;
@@ -1667,8 +2122,17 @@ function connectBus() {
       const key = e.turn || "?";
       let b = R.pend.get(key);
       if (!b) { b = mine && R.mine ? R.mine : bubble("rob pending", ""); if (mine) R.mine = null; R.pend.set(key, b); }
+      const stick = atBottom();
       b._raw = (b._raw || "") + e.text; b.innerHTML = mdRob(b._raw);
-      qs("#chat").scrollTop = qs("#chat").scrollHeight; return;
+      if (stick) toBottom();
+      return;
+    }
+    if (e.topic === "agent.asked") {
+      // Said on the Desk (or another phone): draw it now, not when he answers.
+      if (e.client === CLIENT) { R.heardAt = Date.now(); return; }
+      if (!e.you || !ourThread(e.ws)) return;
+      const yb = RP.quote(bubble("you", e.you), e.quote); yb.dataset.turn = e.turn || "";
+      return;
     }
     if (e.topic === "agent.push") {
       const mine = e.client === CLIENT;
@@ -1676,6 +2140,8 @@ function connectBus() {
       if (e.turn && R.seen.has(e.turn)) return;
       if (e.turn) R.seen.add(e.turn);
       if (e.ws) R.sticky = e.ws;
+      if (e.id) R.lastId = Math.max(R.lastId, e.id);
+      if (PhoneVoice.on && e.reply && (mine || !e.you)) PhoneVoice.final(e, mine);
       // Promote the streaming bubble into the final reply — never remove+redraw (that was the
       // "thinking → answer → answer again" flash on the PWA).
       const streamed = R.pend.get(e.turn || "?");
@@ -1683,21 +2149,26 @@ function connectBus() {
       if (mine) {
         if (R.mine && R.mine !== streamed) dropMine();
         else R.mine = null;
-        R.lost = false;
+        R.lost = false; setPending(null);
         // Stamp the bubble we already drew; only re-draw if this tab lost it (navigated away).
         if (R.mineYou?.isConnected) RP.mark(R.mineYou, e.id, "you");
         else if (e.you) RP.quote(RP.mark(bubble("you", e.you), e.id, "you"), e.quote);
+        R.mineYou?.querySelector(".unsent")?.remove();
+      } else if (e.you) {
+        const drawn = e.turn ? qs(`.bub.you[data-turn="${CSS.escape(e.turn)}"]`, chatEl) : null;
+        if (drawn) RP.mark(drawn, e.id, "you"); else RP.quote(RP.mark(bubble("you", e.you), e.id, "you"), e.quote);
       }
-      else if (e.you) RP.quote(RP.mark(bubble("you", e.you), e.id, "you"), e.quote); // said on the Desk (or another phone)
       if (e.reply) {
-        fx.reply();
+        if (!PhoneVoice.on) fx.reply();
         if (streamed && streamed.isConnected) {
           streamed.className = "bub rob";
           streamed._raw = e.reply;
           streamed.innerHTML = mdRob(e.reply);
-          ArtifactView.embed(streamed);
+          tidyLinks(streamed);
+          window.ArtifactView?.embed(streamed);
           AskCard.embed(streamed);
           RP.mark(streamed, e.id, "reply");
+          foldLong(streamed);
         } else {
           if (streamed) streamed.remove();
           RP.mark(bubble("rob", e.reply), e.id, "reply");
@@ -1707,8 +2178,12 @@ function connectBus() {
       }
       // Free the composer: POST returned ages ago; this push is the turn finishing.
       if (R.awaitTurn && (R.awaitTurn === e.turn || R.awaitTurn === "lost")) robRelease(e.turn || null);
+      saveThreadSoon();
       return;
     }
+    if (e.topic === "agent.turn.done") return;
+    if (e.topic === "draft.ready") return;
+    if (e.topic === "alert.raised") return onAlert(e);
     if (e.topic === "focus.event") {
       if (e.session_id !== F.id || !isFocusUp()) return;
       const ev = e.event; if (!ev || typeof ev.seq !== "number" || F.seen.has(ev.seq)) return;
@@ -1726,39 +2201,42 @@ function connectBus() {
       const s = byId(e.session_id); if (!s || !e.status) return;
       const was = s.status?.phase;
       s.status = e.status;
-      if (was !== e.status.phase && ["blocked", "decide", "your_turn"].includes(e.status.phase)) fx.needsYou();
-      badge(needsCount());
-      if (S.current === s.id) renderCurrent(); else renderHome();
+      if (was !== e.status.phase && ["blocked", "decide"].includes(e.status.phase) && !isWorker(s) && !PhoneVoice.on) fx.needsYou();
+      renderCurrent();
       return;
     }
     if (e.topic === "session.activity") {
       const s = byId(e.session_id); if (!s || s.state === "done" || s.state === "blocked") return;
-      const was = s.state;
       s.state = e.state === "working" ? "working" : "waiting";
       s.prompt = e.state === "working" ? null : (e.prompt ?? s.prompt ?? null);
-      if (was === "working" && s.state === "waiting" && !s.status) fx.needsYou();
-      badge(needsCount());
-      if (S.current === s.id) renderCurrent(); else renderHome();
+      renderCurrent();
       return;
     }
     if (e.topic === "agent.state" && e.kind === "session") {
       const s = byId(e.id); if (!s || s.state === "done") return;
       const was = s.state;
       s.state = e.state === "blocked" ? "blocked" : e.state === "working" ? "working" : "waiting";
-      if (was !== "blocked" && s.state === "blocked" && !s.status) fx.needsYou();
+      if (was !== "blocked" && s.state === "blocked" && !s.status && !isWorker(s) && !PhoneVoice.on) fx.needsYou();
       s.blocked_reason = e.blocked_reason ?? null; s.state_label = e.state_label ?? s.state_label;
-      if (S.current === s.id) renderCurrent(); else renderHome();
+      renderCurrent();
       return;
     }
     reloadSoon();
   };
 }
-// Coming back from the background: refresh the list, re-warm Robert, and reload Focus if open.
-// pageshow covers the app switcher / bfcache path where visibilitychange does not fire.
+let saveT = 0;
+function saveThreadSoon() { clearTimeout(saveT); saveT = setTimeout(() => robertHistory(), 1500); }
+// The socket can be down while plain HTTP works (a captive portal, a proxy that drops websockets):
+// while a turn is out, read the thread every few seconds so its answer still arrives.
+setInterval(() => { if (!S.busOpen && navigator.onLine && TOKEN && (R.awaitTurn || R.pending)) robertHistory(); }, 6000);
+// Coming back from the background: refresh, re-warm Robert, catch up on a turn, check the build.
 function resume() {
   if (document.hidden) return;
   warmRobert();
   reloadSoon();
+  checkBuild();
+  checkPush();
+  if (R.awaitTurn || R.pending) robertHistory();
   if (S.current && isFocusUp()) {
     const id = S.current;
     api("/sessions/" + id + "/focus").then((r) => {
@@ -1766,11 +2244,39 @@ function resume() {
       for (const ev of r.events || []) if (ev && !F.seen.has(ev.seq)) { F.seen.add(ev.seq); F.events.push(ev); }
       F.events.sort((a, b) => a.seq - b.seq); F.loaded = true; renderFocus();
     }).catch(() => {});
-  } else if (typeof connectBus === "function" && qs("#bus-dot").className === "dot") connectBus();
+  }
+  if (!bus) connectBus();
 }
 document.addEventListener("visibilitychange", resume);
 window.addEventListener("pageshow", (e) => { if (e.persisted) resume(); });
-window.addEventListener("online", resume);
+window.addEventListener("online", () => { robWork(false); resume(); if (!R.busy && R.outbox.length) robRelease(null); });
+window.addEventListener("offline", () => robWork(false));
+
+// ── never on a stale build ──────────────────────────────────────────────────
+// The page carries its build stamp. When the app comes back, read the stamp of what the daemon now
+// serves (the first 2 KB of /phone.html) and, if it moved, reload at once while nothing is going on —
+// else show "Update" and reload at the next quiet moment.
+const BUILD = document.querySelector('meta[name="chronos-build"]')?.content || "";
+let buildAt = 0, newBuild = null;
+const quiet = () => !PhoneVoice.on && !V.state && !rComposer.value.trim() && !qs("#sheets").firstChild && !PhoneDeck.isOpen() && !R.busy && !R.outbox.length;
+async function checkBuild(force) {
+  if (!TOKEN || (!force && Date.now() - buildAt < 5 * 60000)) return;
+  buildAt = Date.now();
+  try {
+    const r = await fetch("/phone.html", { cache: "no-store", headers: { Range: "bytes=0-2047" } });
+    if (!r.ok && r.status !== 206) return;
+    const head = (await r.text()).slice(0, 4096);
+    const m = /name="chronos-build" content="([^"]+)"/.exec(head);
+    if (!m || m[1] === BUILD) return;
+    newBuild = m[1];
+    if (quiet()) return reloadApp();
+    qs("#upd").hidden = false;
+  } catch {}
+}
+qs("#upd").onclick = () => { fx.tap(); reloadApp(); };
+setInterval(() => { if (newBuild && quiet() && document.visibilityState === "visible" && Date.now() - lastTouch > 30000) reloadApp(); }, 15000);
+let lastTouch = Date.now();
+document.addEventListener("pointerdown", () => { lastTouch = Date.now(); }, { passive: true, capture: true });
 
 // ── push, badge, service worker ─────────────────────────────────────────────
 // The worker (static/sw.js) shows the notification and can answer a prompt from its buttons; it
@@ -1787,7 +2293,7 @@ const PUSH = (() => {
   return {
     ready,
     async status() {
-      if (!("Notification" in window) || !("PushManager" in window)) return { on: false, reason: "this browser can't do push" };
+      if (!("Notification" in window) || !("PushManager" in window)) return { on: false, reason: IOS ? "add it to the Home Screen first — iPhone only allows notifications there" : "this browser can't do push" };
       if (!window.isSecureContext) return { on: false, reason: "needs HTTPS" };
       if (Notification.permission === "denied") return { on: false, reason: "blocked in browser settings" };
       const r = await ready(); if (!r) return { on: false, reason: "no service worker" };
@@ -1809,43 +2315,137 @@ const PUSH = (() => {
     },
   };
 })();
-// App-icon badge: how many terminals want you. Cleared as soon as nothing does.
+// Notifications are how stuck work reaches him when the app is closed — and a phone that is not
+// subscribed hears nothing. Checked on every launch: subscribed → the subscription is handed to the
+// daemon again (it may have dropped it); not → one clear row on the conversation, one tap to fix.
+const NR = { hiddenUntil: 0 };
+async function checkPush() {
+  const row = qs("#nrow"), go = qs("#nr-go");
+  let st;
+  try { st = await PUSH.status(); } catch { st = { on: false, reason: "" }; }
+  if (st.on) {
+    row.hidden = true;
+    try { const r = await PUSH.ready(); const sub = await r?.pushManager.getSubscription(); if (sub) api("/push/subscribe", { method: "POST", body: JSON.stringify({ subscription: sub.toJSON() }) }).catch(() => {}); } catch {}
+    return;
+  }
+  if (Date.now() < NR.hiddenUntil) return;
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  if (IOS && !standalone && !("PushManager" in window)) {
+    qs("#nr-t").textContent = "Add Robert to your Home Screen";
+    qs("#nr-s").textContent = "iPhone only sends alerts to apps on the Home Screen: Share → Add to Home Screen, then open it from there.";
+    go.hidden = true;
+  } else if (typeof Notification !== "undefined" && Notification.permission === "denied") {
+    qs("#nr-t").textContent = "Alerts are blocked";
+    qs("#nr-s").textContent = "Allow notifications for this app in Settings — stuck work can't reach you.";
+    go.hidden = true;
+  } else if (!("PushManager" in window) || typeof Notification === "undefined") {
+    qs("#nr-t").textContent = "This browser can't get alerts";
+    qs("#nr-s").textContent = st.reason;
+    go.hidden = true;
+  } else {
+    qs("#nr-t").textContent = "Turn on alerts";
+    qs("#nr-s").textContent = "So stuck work reaches you with the app closed.";
+    go.textContent = "Turn on"; go.hidden = false;
+  }
+  row.hidden = false;
+}
+qs("#nr-go").onclick = async () => {
+  fx.tap();
+  try { await PUSH.toggle(); } catch (err) { fx.fail(); toast(String(err.message).slice(0, 140)); }
+  checkPush();
+};
+qs("#nr-no").onclick = () => { fx.tap(); qs("#nrow").hidden = true; NR.hiddenUntil = Date.now() + 6 * 3600000; };
+
+// App-icon badge: how many things wait for him. Cleared as soon as nothing does.
 function badge(n) { try { if (n > 0) navigator.setAppBadge?.(n); else navigator.clearAppBadge?.(); } catch {} }
-// A notification tap lands on a hash: #s=<session> opens that terminal, #robert[=ws] his thread.
-function handleHash() {
-  const h = location.hash.slice(1); if (!h) return;
-  history.replaceState(null, "", location.pathname);
-  const go = () => {
-    if (h.startsWith("s=")) { const id = h.slice(2); if (byId(id)) openFocus(id); else toast("that terminal is gone"); }
-    else if (h.startsWith("robert")) { R.loaded = false; showRobert(); } // deep link opens his thread; routing stays on #tags / sticky / reply
+// Where a notification (or a link) lands: #a=<item> one card in the deck, #s=<session> that
+// terminal's card if it has one waiting (else its story), #robert the conversation. Read once at
+// launch and then wiped from the address; when the app is already open the worker posts the link
+// instead (sw.js) so nothing navigates — a navigation would cost the call and, on iOS, a mic prompt.
+function openLink(h) {
+  h = String(h || "").replace(/^#/, "");
+  if (!h) return;
+  const go = async () => {
+    if (h.startsWith("a=")) {
+      const key = decodeURIComponent(h.slice(2));
+      if (!PhoneDeck.loaded()) await PhoneDeck.load();
+      if (PhoneDeck.has(key)) return PhoneDeck.open(key);
+      // The key moved on (a newer hand-off on the same terminal): its terminal's card, if any.
+      const sid = (/^(?:handoff|prompt|blocked):([^:]+)/.exec(key) || [])[1];
+      const alt = sid && PhoneDeck.forSession(sid);
+      if (alt) return PhoneDeck.open(alt);
+      return toast("already handled");
+    }
+    if (h.startsWith("s=")) {
+      const id = h.slice(2);
+      if (!PhoneDeck.loaded()) await PhoneDeck.load();
+      const key = PhoneDeck.forSession(id);
+      if (key) return PhoneDeck.open(key);
+      if (byId(id)) return openFocus(id);
+      return toast("that terminal is gone");
+    }
+    if (h.startsWith("robert")) { if (PhoneDeck.isOpen()) PhoneDeck.close(); if (qs("#v-home").hidden) showHome(); toBottom(); }
   };
   if (S.loaded) go(); else document.addEventListener("phone:loaded", go, { once: true });
 }
+function handleHash() {
+  const h = location.hash; if (!h) return;
+  history.replaceState(null, "", location.pathname);
+  openLink(h);
+}
 window.addEventListener("hashchange", handleHash);
+navigator.serviceWorker?.addEventListener("message", (e) => {
+  const m = e.data || {};
+  if (m.type === "open" && m.url) { try { openLink(new URL(m.url, location.origin).hash); } catch {} e.ports?.[0]?.postMessage({ ok: true }); }
+});
 
 // ── token ───────────────────────────────────────────────────────────────────
 function tokenSheet() {
   const b = sheet(`<h3>Admin token</h3><p style="color:var(--muted);margin:0 0 14px">From <span class="mono">~/chronos/.admin-token</span> on the Mac. Stored only in this browser.</p>
     <div class="field"><input id="tok" placeholder="paste token" autocapitalize="off" autocomplete="off" spellcheck="false"></div>
     <div class="btns"><button class="big primary wide" id="tok-ok">Connect</button></div>`);
-  qs("#tok-ok", b).onclick = () => { const t = qs("#tok", b).value.trim(); if (!t) return; localStorage.setItem("mc-token", t); TOKEN = t; location.reload(); };
+  qs("#tok-ok", b).onclick = () => { const t = qs("#tok", b).value.trim(); if (!t) return; store.set("mc-token", t); TOKEN = t; location.reload(); };
 }
-if (!TOKEN) { qs("#brand-sub").textContent = "no token"; tokenSheet(); }
+
+// ── boot ────────────────────────────────────────────────────────────────────
+// The conversation is on screen before the network answers: the cached thread, the cached count of
+// what is waiting, and a draft he was typing. Then everything is read fresh.
+(() => {
+  const cached = loadThread();
+  if (cached.length) { drawThread(cached); R.lastId = cached[cached.length - 1].id || 0; } else hello();
+  try {
+    const q = JSON.parse(store.get("phone-queue") || "null");
+    if (q?.n) { qs("#qentry").hidden = false; qs("#qe-n").textContent = q.n; qs("#qe-t").textContent = q.n === 1 ? "1 waiting for you" : q.n + " waiting for you"; qs("#qe-s").textContent = (PhoneDeck.KIND_WORD[q.kind] || "") + (q.line ? " · " + q.line : ""); }
+  } catch {}
+  const draft = store.get("phone-draft"); if (draft) { rComposer.value = draft; rComposer.dispatchEvent(new Event("input")); }
+  try {
+    const p = JSON.parse(store.get("phone-pending") || "null");
+    // A line that was on its way when the page went away: it shows as his, waiting, until its row lands.
+    if (p?.text && Date.now() - p.at < 10 * 60000) {
+      R.pending = p;
+      R.mineYou = bubble("you", p.text);
+      R.mine = bubble("rob pending", "");
+      R.busy = true; robAwait("lost");
+    } else store.del("phone-pending");
+  } catch {}
+  paintCall("off");
+  document.documentElement.dataset.ready = "1";
+})();
+if (!TOKEN) { qs("#top-sub").textContent = "no token"; tokenSheet(); }
 else {
   // A reload while a screen or sheet was up leaves its history entry behind; start clean.
-  if (history.state?.view || history.state?.sheet) history.replaceState(null, "", location.pathname);
-  PUSH.ready();
+  if (history.state?.view || history.state?.sheet || history.state?.deck) history.replaceState(null, "", location.pathname);
+  PUSH.ready().then(checkPush);
   handleHash();
   // Warm + prefetch Robert before the first tap — cold Claude is the slow part, not the tunnel.
   warmRobert(true);
-  loadRobertModel();
+  robertHistory();
   load().then(() => {
     connectBus();
-    robertHistory(); // cache his thread so opening Robert is instant
-    warmRobert(true);
   }).catch((err) => {
-    qs("#brand-sub").textContent = "can't reach the daemon";
-    if (/401|403/.test(err.message)) { localStorage.removeItem("mc-token"); tokenSheet(); } else toast(err.message);
+    qs("#top-sub").textContent = "can't reach the daemon";
+    qs("#top-sub").classList.add("warn");
+    if (/401|403/.test(err.message)) { store.del("mc-token"); tokenSheet(); } else toast(err.message);
   });
 }
 </script>

@@ -59,7 +59,10 @@ test("Phone holds the outbox on the turn id until agent.push (or a history re-re
   assert.match(phone, /if \(r\?\.accepted && r\?\.turn\) \{[\s\S]*?robAwait\(r\.turn\); hold = true; return;/);
   assert.match(phone, /R\.pend\.set\(r\.turn, b\); R\.mine = null; R\.pend\.delete\("\?"\)/);
   assert.match(phone, /if \(R\.awaitTurn && \(R\.awaitTurn === e\.turn \|\| R\.awaitTurn === "lost"\)\) robRelease/);
-  assert.match(phone, /robertHistory\(\)\.finally\(\(\) => \{ if \(waiting\) robRelease\(null\); \}\)/);
+  // On reconnect the thread is re-read; the composer is freed only once the turn's row is there
+  // (recoverPending clears R.pending) — a turn still running keeps it until its push or the 3-min net.
+  assert.match(phone, /robertHistory\(\)\.finally\(\(\) => \{ if \(waiting && !R\.pending\) robRelease\(null\); \}\)/);
+  assert.match(phone, /function recoverPending\(rows\)/);
   assert.doesNotMatch(phone, /connection dropped/);
 });
 
