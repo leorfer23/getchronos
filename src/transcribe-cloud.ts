@@ -35,6 +35,10 @@ let key: string | undefined;
 let downUntil = 0;
 let downWhy: string | null = null;
 let saidNoKey = false;
+// One slow answer is not an outage: measured on a live call path, 1 request in 19 passed the timeout
+// and the 18 after it answered in under a second. The engine is left alone only on the second
+// timeout / network error in a row; an answer in between clears the count.
+let strikes = 0;
 
 /**
  * Take the key out of the environment and keep it here. .secrets is loaded into the daemon's
@@ -52,7 +56,7 @@ claimCloudKey();
 export const cloudHasKey = (): boolean => !!key;
 /** Tests. */
 export function resetCloud(o: { key?: string | null } = {}): void {
-  downUntil = 0; downWhy = null; saidNoKey = false;
+  downUntil = 0; downWhy = null; saidNoKey = false; strikes = 0;
   if (o.key !== undefined) key = o.key ?? undefined;
 }
 
@@ -210,11 +214,19 @@ export function cloudFailed(e: unknown, now: number = Date.now()): void {
     return;
   }
   if (err.kind === "no-key") return;
+  if ((err.kind === "timeout" || err.kind === "network") && ++strikes < 2) {
+    console.warn(`[transcribe] cloud engine ${err.kind} (${err.message}) — this sentence goes to the local engine`);
+    return;
+  }
+  strikes = 0;
   const wait = err.kind === "auth" ? CLOUD_AUTH_DOWN_MS : CLOUD_DOWN_MS;
   if (now >= downUntil) console.warn(`[transcribe] cloud engine ${err.kind} (${err.message}) — finished sentences use the local engines; retry in ${wait / 1000}s`);
   downUntil = now + wait;
   downWhy = `${err.kind}: ${err.message}`;
 }
+
+/** A sentence came back from the cloud: whatever failed before was a blip. */
+export function cloudAnswered(): void { strikes = 0; }
 
 /** For GET /api/voices: is the cloud engine asked for, can it be used, and if not why. Never the key. */
 export function cloudHealth(mode: string, now: number = Date.now(), env: Record<string, string | undefined> = process.env): Record<string, unknown> {
