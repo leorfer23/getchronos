@@ -98,6 +98,8 @@ export function overCap<T extends { bytes: number }>(clips: T[], keep = KEEP, ma
 }
 
 const indexFile = (dir: string) => path.join(dir, "index.json");
+/** The names this module writes. Nothing else in the directory is ever deleted — it may be pointed at a folder that holds more. */
+const OURS = /^(\d{8}T\d{6}Z-[a-z0-9]{1,8}\.[a-z0-9]{2,5}|index\.json(\.tmp)?)$/;
 
 function readIndex(dir: string): Clip[] {
   try {
@@ -148,7 +150,7 @@ export function keepClip(
   const kept = clips.filter((c) => !drop.includes(c));
   writeIndex(dir, kept);
   const known = new Set(kept.map((c) => c.file));
-  for (const f of fs.readdirSync(dir)) if (f !== "index.json" && !known.has(f)) fs.rmSync(path.join(dir, f), { force: true, recursive: true });
+  for (const f of fs.readdirSync(dir)) if (OURS.test(f) && !f.startsWith("index.json") && !known.has(f)) fs.rmSync(path.join(dir, f), { force: true });
   return drop.includes(clip) ? null : clip;
 }
 
@@ -157,7 +159,10 @@ export function listClips(dir = clipsDir()): Clip[] {
   return readIndex(dir).filter((c) => fs.existsSync(path.join(dir, c.file))).reverse();
 }
 
-/** The setting went off: nothing of it stays on disk. */
+/** The setting went off: no clip and no transcript stays on disk (the directory goes too, when nothing else is in it). */
 export function wipeClips(dir = clipsDir()): void {
-  fs.rmSync(dir, { recursive: true, force: true });
+  let names: string[] = [];
+  try { names = fs.readdirSync(dir); } catch { return; }
+  for (const f of names) if (OURS.test(f)) fs.rmSync(path.join(dir, f), { force: true });
+  try { fs.rmdirSync(dir); } catch {}
 }

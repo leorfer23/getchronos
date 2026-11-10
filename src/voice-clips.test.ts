@@ -85,19 +85,24 @@ test("the blank clip that warms the engine, an empty body and an oversized one a
 });
 
 test("a stray file in the directory does not survive the next clip, and a hostile index entry is ignored", () => {
-  fs.writeFileSync(path.join(dir, "left-behind.wav"), "x");
+  fs.writeFileSync(path.join(dir, "20200101T000000Z-abc123.wav"), "x"); // a clip the index lost
+  fs.writeFileSync(path.join(dir, "notes.txt"), "not ours");
   const idx = JSON.parse(fs.readFileSync(path.join(dir, "index.json"), "utf8"));
   idx.clips.push({ file: "../../etc/passwd", text: "x", bytes: 1, at: "" });
   fs.writeFileSync(path.join(dir, "index.json"), JSON.stringify(idx));
   keepClip(wav(350, 300, 750), { text: "otra" }, { dir, keep: 3 });
-  assert.ok(!fs.existsSync(path.join(dir, "left-behind.wav")));
+  assert.ok(!fs.existsSync(path.join(dir, "20200101T000000Z-abc123.wav")));
+  assert.ok(fs.existsSync(path.join(dir, "notes.txt")), "a file this module did not write is never touched");
   assert.ok(listClips(dir).every((c) => /^[\w.-]+$/.test(c.file)));
 });
 
 test("turning it off leaves nothing behind", () => {
   assert.ok(listClips(dir).length > 0);
   wipeClips(dir);
-  assert.equal(fs.existsSync(dir), false);
+  assert.deepEqual(fs.readdirSync(dir), ["notes.txt"], "every clip and the index are gone; a stranger's file stays");
   assert.deepEqual(listClips(dir), []);
+  fs.rmSync(path.join(dir, "notes.txt"));
+  wipeClips(dir);
+  assert.equal(fs.existsSync(dir), false, "an empty directory goes too");
   wipeClips(dir); // twice is fine
 });
