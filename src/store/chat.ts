@@ -11,6 +11,8 @@ export type ChatSource = "web" | "telegram" | "heartbeat" | "robert" | "divider"
 // which half of it: "you" (the operator's line) or "reply" (Robert's). `text` is whatever the caller
 // holds — the whole parent for the model (quotePrompt), a one-line excerpt for display (stored).
 export type ChatQuoteSide = "you" | "reply";
+/** A Robert turn's arrival and latency stamps (ISO strings, like created_at). */
+export type ChatTiming = { voice?: boolean | null; asked_at?: string | null; first_delta_at?: string | null };
 /** `workspace_id` is the parent's project — the router uses it so a reply stays on that thread. */
 export type ChatQuote = { id: number; side: ChatQuoteSide; text: string; workspace_id?: string | null };
 const QUOTE_SHOWN = 240; // the stored excerpt; the UI clamps it to one line
@@ -103,15 +105,24 @@ export const chat = {
     quote: ChatQuote | null = null,
     /** Short name of the model/backend that answered ("opus", "cursor") — Desk shows it on the bubble. */
     engine: string | null = null,
+    /**
+     * How the line arrived and how long the answer took (migration 155). created_at is when the reply
+     * was stored; asked_at is when the daemon accepted the line; first_delta_at is the first streamed
+     * TEXT of the reply (null when nothing streamed — a fan-out, an error). Rows without it stay NULL.
+     */
+    timing: ChatTiming | null = null,
   ): { id: number; created_at: string; source: ChatSource } {
     const ts = now();
     const r = db
-      .prepare(`INSERT INTO chat_messages (you,reply,created_at,source,workspace_id,steps,attachments,reply_to,reply_quote,engine) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .prepare(`INSERT INTO chat_messages (you,reply,created_at,source,workspace_id,steps,attachments,reply_to,reply_quote,engine,voice,asked_at,first_delta_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(you, reply, ts, source, workspaceId, steps && steps.length ? JSON.stringify(steps) : null,
         attachments && attachments.length ? JSON.stringify(attachments) : null,
         quote ? quote.id : null,
         quote ? JSON.stringify({ side: quote.side, text: quoteExcerpt(quote.text) }) : null,
-        engine || null);
+        engine || null,
+        timing?.voice == null ? null : timing.voice ? 1 : 0,
+        timing?.asked_at ?? null,
+        timing?.first_delta_at ?? null);
     return { id: Number(r.lastInsertRowid), created_at: ts, source };
   },
   /**

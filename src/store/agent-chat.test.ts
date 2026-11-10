@@ -30,3 +30,21 @@ test("exec threads never leak into the manager thread (and vice versa)", () => {
   assert.deepEqual(chat.recent(10, null).map((m: any) => m.you), ["mgr msg"]);
   assert.deepEqual(agentChat.recent("ada").map((m: any) => m.you), ["exec msg"]);
 });
+
+test("chat.add stores a turn's voice flag and latency stamps; rows without them stay NULL", () => {
+  const timed = chat.add("hola", "hola.", "web", null, null, null, null, "opus", {
+    voice: true,
+    asked_at: "2026-11-09T10:00:00.000Z",
+    first_delta_at: "2026-11-09T10:00:01.200Z",
+  });
+  const plain = chat.add("typed", "ok", "web");
+  const typed = chat.add("typed", "ok", "web", null, null, null, null, null, { voice: false, asked_at: "2026-11-09T10:01:00.000Z", first_delta_at: null });
+  const get = (id: number) => db.prepare("SELECT voice, asked_at, first_delta_at FROM chat_messages WHERE id = ?").get(id) as any;
+  assert.deepEqual({ ...get(timed.id) }, { voice: 1, asked_at: "2026-11-09T10:00:00.000Z", first_delta_at: "2026-11-09T10:00:01.200Z" });
+  assert.deepEqual({ ...get(plain.id) }, { voice: null, asked_at: null, first_delta_at: null });
+  assert.deepEqual({ ...get(typed.id) }, { voice: 0, asked_at: "2026-11-09T10:01:00.000Z", first_delta_at: null });
+  // GET /agent/history reads these rows with SELECT *, so the stamps reach the client as-is.
+  const row = chat.recent(10, null).find((r: any) => r.id === timed.id);
+  assert.equal(row.voice, 1);
+  assert.equal(row.asked_at, "2026-11-09T10:00:00.000Z");
+});

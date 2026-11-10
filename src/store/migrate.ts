@@ -2259,6 +2259,19 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     },
   },
 
+  {
+    version: 155,
+    name: "chat_messages.voice + asked_at + first_delta_at — was a Robert turn spoken, and how long it took",
+    // created_at is when the reply was STORED, so a turn's latency was not queryable at all. asked_at
+    // is when POST /agent accepted the line, first_delta_at the first streamed text of the reply
+    // (when speech can start), voice 1 for a line said on the voice call. All NULL on older rows and
+    // on rows other paths write (Telegram, wakes, dividers) — NULL means "not measured", never 0.
+    up: (db) => db.exec(`
+      ALTER TABLE chat_messages ADD COLUMN voice INTEGER CHECK (voice IN (0, 1));
+      ALTER TABLE chat_messages ADD COLUMN asked_at TEXT;
+      ALTER TABLE chat_messages ADD COLUMN first_delta_at TEXT;`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
