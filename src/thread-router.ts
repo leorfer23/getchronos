@@ -535,6 +535,21 @@ export function fansOut(t: ResolvedTurn, voice: boolean, enabled = false): boole
   return enabled && !voice && wantsFanout(t);
 }
 
+/**
+ * He talks to ONE Robert. A project's own Robert takes the turn only when he pointed at that project
+ * himself: picked it, tagged it, named it (or one of its tickets / repos), or is answering one of its
+ * bubbles. A guess — the router model's, or "where the last line landed" — does not send him to a
+ * different Robert who only knows one project ("¿qué me espera?" answered "nothing, in <project>").
+ * Those turns go to the unscoped Robert, who sees all of it. Pure.
+ */
+export function oneRobert(t: ResolvedTurn, replyWorkspace?: string | null): ResolvedTurn {
+  if (t.ask || t.ws === null || !t.routed) return t;
+  const guessed = t.routed.how === "model" || (t.routed.how === "sticky" && t.ws !== (replyWorkspace ?? null));
+  if (!guessed) return t;
+  const routed: Route = { ...t.routed, ws: null, how: "fleet", fleet: false, why: `one Robert: no project named (${t.routed.why})` };
+  return { ws: null, text: t.text, routed, ask: null, how: "fleet" };
+}
+
 /** Remember where the turn landed, so the next bare message follows it. An ask lands nowhere. */
 export function commitTurn(surface: string, t: ResolvedTurn): void {
   if (t.ask) return;
