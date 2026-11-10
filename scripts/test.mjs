@@ -29,8 +29,10 @@ if (!files.length) {
     ...walk("scripts").filter((f) => /^scripts\/mc-[^/]+\.test\.mjs$/.test(f)),
     ...walk("evals").filter((f) => f.endsWith(".eval.ts")),
   ];
-  // Longest first, so the slow files are not the last ones to start.
-  files.sort((a, b) => Number(SLOW_FILES.test(b)) - Number(SLOW_FILES.test(a)) || a.localeCompare(b));
+  // Longest first, so a long file is not the last one to start: the slow files, then by size (a
+  // rough stand-in for how long a file runs).
+  const size = (f) => fs.statSync(path.join(root, f)).size;
+  files.sort((a, b) => Number(SLOW_FILES.test(b)) - Number(SLOW_FILES.test(a)) || size(b) - size(a));
 }
 
 const env = { ...process.env, ...(all || args.some((a) => !a.startsWith("--")) ? { CHRONOS_TEST_SLOW: "1" } : {}) };
