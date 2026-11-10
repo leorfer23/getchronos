@@ -2259,6 +2259,52 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     },
   },
 
+  {
+    version: 157,
+    name: "alerts — one row per stuck episode the operator was told about (src/stuck-alerts.ts)",
+    // A terminal stuck on his answer, a wall nothing could move, a computer gone with work on it, a job
+    // that failed for good: each episode is ONE row, written before anything is sent, so a restart
+    // neither forgets an alert half-way up the ladder (voice → phone → Telegram) nor repeats one he
+    // already got. The partial unique index IS the dedup: one open episode per subject and kind.
+    // `channels` is the ladder as it ran, so time-from-stuck-to-told and misses are a query.
+    // 155 and 156 belong to other branches; this one must land after them or a DB already at 157
+    // would skip them (migrate() only applies versions above user_version).
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS alerts (
+        id TEXT PRIMARY KEY,
+        subject TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        workspace_id TEXT,
+        session_id TEXT,
+        run_id TEXT,
+        job_id TEXT,
+        host_id TEXT,
+        reason TEXT,
+        title TEXT NOT NULL,
+        text TEXT NOT NULL,
+        lang TEXT NOT NULL,
+        state TEXT NOT NULL,
+        stuck_since TEXT NOT NULL,
+        raised_at TEXT NOT NULL,
+        next_at INTEGER,
+        channels TEXT NOT NULL DEFAULT '[]',
+        meta TEXT,
+        delivered_at TEXT,
+        delivered_via TEXT,
+        acked_at TEXT,
+        acked_via TEXT,
+        resolved_at TEXT,
+        summary_id TEXT,
+        selfcheck INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_open ON alerts(subject, kind) WHERE resolved_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_alerts_next ON alerts(next_at) WHERE next_at IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at);
+      CREATE INDEX IF NOT EXISTS idx_alerts_session ON alerts(session_id);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

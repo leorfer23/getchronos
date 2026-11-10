@@ -367,6 +367,12 @@ async function handleCallback(cb: any) {
       await stripKb();
       return send(chatId, out.ok ? `✅ answered: ${esc(text)}` : `⚠️ ${esc((out as any).error)}`);
     }
+    // A stuck-work alert (src/stuck-alerts.ts): "got it" stops it climbing any further. `al.ack.<id8>`.
+    // The keyboard stays: its answer buttons (tp.*) still work after he has said he has it.
+    if (ns === "al") {
+      const { ackAlertTap } = await import("./stuck-alerts.js");
+      return ack(ackAlertTap(id, "telegram") ? "✓ noted" : "that alert is gone");
+    }
     // A waiting terminal's own prompt (src/terminal-prompts.ts), escalated because Robert did not
     // settle it: `tp.<session id8>.<option index | y | n>`. The tap goes through the SAME primitive as
     // the Desk's answer strip — the live prompt is re-read first, so a screen that moved on is

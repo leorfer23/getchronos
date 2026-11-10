@@ -8464,6 +8464,7 @@ async function vcStart() {
   VC.src.connect(VC.node); VC.node.connect(sink); sink.connect(VC.ctx.destination);
   Object.assign(VC, { seg: null, pre: [], preMs: 0, noise: 0.01, deafUntil: performance.now() + 250 });
   earcon("on");
+  vcPresence(true);
   vcState();
   // A cold whisper model costs seconds on the first sentence; a blank clip loads it now. And his
   // warm process for the thread you are on.
@@ -8474,6 +8475,7 @@ function vcStop(silent) {
   if (!VC.on) return;
   vcSkip();
   VC.on = false;
+  vcPresence(false);
   Object.assign(VC, { seg: null, pre: [], preMs: 0, pick: null, buf: "", turn: null });
   try { if (VC.node) { VC.node.onaudioprocess = null; VC.node.disconnect(); } VC.src?.disconnect(); } catch {}
   VC.node = VC.src = null;
@@ -8664,14 +8666,14 @@ function vcFinal(e, fromHere) {
   const parts = String(e.reply).split(SENTENCE_CUT);
   for (const p of fromHere ? parts : parts.slice(0, 4)) vcSentence(p);
 }
-function vcEnqueue(text) {
+function vcEnqueue(text, first) {
   if (!VC.on) return;
   const item = {
     text,
     blob: fetch("/api/speak", { method: "POST", headers: { "content-type": "application/json", ...vcAuth() }, body: JSON.stringify({ text, lang: VC.lang }) })
       .then((r) => (r.ok ? r.blob() : null)).catch(() => null),
   };
-  VC.speakQ.push(item);
+  if (first) VC.speakQ.unshift(item); else VC.speakQ.push(item);
   vcState();
   vcPlay();
 }
@@ -8704,6 +8706,20 @@ function vcSkip(barged) {
   VC.speakQ = []; VC.playing = null;
   if (a) { a.pause(); a.onended = a.onerror = null; done?.(); }
   vcAfterSpeech(barged);
+}
+// Stuck work, said at once (src/stuck-alerts.ts). The daemon names ONE live call (its client) — this
+// page says it ahead of whatever is queued and tells the daemon it did; no answer and it goes to the
+// phone instead. While the call is up the page says so every 20s, and once more when it hangs up.
+function vcAlert(e) {
+  if (!VC.on || !e.say || (e.client && e.client !== CLIENT)) return;
+  vcEnqueue(speakable(e.say), true);
+  fetch("/api/alerts/" + encodeURIComponent(e.alert_id) + "/spoken", { method: "POST", headers: { "content-type": "application/json", ...vcAuth() }, body: JSON.stringify({ client: CLIENT }) }).catch(() => {});
+}
+function vcPresence(on) {
+  clearInterval(VC.presT); VC.presT = 0;
+  const ping = (live) => fetch("/api/voice/presence", { method: "POST", headers: { "content-type": "application/json", ...vcAuth() }, body: JSON.stringify({ client: CLIENT, surface: "desk", live, lang: VC.lang, lock: LOCK?.id ?? null }) }).catch(() => {});
+  ping(!!on);
+  if (on) VC.presT = setInterval(() => ping(true), 20000);
 }
 
 // ── Dictation into a terminal ────────────────────────────────────────────────────────────────
@@ -8814,7 +8830,7 @@ const BUS_TOPICS = [
   "host.online", "host.offline", "host.updated", "host.inventory",
   "ask.created", "ask.answered",
   "artifact.created", "artifact.updated", "artifact.event",
-  "service.changed", "service.alarm",
+  "service.changed", "service.alarm", "alert.raised",
   "inbox.updated",
 ].join(",");
 function connectBus() {
@@ -8824,6 +8840,7 @@ function connectBus() {
   ws.onmessage = (ev) => {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     if (!DeskScope.passes(e, LOCK)) return;
+    if (e.topic === "alert.raised") return vcAlert(e);
     if (DW.topics.has(e.topic)) dwBus(e.topic);
     if (e.topic === "ask.created" || e.topic === "ask.answered") loopsSoon();
     AskCard.onEvent(e);

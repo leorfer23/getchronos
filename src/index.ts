@@ -53,6 +53,7 @@ import { startRobertDrive } from "./robert-drive.js";
 import { startInboxAutoDispatch } from "./inbox-autodispatch.js";
 import { startRobertSweep } from "./robert-sweep.js";
 import { startDraftNotify } from "./draft-notify.js";
+import { alertsOwnPush, startStuckAlerts } from "./stuck-alerts.js";
 import { startTerminalFailover } from "./terminal-failover.js";
 import { startWorklog } from "./worklog.js";
 import { startCloudReconcile } from "./cloud-reconcile.js";
@@ -105,7 +106,7 @@ void startEgress();
 startTelegram();
 startRelay();
 startNotify();
-startPush({ activity: sessionActivity, prompt: sessionPrompt, phase: (id) => statusOf(id)?.phase ?? null });
+startPush({ activity: sessionActivity, prompt: sessionPrompt, phase: (id) => statusOf(id)?.phase ?? null, owned: alertsOwnPush });
 startTermStatus();
 startMergeGate();
 startSelfDeploy();
@@ -125,6 +126,8 @@ startRobertDrive();
 startRobertSweep();
 // Every draft an agent leaves (it never sends) is announced on the operator's Telegram (draft-notify.ts).
 startDraftNotify();
+// Stuck work reaches the operator once, at once: his voice call → his phone → Telegram (stuck-alerts.ts).
+startStuckAlerts();
 startTerminalFailover();
 // Standing watches on single terminals + the deadlines that stop a question sitting with Robert forever.
 startDeskWatch();

@@ -76,8 +76,8 @@ self.addEventListener("push", (e) => {
     await self.registration.showNotification(p.title || "Chronos", {
       body: p.body || "", tag: p.tag || "chronos", renotify: true,
       icon: "/phone-icon.png", badge: "/phone-icon.png",
-      vibrate: p.kind === "blocked" ? [60, 40, 60, 40, 120] : p.kind === "robert" ? [20, 60, 20] : [40, 60, 40, 60, 80],
-      data: { url: p.url || "/phone", session_id: p.session_id || null, actions: p.actions || [], kind: p.kind },
+      vibrate: p.kind === "blocked" || p.kind === "alert" ? [60, 40, 60, 40, 120] : p.kind === "robert" ? [20, 60, 20] : [40, 60, 40, 60, 80],
+      data: { url: p.url || "/phone", session_id: p.session_id || null, actions: p.actions || [], kind: p.kind, alert_id: p.alert_id || null },
       actions,
     });
   })());
@@ -90,6 +90,17 @@ self.addEventListener("notificationclick", (e) => {
   const act = e.action && (d.actions || []).find((a) => a.action === e.action);
   n.close();
   e.waitUntil((async () => {
+    // A stuck-work alert (src/stuck-alerts.ts): any tap means he has it — it stops climbing to Telegram.
+    // Raced against 1.5s so a slow tunnel never holds the app from opening.
+    if (d.alert_id) {
+      const token = await kvGet("token");
+      const sent = fetch("/api/alerts/" + encodeURIComponent(d.alert_id) + "/ack", {
+        method: "POST", credentials: "same-origin",
+        headers: { "content-type": "application/json", ...(token ? { "x-mc-admin": token } : {}) },
+        body: JSON.stringify({ via: act ? "push_button" : "push_open" }),
+      }).catch(() => {});
+      await Promise.race([sent, new Promise((r) => setTimeout(r, 1500))]);
+    }
     if (act && d.session_id && act.input && Object.keys(act.input).length) {
       const token = await kvGet("token");
       try {
