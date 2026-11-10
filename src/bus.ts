@@ -229,6 +229,10 @@ export type BusEvent = (
   // recorded his answer to one of its decision items. Recording is all a decision does — the executor acts.
   | { topic: "ledger.updated"; request_id: string; workspace_id: string | null; state: string }
   | { topic: "ledger.decided"; request_id: string; item_id: string; workspace_id: string | null; action: string; decision: string; by: string | null; target_hash: string | null }
+  // A new question was put on a request (ledger.ts raiseItem) — what the verifier (src/request-verifier.ts)
+  // wakes on — and what one verifier pass concluded. Ids and a reason only, never the work itself.
+  | { topic: "ledger.item_raised"; request_id: string; item_id: string; workspace_id: string | null; action: string; deliverable_id: string | null }
+  | { topic: "ledger.verified"; request_id: string; workspace_id: string | null; ready: boolean; told: boolean; reason: string | null }
 ) & { actor?: string };
 
 class Bus extends EventEmitter {

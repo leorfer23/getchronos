@@ -435,6 +435,15 @@ defineSetting({
   default: () => CONFIG.terminalFailoverMax,
 });
 
+// The verifier (src/request-verifier.ts): a hand-off asking for a merge, review or deploy, and every
+// draft, is checked by the daemon before it is put to the operator as ready.
+defineSetting({
+  key: "verifier.enabled", group: "Safety", level: "both", type: "bool", env: "CHRONOS_VERIFIER",
+  label: "Check work before it reaches you",
+  help: "A hand-off asking for your yes is checked first: the PR is open, mergeable and up to date, the repo's checks re-run, a second model reads it against what you asked, UI changes carry before/after shots, drafts are bound to their exact words. Failures go back to the terminal (two rounds). Off: items reach you unverified.",
+  default: () => process.env.CHRONOS_VERIFIER !== "0",
+});
+
 // Alerts (src/stuck-alerts.ts): work that is stuck reaches the operator once, on the first channel
 // that answers — his live voice call, then his phone, then Telegram. Event-driven; silent when
 // nothing is wrong.

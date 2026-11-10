@@ -71,7 +71,7 @@ export const FINAL_DELIVERABLE: ReadonlySet<DeliverableState> = new Set<Delivera
 export const CHECK_NAMES = [
   "tests", "regression", "pr_ready", "matches_request", "shots", "walkthrough",
   "queries", "crosscheck", "assumptions", "exercised", "repro_steps",
-  "repro_before", "fixed_after", "post_deploy",
+  "repro_before", "fixed_after", "post_deploy", "goal_test", "draft_bound",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
 export const CHECK_STATUSES = ["pass", "fail", "skip"] as const;
@@ -84,7 +84,14 @@ export type Prereq = { kind: "vpn" | "login" | string; name?: string | null; why
 
 // ───────────────────────────── work types ─────────────────────────────
 
-export type ExpectedCheck = { name: CheckName; required: boolean; what: string };
+/**
+ * `required` = not ready without a result. `gate` = not ready without a PASS: a skip is not enough,
+ * because without it there is nothing to say yes to (the PR is not known to be mergeable, nobody but
+ * the author read it, the screens were not shown, the words he hears are not the words bound).
+ * A required check that is not a gate may be skipped with its reason — the queue says what was not
+ * checked, so a gap is spoken, never passed off as a pass.
+ */
+export type ExpectedCheck = { name: CheckName; required: boolean; what: string; gate?: boolean };
 export type WorkType = {
   /** How it is said aloud ("a UI PR"). */
   label: string;
@@ -99,8 +106,9 @@ export type WorkType = {
 };
 
 const TESTS: ExpectedCheck = { name: "tests", required: true, what: "the repo's own check command re-run locally, output kept" };
-const PR_READY: ExpectedCheck = { name: "pr_ready", required: true, what: "the PR exists, is mergeable and up to date with its base" };
-const MATCHES: ExpectedCheck = { name: "matches_request", required: true, what: "a reader that did not write it says the change does what was asked" };
+const PR_READY: ExpectedCheck = { name: "pr_ready", required: true, gate: true, what: "the PR exists, is open, mergeable and up to date with its base" };
+const MATCHES: ExpectedCheck = { name: "matches_request", required: true, gate: true, what: "a reader that did not write it says the change does what was asked" };
+const DRAFT_BOUND: ExpectedCheck = { name: "draft_bound", required: true, gate: true, what: "the words, recipient and channel he hears are the ones a yes is bound to" };
 
 /**
  * A request's work type IS a terminal's goal kind (types.ts GoalKind) — one vocabulary, set where it
@@ -113,7 +121,13 @@ export const WORK: Record<GoalKind, WorkType> = {
     done: "A PR open against the right branch, tests green, and proof that nothing else broke.",
     deliverables: ["pr"],
     actions: ["merge"],
-    evidence: [TESTS, { name: "regression", required: true, what: "the wider suite and the paths around the change still pass" }, PR_READY, MATCHES],
+    evidence: [
+      TESTS,
+      { name: "regression", required: true, what: "the wider suite and the paths around the change still pass" },
+      { name: "goal_test", required: true, what: "a test tied to the goal changed in the diff (fails before, passes after)" },
+      PR_READY,
+      MATCHES,
+    ],
   },
   ui: {
     label: "a UI PR",
@@ -123,7 +137,7 @@ export const WORK: Record<GoalKind, WorkType> = {
     evidence: [
       TESTS,
       { name: "regression", required: true, what: "the screens around the change still render and behave" },
-      { name: "shots", required: true, what: "before/after per screen, per viewport (meta: screen, viewport, side)" },
+      { name: "shots", required: true, gate: true, what: "before/after per screen, per viewport (meta: screen, viewport, side)" },
       { name: "walkthrough", required: true, what: "the user flow it changes, a recording or a shot per step" },
       PR_READY,
       MATCHES,
@@ -135,6 +149,7 @@ export const WORK: Record<GoalKind, WorkType> = {
     deliverables: ["answer", "slack_draft", "email_draft", "artifact", "dashboard", "doc"],
     actions: ["send", "review"],
     evidence: [
+      { ...MATCHES, what: "a reader that did not do the work says the answer addresses the question, in the form asked" },
       { name: "queries", required: true, what: "every query or source behind each number, re-runnable" },
       { name: "crosscheck", required: true, what: "the headline numbers reproduced another way" },
       { name: "assumptions", required: true, what: "what was assumed or left out, stated" },
@@ -170,14 +185,67 @@ export const WORK: Record<GoalKind, WorkType> = {
 /** The evidence slots of a request, filled from the checks it has: missing until a verifier runs. */
 export function expectedChecks(
   kind: GoalKind | null | undefined,
-  checks: Array<{ name: string; status: string; ran_at: string }>,
-): Array<ExpectedCheck & { status: CheckStatus | "missing" }> {
-  if (!kind) return [];
-  return WORK[kind].evidence.map((e) => {
+  checks: Array<{ name: string; status: string; ran_at: string; note?: string | null }>,
+  slots: ExpectedCheck[] | null = null,
+): SlotStatus[] {
+  if (!kind && !slots) return [];
+  return (slots ?? WORK[kind!].evidence).map((e) => {
     // The newest run of a check is the one that counts.
     const last = checks.filter((c) => c.name === e.name).sort((a, b) => b.ran_at.localeCompare(a.ran_at))[0];
-    return { ...e, status: (last?.status as CheckStatus | undefined) ?? "missing" };
+    return { ...e, status: (last?.status as CheckStatus | undefined) ?? "missing", note: last?.note ?? null };
   });
+}
+
+/**
+ * The evidence slots one decision item is judged by: its request's work type, narrowed to what its
+ * deliverable can carry. A PR is judged by the code slots (a product's `post_deploy` belongs to the
+ * deploy, after the yes); a draft by whether its words are bound and answer what was asked; an
+ * answer, document or page by its work type's own slots. Nothing for a deploy before the executor
+ * binds what would go out.
+ */
+export function slotsFor(kind: GoalKind | null | undefined, deliverable: DeliverableKind | null | undefined): ExpectedCheck[] {
+  const k: GoalKind = kind ?? "pr";
+  if (deliverable === "pr") {
+    const code = k === "pr" || k === "ui" || k === "product" ? WORK[k].evidence : WORK.pr.evidence;
+    return code.filter((e) => e.name !== "post_deploy" && e.name !== "repro_before" && e.name !== "fixed_after");
+  }
+  if (deliverable === "slack_draft" || deliverable === "email_draft") return [DRAFT_BOUND, MATCHES];
+  if (deliverable === "deploy") return [];
+  if (k === "investigation" || k === "qa") return WORK[k].evidence;
+  return [MATCHES];
+}
+
+/** One slot as the newest current check left it (`expectedChecks` over the checks for this target). */
+export type SlotStatus = ExpectedCheck & { status: CheckStatus | "missing"; note?: string | null };
+export type Readiness = {
+  /** Every required slot has a result, none failed, every gate passed: ready for his yes. */
+  ready: boolean;
+  /** ready · failing (a check failed) · unverified (missing results, or a gate only skipped) · none (no slots: nothing to judge). */
+  status: "ready" | "failing" | "unverified" | "none";
+  /** Slots that passed. */
+  passed: number;
+  failed: Array<{ name: CheckName; note: string | null }>;
+  missing: CheckName[];
+  /** Required slots skipped with a reason — said aloud with the yes, never passed off as passes. */
+  gaps: Array<{ name: CheckName; note: string | null }>;
+  /** Gates that were only skipped: why it is not ready even though nothing failed. */
+  gate_unmet: Array<{ name: CheckName; note: string | null }>;
+};
+
+/**
+ * Is this item ready for his yes? Judged only on checks for its CURRENT target (the caller filters out
+ * checks run against an older PR head or older words — those are stale). Pure.
+ */
+export function readiness(slots: SlotStatus[]): Readiness {
+  const req = slots.filter((s) => s.required);
+  const failed = slots.filter((s) => s.status === "fail").map((s) => ({ name: s.name, note: s.note ?? null }));
+  const missing = req.filter((s) => s.status === "missing").map((s) => s.name);
+  const gaps = req.filter((s) => s.status === "skip" && !s.gate).map((s) => ({ name: s.name, note: s.note ?? null }));
+  const gate_unmet = req.filter((s) => s.gate && s.status === "skip").map((s) => ({ name: s.name, note: s.note ?? null }));
+  const passed = slots.filter((s) => s.status === "pass").length;
+  if (!slots.length) return { ready: false, status: "none", passed, failed, missing, gaps, gate_unmet };
+  const ready = !failed.length && !missing.length && !gate_unmet.length && passed > 0;
+  return { ready, status: ready ? "ready" : failed.length ? "failing" : "unverified", passed, failed, missing, gaps, gate_unmet };
 }
 
 /** What a workspace's setup says a request of this type needs first. Only the VPN is known today. */
@@ -517,8 +585,8 @@ export type QueueCandidate = {
   target_hash: string | null;
   hold_until: string | null;
   created_at: string;
-  /** Verifier results on what this item is about: none yet = unverified. */
-  checks: { pass: number; fail: number; missing_required: number };
+  /** Verifier results on what this item is about: none yet = unverified. `gate_unmet` = gates only skipped (readiness). */
+  checks: { pass: number; fail: number; missing_required: number; gate_unmet?: number };
 };
 
 /**
@@ -536,7 +604,7 @@ export function queueRank(c: QueueCandidate): number {
   if (c.checks.fail > 0) return 5;
   if (c.action === "review") return 3;
   if (!c.target_hash) return 4;
-  return c.checks.pass > 0 && c.checks.missing_required === 0 ? 1 : 2;
+  return c.checks.pass > 0 && c.checks.missing_required === 0 && !c.checks.gate_unmet ? 1 : 2;
 }
 
 export function queueOrder<T extends QueueCandidate>(items: T[]): Array<T & { rank: number }> {

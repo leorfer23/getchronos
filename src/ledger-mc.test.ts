@@ -91,3 +91,33 @@ test("mc ledger: list, mine, queue, show and text read the ledger's own routes",
   const text = await withApi(reply, ["ledger", "text"]);
   assert.match(text.out, /^LEDGER \(1 open · 1 need you\):/m);
 });
+
+test("mc ledger show prints the verifier's checks, readiness and passes; verify re-runs with the operator's token", async () => {
+  const at = new Date().toISOString();
+  let posted = false;
+  const detail = (verified: boolean) => ({
+    id: "abcdef12-0000", state: "needs_operator", kind: "ui", title: "new settings page", state_line: "merge: PR #12", state_at: at, via: "voice", asked_at: at,
+    words: "make settings readable on the phone", work: null, prereqs: [], terminals: [], result: [], deliverables: [], decisions: [], children: [],
+    expected_checks: [{ name: "shots", status: "pass" }],
+    checks: [
+      { name: "tests", status: "pass", stale: true, target_hash: "a".repeat(40), ran_at: at, note: "test green at aaaaaaa", evidence: [] },
+      { name: "shots", status: "pass", stale: false, target_hash: "b".repeat(40), ran_at: at, note: "1 pair", evidence: [{ ref: "/api/sessions/s/outcome/shot/b1.png", meta: { screen: "settings", viewport: "phone", side: "before" } }] },
+    ],
+    readiness: [{ action: "merge", label: "PR #12", ready: false, line: "not checked yet: tests", gaps: [] }],
+    verification: { rounds_told: 1, last: verified ? { id: "v2", status: "done", trigger: "manual", started_at: at, ready: false, reason: "tests missing", told: false } : { id: "v1", status: "done", trigger: "outcome", started_at: at, ready: false, reason: "x", told: true, round: 1 }, passes: [] },
+  });
+  const reply = (m: string, url: string) => {
+    if (m === "POST" && url === "/api/ledger/abcdef12/verify") { posted = true; return { ok: true, started: true }; }
+    return detail(posted);
+  };
+  const show = await withApi(reply, ["ledger", "show", "abcdef12"]);
+  assert.match(show.out, /check runs:/);
+  assert.match(show.out, /✓ tests pass \(STALE — ran on an older target\) @aaaaaaa/);
+  assert.match(show.out, /before · settings · phone: \/api\/sessions\/s\/outcome\/shot\/b1\.png/);
+  assert.match(show.out, /→ merge PR #12: not ready — not checked yet: tests/);
+  assert.match(show.out, /verifier: last pass done \(outcome\).*rounds told 1\/2/);
+  const v = await withApi(reply, ["ledger", "verify", "abcdef12"], { env: { CHRONOS_ADMIN_TOKEN: "admin-for-test" } });
+  assert.equal(v.code, 0, v.out);
+  assert.ok(posted);
+  assert.match(v.out, /⛔ not ready — tests missing/);
+});

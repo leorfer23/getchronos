@@ -17,7 +17,8 @@
 | `request_terminals` | (request, terminal) | `role` · `is_primary` · the window `[linked_at, until)` its hand-offs count in |
 | `request_deliverables` | thing that came back | `kind` (pr · deploy · slack_draft · email_draft · artifact · dashboard · doc · answer) · `ref` (what it is) · `target_hash` (what it is *now*) · `state` |
 | `request_decisions` | question put to him | `action` (merge · deploy · send · review · answer) · bound `target_hash` · `status` (open · held · decided · superseded) · `decision` (yes · no · later · change · answered) + his `words`, `decided_by`, `decided_at`, `hold_until`, `audio_ref` |
-| `request_checks` | verifier check run | `name` · pass/fail/skip · `evidence[]` refs (+ meta: screen, viewport, side) · `target_hash` it ran against · `ran_by`, `ran_at` — **empty until the verifier exists** |
+| `request_checks` | verifier check run | `name` · pass/fail/skip · `evidence[]` refs (+ meta: screen, viewport, side) · `target_hash` it ran against · `ran_by`, `ran_at` — written by the verifier (below) |
+| `request_verifications` | verifier pass | why it ran (`trigger`) · the targets it judged (`target_key`) · `ready` · `reason` · `told` (one of the two rounds) · `round` (migration 158) |
 
 - **A request fans out, a terminal carries on.** A request links to any number of terminals; a terminal can
   serve a later request too. Each terminal has at most one open *primary* link: the request that owns what
@@ -125,8 +126,8 @@ A hand-off becomes deliverables and decision items, from its `ask`:
 
 **Target hashes.** Every executable item (merge · deploy · send) is bound to its deliverable's `target_hash`:
 
-- PR → its head SHA. **Not filled yet**: the verifier stamps it (`requests.bindTarget(deliverable, sha)`) after
-  checking the PR; the executor merges with `--match-head-commit`. Re-binding moves every open item on that
+- PR → its head SHA. The verifier stamps it (`requests.bindTarget(deliverable, sha)`) when it reads the PR,
+  and re-stamps it when its sweep sees the head move; the executor merges with `--match-head-commit`. Re-binding moves every open item on that
   deliverable in one statement, so a yes he gave to an older head matches nothing.
 - Draft → `draftHash` = `sha256:` + sha256 of `JSON.stringify([channel, to, subject, text])`, channel and
   recipient trimmed and lower-cased, subject trimmed (`""` for Slack), text verbatim; recipients of an email
@@ -182,10 +183,47 @@ the process. Every hand-off in a window is part of the result, but only the newe
 each hand-off is the newest when it lands, and a backfill does not bring back hand-offs he already dealt with. Thirty seconds after boot and every minute after, the sweep reopens due holds, settles PRs GitHub
 already settled, adopts orphans, backfills terminals older than `kv ledger.since`, and re-derives every open row.
 
+## The verifier
+
+`src/request-verifier.ts` (runs it) · `src/verify-model.ts` (pure: what each check concludes) · readiness in
+`ledger-model.ts` (`slotsFor`, `readiness`) and `ledger.ts` (`itemReadiness`). "Ready for his yes" is decided by
+code and evidence, never by the terminal's own claim.
+
+- **Trigger.** Every new decision item (`ledger.item_raised`, published by `raiseItem`): a hand-off asking for a
+  merge, review or deploy, or a draft. A burst from one hand-off is one pass (5 s debounce); at most two passes run
+  at once. A pass whose targets (items + their hashes) match the last finished one is not repeated. The sweep
+  (every 3 min) re-reads the head of every open PR item: a moved head is re-bound at once and re-checked.
+- **Where it runs.** In the workspace that owns the request, never workspace-less ones: gh reads with that
+  workspace's read env (`ghReadEnv`), only for a PR of its own repos (`prBelongsTo`); the repo's checks in the
+  terminal's own worktree through its sandbox (`sandboxWrap`), under `nice` and a heavy slot (`mc heavy`); the
+  reader as a `review:` run of that workspace (its sandbox, its review engine). Read-only to the outside world:
+  no merge, send, deploy, PR comment or post.
+- **Checks.** Any PR: `pr_ready` (open, not a draft, no conflict, not behind its base, CI not red), `tests` (the
+  repo's `gate_cmds` re-run at the PR head — only when the worktree is exactly at that head and clean; output kept
+  on the check; no command configured = `skip` with that reason, never `pass`), `matches_request` (a second
+  reader, never the model that wrote it — `pickReviewer` — given his words and the goal; no Bash, no writes, so it
+  cannot park on an ask or post anything). Backend: `goal_test` (a test file in the diff; skip when undecidable),
+  `regression` (skip: not machine-checked). UI: `shots` (before/after per screen at phone AND desktop width,
+  labels `before-<screen>-phone` …, evidence meta `{screen, viewport, side}` for the phone's card) and
+  `walkthrough` (`mc show` steps). Analysis/QA: the reader judges `queries` · `crosscheck` · `assumptions` /
+  `exercised` · `repro_steps`. Drafts: `draft_bound` — the words on file re-hashed with `draftHash` (the formula
+  `mc hook` uses) and bound, or matched against what the hook bound.
+- **Ready** = on the item's CURRENT target: every required slot has a result, none failed, and every gate passed
+  (`pr_ready`, `matches_request`, `shots`, `draft_bound` — a skip is not enough). Other required slots may be
+  skipped with a reason; the queue line says them ("checks pass (not checked: tests, regression)"). A check run
+  against an older head or older words is stale and counts for nothing.
+- **Fail → the terminal.** A fail the terminal can fix is typed into it (`[verifier] Not ready… round n of 2`),
+  at most two rounds; after that, and when its terminal is closed, the request surfaces as not ready with the
+  reason (`GET /api/ledger/:id` → `verification`, the queue line). Infrastructure trouble (GitHub unreachable, no
+  verdict) is a skip and is never told.
+- **Reading and re-running.** `GET /api/ledger/:id` → `checks` (each with `stale`), `readiness` per open item,
+  `verification` (passes, rounds told); the queue item → `verification` (ready, failed, gaps, evidence).
+  `POST /api/ledger/:id/verify` / `mc ledger verify <id>` — the operator's token only (a workspace token reads
+  its own checks, never re-runs). Setting `verifier.enabled` (Safety) turns the automatic verifier off per
+  workspace; the operator's re-run still works.
+
 ## Not yet
 
-- **Verifier**: fill `request_checks` (`requests.addCheck`) and bind PR heads (`requests.bindTarget`). The queue
-  already ranks verified items first and the detail view already shows the missing slots.
 - **Executor**: act on `decided`/`yes` items whose `target_hash` still matches, then move the deliverable
   (`merged` / `sent` / `deployed`), which closes the request.
 - **Voice front**: built (VOICE.md, `src/talker.ts`, setting `voice.talker`, off by default) — it speaks from

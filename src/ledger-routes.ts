@@ -10,6 +10,9 @@
  *   POST /ledger/:id/decision  {item?, decision: yes|no|later|change, words?, target_hash?, until?, by?, audio_ref?}
  *                              records his answer — and executes nothing (the executor is a later piece)
  *   POST /ledger/:id/close     {words?} — he closed it; whatever it still owed stops being a question
+ *   POST /ledger/:id/verify    re-run the verifier on it now (src/request-verifier.ts) — the operator's token
+ *                              only; answers 202 at once, the pass lands in GET /ledger/:id → verification.
+ *                              Never merges, sends or posts: it only reads and writes checks.
  *
  * The wall (CLAUDE.md gotcha #4): the operator's token reads every workspace; a project Robert's token
  * or a workspace token reads ONLY its own workspace's rows, and a foreign id is the same 404 as a
@@ -31,6 +34,7 @@ import { workspaces } from "./store.js";
 import { requests } from "./store/requests.js";
 import { DECISIONS, OPEN_STATES, REQUEST_STATES, type RequestState } from "./ledger-model.js";
 import { closeRequest, detailOf, ledgerText, queueView, recordDecision, summaryOf } from "./ledger.js";
+import { verifyRequest } from "./request-verifier.js";
 
 type Scope = { ws: string | null; operator: boolean };
 
@@ -161,6 +165,24 @@ export function mountLedgerRoutes(api: express.Router): void {
       return res.status(status).json(body);
     }
     res.json({ ok: true, item: out.item, request: summaryOf(out.request) });
+  });
+
+  // The operator's re-run. A workspace token (or a project Robert's) may read its own checks, never
+  // start a pass: a pass spends a heavy slot and a reviewer run, and its result is his evidence.
+  api.post("/ledger/:id/verify", async (req, res) => {
+    const scope = ledgerScope(req, res);
+    if (!scope) return;
+    if (!scope.operator) return res.status(403).json({ error: "only the operator re-runs the verifier (x-mc-admin)" });
+    const r = requests.resolve(String(req.params.id));
+    if (!r) return res.status(404).json({ error: "not found" });
+    if (!r.workspace_id) return res.status(409).json({ error: "a request with no workspace is not verified — it has no sandbox or credentials to check it with" });
+    const pass = verifyRequest(r.id, { trigger: "manual", by: "operator", force: true });
+    // A pass that cannot start (nothing to check, one already running) says so at once; one that
+    // starts is left to run — it can take as long as the repo's checks do.
+    const early = await Promise.race([pass, new Promise<null>((ok) => setTimeout(() => ok(null), 50))]);
+    if (early && early.status !== "done") return res.status(409).json({ error: early.reason, status: early.status });
+    if (early) return res.json({ ok: true, request_id: r.id, ...early });
+    res.status(202).json({ ok: true, request_id: r.id, started: true });
   });
 
   api.post("/ledger/:id/close", validate(CloseSchema), (req, res) => {

@@ -223,7 +223,8 @@ mc outcome "Focus now shows the goal, the open questions and the hand-off — th
   --change "questions from mc ask-robert get one button per option" \
   --proof "npm test → 2,734 pass, 0 fail" \
   --proof "screenshot: a 3-option ask renders 3 buttons" \
-  --shot before=/tmp/focus-before.png --shot after=/tmp/focus-after.png \
+  --shot before-focus-desktop=/tmp/fb-d.png --shot after-focus-desktop=/tmp/fa-d.png \
+  --shot before-focus-phone=/tmp/fb-p.png --shot after-focus-phone=/tmp/fa-p.png \
   --pr https://github.com/acme/app/pull/24 \
   --ask merge+deploy
 mc outcome show        # what the operator sees
@@ -235,9 +236,15 @@ mc outcome clear       # drop it (a new `mc outcome` replaces the last one anywa
 - **`--proof`**: the evidence for each **Done when** check — the test run and its numbers, the query
   and its result, what the screenshot shows. A claim with no proof is a claim.
 - **`--shot label=file`**: anything visible gets **before and after** screenshots (png/jpg/webp/gif,
-  ≤6 MB). Take them with `mc browser run -- …` (never launch your own browser). The bytes are uploaded,
+  ≤6 MB). Label each `before-<screen>-phone` / `after-<screen>-desktop` …: the daemon's verifier pairs them
+  per screen and width and fails a UI hand-off without a phone and a desktop pair for every screen. Take them with `mc browser run -- …` (never launch your own browser). The bytes are uploaded,
   so this works from any computer.
 - **`--pr`**: the full PR link(s). The card shows its state and checks live.
+- **The verifier** checks every hand-off that asks for a merge, review or deploy before the operator hears
+  it: the PR is open, mergeable and up to date with its base; the repo's check command is re-run at the PR
+  head; a second model reads the diff against what he asked; backend work needs a test in the diff. A fail
+  is typed back into you as `[verifier] Not ready…` — fix it, push, and file `mc outcome` again (two rounds,
+  then it goes to him as not ready).
 - **`--ask`**: what you need from the operator — `merge`, `deploy`, `merge+deploy`, `review` (just read
   it) or `none`. The card turns it into buttons; a click types `Approved: …` into you. Then do exactly
   that, and run `mc outcome --shipped "<what you shipped>"`.
