@@ -277,3 +277,157 @@ test("say() resolves only when the words were played to the end — first:true g
   assert.equal(PV.state(), "off");
   assert.equal(PV.on, false);
 });
+
+// ── hearing: one-word answers, the beep window, a sentence cut by a breath ──────────────────────────
+
+test("a one-word answer on a quiet mic is kept (it never reaches the 'speech' level long enough); a knock is not; over Robert's voice the strict rule stays", () => {
+  // "Sí" at phone level: ~260 ms of voice at RMS 0.035 (a 0.05 sine) — above the level that opens a
+  // segment (0.025), under `speech` (0.04). Before: loudMs 0 → dropped before whisper ever saw it.
+  const ear = T.makeEar();
+  let r = feed(ear, 0.002, 800, 0);
+  r = feed(ear, 0.05, 260, r.t);
+  r = feed(ear, 0.002, 1200, r.t);
+  const close = r.events.find((e) => e.type === "close");
+  assert.equal(close?.keep, true, "the word is sent");
+  assert.equal(close.short, true, "…and marked as kept by the word rule");
+  assert.ok(close.loudMs < T.VAD.minSpeechMs && close.voicedMs >= T.VAD.minWordMs);
+  // A knock (~130 ms) at any level is still not speech.
+  const ear2 = T.makeEar();
+  let k = feed(ear2, 0.002, 800, 0);
+  k = feed(ear2, 0.3, 120, k.t);
+  k = feed(ear2, 0.002, 1200, k.t);
+  assert.equal(k.events.find((e) => e.type === "close")?.keep, false);
+  // A segment that ran over Robert's own voice never gets the lenient rule (his echo is not an answer).
+  const ear3 = T.makeEar();
+  let s = feed(ear3, 0.002, 800, 0);
+  s = feed(ear3, 0.05, 130, s.t);
+  s = feed(ear3, 0.05, 130, s.t, true);
+  s = feed(ear3, 0.002, 1200, s.t);
+  assert.equal(s.events.find((e) => e.type === "close")?.keep, false);
+});
+
+test("the 'sent' beep window opens nothing but keeps the pre-roll: what he says right after a cut keeps its first syllable", () => {
+  const ear = T.makeEar();
+  let r = feed(ear, 0.002, 600, 0);
+  ear.holdUntil = r.t + 220; // earcon("sent")
+  const spokeAt = r.t;
+  r = feed(ear, 0.2, 200, r.t); // he is already talking inside the window
+  assert.ok(!r.events.some((e) => e.type === "open"), "nothing opens inside the window");
+  r = feed(ear, 0.2, 500, r.t);
+  assert.equal(r.events[0]?.type, "open", "it opens as soon as the window ends");
+  r = feed(ear, 0.002, 1200, r.t);
+  const close = r.events.find((e) => e.type === "close");
+  // Everything he said (700 ms) is in the clip: the frames from inside the window ride as pre-roll.
+  assert.ok(close.ms >= 700 + 750 - 2 * msPer, `the clip holds his whole utterance (${Math.round(close.ms)} ms from ${Math.round(spokeAt)})`);
+  // The old window (deafUntil) threw those frames away — that path is still what a playback echo gets.
+  const ear2 = T.makeEar();
+  let q = feed(ear2, 0.002, 600, 0);
+  ear2.deafUntil = q.t + 220;
+  q = feed(ear2, 0.2, 700, q.t);
+  q = feed(ear2, 0.002, 1200, q.t);
+  assert.ok(q.events.find((e) => e.type === "close").ms < close.ms - 150, "deaf = frames lost");
+});
+
+/** A call in the vm with a scripted whisper: each transcription resolves when the test says so. */
+function fakeCall() {
+  const heard: string[] = [], stops: string[] = [];
+  const pending: Array<{ size: number; answer: (text: string) => void }> = [];
+  (ctx as any).fetch = (_u: string, o: any) =>
+    new Promise((ok) => pending.push({ size: o.body.size, answer: (text) => ok({ ok: true, status: 200, json: async () => ({ text }) }) }));
+  PV.init({ lang: () => "es", token: () => "", label: () => null, speed: () => 1, onState() {}, onSubtitle() {}, onError() {}, onPartial() {}, onHeard: (t: string) => heard.push(t), onStopTurn: () => stops.push("stop") });
+  const V = T.V;
+  V.on = true; V.held = null; V.flight = null; V.ear.reset(); V.chain = Promise.resolve();
+  const frames = (ms: number) => Array.from({ length: Math.ceil(ms / msPer) }, () => frame(0.2));
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  return { heard, stops, pending, V, frames, tick, end: () => { V.on = false; V.held = null; V.flight = null; V.ear.reset(); } };
+}
+
+test("a sentence cut by a breath is one turn: the second half joins a first half still being transcribed", async () => {
+  const c = fakeCall();
+  try {
+    T.send(c.frames(1500), false, { t0: 0, t1: 2250, loudMs: 1400 });
+    await c.tick();
+    assert.equal(c.pending.length, 1, "the first half went out at once — a complete sentence is never delayed");
+    T.send(c.frames(1000), false, { t0: 2250 + 600, t1: 4600, loudMs: 900 }); // he went on 600 ms after the cut
+    c.pending[0].answer("revisame el deploy de");
+    await c.tick();
+    assert.deepEqual(c.heard, [], "the half is not a turn");
+    assert.equal(c.pending.length, 2);
+    assert.ok(c.pending[1].size > c.pending[0].size * 1.5, "the second request carries both halves as one clip");
+    c.pending[1].answer("revisame el deploy de ayer porque se cuelga");
+    await c.tick();
+    assert.deepEqual(c.heard, ["revisame el deploy de ayer porque se cuelga"]);
+    assert.ok(T.trace().some((e: any) => /^join:\d+/.test(e[1])));
+  } finally { c.end(); }
+});
+
+test("…and joins a first half whose transcript came back while he was already talking again; alone, it is delivered as it is", async () => {
+  const c = fakeCall();
+  try {
+    T.send(c.frames(1500), false, { t0: 0, t1: 2250, loudMs: 1400 });
+    await c.tick();
+    c.V.ear.seg = { t0: 2250 + 400, barge: false, frames: [], ms: 0 }; // talking again
+    c.pending[0].answer("revisame el deploy de");
+    await c.tick();
+    assert.deepEqual(c.heard, [], "held: he is mid-sentence");
+    c.V.ear.seg = null;
+    T.send(c.frames(1000), false, { t0: 2250 + 400, t1: 4400, loudMs: 900 });
+    await c.tick();
+    c.pending[1].answer("revisame el deploy de ayer");
+    await c.tick();
+    assert.deepEqual(c.heard, ["revisame el deploy de ayer"]);
+    // The second half never comes (it was a noise the ear dropped): the first is his turn.
+    T.send(c.frames(1500), false, { t0: 10_000, t1: 12_250, loudMs: 1400 });
+    await c.tick();
+    c.V.ear.seg = { t0: 12_500, barge: false, frames: [], ms: 0 };
+    c.pending[2].answer("mergealo cuando termine el test");
+    await c.tick();
+    assert.equal(c.heard.length, 1);
+    c.V.ear.seg = null;
+    T.onFrame(frame(0.0005));
+    assert.deepEqual(c.heard.slice(1), ["mergealo cuando termine el test"]);
+  } finally { c.end(); }
+});
+
+test("a short answer or a stop is never held or swallowed by a join, and a late continuation is its own turn", async () => {
+  const c = fakeCall();
+  try {
+    // "pará" comes back while a sound has opened a segment: it acts now.
+    T.send(c.frames(400), false, { t0: 0, t1: 1150, loudMs: 300 });
+    await c.tick();
+    c.V.ear.seg = { t0: 1300, barge: false, frames: [], ms: 0 };
+    c.pending[0].answer("Pará.");
+    await c.tick();
+    assert.deepEqual(c.stops, ["stop"]);
+    // "sí dale" (two words) too.
+    T.send(c.frames(500), false, { t0: 3000, t1: 4250, loudMs: 400 });
+    await c.tick();
+    c.pending[1].answer("Sí, dale.");
+    await c.tick();
+    assert.deepEqual(c.heard, ["Sí, dale."]);
+    c.V.ear.seg = null;
+    // A short first clip still in flight is not folded into what follows: it may be a command.
+    T.send(c.frames(400), false, { t0: 6000, t1: 7150, loudMs: 300 });
+    T.send(c.frames(1500), false, { t0: 7400, t1: 9650, loudMs: 1400 });
+    await c.tick();
+    c.pending[2].answer("No.");
+    await c.tick();
+    c.pending[3].answer("mejor mostrame el dashboard");
+    await c.tick();
+    assert.deepEqual(c.heard.slice(1), ["No.", "mejor mostrame el dashboard"]);
+    // Past the join window it is a new sentence.
+    T.send(c.frames(1500), false, { t0: 20_000, t1: 22_250, loudMs: 1400 });
+    T.send(c.frames(1500), false, { t0: 22_250 + T.JOIN.ms + 100, t1: 26_000, loudMs: 1400 });
+    await c.tick();
+    c.pending[4].answer("abrí una terminal nueva");
+    await c.tick();
+    c.pending[5].answer("y después avisame");
+    await c.tick();
+    assert.deepEqual(c.heard.slice(3), ["abrí una terminal nueva", "y después avisame"]);
+  } finally { c.end(); }
+});
+
+test("whisper's spellings of «colgá» hang up; a sentence that merely contains the word does not", () => {
+  for (const w of ["Colgá.", "¡Colgar!", "¡Colgada!", "Cortá", "colgalo"]) assert.equal(T.isCommand(w), true, w);
+  assert.equal(T.isCommand("la app quedó colgada en el splash"), false);
+});

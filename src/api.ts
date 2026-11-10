@@ -140,7 +140,8 @@ import {
 } from "./agent-lifecycle.js";
 import { runCommandLine } from "./commands.js";
 import { flowData } from "./flow.js";
-import { transcribe, transcribeBilingual, audioFilename, transcribeFailure } from "./transcribe.js";
+import { transcribe, hearFinal, warmFinal, pickEngine, finalUrl, wavMs, audioFilename, transcribeFailure } from "./transcribe.js";
+import { keepClip, listClips, clipsDir, wavStats } from "./voice-clips.js";
 import { speak, voiceFor, listVoices, neuralHealth } from "./speak.js";
 import { activeWorkspaceIds, askFleetFanout, askManagerWeb, handFilesTo, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurn, oneRobert, resolveVoiceAsk, setSticky, fansOut } from "./thread-router.js";
@@ -4879,7 +4880,7 @@ export function startServer() {
     );
   });
 
-  let transcribing = 0; // whisper requests in flight from this route — a partial skips when > 0
+  let transcribing = 0; // fast-engine requests in flight from this route — a partial skips when > 0
   // Voice: browser mic → transcript. Raw audio body (webm/ogg, mp4 on iOS) → local whisper → { text }.
   api.post("/transcribe", requireAdmin, express.raw({ type: () => true, limit: "25mb" }), async (req, res) => {
     try {
@@ -4893,17 +4894,39 @@ export function startServer() {
       // runs one request at a time, and a final transcript must not wait on a preview.
       if (partial && transcribing > 0) return res.json({ text: null, busy: true });
       const t0 = Date.now();
-      transcribing++;
-      try {
-        if (language && !partial && setting("voice.listen") !== "page") {
-          const out = await transcribeBilingual(buf, { filename: audioFilename(ct), contentType: ct, hint: language });
-          return res.json({ text: out.text, lang: out.lang, passes: out.passes, ms: Date.now() - t0, bytes: buf.length });
+      if (partial) {
+        transcribing++;
+        try {
+          const text = await transcribe(buf, { filename: audioFilename(ct), contentType: ct, language });
+          return res.json({ text, ms: Date.now() - t0, bytes: buf.length, partial: true });
+        } finally {
+          transcribing--;
         }
-        const text = await transcribe(buf, { filename: audioFilename(ct), contentType: ct, language });
-        res.json({ text, ms: Date.now() - t0, bytes: buf.length, ...(partial ? { partial: true } : {}) });
-      } finally {
-        transcribing--;
       }
+      // A finished sentence: the accurate engine on its own server when there is one (it never waits
+      // behind a partial there), the fast one otherwise — hearFinal falls back by itself.
+      const mode = String(setting("voice.final_engine"));
+      // The blank clip a call opens with (pure digital silence) is there to load the model: load both.
+      if (buf.length < 64_000 && wavStats(buf)?.peak === 0) warmFinal(buf, { mode, filename: audioFilename(ct), contentType: ct, language });
+      // Only a final that goes to the fast engine holds partials off; one on the second server
+      // leaves the fast one free for the words of whatever he says next.
+      const onFast = pickEngine({ partial: false, mode, finalUrl: finalUrl(), audioMs: wavMs(buf) }) === "fast";
+      let out;
+      if (onFast) transcribing++;
+      try {
+        out = await hearFinal(buf, {
+          filename: audioFilename(ct), contentType: ct, language,
+          bilingual: setting("voice.listen") !== "page", mode, vocab: setting("voice.vocab"),
+        });
+      } finally {
+        if (onFast) transcribing--;
+      }
+      const ms = Date.now() - t0;
+      if (settingOn("voice.keep_clips")) {
+        try { keepClip(buf, { text: out.text, lang: out.lang ?? language ?? null, engine: out.engine, ms, ext: audioFilename(ct).split(".").pop() }); }
+        catch (e: any) { console.warn(`[voice-clips] not kept: ${String(e?.message ?? e).slice(0, 160)}`); }
+      }
+      res.json({ text: out.text, ...(language ? { lang: out.lang, passes: out.passes } : {}), engine: out.engine, ms, bytes: buf.length });
     } catch (e: any) {
       const f = transcribeFailure(e, { mime: req.get("content-type") || "-", bytes: (req.body as Buffer)?.length ?? 0 });
       console.error(f.log);
@@ -4934,6 +4957,12 @@ export function startServer() {
   });
   api.get("/voice/traces", requireAdmin, (req, res) => {
     res.json({ traces: voiceTraces(Number(req.query.limit) || 5) });
+  });
+  // The clips kept for diagnosis (src/voice-clips.ts, setting voice.keep_clips): what was said and
+  // what was heard. Operator only — the list, never the audio; the files are read on the Mac itself.
+  api.get("/voice/clips", requireAdmin, (_req, res) => {
+    const on = settingOn("voice.keep_clips");
+    res.json({ on, dir: clipsDir(), clips: on ? listClips() : [] });
   });
   api.get("/voices", requireAdmin, async (_req, res) => {
     res.json({ en: await voiceFor("en"), es: await voiceFor("es"), installed: (await listVoices()).filter((v) => v.premium), neural: await neuralHealth() });

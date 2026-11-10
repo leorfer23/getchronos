@@ -147,6 +147,8 @@ export function derivedWriteRefusal(req: express.Request): string | null {
   if (pattern === "/settings" && (req.method === "PUT" || req.method === "POST")) {
     const key = String(body.key ?? "");
     if (key.startsWith("executor.")) return operatorOnly(`${key} (the executor's switches)`);
+    // Keeping recordings of the operator's voice is his decision alone (voice-clips.ts).
+    if (key === "voice.keep_clips") return operatorOnly(`${key} (it records the operator's voice)`);
     const col = SETTING_COLUMN[key];
     if (col) {
       const wsRef = typeof body.workspace === "string" ? body.workspace : typeof body.workspace_id === "string" ? body.workspace_id : "";
@@ -198,8 +200,8 @@ export const FLEET_OPERATOR_ONLY = new Set([
   "POST /capture/open", "POST /capture/resolve", "DELETE /capture/routes/:key",
   "POST /speak", "POST /transcribe",
 ]);
-/** Admin reads that are the operator's alone, even for the fleet-wide Robert (his clipboard contents). */
-export const FLEET_PRIVATE_READS = new Set(["GET /clipboard"]);
+/** Admin reads that are the operator's alone, even for the fleet-wide Robert (his clipboard contents, the kept clips of his voice). */
+export const FLEET_PRIVATE_READS = new Set(["GET /clipboard", "GET /voice/clips"]);
 
 /** The fleet-wide Robert on an admin route: null = allowed, else why not. */
 export function fleetRefusal(req: express.Request, fl: FleetScope): string | null {

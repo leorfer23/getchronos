@@ -10,6 +10,7 @@ import { hostlinkDir } from "./hostlink/join.js";
 import { mirrorRoot } from "./hosts/transcript-mirror.js";
 import { hostHomeDir } from "./hostd/home.js";
 import { filesRoot } from "./shared-files.js";
+import { clipsDir } from "./voice-clips.js";
 import { reaperConfigFromEnv } from "./resources/reaper.js";
 import { ladderConfigFromEnv } from "./resources/ladder.js";
 
@@ -752,7 +753,9 @@ export const CONFIG = {
     //    named by its target as well.
     //  - the file shelf (shared-files.ts): every workspace's `mc file put` bytes in one directory. An
     //    agent reaches its own through the API, which checks the workspace; the disk would not.
-    sealed: [...new Set([hostlinkDir(), mirrorRoot(), hostHomeDir(), filesRoot()].flatMap((p) => {
+    //  - the call clips (voice-clips.ts): the operator's own voice and words, kept only while the
+    //    diagnosis setting is on. Admin-only through the API; no agent has a reason to read them.
+    sealed: [...new Set([hostlinkDir(), mirrorRoot(), hostHomeDir(), filesRoot(), clipsDir()].flatMap((p) => {
       try { return [p, fs.realpathSync(p)]; } catch { return [p]; }
     }))],
     // Denied, but a job's own cwd / add_dirs are re-granted (so a job scoped INTO one of these

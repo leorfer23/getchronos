@@ -414,6 +414,25 @@ defineSetting({
   options: () => ["bilingual", "page"],
   default: () => "bilingual",
 });
+defineSetting({
+  key: "voice.final_engine", group: "Voice", level: "global", type: "enum", env: "CHRONOS_VOICE_FINAL_ENGINE",
+  label: "Engine for what you said",
+  help: "accurate: the finished sentence goes to the second, larger whisper (sh.chronos.whisper-final) while the live words keep the fast one — so a sentence never waits behind a preview. Falls back to the fast engine whenever the second one is not running. fast: one engine for everything, as before.",
+  options: () => ["accurate", "fast"],
+  default: () => (process.env.CHRONOS_VOICE_FINAL_ENGINE === "fast" ? "fast" : "accurate"),
+});
+defineSetting({
+  key: "voice.vocab", group: "Voice", level: "global", type: "string", env: "CHRONOS_VOICE_VOCAB",
+  label: "Words it should know",
+  help: "Names and terms you say on calls, comma-separated (products, people, English tech words). Given to whisper as a hint with every finished sentence; never sent anywhere else. Empty: no hint.",
+  default: () => process.env.CHRONOS_VOICE_VOCAB || "",
+});
+defineSetting({
+  key: "voice.keep_clips", group: "Voice", level: "global", type: "bool",
+  label: "Keep the last call clips (diagnosis)",
+  help: "Keeps the audio of the last 40 things you said on a call, with what was heard, in a folder on this Mac that no agent can read — to compare speech engines on your real voice (mc voice clips). Turning it off deletes them.",
+  default: () => false,
+});
 
 // Failover
 defineSetting({

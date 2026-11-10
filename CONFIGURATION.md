@@ -404,6 +404,13 @@ The voice front (`src/talker.ts`, VOICE.md) — every knob is also a Desk settin
 | `CHRONOS_TALKER_API_MODEL` | `claude-haiku-5-5` | model id for the `api` engine (the gateway form is derived) |
 | `CHRONOS_TALKER_PROVIDER` | `auto` | `api` engine key: `auto` (Anthropic first, else gateway), `anthropic`, `gateway` |
 | `CHRONOS_TALKER_API_KEY` | *(falls back to `ANTHROPIC_API_KEY`)* | Anthropic key for the `api` engine; `AI_GATEWAY_API_KEY` is used for `gateway`. Keys live in `.secrets`, never in a setting |
+| `CHRONOS_VOICE_FINAL_ENGINE` | `accurate` | setting `voice.final_engine`. `accurate` = a finished sentence goes to the second whisper (`sh.chronos.whisper-final`, a larger model on its own port) while the live words keep the fast one; one-word answers stay on the fast one; falls back to the fast one whenever the second is not running. `fast` = one engine for everything |
+| `CHRONOS_VOICE_VOCAB` | *(empty)* | setting `voice.vocab`: names and terms you say on calls, comma-separated. Given to whisper as a `prompt` with every finished sentence longer than a word or two. Instance data — set it in Settings or `.secrets`, never in code |
+| `CHRONOS_TRANSCRIBE_FINAL_URL` | `http://127.0.0.1:7781/inference` | where the second engine listens; `off` = none. Only used beside the local fast engine unless set explicitly |
+| `CHRONOS_TRANSCRIBE_FINAL_AUDIO_CTX` | `768` | whisper `audio_ctx` sent to the second engine for clips up to 8 s (15 s of context instead of 30 — about half the time per sentence on large-v3-turbo); `0` = always the full window |
+| `CHRONOS_WHISPER_FINAL_MODEL` | *(largest other multilingual model in ~/.cache/whisper)* | which ggml file `install-launchd` puts in `sh.chronos.whisper-final`; with none present the agent is skipped and finished sentences stay on the fast engine |
+| `CHRONOS_WHISPER_FINAL_PORT` | `7781` | the second engine's port (then set `CHRONOS_TRANSCRIBE_FINAL_URL` to match) |
+| `CHRONOS_VOICE_CLIPS` | `~/.mc/voice-clips` | where the last 40 call clips are kept while setting `voice.keep_clips` is on (off by default; sealed from every agent sandbox; deleted when it goes off) |
 | `CHRONOS_WHISPER_MODEL` | *(best in ~/.cache/whisper)* | which ggml model file `install-launchd` puts in `sh.chronos.whisper` (default: small — fastest; `ggml-large-v3-turbo.bin` hears mixed Spanish-English far better at ~1 s more per sentence; English-only `.en` models last) |
 
 ### Memory and learning
@@ -848,6 +855,13 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_TIMEOUT` | `3600` | `src/config.ts` |
 | `CHRONOS_TRANSCRIBE_MODEL` | — | `src/transcribe.ts` |
 | `CHRONOS_TRANSCRIBE_URL` | — | `src/telegram.test.ts` |
+| `CHRONOS_TRANSCRIBE_FINAL_URL` | `http://127.0.0.1:7781/inference`; `off` = no second engine | `src/transcribe.ts` |
+| `CHRONOS_TRANSCRIBE_FINAL_AUDIO_CTX` | `768`; `0` = full window | `src/transcribe.ts` |
+| `CHRONOS_VOICE_FINAL_ENGINE` | `accurate` | `src/settings.ts` |
+| `CHRONOS_VOICE_VOCAB` | — | `src/settings.ts` |
+| `CHRONOS_VOICE_CLIPS` | `~/.mc/voice-clips` | `src/voice-clips.ts` |
+| `CHRONOS_WHISPER_FINAL_MODEL` | — | `scripts/install-launchd.mjs` |
+| `CHRONOS_WHISPER_FINAL_PORT` | `7781` | `scripts/install-launchd.mjs` |
 | `CHRONOS_TTS_URL` | `"http://127.0.0.1:7779"` (Kokoro, `scripts/tts-server.py`); `off` = `say` only | `src/speak.ts` |
 | `CHRONOS_VAPID_FILE` | `path.join` | `src/push.ts` |
 | `CHRONOS_VERIFY_MODE` | `"enforce"` | `src/config.ts` |

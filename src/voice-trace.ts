@@ -61,6 +61,14 @@ export function noteVoiceTrace(body: any, nowMs = Date.now()): { ok: true; id: s
   t.summary.barge_words = t.events.filter((e) => /^barge:words/.test(e[1])).length;
   t.summary.barge_false = t.events.filter((e) => /^barge:echo-or-noise/.test(e[1])).length;
   t.summary.taps_stop = t.events.filter((e) => /^tap-stop/.test(e[1])).length;
+  // Hearing: what the ear did with each sound (seg:<ms>:<loud ms>:<voiced ms>:<peak‰>:<kept|word|barge|drop>),
+  // how often he spoke again right after a cut (reopen:<ms>) and how many of those became one turn (join:<ms>).
+  const kind = (k: string) => t.events.filter((e) => new RegExp(`^seg:.*:${k}$`).test(e[1])).length;
+  t.summary.segs_kept = kind("kept") + kind("barge");
+  t.summary.segs_word = kind("word");
+  t.summary.segs_dropped = kind("drop");
+  t.summary.reopens = t.events.filter((e) => /^reopen:/.test(e[1])).length;
+  t.summary.joins = t.events.filter((e) => /^join:\d/.test(e[1])).length;
   traces.push(t);
   while (traces.length > KEEP) traces.shift();
   return { ok: true, id: t.id };
