@@ -75,7 +75,7 @@ import { recordSessionPrs } from "./terminal-automerge.js";
 import { draftFields, recentDrafts, recordDraft } from "./draft-notify.js";
 import { openProactive } from "./robert-selfwake.js";
 import { notifyDraft } from "./draft-notify.js";
-import { markVoiceTurn, noteDraft } from "./ledger.js";
+import { markVoiceTurn, noteDraft, openWorkBlock } from "./ledger.js";
 import { mountLedgerRoutes } from "./ledger-routes.js";
 import { robertMay } from "./robert-scope.js";
 import { isShipTerminal } from "./ship-guard.js";
@@ -138,7 +138,7 @@ import { flowData } from "./flow.js";
 import { transcribe, audioFilename, transcribeFailure } from "./transcribe.js";
 import { speak, voiceFor, listVoices, neuralHealth } from "./speak.js";
 import { activeWorkspaceIds, askFleetFanout, askManagerWeb, handFilesTo, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
-import { askLine, commitTurn, explainRoute, getSticky, resolveTurnSmart, resolveVoiceAsk, setSticky, wantsFanout } from "./thread-router.js";
+import { askLine, commitTurn, explainRoute, getSticky, resolveTurnSmart, resolveVoiceAsk, setSticky, fansOut } from "./thread-router.js";
 import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type LeadEvent } from "./store.js";
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
 import { leadEventPayload, waitForLeadEvents } from "./robert-drive.js";
@@ -5138,7 +5138,7 @@ export function startServer() {
     // the fleet-wide Robert, whose prompt carries no client's content at all.
     const runWs = ws;
     // Fan-out only for a real shop-wide question or two named projects — never for "hola".
-    const fanout = named.length >= 2 ? named : wantsFanout(turn) ? activeWorkspaceIds() : null;
+    const fanout = named.length >= 2 ? named : fansOut(turn, voice, process.env.CHRONOS_ROBERT_FANOUT === "1") ? activeWorkspaceIds() : null;
     const text = turn.text; // the #tag never reaches the model
     const client = req.body.client;
     const turnId = randomUUID();
@@ -5155,7 +5155,11 @@ export function startServer() {
     const quoted = quote ? { id: quote.id, side: quote.side, text: quoteExcerpt(quote.text) } : null;
     // A project's Robert cannot read Chronos's attachments root (every client's files): this turn's
     // files are copied into his own dir and he gets those paths.
-    const prompt = quotePrompt(quote) + text + chatAttachmentsBlock(fanout?.length ? files : handFilesTo(runWs, files));
+    // The unscoped Robert answers for the whole shop on his own, so he is handed what is open right now
+    // (the request ledger, every project — the operator reads everything, and so does his front Robert)
+    // instead of re-scanning the Desk with tools before he can say a word.
+    const open = !runWs && !fanout?.length ? openWorkBlock() : "";
+    const prompt = open + quotePrompt(quote) + text + chatAttachmentsBlock(fanout?.length ? files : handFilesTo(runWs, files));
     const shown = files.map((a) => ({ id: a.id, url: a.url, mime: a.mime, name: a.name }));
     // First streamed TEXT delta of the reply (chat_messages.first_delta_at): when speech can start.
     let firstDeltaAt: string | null = null;
