@@ -164,7 +164,7 @@ const hasTools = (() => {
   try { execFileSync("/usr/bin/xcode-select", ["-p"], { stdio: "ignore" }); return true; } catch { return false; }
 })();
 
-test("desktop/hostbar.swift compiles with swiftc -O, draws every look, and reads the real status", { skip: hasTools ? false : "no Xcode command-line tools on this machine", timeout: 300_000 }, async () => {
+test("desktop/hostbar.swift compiles with swiftc -O, draws every look, and reads the real status", { skip: !hasTools ? "no Xcode command-line tools on this machine" : process.env.CHRONOS_TEST_SLOW ? false : "slow suite: npm run test:all", timeout: 300_000 }, async () => {
   const dir = path.join(tmpRoot, "real");
   const d: MenubarDeps = { run: defaultRunner, hostHome: dir, pkgRoot: REPO, launchAgentsDir: path.join(dir, "LaunchAgents"), uid: 501, home: dir };
   const r = await buildHostbar(d);

@@ -154,7 +154,7 @@ beforeEach(() => {
   db.exec("DELETE FROM hosts WHERE id != 'local'; UPDATE hosts SET name = 'studio' WHERE id = 'local';");
 });
 
-test("hostbar.swift --brain: compiles, and --print reads the real /api/hosts/bar state by state (token file, re-read on reject)", { skip: hasTools ? false : "no Xcode command-line tools on this machine", timeout: 300_000 }, async () => {
+test("hostbar.swift --brain: compiles, and --print reads the real /api/hosts/bar state by state (token file, re-read on reject)", { skip: !hasTools ? "no Xcode command-line tools on this machine" : process.env.CHRONOS_TEST_SLOW ? false : "slow suite: npm run test:all", timeout: 300_000 }, async () => {
   const { d, dir } = world();
   const b = await bb.buildBrainbar({ ...d, run: bb.defaultRunner });
   assert.ok(b.ok, b.error);
