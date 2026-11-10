@@ -2,6 +2,11 @@
 # Stand-in for every agent CLI (claude, codex, cursor-agent, grok, opencode) and the calendar /
 # Workspace CLIs while the test suite runs: scripts/test-setup.mjs puts this directory first on PATH.
 # A unit test must never call a model, spend a token or read the operator's mail — tests that need a
-# CLI write their own fake and point CHRONOS_<NAME>_BIN at it.
+# CLI write their own fake and point CHRONOS_<NAME>_BIN at it. CHRONOS_TEST_CLI_LOG=<file> records
+# every call that reached here (which test code still tries to run a real CLI).
+[ -n "$CHRONOS_TEST_CLI_LOG" ] && printf '%s %s\n' "$(basename "$0")" "$(printf '%s ' "$@" | cut -c1-120)" >> "$CHRONOS_TEST_CLI_LOG"
+# A real CLI reads the prompt the daemon pipes in before it fails; exiting first would turn every
+# such write into an EPIPE the real CLI never causes. Drain a piped stdin in the background.
+[ -p /dev/stdin ] && (cat >/dev/null 2>&1 &)
 echo "chronos tests: the real $(basename "$0") CLI is disabled under npm test (scripts/test-bin)" >&2
 exit 1
