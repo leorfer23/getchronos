@@ -293,3 +293,13 @@ test("routed rows keep each workspace's recap clean — ws A never sees ws B's t
   // and the unscoped thread holds only the fleet-wide turn
   assert.deepEqual(chat.recent(99, null).map((r) => r.you), ["what's running?"]);
 });
+
+test("he talks to one Robert: a turn on no project never goes to every project's Robert unless that is switched on, and never when spoken", async () => {
+  const { fansOut, wantsFanout } = await import("./thread-router.js");
+  const shop = { ws: null, text: "cómo venimos", routed: { ws: null, text: "cómo venimos", how: "fleet", confidence: 0.9, why: "t", candidates: [], social: false, fleet: true }, ask: null, how: "fleet" } as any;
+  assert.equal(wantsFanout(shop), true, "the router still calls it a shop-wide question");
+  assert.equal(fansOut(shop, true), false);
+  assert.equal(fansOut(shop, false), false, "typed: one reply too, by default");
+  assert.equal(fansOut(shop, true, true), false, "spoken: never, even when the old fan-out is on");
+  assert.equal(fansOut(shop, false, true), true);
+});
