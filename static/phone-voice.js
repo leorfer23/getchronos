@@ -68,11 +68,51 @@
     return new Blob([buf], { type: "audio/wav" });
   }
 
+  // How long after the page stops speaking an utterance is still suspect: the room's reverb and the
+  // extra delay of a Bluetooth/car route, on top of the 450 ms deaf window. Not measured on a real
+  // route yet — a margin, not a number someone timed.
+  var ECHO_MS = 1200;
+  // Words that stop something (a held approval, his voice). Never mistaken for an echo.
+  var STOP_WORDS = "cancelar cancela cancelalo cancelá cancel no para parar pará stop espera esperá wait frena frená frenalo basta alto detente".split(" ").map(function (w) { return norm(w).trim(); });
+  function isStop(text) {
+    var words = norm(text).trim().split(" ").filter(Boolean);
+    return words.length > 0 && words.length <= 3 && words.every(function (w) { return STOP_WORDS.indexOf(w) >= 0; });
+  }
+  // Up to three words, every one of them just said by the page (short words too — "lo mergeo"), is
+  // its echo; a longer utterance, when 80% of its words are.
+  function strictEcho(text, recent) {
+    var words = norm(text).trim().split(" ").filter(Boolean);
+    if (!words.length) return false;
+    var his = new Set(recent.join(" ").split(" ").filter(Boolean));
+    var hit = words.filter(function (w) { return his.has(w); }).length;
+    return words.length <= 3 ? hit === words.length : hit / words.length >= 0.8;
+  }
+  /**
+   * Is this transcript the page's own voice coming back? Judged against the sentences that were
+   * playing in the 3 s before it began. Anything flagged never reaches the page: not a turn for
+   * Robert, never an answer to a card.
+   * - Over the page's audio (or a barge): any words that are nearly all his, short ones included.
+   * - Started within ECHO_MS after it stopped (already past the deaf window): only a whole sentence of
+   *   his coming back late through a slow route. A short reply the page invited — "después", an
+   *   option's name — is his, even said right away.
+   */
+  function echoVerdict(text, meta, recent) {
+    var m = meta || {};
+    var over = !!(m.overlap || m.barge);
+    if (!over && !(m.afterPlay != null && m.afterPlay < ECHO_MS)) return false;
+    // A stop is always his. The page says "decí cancelar para frenar": its echo stopping a held
+    // approval is harmless; his own "cancelar" taken for that echo would let the action through.
+    if (isStop(text)) return false;
+    var from = (m.t0 || 0) - 3000;
+    var ks = (recent || []).filter(function (r) { return typeof r === "string" || r.end >= from; }).map(function (r) { return typeof r === "string" ? r : r.k; });
+    return over ? isEcho(text, ks) || strictEcho(text, ks) : isEcho(text, ks, 3);
+  }
+
   // A barge whose words are nearly all words he just said is the room hearing him, not you.
-  function isEcho(text, recent) {
+  function isEcho(text, recent, min) {
     var words = norm(text).trim().split(" ").filter(function (w) { return w.length > 2; });
-    if (words.length < 2) return false;
-    var his = new Set(recent.join(" ").split(" "));
+    if (words.length < (min || 2)) return false;
+    var his = new Set(recent.map(function (r) { return typeof r === "string" ? r : r.k; }).join(" ").split(" "));
     return words.filter(function (w) { return his.has(w); }).length / words.length >= 0.8;
   }
 
@@ -98,7 +138,7 @@
         while (E.preMs > VAD.preMs + VAD.bargeMs && E.pre.length > 1) E.preMs -= (E.pre.shift().length / rate) * 1000;
         E.bargeMs = rms > Math.max(VAD.barge, E.noise * 6) ? E.bargeMs + ms : Math.max(0, E.bargeMs - ms / 2);
         if (E.bargeMs < VAD.bargeMs) return ev;
-        E.seg = { frames: E.pre, ms: E.preMs, loudMs: E.bargeMs, last: now, barge: true };
+        E.seg = { frames: E.pre, ms: E.preMs, loudMs: E.bargeMs, last: now, barge: true, t0: now - E.bargeMs };
         E.pre = []; E.preMs = 0; E.bargeMs = 0;
         ev.push({ type: "barge" });
         return ev;
@@ -107,7 +147,7 @@
         E.pre.push(frame); E.preMs += ms;
         while (E.preMs > VAD.preMs && E.pre.length > 1) E.preMs -= (E.pre.shift().length / rate) * 1000;
         if (rms > Math.max(VAD.start, E.noise * 3)) {
-          E.seg = { frames: E.pre, ms: E.preMs, loudMs: rms > VAD.speech ? ms : 0, last: now, barge: false };
+          E.seg = { frames: E.pre, ms: E.preMs, loudMs: rms > VAD.speech ? ms : 0, last: now, barge: false, t0: now };
           E.pre = []; E.preMs = 0;
           ev.push({ type: "open" });
         } else E.noise = Math.min(0.02, E.noise * 0.97 + rms * 0.03);
@@ -120,7 +160,7 @@
       if (!s.barge && speaking && s.loudMs >= VAD.bargeMs) { s.barge = true; ev.push({ type: "barge" }); }
       if (now - s.last > VAD.endMs || s.ms > VAD.maxMs) {
         E.seg = null;
-        ev.push({ type: "close", frames: s.frames, ms: s.ms, loudMs: s.loudMs, barge: s.barge, keep: s.loudMs >= VAD.minSpeechMs });
+        ev.push({ type: "close", frames: s.frames, ms: s.ms, loudMs: s.loudMs, barge: s.barge, keep: s.loudMs >= VAD.minSpeechMs, t0: s.t0, t1: now, overlap: !!s.overlap, afterPlay: s.afterPlay == null ? null : s.afterPlay });
       }
       return ev;
     };
@@ -140,6 +180,8 @@
     audio: null, speakQ: [], playing: null, paused: null, turn: null, buf: "", spoken: new Set(), muted: null, recent: [],
     chain: Promise.resolve(), sending: 0, lock: null, deaf: false, mute: false, gen: 0, reacquiring: false, bargeItem: null,
     lastLevel: -1, trace: [],
+    // The page's own playback clock: is audio coming out right now, and when did it last stop.
+    audible: false, lastPlayEnd: -1e9,
   };
   // What the call did, last 60 moves — for the harness and for a bug report, never shown.
   function tr(what) { V.trace.push([Math.round(performance.now()), what]); if (V.trace.length > 60) V.trace.shift(); }
@@ -194,14 +236,20 @@
 
   function onFrame(f) {
     if (!V.on || V.paused || V.mute || V.deaf) return;
-    var evs = V.ear.frame(f, V.rate, performance.now(), speaking() && !V.bargeItem);
+    var now = performance.now();
+    var evs = V.ear.frame(f, V.rate, now, speaking() && !V.bargeItem);
+    var seg = V.ear.seg;
+    if (seg) {
+      if (seg.afterPlay == null) seg.afterPlay = V.audible ? 0 : now - V.lastPlayEnd;
+      if (V.audible) seg.overlap = true;
+    }
     var lvl = Math.round(V.ear.level * 10) / 10;
     if (lvl !== V.lastLevel) { V.lastLevel = lvl; try { C.onLevel(lvl); } catch (e) {} }
     for (var i = 0; i < evs.length; i++) {
       var e = evs[i];
-      if (e.type === "barge") bargeIn();
+      if (e.type === "barge") { if (V.ear.seg) { V.ear.seg.overlap = true; V.ear.seg.afterPlay = 0; } bargeIn(); }
       else if (e.type === "close") {
-        if (e.keep) send(e.frames, e.barge);
+        if (e.keep) send(e.frames, e.barge, { t0: e.t0, t1: e.t1, overlap: e.overlap || e.barge, afterPlay: e.barge ? 0 : e.afterPlay });
         else if (e.barge) bargeFalse(); // a cough over him: he carries on
       }
     }
@@ -276,6 +324,7 @@
     tr("pause:" + why);
     V.paused = why;
     var a = V.audio; if (a && V.playing) { try { a.pause(); } catch (e) {} }
+    if (V.audible) { V.audible = false; V.lastPlayEnd = performance.now(); }
     V.ear.reset();
     paint();
   }
@@ -284,7 +333,7 @@
     tr("resume");
     V.paused = null;
     V.ear.deafUntil = performance.now() + 300;
-    if (V.playing && V.audio && V.audio.src) V.audio.play().catch(function () {});
+    if (V.playing && V.audio && V.audio.src) { V.audible = true; V.audio.play().catch(function () {}); }
     else play();
     earcon("resume");
     paint();
@@ -380,7 +429,8 @@
   function err(msg) { try { C.onError(msg); } catch (e) {} }
 
   // ── the ear → words ─────────────────────────────────────────────────────────────────────────────
-  function send(frames, barge) {
+  function send(frames, barge, meta) {
+    meta = meta || {};
     var blob = wav(frames, V.rate);
     V.sending++; earcon("sent"); paint();
     var bargeItem = barge ? V.bargeItem : null;
@@ -393,40 +443,46 @@
       } catch (e) { if (V.on) err(t("No pude transcribir: ", "Transcribe failed: ") + String((e && e.message) || e).slice(0, 100)); }
       finally { V.sending--; }
       if (!V.on) return paint();
-      var real = !!text && !HEARD_NOISE.test(text) && !(barge && isEcho(text, V.recent));
-      if (!real) tr("dropped:" + (text ? text.slice(0, 30) : "silence"));
+      var m = { barge: !!barge, t0: meta.t0, t1: meta.t1, overlap: !!meta.overlap, afterPlay: meta.afterPlay, echo: false };
+      var echo = !!text && echoVerdict(text, m, V.recent);
+      var real = !!text && !HEARD_NOISE.test(text) && !echo;
+      if (!real) tr("dropped:" + (echo ? "echo:" : "") + (text ? text.slice(0, 30) : "silence"));
       if (bargeItem && bargeItem === V.bargeItem) { if (real) bargeTrue(); else bargeFalse(); }
-      if (real) heard(text, barge);
+      if (real) heard(text, m);
       paint();
     });
   }
-  function heard(text, barge) {
+  function heard(text, meta) {
     tr("heard:" + text.slice(0, 40));
     var n = norm(text);
     if (/^ (hang up|end (the )?call|disconnect|colgar|colga|corta|cortar|chau robert|bye robert) $/.test(n)) return stop();
+    // "Pará" stops him talking — and the page hears it too (a held approval is cancelled by it).
     if (/^ (stop|para|parar|pará|detente|basta|stop robert|para robert|silencio) $/.test(n)) { skip(); try { C.onStopTurn && C.onStopTurn(); } catch (e) {} return; }
-    try { C.onHeard(text, { barge: !!barge }); } catch (e) { err(String((e && e.message) || e)); }
+    try { C.onHeard(text, meta || {}); } catch (e) { err(String((e && e.message) || e)); }
   }
 
   // You spoke over him. The audio PAUSES (not discarded): if what you said turns out to be words, the
   // rest of his turn is dropped; if it was his own voice coming back or a cough, he carries on.
   function bargeIn() {
     tr("barge");
+    try { C.onBarge && C.onBarge(); } catch (e) {}
     if (!V.playing) { V.muted = V.turn; skip(true); return; }
     V.bargeItem = V.playing;
     try { V.audio.pause(); } catch (e) {}
+    V.audible = false; V.lastPlayEnd = performance.now();
     paint();
   }
   function bargeTrue() {
     tr("barge:words");
     V.bargeItem = null;
+    V.audible = false;
     V.muted = V.turn;
     skip(true);
   }
   function bargeFalse() {
     tr("barge:echo-or-noise");
     var it = V.bargeItem; V.bargeItem = null;
-    if (it && V.playing === it && V.on && !V.paused) V.audio.play().catch(function () {});
+    if (it && V.playing === it && V.on && !V.paused) { V.audible = true; V.audio.play().catch(function () {}); }
   }
 
   // ── the mouth ───────────────────────────────────────────────────────────────────────────────────
@@ -516,7 +572,9 @@
     if (blob && V.on) {
       var url = URL.createObjectURL(blob), a = V.audio;
       try { C.onSubtitle(item.text); } catch (e) {}
-      V.recent.push(norm(item.text)); if (V.recent.length > 8) V.recent.shift();
+      var rec = { k: norm(item.text), end: Infinity };
+      V.recent.push(rec); if (V.recent.length > 8) V.recent.shift();
+      V.audible = true;
       a.preservesPitch = a.webkitPreservesPitch = true;
       ok = await new Promise(function (done) {
         a.onended = function () { done(true); };
@@ -526,6 +584,7 @@
         if (p && p.then) p.then(function () { if (item.onStart && V.playing === item) { var f = item.onStart; item.onStart = null; try { f(); } catch (e) {} } }, function () { done(false); });
       });
       URL.revokeObjectURL(url);
+      V.audible = false; V.lastPlayEnd = performance.now(); rec.end = V.lastPlayEnd;
       if (V.playing !== item) return item.resolve(false);
     }
     V.playing = null;
@@ -550,6 +609,7 @@
     }
     var cur = V.playing;
     V.playing = null; V.bargeItem = null;
+    if (V.audible) { V.audible = false; V.lastPlayEnd = performance.now(); var last = V.recent[V.recent.length - 1]; if (last && last.end === Infinity) last.end = V.lastPlayEnd; }
     if (cur) cur.resolve(false);
     if (a) { try { a.pause(); } catch (e) {} a.onended = a.onerror = null; }
     // Unblock the play() that was waiting on this sentence's end; it sees the item was dropped.
@@ -576,6 +636,12 @@
     // Pure helpers, for the tests (src/phone-voice.test.ts).
     // `heard` delivers a transcript as if whisper had returned it — the harness drives the dialogue
     // with it once the audio path itself has been exercised with a fake microphone.
-    _t: { norm: norm, speakable: speakable, wav: wav, isEcho: isEcho, makeEar: makeEar, VAD: VAD, HEARD_NOISE: HEARD_NOISE, SENTENCE_CUT: SENTENCE_CUT, heard: function (text) { if (V.on) heard(text, false); }, trace: function () { return V.trace.slice(); } },
+    _t: { norm: norm, speakable: speakable, wav: wav, isEcho: isEcho, makeEar: makeEar, VAD: VAD, HEARD_NOISE: HEARD_NOISE, SENTENCE_CUT: SENTENCE_CUT, heard: function (text, meta) {
+        if (!V.on) return;
+        var now = performance.now();
+        var m = Object.assign({ barge: false, t0: now, t1: now, overlap: V.audible, afterPlay: V.audible ? 0 : now - V.lastPlayEnd, echo: false }, meta || {});
+        if (echoVerdict(text, m, V.recent)) { tr("dropped:echo:" + text.slice(0, 30)); return; }
+        heard(text, m);
+      }, trace: function () { return V.trace.slice(); }, echoVerdict: echoVerdict, strictEcho: strictEcho, isStop: isStop, ECHO_MS: ECHO_MS },
   };
 })(typeof window !== "undefined" ? window : globalThis);

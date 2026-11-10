@@ -591,7 +591,7 @@ let toastT;
 function toast(msg, act) {
   const t = qs("#toast"); t.textContent = msg;
   if (act?.fn) { const b = document.createElement("button"); b.textContent = act.label || "Undo"; b.onclick = () => { fx.tap(); t.classList.remove("show"); act.fn(); }; t.appendChild(b); }
-  t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), act ? 5000 : 2400);
+  t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), act?.ms || (act ? 5000 : 2400));
 }
 // Feedback you can feel. Every tone is synthesized on the spot (no files to load through the
 // tunnel), every pattern is short, and both stay off until the first touch — Android only lets a
@@ -1972,7 +1972,8 @@ function callStart() {
     if (PhoneDeck.isOpen()) PhoneDeck.readCurrent();
     else if (n && Date.now() - callNoticeAt > 15 * 60000) {
       callNoticeAt = Date.now(); store.set("phone-call-notice", String(callNoticeAt));
-      PhoneVoice.say(n === 1 ? tr("Una cosa espera tu sí. Decí «veamos» para verla.", "One thing is waiting for your yes. Say “let's see” to go through it.") : tr(n + " cosas esperan tu sí. Decí «veamos» para verlas.", n + " things are waiting for your yes. Say “let's see” to go through them."));
+      // No yes-word in anything the page says (it could come back through the speaker as one).
+      PhoneVoice.say(n === 1 ? tr("Una cosa te espera. Decí «veamos» para verla.", "One thing is waiting for you. Say “let's see” to go through it.") : tr(n + " cosas te esperan. Decí «veamos» para verlas.", n + " things are waiting for you. Say “let's see” to go through them."));
     }
   });
 }
@@ -2042,16 +2043,20 @@ PhoneVoice.init({
     paintCall(st, why);
     const on = st !== "off";
     if (on !== !!presT) presence(on);
-    if (!on) { callSub = ""; R.pick = null; }
+    if (!on) { callSub = ""; R.pick = null; PhoneDeck.cancelHold(true); } // hanging up stops a held approval
   },
   onLevel: (lvl) => qs("#orb").style.setProperty("--lvl", lvl),
   onSubtitle: (t) => { callSub = t; if (PhoneVoice.state() === "speaking") qs("#call-sub").textContent = t; },
   onError: (m) => { fx.fail(); toast(m); },
-  onStopTurn: () => { if (R.busy) api("/command", { method: "POST", body: JSON.stringify({ line: "stop robert" }) }).catch(() => {}); },
-  onHeard: (text) => {
+  // "Pará" stops Robert's turn and any approval being held; a barge-in stops a held approval too.
+  onStopTurn: () => { PhoneDeck.cancelHold(); if (R.busy) api("/command", { method: "POST", body: JSON.stringify({ line: "stop robert" }) }).catch(() => {}); },
+  onBarge: () => PhoneDeck.onBarge(),
+  // meta: when he started, whether page audio played meanwhile (phone-voice.js). What the engine
+  // judges to be the page's own voice coming back (echoVerdict) is dropped before it gets here.
+  onHeard: (text, meta) => {
     callSub = "“" + text + "”";
     // 1. A card on screen: the words are for THAT card (bound in phone-deck.js).
-    if (PhoneDeck.voiceAnswer(text)) return;
+    if (PhoneDeck.voiceAnswer(text, meta)) return;
     const n = vnorm(text);
     // 2. Which project, when the router asked: the next words are the pick.
     if (R.pick) {

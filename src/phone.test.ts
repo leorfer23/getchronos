@@ -80,8 +80,18 @@ test("the talk button: a tap opens the hands-free call inside the gesture, a hol
   assert.match(html, /if \(el\._voice\) body\.voice = true;/);
   assert.match(html, /if \(e\.topic === "agent\.delta" && PhoneVoice\.on && e\.client === CLIENT\) PhoneVoice\.delta\(e\);/);
   assert.match(html, /if \(PhoneVoice\.on && e\.reply && \(mine \|\| !e\.you\)\) PhoneVoice\.final\(e, mine\);/);
-  // A card on screen gets the words first; "let's see" opens the deck.
-  assert.match(html, /if \(PhoneDeck\.voiceAnswer\(text\)\) return;/);
+  // A card on screen gets the words first — with the call's clock (when the words started, whether
+  // the page was playing) so a yes over its own audio is not a yes; "let's see" opens the deck.
+  assert.match(html, /onHeard: \(text, meta\) => \{/);
+  assert.match(html, /if \(PhoneDeck\.voiceAnswer\(text, meta\)\) return;/);
+  // A held spoken approval stops on "stop", on any barge-in, and on hanging up.
+  assert.match(html, /onStopTurn: \(\) => \{ PhoneDeck\.cancelHold\(\);/);
+  assert.match(html, /onBarge: \(\) => PhoneDeck\.onBarge\(\),/);
+  assert.match(html, /if \(!on\) \{ callSub = ""; R\.pick = null; PhoneDeck\.cancelHold\(true\); \}/);
+  // Its on-screen Cancel can outlast a plain 5 s toast (the deck asks for the whole window).
+  assert.match(html, /act\?\.ms \|\| \(act \? 5000 : 2400\)/);
+  // What the call says to open the deck carries no yes-word (it could come back through the mic).
+  assert.match(html, /Decí «veamos» para verla\./);
   assert.match(html, /const VIEW_RE = /);
 });
 

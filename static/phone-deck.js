@@ -57,10 +57,13 @@
   // ── local decisions (until the ledger records them) ───────────────────────────────────────────
   var DKEY = "phone-decided";
   function decided() { try { return JSON.parse(localStorage.getItem(DKEY) || "{}") || {}; } catch (e) { return {}; } }
-  function record(key, d, until) {
+  // `heard` = { words, how } for a decision taken by voice: the raw transcript and whether the yes was
+  // strong, or a weak one confirmed after a re-ask. The phone's own record until the ledger has it.
+  function record(key, d, until, heard) {
     var all = decided(), now = Date.now();
     for (var k in all) if (now - (all[k].at || 0) > 4 * 86400000) delete all[k];
     all[key] = { d: d, at: now, until: until || null };
+    if (heard && heard.words) { all[key].words = String(heard.words).slice(0, 300); all[key].how = heard.how || null; }
     try { localStorage.setItem(DKEY, JSON.stringify(all)); } catch (e) {}
   }
   function unrecord(key) { var all = decided(); delete all[key]; try { localStorage.setItem(DKEY, JSON.stringify(all)); } catch (e) {} }
@@ -318,14 +321,72 @@
     return list;
   }
 
+  // ── everything the deck says out loud, in one place ──────────────────────────────────────────
+  // Kept free of every word that counts as a yes (STRONG_YES / WEAK_YES below): if the phone's own
+  // speaker leaks one of these lines back into the mic, it must never come back as his approval.
+  // src/phone-deck.test.ts speaks each line for every card kind, in both languages, and fails if one
+  // of them is ever taken for a yes.
+  var SAY = {
+    later: function () { return t("Te lo dejo para después.", "Later, then."); },
+    // A yes/no answer is said back without its label: "Yes" would be the page saying a yes.
+    answered: function (said, yn) {
+      if (yn) return /^\s*no\b/i.test(String(said || "")) ? t("Le contesté que no.", "I answered no.") : t("Le contesté afirmativamente.", "I answered affirmatively.");
+      return t("Le respondí: ", "Answered: ") + said + ".";
+    },
+    told: function () { return t("Se lo dije.", "Told it."); },
+    askedFor: function (w) { return t("Le pedí: ", "Asked for: ") + w; },
+    done: function (kind) { return { merge: t("Hecho. Le dije que mergee.", "Done — told it to merge."), deploy: t("Hecho. Le dije que despliegue.", "Done — told it to deploy."), "merge+deploy": t("Hecho. Le dije que mergee y despliegue.", "Done — told it to merge and deploy.") }[kind]; },
+    recorded: function () { return t("Quedó registrado.", "Recorded."); },
+    draftToday: function (it) { var w = it.draft.kind === "email" ? "Gmail" : "Slack"; return t("Quedó tu aprobación. Sigue como borrador: lo mandás vos desde " + w + ".", "Your approval is recorded. It stays a draft — you send it from " + w + "."); },
+    draftLedger: function () { return t("Quedó registrado. No se mandó nada: sigue en tus borradores.", "Recorded. Nothing was sent — it stays in your drafts."); },
+    read: function () { return t("Marcado como leído.", "Marked read."); },
+    moved: function () { return t("Cambió desde que lo viste — miralo de nuevo.", "It changed since you saw it — have another look."); },
+    gone: function () { return t("Esa tarjeta ya no está; no hice nada.", "That card is gone; nothing was done."); },
+    noExact: function () { return t("No tengo el texto completo de ese borrador; no puedo aprobarlo.", "I don't have that draft's full text, so I can't approve it."); },
+    ended: function () { return t("Esa terminal ya terminó", "That terminal has ended"); },
+    termEnded: function () { return t("La terminal ya terminó, así que no puedo pasarle tu aprobación.", "Its terminal has ended, so I can't pass your approval on."); },
+    noFullText: function () { return t("Sin el texto completo no puedo aprobarlo. Abrilo en tus borradores.", "Without the full text I can't approve it. Open it in your drafts."); },
+    readFirst: function () { return t("Primero te la leo entera.", "Let me read it all first."); },
+    letMeFinish: function () { return t("Dejame terminar.", "Let me finish."); },
+    tapInstead: function () { return t("Para este, tocá el botón en la pantalla.", "For this one, tap the button on the screen."); },
+    notCaught: function () { return t("No te entendí.", "I didn't catch that."); },
+    toRobert: function () { return t("Para hablar con Robert, decí cerrar.", "To talk to Robert, say close."); },
+    nothingLeft: function () { return t("No queda nada.", "Nothing left."); },
+    lastOne: function () { return t("Esta es la final.", "This is the final card."); },
+    nothingMore: function () { return t("No hay más detalle.", "There's nothing more."); },
+    whatToTell: function () { return t("¿Qué le digo?", "What should I tell it?"); },
+    whatChange: function () { return t("¿Qué querés que cambie?", "What should change?"); },
+    sendThis: function (w) { return t("Le digo: ", "I'll tell it: ") + w + t(". ¿Lo mando?", ". Shall I send that?"); },
+    notSent: function () { return t("No lo mando.", "Not sent."); },
+    failed: function (m) { return t("No se pudo: ", "That didn't work: ") + m; },
+    // A weak acknowledgement on something that cannot be undone: asked once more, never acted on.
+    weak: function (kind) { return { merge: t("¿Confirmás el merge?", "Confirm the merge?"), deploy: t("¿Confirmás el despliegue?", "Confirm the deploy?"), "merge+deploy": t("¿Confirmás el merge y el despliegue?", "Confirm the merge and the deploy?"), draft: t("¿Confirmás tu aprobación del borrador?", "Confirm your approval of the draft?") }[kind]; },
+    // Said before an irreversible action, with the window to stop it.
+    hold: function (it) {
+      var what = shortTitle(it);
+      var to = it.draft ? it.draft.to || it.draft.channel || "" : "";
+      return ({ merge: t("Mergeo ", "Merging ") + what, deploy: t("Despliego ", "Deploying ") + what, "merge+deploy": t("Mergeo y despliego ", "Merging and deploying ") + what,
+        draft: t("Apruebo el borrador", "Approving the draft") + (to ? t(" para ", " to ") + to : "") }[it.kind]).replace(/([^…])$/, "$1.") + " " + t("Decí cancelar para frenar.", "Say cancel to stop.");
+    },
+    cancelled: function () { return t("Cancelado. No hice nada.", "Cancelled. Nothing was done."); },
+  };
+  function shortTitle(it) {
+    var w = plain(it.title || it.verdict || "").replace(/[.!?]+$/, "").split(" ");
+    return w.slice(0, 8).join(" ") + (w.length > 8 ? "…" : "");
+  }
+  var heardOf = function (meta) { return meta && meta.voice ? { words: meta.words || null, how: meta.how || null } : null; };
+
   /**
    * Carry one decision back — TODAY through the doors that already exist (see the header). Returns
    * what to tell him. `words` is his own text for change / a free answer; `opt` an option index.
+   * What is TYPED into a terminal is only the decision (the Desk's approval line, his change words, his
+   * answer) — never the transcript of how he said yes; that goes to the record (ledger `words`, or here).
    */
   async function decide(it, d, words, opt, meta) {
     var sid = it.sid;
+    var heard = heardOf(meta);
     var typeInto = function (text) {
-      if (!sid || !it.live) throw new Error(t("Esa terminal ya terminó", "That terminal has ended"));
+      if (!sid || !it.live) throw new Error(SAY.ended());
       return C.input(sid, { text: text, enter: true });
     };
     if (it.src === "ledger" && it.ledger) return decideLedger(it, d, words, opt, meta || {}, typeInto);
@@ -334,8 +395,8 @@
         // A real "later" exists for questions: date it off the live list (holds.ts).
         await C.api("/asks/" + it.askId + "/hold", { method: "POST", body: JSON.stringify({ until: "+2h", reason: "later, from the phone" }) });
       }
-      record(it.key, "later", Date.now() + 2 * 3600000);
-      return t("Te lo dejo para después.", "Later, then.");
+      record(it.key, "later", Date.now() + 2 * 3600000, heard);
+      return SAY.later();
     }
     if (it.kind === "question") {
       var q = it.question, said = opt != null ? q.options[opt] : words;
@@ -346,36 +407,36 @@
         var body = root.AskCard ? root.AskCard.termBody(q.src, opt == null ? null : opt, words) : { text: said, enter: true };
         await C.input(sid, body);
       }
-      record(it.key, "yes");
-      return t("Le respondí: ", "Answered: ") + said + ".";
+      record(it.key, "yes", null, heard);
+      return SAY.answered(said, q.yn);
     }
     if (it.kind === "blocked") {
       if (d !== "change" || !words) throw new Error("say what to tell it");
       await typeInto(words);
-      record(it.key, "change");
-      return t("Se lo dije.", "Told it.");
+      record(it.key, "change", null, heard);
+      return SAY.told();
     }
     if (d === "change") {
       if (!words) throw new Error("say what should change");
       if (it.kind === "draft") await typeInto("Change the draft" + (it.draft.to || it.draft.channel ? " to " + (it.draft.to || it.draft.channel) : "") + ": " + words);
       else await typeInto("Changes needed: " + words);
-      record(it.key, "change");
-      return t("Le pedí: ", "Asked for: ") + words;
+      record(it.key, "change", null, heard);
+      return SAY.askedFor(words);
     }
     // d === "yes"
     if (OK_LINE[it.kind]) {
       await typeInto(OK_LINE[it.kind]);
-      record(it.key, "yes");
-      return { merge: t("Listo. Le dije que mergee.", "Done — told it to merge."), deploy: t("Listo. Le dije que despliegue.", "Done — told it to deploy."), "merge+deploy": t("Listo. Le dije que mergee y despliegue.", "Done — told it to merge and deploy.") }[it.kind];
+      record(it.key, "yes", null, heard);
+      return SAY.done(it.kind);
     }
     if (it.kind === "draft") {
       // Nothing is sent: there is no executor and agents never send. The yes is recorded where one can
       // be today — the terminal that wrote it — and here.
       if (sid && it.live) await typeInto("Approved: the draft" + (it.draft.to || it.draft.channel ? " to " + (it.draft.to || it.draft.channel) : "") + " is good as written. Leave it as a draft — I'll send it myself.").catch(function () {});
-      record(it.key, "yes");
-      return t("Aprobado. Sigue como borrador: lo mandás vos desde " + (it.draft.kind === "email" ? "Gmail." : "Slack."), "Approved. It stays a draft — you send it from " + (it.draft.kind === "email" ? "Gmail." : "Slack."));
+      record(it.key, "yes", null, heard);
+      return SAY.draftToday(it);
     }
-    if (it.kind === "review") { record(it.key, "read"); return t("Marcado como leído.", "Marked read."); }
+    if (it.kind === "review") { record(it.key, "read", null, heard); return SAY.read(); }
     throw new Error("nothing to approve");
   }
 
@@ -384,34 +445,37 @@
    * executes nothing). What still has to happen today happens through today's doors: a change reaches
    * the terminal as words, and a merge/deploy whose target the verifier has not bound yet (the ledger
    * refuses that yes) is delivered to the terminal as the Desk does. A 409 means the target moved since
-   * the card was drawn: nothing is resent — the card is read again and he decides again.
+   * the card was drawn: nothing is resent — the card is read again and he decides again. A decision
+   * taken by voice carries the raw transcript (`words`) and how it was given (`by`: strong yes, or a
+   * weak one confirmed after a re-ask).
    */
   async function decideLedger(it, d, words, opt, meta, typeInto) {
     var L = it.ledger;
+    var by = meta.voice ? ("phone-voice:" + (meta.how || "strong")).slice(0, 40) : "phone";
     var post = function (decision, extra) {
       return C.api("/ledger/" + L.request + "/decision", {
         method: "POST", headers: { "x-mc-operator": "1" },
-        body: JSON.stringify(Object.assign({ item: L.item, decision: decision, by: meta.voice ? "phone-voice" : "phone" }, extra || {})),
+        body: JSON.stringify(Object.assign({ item: L.item, decision: decision, by: by }, extra || {})),
       }).catch(function (e) {
-        if (e && e.status === 409) { var x = new Error(t("Cambió desde que lo viste — miralo de nuevo.", "It changed since you saw it — have another look.")); x.moved = true; throw x; }
+        if (e && e.status === 409) { var x = new Error(SAY.moved()); x.moved = true; throw x; }
         throw e;
       });
     };
     if (it.kind === "question") {
       // Answered on the ask; the ledger follows it (LEDGER.md) — one decision, written once.
       var q = it.question, said = opt != null ? q.options[opt] : words;
-      if (d === "later") { await post("later", { until: "+2h" }); return t("Te lo dejo para después.", "Later, then."); }
+      if (d === "later") { await post("later", { until: "+2h", words: meta.words || null }); return SAY.later(); }
       if (!said) throw new Error("no answer");
       if (it.askId) await C.api("/asks/" + it.askId + "/answer", { method: "POST", body: JSON.stringify({ answer: said, by: "operator" }) });
       else await post("change", { words: said });
-      return t("Le respondí: ", "Answered: ") + said + ".";
+      return SAY.answered(said, q.yn);
     }
-    if (d === "later") { await post("later", { until: "+2h" }); return t("Te lo dejo para después.", "Later, then."); }
+    if (d === "later") { await post("later", { until: "+2h", words: meta.words || null }); return SAY.later(); }
     if (d === "change") {
       if (!words) throw new Error("say what should change");
       await post("change", { words: words });
       if (sid(it)) await typeInto(it.kind === "draft" ? "Change the draft" + (it.draft.to || it.draft.channel ? " to " + (it.draft.to || it.draft.channel) : "") + ": " + words : "Changes needed: " + words).catch(function () {});
-      return t("Le pedí: ", "Asked for: ") + words;
+      return SAY.askedFor(words);
     }
     // yes
     if (OK_LINE[it.kind]) {
@@ -419,19 +483,19 @@
         // The ledger cannot take this yes yet (no bound PR head): today's way, said on the card — and kept
         // on this phone so the card does not come back while the ledger waits for the PR to settle.
         await typeInto(OK_LINE[it.kind]);
-        record(it.key, "yes");
-        return { merge: t("Listo. Le dije que mergee.", "Done — told it to merge."), deploy: t("Listo. Le dije que despliegue.", "Done — told it to deploy."), "merge+deploy": t("Listo. Le dije que mergee y despliegue.", "Done — told it to merge and deploy.") }[it.kind];
+        record(it.key, "yes", null, heardOf(meta));
+        return SAY.done(it.kind);
       }
       await post("yes", { target_hash: L.target_hash, words: meta.words || null });
-      return t("Aprobado y anotado.", "Approved and recorded.");
+      return SAY.recorded();
     }
     if (it.kind === "draft") {
-      if (!it.draft.text || !it.hashOk) throw new Error(t("No tengo el texto exacto de ese borrador; no puedo darte el sí.", "I don't have that draft's exact text, so I can't take a yes."));
+      if (!it.draft.text || !it.hashOk) throw new Error(SAY.noExact());
       await post("yes", { target_hash: L.target_hash, words: meta.words || null });
-      return t("Aprobado y anotado. No se mandó nada: sigue en tus borradores.", "Approved and recorded. Nothing was sent — it stays in your drafts.");
+      return SAY.draftLedger();
     }
     await post("yes", { words: meta.words || null });
-    return it.kind === "review" ? t("Marcado como leído.", "Marked read.") : t("Listo.", "Done.");
+    return it.kind === "review" ? SAY.read() : SAY.recorded();
   }
   function sid(it) { return !!(it.sid && it.live); }
 
@@ -754,7 +818,9 @@
   function close(fromHistory, keepVoice) {
     if (!D.open) return;
     if (PV) PV.close(true);
-    D.open = false; D.el.hidden = true; D.el.classList.remove("in");
+    cancelHold(true); // leaving the deck stops a held yes
+    D.open = false;
+    if (D.el) { D.el.hidden = true; D.el.classList.remove("in"); }
     VA.key = null;
     if (C.voice.on && !keepVoice) C.voice.skip(false, "card");
     if (!fromHistory && C.history && history.state && history.state.deck) history.back();
@@ -777,6 +843,8 @@
   // go now. The card leaves and the next one is already there.
   async function act(it, d, words, opt, viaVoice) {
     if (!it || D.busy) return null;
+    // A tap decides: a spoken yes still being held is dropped first — never both.
+    if (VA.hold) cancelHold(true);
     if (d === "yes" && !viaVoice) {
       var key = it.key, undone = false;
       D.pending.add(key);
@@ -801,7 +869,7 @@
       if (dropped) { Q.items.splice(Math.min(D.idx, Q.items.length), 0, it); render(it.key); }
       if (C.fx) C.fx.fail();
       C.toast(String((e && e.message) || e).slice(0, 140));
-      if (meta && meta.voice && C.voice.on && !(e && e.moved)) C.voice.say(t("No se pudo: ", "That didn't work: ") + String((e && e.message) || e).slice(0, 120), { tag: "card" });
+      if (meta && meta.voice && C.voice.on && !(e && e.moved)) C.voice.say(SAY.failed(String((e && e.message) || e).slice(0, 120)), { tag: "card" });
       // The target moved (a newer PR head, a rewritten draft): never resent — reload, read it again.
       if (e && e.moved) { LED.delete(it.ledger && it.ledger.request); load().then(function () { if (D.open && C.voice.on) { C.voice.say(String(e.message), { tag: "card" }).then(function () { readCard(current()); }); } }); }
       return null;
@@ -835,15 +903,31 @@
   }
 
   // ── voice: a card on screen during a call ──────────────────────────────────────────────────────
-  // The page reads the card verdict-first and binds the next words to THAT card. Bound in code, not
-  // trusted to a model: the card key + content signature captured when it was read must still be the
-  // card on screen, and only an explicit affirmative (a short utterance made only of yes-words) is a
-  // yes. Anything unclear is asked again. A draft is a yes only after its full text was played.
-  var VA = { key: null, rev: null, verdict: false, read: false, unclear: 0, awaiting: null, pending: null };
-  var YES_CORE = "si sip dale ok okay okey oka va vale listo perfecto bien aprobado aprobada apruebo aprobalo aprobala aprueba aprobar mergealo mergea mergear mergeo desplegalo despliega deployalo hacelo hazlo adelante correcto claro obvio yes yeah yep yup sure approve approved".split(" ");
-  var YES_PHRASE = [" go ahead ", " do it ", " ship it ", " merge it ", " deploy it ", " send it ", " de una ", " si si "];
-  var FILLER = "por favor gracias robert please thanks thank you entonces eh este esta la lo el nomas ya che bueno it then".split(" ");
-  var NEG = "no not nope pero but espera wait aguanta momento cambia cambie change".split(" ");
+  // The page reads the card verdict-first and binds the next words to THAT card — in code, never a
+  // model's reading of them. A decision counts only when all of these hold:
+  //   · the card under the words is the card that was read (key + content signature);
+  //   · the words STARTED after the card's question finished playing, and no page audio played while
+  //     he spoke (the call's own playback clock: meta.t0 / meta.overlap from phone-voice.js) — the
+  //     phone's speaker leaking its own question back into the mic is never his answer;
+  //   · the echo guard did not flag them (phone-voice.js drops those before they get here);
+  //   · they are an explicit yes: a short utterance made only of yes-words — and no word the page itself
+  //     says for this card counts (the vocabulary minus pageWords(card), built from the actual lines).
+  // On something irreversible (merge, deploy, a draft) only a STRONG yes counts; a weak one ("ok",
+  // "bien", "listo"…) is asked once more and never acted on; and the yes is held for a few seconds,
+  // said out loud, and stopped by "cancelar"/"no"/"pará"/any barge-in — the voice twin of Undo.
+  var VA = { key: null, rev: null, verdict: false, read: false, askEndedAt: null, unclear: 0, awaiting: null, pending: null, weak: null, hold: null };
+  var HOLD_MS = 4000;
+  var HOLD_WAIT_MS = 6000; // the longest the window waits for words he started inside it
+  var nowMs = function () { return root.performance && root.performance.now ? root.performance.now() : Date.now(); };
+  var IRREVERSIBLE = { merge: true, deploy: true, "merge+deploy": true, draft: true };
+  // A strong yes: what a person says when he means it. Imperatives the page never says itself.
+  var STRONG_YES = "si dale yes adelante hacelo hazlo mergealo desplegalo deployalo aprobado aprobada aprobalo aprobala approved".split(" ");
+  var STRONG_PHRASE = [" go ahead ", " do it ", " ship it ", " merge it ", " deploy it ", " de una "];
+  // What a person mutters while listening: a yes for a question or a read, never for a merge.
+  var WEAK_YES = "ok okay okey oka bien listo perfecto claro obvio va vale bueno correcto exacto genial joya sip sure yeah yup yep fine alright".split(" ");
+  var FILLER = "por favor gracias robert please thanks thank you eh este esta nomas ya che entonces then".split(" ");
+  var NEG = "no not nope pero but espera wait aguanta momento cambia cambie change cancelar cancel".split(" ");
+  var OPT_FILLER = "la el de que quiero elijo opcion option the one por favor please".split(" ");
   var LATER_RE = /^ (despues|mas tarde|luego|manana|later|not now|ahora no|en otro momento|dejalo|dejalo para despues|para despues|lo veo despues|despues lo veo|after|tomorrow)( (por favor|please|robert))? $/;
   var NEXT_RE = /^ (siguiente|el siguiente|la siguiente|proximo|proxima|next|otra|otro|pasa|pasala|pasalo|la que sigue) $/;
   var MORE_RE = /^ (mas|detalles|evidencia|pruebas|contame mas|que tests|que pruebas|lee la evidencia|leeme la evidencia|more|details|evidence|proof|read the proof|what tests) $/;
@@ -852,12 +936,33 @@
   var WAIT_RE = /^ (espera|espera un momento|un momento|aguanta|wait|hold on|one sec) $/;
   // "No sé…" is not a no and not an answer: he is unsure, so nothing is decided.
   var UNSURE_RE = /^ (no se|no lo se|ni idea|no tengo idea|no estoy seguro|no estoy segura|no sabria|i dont know|i don t know|not sure|dunno|no idea)\b/;
-  var CHANGE_HEAD = /^ (?:(?:no|pero|but)\s+)?(?:(?:pedile|decile|deci|tell it|ask it to|ask it)\s+)?(?:que\s+)?((?:cambia|cambie|cambiar|change|fix|arregla|arregle|corregi|corrige|corrija|modifica|modifique|agrega|agregue|saca|saque|quita|quite|pone|ponga|hace|haga|make|add|remove|use|usa|usa)\b.*)$/;
-  var ORD = [[/\b(primera|primero|uno|1|first|one|la de arriba)\b/, 0], [/\b(segunda|segundo|dos|2|second|two)\b/, 1], [/\b(tercera|tercero|tres|3|third|three)\b/, 2], [/\b(cuarta|cuarto|cuatro|4|fourth|four)\b/, 3]];
+  var CHANGE_HEAD = /^ (?:(?:pero|but)\s+)?(?:(?:pedile|decile|tell it|ask it to|ask it)\s+)?(?:que\s+)?((?:cambia|cambie|cambiar|change|fix|arregla|arregle|corregi|corrige|corrija|modifica|modifique|agrega|agregue|saca|saque|quita|quite|pone|ponga|hace|haga|make|add|remove|use|usa|usa)\b.*)$/;
+  // An option by its order: "la segunda", "the second one", "option two", "la última", "la de arriba" —
+  // order words and fillers only, so the page's own "Which one: …" is never an answer.
+  var ORD_MAP = { primera: 0, primero: 0, first: 0, "1": 0, uno: 0, one: 0, segunda: 1, segundo: 1, second: 1, "2": 1, dos: 1, two: 1,
+    tercera: 2, tercero: 2, third: 2, "3": 2, tres: 2, three: 2, cuarta: 3, cuarto: 3, fourth: 3, "4": 3, cuatro: 3, four: 3,
+    ultima: -1, ultimo: -1, last: -1 };
+  var ORD_SOFT = { uno: 1, one: 1 }; // "the second one": here "one" names the option, it is not its order
+  var ORD_FILL = "la el lo the de del opcion option numero number arriba por favor please quiero elijo".split(" ");
+  function ordinalOf(words, n, count) {
+    if (words.length > 4 || !words.every(function (w) { return ORD_MAP.hasOwnProperty(w) || ORD_FILL.indexOf(w) >= 0; })) return null;
+    var picks = [];
+    words.forEach(function (w) { if (ORD_MAP.hasOwnProperty(w) && !ORD_SOFT[w]) picks.push(ORD_MAP[w] < 0 ? count - 1 : ORD_MAP[w]); });
+    if (!picks.length && / de arriba /.test(n)) picks.push(0);
+    if (!picks.length && words.some(function (w) { return ORD_SOFT[w]; })) picks.push(0);
+    var one = picks.filter(function (p, i) { return picks.indexOf(p) === i; });
+    return one.length === 1 && one[0] < count ? one[0] : null;
+  }
+  var EMPTY = new Set();
 
-  /** What an utterance means for this card. Pure (the tests drive it). */
-  function intentOf(text, it) {
-    var n = norm(text);
+  /**
+   * What an utterance means for this card. Pure (the tests drive it). `exclude` = the words the page
+   * itself says for this card (pageWords): none of them counts as a yes.
+   */
+  function intentOf(text, it, exclude) {
+    var ex = exclude || EMPTY;
+    var raw = String(text == null ? "" : text);
+    var n = norm(raw);
     var words = n.trim().split(" ").filter(Boolean);
     if (!words.length) return { type: "unclear" };
     if (CLOSE_RE.test(n)) return { type: "close" };
@@ -867,40 +972,56 @@
     if (MORE_RE.test(n)) return { type: "more" };
     if (LATER_RE.test(n)) return { type: "later" };
     if (NEXT_RE.test(n)) return { type: "next" };
+    // A question asked back is never a decision ("¿sí?" is "really?", not approval).
+    if (/[?¿]/.test(raw)) return { type: "unclear" };
     var q = it && it.question;
-    // An option, by its order or its own words.
+    // An option, by its order or by its own words — and nothing else in the utterance (the page reads
+    // the options and the question aloud: a sentence of its own must not match one).
     if (q && q.options.length && !q.yn) {
-      var hit = null;
-      if (words.length <= 4) ORD.forEach(function (o) { if (hit == null && o[0].test(n) && o[1] < q.options.length) hit = o[1]; });
-      if (hit == null && /\b(ultima|ultimo|last)\b/.test(n) && words.length <= 4) hit = q.options.length - 1;
+      var hit = ordinalOf(words, n, q.options.length);
       if (hit == null) {
-        var scores = q.options.map(function (o) {
-          var ow = norm(o).trim().split(" ").filter(function (w) { return w.length > 2; });
-          if (!ow.length) return 0;
-          return ow.filter(function (w) { return n.indexOf(" " + w + " ") >= 0; }).length / ow.length;
-        });
-        var best = -1, bi = -1, second = 0;
-        scores.forEach(function (s, i) { if (s > best) { second = best; best = s; bi = i; } else if (s > second) second = s; });
-        if (best >= 0.6 && best - Math.max(0, second) >= 0.25) hit = bi;
+        var optWords = new Set();
+        q.options.forEach(function (o) { norm(o).trim().split(" ").forEach(function (w) { if (w) optWords.add(w); }); });
+        var onlyOpt = words.every(function (w) { return optWords.has(w) || OPT_FILLER.indexOf(w) >= 0; });
+        if (onlyOpt) {
+          var scores = q.options.map(function (o) {
+            var ow = norm(o).trim().split(" ").filter(function (w) { return w.length > 2; });
+            if (!ow.length) return 0;
+            return ow.filter(function (w) { return n.indexOf(" " + w + " ") >= 0; }).length / ow.length;
+          });
+          var best = -1, bi = -1, second = 0;
+          scores.forEach(function (sc, i) { if (sc > best) { second = best; best = sc; bi = i; } else if (sc > second) second = sc; });
+          if (best >= 0.6 && best - Math.max(0, second) >= 0.25) hit = bi;
+        }
       }
       if (hit != null) return { type: "option", option: hit };
     }
     var ch = CHANGE_HEAD.exec(n);
-    if (ch) return { type: "change", words: String(text).replace(/^\s*(no|pero|but)[\s,.:;!]+/i, "").trim() };
-    if (/^ (si|yes) pero /.test(n) || /^ pero /.test(n)) return { type: "change", words: String(text).replace(/^\s*(s[ií]|yes)?[\s,]*(pero|but)[\s,.:;!]+/i, "").trim() };
-    var free = /^ (decile|deci|respondele|contestale|tell it|answer|respond) (que )?(.+)$/.exec(n);
-    if (free) return { type: "free", words: String(text).replace(/^\s*\S+\s+(que\s+)?/i, "").trim() };
+    if (ch) return { type: "change", words: raw.replace(/^\s*(no|pero|but)[\s,.:;!]+/i, "").trim() };
+    if (/^ (si|yes) pero /.test(n) || /^ pero /.test(n)) return { type: "change", words: raw.replace(/^\s*(s[ií]|yes)?[\s,]*(pero|but)[\s,.:;!]+/i, "").trim() };
+    // "Decí …" is the page's own word ("decí cancelar", "decí veamos"): only "decile/respondele/…" is his.
+    var free = /^ (decile|respondele|contestale|tell it|answer|respond) (que )?(.+)$/.exec(n);
+    if (free) return { type: "free", words: raw.replace(/^\s*\S+\s+(que\s+)?/i, "").trim() };
     if (n === " no " || n === " nope " || n === " no gracias ") return { type: "no" };
-    if (/^ no /.test(n) && words.length > 2) return { type: "change", words: String(text).replace(/^\s*no[\s,.:;!]+/i, "").trim() };
-    // Yes: short, made only of yes-words and fillers, with at least one real yes-word — and not asked
-    // back as a question ("¿sí?" is "really?", not approval).
-    if (/[?¿]/.test(String(text))) return { type: "unclear" };
-    var phrase = YES_PHRASE.some(function (p) { return n.indexOf(p) >= 0; });
-    var core = words.some(function (w) { return YES_CORE.indexOf(w) >= 0; }) || phrase;
-    var onlyYes = words.every(function (w) { return YES_CORE.indexOf(w) >= 0 || FILLER.indexOf(w) >= 0 || /^(go|ahead|do|ship|merge|deploy|send|de|una)$/.test(w); });
-    var neg = words.some(function (w) { return NEG.indexOf(w) >= 0; });
-    if (core && onlyYes && !neg && words.length <= 6) return { type: "yes" };
-    return { type: "unclear" };
+    // "No, <something>": what follows is read back and asked about before it reaches the terminal —
+    // "No te entendí" or "No queda nada" coming back through the speaker must not become a change.
+    if (/^ no /.test(n) && words.length > 2) return { type: "nochange", words: raw.replace(/^\s*no[\s,.:;!]+/i, "").trim() };
+    // Yes: short, made only of yes-words and fillers. A yes-word the page itself says for this card
+    // does not count (it may be the speaker's own voice coming back).
+    var phrases = STRONG_PHRASE.filter(function (ph) { return n.indexOf(ph) >= 0; });
+    var phraseWords = new Set();
+    phrases.forEach(function (ph) { ph.trim().split(" ").forEach(function (w) { phraseWords.add(w); }); });
+    var strong = phrases.some(function (ph) { return ph.trim().split(" ").every(function (w) { return !ex.has(w); }); });
+    var weak = false, pageWord = phrases.length > 0 && !strong, other = false;
+    words.forEach(function (w) {
+      if (STRONG_YES.indexOf(w) >= 0) { if (ex.has(w)) pageWord = true; else strong = true; }
+      else if (WEAK_YES.indexOf(w) >= 0) { if (ex.has(w)) pageWord = true; else weak = true; }
+      else if (FILLER.indexOf(w) < 0 && !phraseWords.has(w)) other = true;
+    });
+    if (other || words.length > 6 || words.some(function (w) { return NEG.indexOf(w) >= 0; })) return { type: "unclear" };
+    if (strong) return { type: "yes", strength: "strong" };
+    if (weak) return it && IRREVERSIBLE[it.kind] ? { type: "weak" } : { type: "yes", strength: "weak" };
+    return { type: "unclear", why: pageWord ? "page-word" : null };
   }
 
   function readout(it) {
@@ -910,7 +1031,7 @@
     if (it.kind === "question") {
       var q = it.question;
       if (q.note) body.push(t("Robert sugiere: ", "Robert suggests: ") + q.note);
-      if (q.yn) ask = t("¿Sí o no?", "Yes or no?");
+      if (q.yn) ask = t("¿Qué le contesto?", "What do I answer?");
       else if (q.options.length) ask = t("Opciones: ", "Options: ") + q.options.join(t(", o ", ", or ")) + ".";
       else ask = t("¿Qué le respondo?", "What should I answer?");
       return { head: (it.title ? it.title + ". " : "") + t("Pregunta: ", "It asks: ") + plain(q.text), body: body, ask: ask };
@@ -920,7 +1041,7 @@
       head = name + t("Borrador: ", "A draft: ") + where + (d.to || d.channel ? t(" para ", " to ") + (d.to || d.channel) : "") + ".";
       if (d.subject) body.push(t("Asunto: ", "Subject: ") + d.subject + ".");
       if (d.text) body.push(t("Dice así: ", "It reads: ") + d.text);
-      ask = d.text ? t("¿La apruebo? Sigue como borrador; la mandás vos.", "Approve it? It stays a draft; you send it.") : t("No me llegó el texto completo, así que no puedo darte el sí. Está en tus borradores.", "The full text did not come through, so I can't take a yes. It's in your drafts.");
+      ask = d.text ? t("¿La apruebo? Sigue como borrador; la mandás vos.", "Do you approve it? It stays a draft; you send it.") : t("No me llegó el texto completo, así que no puedo aprobarlo. Está en tus borradores.", "The full text did not come through, so I can't approve it. It's in your drafts.");
       return { head: head, body: body, ask: ask };
     }
     if (it.kind === "blocked") return { head: name + t("Se frenó: ", "It stopped: ") + it.verdict + ".", body: [], ask: t("¿Qué le digo? O decí después.", "What should I tell it? Or say later.") };
@@ -930,52 +1051,165 @@
     else if (pass.length) body.push(t("Según el agente: ", "The agent says: ") + pass.map(function (p) { return { tests: t("los tests pasan", "tests pass"), "nothing else broke": t("no se rompió nada más", "nothing else broke"), review: t("lo revisaron", "it was reviewed"), "checked by hand": t("lo chequeó a mano", "it was checked by hand"), evidence: t("hay evidencia", "there is evidence") }[p] || p; }).join(t(", ", ", ")) + ".");
     else body.push(t("No dejó pruebas.", "It filed no proof."));
     if (it.pairs && it.pairs.length) body.push(t("Tenés el antes y el después en pantalla.", "The before and after are on screen."));
-    ask = { merge: t("¿Lo mergeo?", "Merge it?"), deploy: t("¿Lo despliego?", "Deploy it?"), "merge+deploy": t("¿Lo mergeo y despliego?", "Merge and deploy it?"), review: t("¿Lo doy por leído?", "Mark it read?") }[it.kind];
-    if (OK_LINE[it.kind] && !it.live) ask = t("La terminal ya terminó, así que no puedo pasarle el sí.", "Its terminal has ended, so I can't pass the yes on.");
+    ask = { merge: t("¿Lo mergeo?", "Shall I merge?"), deploy: t("¿Lo despliego?", "Shall I deploy?"), "merge+deploy": t("¿Lo mergeo y despliego?", "Shall I merge and deploy?"), review: t("¿Lo doy por leído?", "Shall I mark it read?") }[it.kind];
+    if (OK_LINE[it.kind] && !it.live) ask = SAY.termEnded();
     return { head: head, body: body, ask: ask };
   }
   function reprompt(it) {
-    if (it.kind === "question") { var q = it.question; return q.yn ? t("¿Sí o no? O decí después.", "Yes or no? Or say later.") : q.options.length ? t("¿Cuál: ", "Which one: ") + q.options.join(t(" o ", " or ")) + t("? O decí después.", "? Or say later.") : t("¿Qué le respondo? O decí después.", "What should I answer? Or say later."); }
+    if (it.kind === "question") { var q = it.question; return q.yn ? t("¿Qué le contesto? O decí después.", "What do I answer? Or say later.") : q.options.length ? t("¿Cuál: ", "Which one: ") + q.options.join(t(" o ", " or ")) + t("? O decí después.", "? Or say later.") : t("¿Qué le respondo? O decí después.", "What should I answer? Or say later."); }
     if (it.kind === "blocked") return t("¿Qué le digo? O decí después.", "What should I tell it? Or say later.");
-    var verb = { merge: t("¿Lo mergeo", "Merge it"), deploy: t("¿Lo despliego", "Deploy it"), "merge+deploy": t("¿Lo mergeo y despliego", "Merge and deploy"), review: t("¿Lo doy por leído", "Mark it read"), draft: t("¿La apruebo", "Approve it") }[it.kind];
+    var verb = { merge: t("¿Lo mergeo", "Shall I merge"), deploy: t("¿Lo despliego", "Shall I deploy"), "merge+deploy": t("¿Lo mergeo y despliego", "Shall I merge and deploy"), review: t("¿Lo doy por leído", "Shall I mark it read"), draft: t("¿La apruebo", "Do you approve it") }[it.kind];
     return verb + t(", lo dejo para después, o qué cambio?", ", later, or what should change?");
+  }
+  /** Every line the deck may say for this card, in the current language — what pageWords is built from. */
+  function deckLines(it) {
+    var r = readout(it), out = [r.head, r.ask].concat(r.body, [reprompt(it)]);
+    out = out.concat((it.proof || []), (it.changes || []));
+    Object.keys(SAY).forEach(function (k) {
+      var f = SAY[k];
+      try {
+        if (k === "answered") (it.question ? it.question.options : []).forEach(function (o) { out.push(f(o, it.question.yn)); });
+        else if (k === "weak" || k === "done") out.push(f(it.kind) || "");
+        else if (k === "hold" || k === "draftToday") { if (IRREVERSIBLE[it.kind] && (k === "hold" || it.draft)) out.push(f(it)); }
+        else if (f.length === 0) out.push(f());
+      } catch (e) {}
+    });
+    return out.filter(Boolean);
+  }
+  /** The words the page says for this card, in either language: none of them can be his yes. */
+  var PW = new Map();
+  function pageWords(it) {
+    var k = it.key + "§" + it.rev;
+    if (PW.has(k)) return PW.get(k);
+    var set = new Set(), keep = C.lang;
+    ["es", "en"].forEach(function (lang) {
+      C.lang = function () { return lang; };
+      try { deckLines(it).forEach(function (line) { norm(line).trim().split(" ").forEach(function (w) { if (w) set.add(w); }); }); } finally { C.lang = keep; }
+    });
+    if (PW.size > 50) PW.clear();
+    PW.set(k, set);
+    return set;
+  }
+
+  // A question to him for this card: when it has played to its end, his answer may start.
+  function askNow(it, text) {
+    var key = it.key;
+    VA.askEndedAt = null;
+    return C.voice.say(text, { tag: "card" }).then(function (ok) { if (ok && VA.key === key) VA.askEndedAt = nowMs(); return ok; });
   }
   function readCard(it) {
     if (!it || !C.voice.on) return;
+    if (VA.hold && VA.hold.key !== it.key) cancelHold(true);
     C.voice.skip(false);
     var r = readout(it), key = it.key, rev = it.rev;
-    VA = { key: key, rev: rev, verdict: false, read: false, unclear: 0, awaiting: null, pending: null };
+    VA = { key: key, rev: rev, verdict: false, read: false, askEndedAt: null, unclear: 0, awaiting: null, pending: null, weak: null, hold: null };
     var tag = "card";
     C.voice.say(r.head, { tag: tag }).then(function (ok) { if (VA.key === key && ok) VA.verdict = true; });
     var bodyDone = r.body.length ? C.voice.say(r.body.join(" "), { tag: tag }) : Promise.resolve(true);
     bodyDone.then(function (ok) { if (VA.key === key && VA.rev === rev && ok) VA.read = true; });
-    if (r.ask) C.voice.say(r.ask, { tag: tag });
+    if (r.ask) askNow(it, r.ask);
   }
   function speakThen(text, next) {
     return C.voice.say(text, { tag: "card" }).then(function () { if (next) next(); });
   }
   function afterDecision(msg) {
     if (msg == null) return; // it failed: run() already said why
-    var nxt = current();
     speakThen(msg, function () {
       if (!D.open) return;
-      if (nxt) readCard(nxt); else C.voice.say(t("No queda nada.", "Nothing left."));
+      var nxt = current();
+      // He may have spoken over the line, and the next card is already being read: once is enough.
+      if (nxt) { if (VA.key !== nxt.key || VA.rev !== nxt.rev) readCard(nxt); }
+      else C.voice.say(SAY.nothingLeft());
     });
   }
-  /** A transcript during a call. True when the deck took it (it never reaches Robert then). */
-  function voiceAnswer(text) {
+
+  // The voice twin of Undo: an irreversible yes is said out loud and held; "cancelar", "no", "pará",
+  // anything that is not a yes, a barge-in, hanging up or leaving the card stops it.
+  function holdThenRun(it, words, meta) {
+    var key = it.key;
+    var h = { key: key, timer: 0, cancelled: false, waited: 0 };
+    VA.hold = h;
+    // The on-screen Cancel lasts the whole window (the line, the wait, words still on their way).
+    C.toast(SAY.hold(it), { label: t("Cancelar", "Cancel"), fn: function () { cancelHold(); }, ms: 60000 });
+    // When the window closes while he is still talking (or his words are still being transcribed), it
+    // waits for them: a "cancelar" said at the last second counts by when it was said, not when it landed.
+    // Words still in flight after that wait mean nothing happens — never an action on an unheard reply.
+    var fire = function () {
+      if (VA.hold !== h || h.cancelled) return;
+      var st = C.voice.state ? C.voice.state() : "";
+      if (st === "hearing" || st === "transcribing") {
+        if (h.waited >= HOLD_WAIT_MS) { cancelHold(); return; }
+        h.waited += 300; h.timer = setTimeout(fire, 300); return;
+      }
+      VA.hold = null;
+      // Still the card he heard? It may have been decided elsewhere, or changed (a new PR head, new
+      // words) while the window was open: a yes to what he heard never covers something else.
+      var still = Q.items.find(function (x) { return x.key === it.key; });
+      if (!still || still.rev !== it.rev) {
+        var why = still ? SAY.moved() : SAY.gone();
+        C.toast(why);
+        if (C.voice.on) C.voice.say(why, { tag: "card" }).then(function () { if (still && D.open && VA.key === it.key) readCard(still); });
+        return;
+      }
+      run(still, "yes", null, null, false, meta).then(function (msg) { if (msg) C.toast(msg); afterDecision(msg); });
+    };
+    C.voice.say(SAY.hold(it), { tag: "card" }).then(function (ok) {
+      if (VA.hold !== h || h.cancelled) return;
+      if (!ok) { VA.hold = null; C.toast(SAY.cancelled()); return; } // never fully heard: nothing happens
+      h.timer = setTimeout(fire, HOLD_MS);
+    });
+  }
+  function cancelHold(silent) {
+    var h = VA.hold;
+    if (!h) return false;
+    h.cancelled = true; clearTimeout(h.timer); VA.hold = null;
+    C.toast(SAY.cancelled()); // replaces the toast whose Cancel button belonged to this hold
+    if (!silent && C.voice.on) { C.voice.skip(false, "card"); C.voice.say(SAY.cancelled(), { tag: "card" }); }
+    if (C.fx) C.fx.tap();
+    return true;
+  }
+
+  /**
+   * A transcript during a call. True when the deck took it (it never reaches Robert then).
+   * meta (phone-voice.js): t0 = when he started speaking, overlap = page audio played during it,
+   * echo = flagged by the echo guard, barge = he spoke over the page.
+   */
+  function voiceAnswer(text, meta) {
     if (!D.open || !C.voice.on) return false;
+    meta = meta || {};
     var it = current();
     if (!it) return false;
+    var i = intentOf(text, it, pageWords(it));
+    // Inside the hold window anything that is not a yes stops the action.
+    if (VA.hold) {
+      if (i.type !== "yes" || i.strength !== "strong") cancelHold();
+      return true;
+    }
     // The card under the words must be the card that was read — else read the one on screen first.
     if (VA.key !== it.key || VA.rev !== it.rev) { readCard(it); return true; }
-    var i = intentOf(text, it);
+    var heard = { voice: true, words: text, how: "strong" };
+    var COMMAND = { close: 1, wait: 1, repeat: 1, more: 1, next: 1 };
+    if (!COMMAND[i.type]) {
+      // Our own voice coming back: say nothing, decide nothing.
+      if (meta.echo) return true;
+      // He started before the question was over, or spoke over the page: decide nothing. While the
+      // card is still being read, let it finish (its question comes at the end); once it is quiet,
+      // read what he missed or ask again.
+      if (VA.askEndedAt == null || meta.t0 == null || meta.t0 < VA.askEndedAt || meta.overlap) {
+        if (C.voice.state && C.voice.state() === "speaking") return true;
+        if (it.kind === "draft" && !VA.read) { speakThen(SAY.readFirst(), function () { if (VA.key === it.key) readCard(it); }); return true; }
+        if (!VA.verdict) { readCard(it); return true; }
+        C.voice.say(SAY.letMeFinish(), { tag: "card" });
+        askNow(it, readout(it).ask || reprompt(it));
+        return true;
+      }
+    }
     if (VA.awaiting === "confirm") {
       var p = VA.pending;
-      if (i.type === "yes") { VA.awaiting = null; VA.pending = null; run(it, p.d, p.words, null, false, { voice: true, words: text }).then(afterDecision); return true; }
-      if (i.type === "later" || i.type === "no" || i.type === "close") { VA.awaiting = null; VA.pending = null; if (i.type === "close") { close(); return true; } C.voice.say(t("No lo mando. ", "Not sent. ") + reprompt(it), { tag: "card" }); return true; }
+      if (i.type === "yes") { VA.awaiting = null; VA.pending = null; run(it, p.d, p.words, null, false, { voice: true, words: text, how: "answer" }).then(afterDecision); return true; }
+      if (i.type === "later" || i.type === "no" || i.type === "close") { VA.awaiting = null; VA.pending = null; if (i.type === "close") { close(); return true; } C.voice.say(SAY.notSent(), { tag: "card" }); askNow(it, reprompt(it)); return true; }
       if (i.type !== "unclear" && i.type !== "repeat") { VA.awaiting = null; VA.pending = null; }
-      else { C.voice.say(t("Le digo: ", "I'll tell it: ") + p.words + t(". ¿Va?", ". OK?"), { tag: "card" }); return true; }
+      else { askNow(it, SAY.sendThis(p.words)); return true; }
     }
     if (VA.awaiting === "words") {
       if (i.type === "later") { VA.awaiting = null; }
@@ -983,9 +1217,9 @@
       else if (i.type !== "yes" && i.type !== "repeat" && plain(text).split(" ").length >= 2) {
         VA.awaiting = null;
         var dd = it.kind === "question" ? "yes" : "change";
-        if (dd === "change" && it.kind !== "blocked") { run(it, "change", plain(text), null, false, { voice: true, words: text }).then(afterDecision); return true; }
+        if (dd === "change" && it.kind !== "blocked") { run(it, "change", plain(text), null, false, { voice: true, words: text, how: "change" }).then(afterDecision); return true; }
         VA.awaiting = "confirm"; VA.pending = { d: dd, words: plain(text) };
-        C.voice.say(t("Le digo: ", "I'll tell it: ") + plain(text) + t(". ¿Va?", ". OK?"), { tag: "card" });
+        askNow(it, SAY.sendThis(plain(text)));
         return true;
       }
     }
@@ -993,41 +1227,57 @@
       case "close": close(); return true;
       case "wait": C.voice.skip(false, "card"); return true;
       case "repeat": readCard(it); return true;
-      case "next": if (D.idx < Q.items.length - 1) move(1); else C.voice.say(t("Es la última.", "That's the last one."), { tag: "card" }); return true;
+      case "next": if (D.idx < Q.items.length - 1) move(1); else C.voice.say(SAY.lastOne(), { tag: "card" }); return true;
       case "more": {
         var lines = (it.proof || []).concat(it.changes || []);
-        C.voice.say(lines.length ? lines.join(". ") : t("No hay más detalle.", "There's nothing more."), { tag: "card" }).then(function () { if (VA.key === it.key) C.voice.say(reprompt(it), { tag: "card" }); });
+        C.voice.say(lines.length ? lines.join(". ") : SAY.nothingMore(), { tag: "card" }).then(function () { if (VA.key === it.key) askNow(it, reprompt(it)); });
         return true;
       }
-      case "later": run(it, "later", null, null, false, { voice: true, words: text }).then(afterDecision); return true;
-      case "option": run(it, "yes", null, i.option, false, { voice: true, words: text }).then(afterDecision); return true;
+      case "later": run(it, "later", null, null, false, { voice: true, words: text, how: "later" }).then(afterDecision); return true;
+      case "option": run(it, "yes", null, i.option, false, { voice: true, words: text, how: "answer" }).then(afterDecision); return true;
+      case "weak":
+        // "ok", "bien", "listo"… on something that cannot be undone: asked once more, never acted on.
+        VA.weak = text;
+        askNow(it, SAY.weak(it.kind));
+        return true;
       case "yes": {
         if (it.kind === "question") {
           var q = it.question, aff = q.yn ? 0 : q.options.findIndex(function (o) { return /^ (yes|si|ok|approve|approved|go|dale|keep) /.test(norm(o)) || norm(o).trim() === "yes"; });
-          if (aff >= 0) { run(it, "yes", null, aff, false, { voice: true, words: text }).then(afterDecision); return true; }
-          C.voice.say(reprompt(it), { tag: "card" }); return true;
+          if (aff >= 0) { run(it, "yes", null, aff, false, { voice: true, words: text, how: "answer" }).then(afterDecision); return true; }
+          askNow(it, reprompt(it)); return true;
         }
-        if (it.kind === "blocked") { VA.awaiting = "words"; C.voice.say(t("¿Qué le digo?", "What should I tell it?"), { tag: "card" }); return true; }
-        if (it.kind === "draft" && !it.draft.text) { C.voice.say(t("Sin el texto completo no puedo darte el sí. Abrilo en tus borradores.", "Without the full text I can't take a yes. Open it in your drafts."), { tag: "card" }); return true; }
-        if (it.kind === "draft" && !VA.read) { C.voice.say(t("Primero te la leo entera.", "Let me read it all first."), { tag: "card" }).then(function () { if (VA.key === it.key) readCard(it); }); return true; }
+        if (it.kind === "blocked") { VA.awaiting = "words"; askNow(it, SAY.whatToTell()); return true; }
+        if (it.kind === "draft" && !it.draft.text) { C.voice.say(SAY.noFullText(), { tag: "card" }); return true; }
+        if (it.kind === "draft" && !VA.read) { speakThen(SAY.readFirst(), function () { if (VA.key === it.key) readCard(it); }); return true; }
         if (!VA.verdict) { readCard(it); return true; }
-        if (OK_LINE[it.kind] && !it.live) { C.voice.say(t("La terminal ya terminó; no puedo pasarle el sí.", "Its terminal has ended; I can't pass the yes on."), { tag: "card" }); return true; }
-        run(it, "yes", null, null, false, { voice: true, words: text }).then(afterDecision);
+        if (OK_LINE[it.kind] && !it.live) { C.voice.say(SAY.termEnded(), { tag: "card" }); return true; }
+        if (IRREVERSIBLE[it.kind]) {
+          if (VA.weak) { heard.words = VA.weak + " → " + text; heard.how = "confirmed"; }
+          holdThenRun(it, null, heard);
+          return true;
+        }
+        run(it, "yes", null, null, false, heard).then(afterDecision);
         return true;
       }
-      case "change": if (i.words && plain(i.words).split(" ").length >= 2) { if (it.kind === "question" || it.kind === "blocked") { VA.awaiting = "confirm"; VA.pending = { d: it.kind === "question" ? "yes" : "change", words: i.words }; C.voice.say(t("Le digo: ", "I'll tell it: ") + i.words + t(". ¿Va?", ". OK?"), { tag: "card" }); return true; } run(it, "change", i.words, null, false, { voice: true, words: text }).then(afterDecision); return true; }
-        VA.awaiting = "words"; C.voice.say(t("¿Qué cambio le pido?", "What should change?"), { tag: "card" }); return true;
+      case "change": if (i.words && plain(i.words).split(" ").length >= 2) { if (it.kind === "question" || it.kind === "blocked") { VA.awaiting = "confirm"; VA.pending = { d: it.kind === "question" ? "yes" : "change", words: i.words }; askNow(it, SAY.sendThis(i.words)); return true; } run(it, "change", i.words, null, false, { voice: true, words: text, how: "change" }).then(afterDecision); return true; }
+        VA.awaiting = "words"; askNow(it, SAY.whatChange()); return true;
       case "no":
         // A yes/no question: "no" is its answer, as explicit as "sí". Anywhere else it means "not like
         // this" — ask what should change.
-        if (it.kind === "question" && it.question.yn) { run(it, "yes", null, 1, false, { voice: true, words: text }).then(afterDecision); return true; }
-        VA.awaiting = "words"; C.voice.say(it.kind === "blocked" ? t("¿Qué le digo?", "What should I tell it?") : t("¿Qué querés que cambie?", "What should change?"), { tag: "card" });
+        if (it.kind === "question" && it.question.yn) { run(it, "yes", null, 1, false, { voice: true, words: text, how: "answer" }).then(afterDecision); return true; }
+        VA.awaiting = "words"; askNow(it, it.kind === "blocked" ? SAY.whatToTell() : SAY.whatChange());
         return true;
-      case "free": if (it.kind === "question" || it.kind === "blocked") { VA.awaiting = "confirm"; VA.pending = { d: it.kind === "question" ? "yes" : "change", words: i.words }; C.voice.say(t("Le digo: ", "I'll tell it: ") + i.words + t(". ¿Va?", ". OK?"), { tag: "card" }); return true; }
-        run(it, "change", i.words, null, false, { voice: true, words: text }).then(afterDecision); return true;
+      case "nochange":
+        VA.awaiting = "confirm"; VA.pending = { d: it.kind === "question" ? "yes" : "change", words: i.words };
+        askNow(it, SAY.sendThis(i.words));
+        return true;
+      case "free": if (it.kind === "question" || it.kind === "blocked") { VA.awaiting = "confirm"; VA.pending = { d: it.kind === "question" ? "yes" : "change", words: i.words }; askNow(it, SAY.sendThis(i.words)); return true; }
+        run(it, "change", i.words, null, false, { voice: true, words: text, how: "change" }).then(afterDecision); return true;
       default:
+        // A yes made only of words the page itself says for this card cannot be told from its echo.
+        if (i.why === "page-word") { C.voice.say(SAY.tapInstead(), { tag: "card" }); return true; }
         VA.unclear++;
-        if (VA.unclear <= 3) C.voice.say(t("No te entendí. ", "I didn't catch that. ") + reprompt(it) + (VA.unclear >= 2 ? t(" Para hablar con Robert, decí cerrar.", " To talk to Robert, say close.") : ""), { tag: "card" });
+        if (VA.unclear <= 3) { C.voice.say(SAY.notCaught() + (VA.unclear >= 2 ? " " + SAY.toRobert() : ""), { tag: "card" }); askNow(it, reprompt(it)); }
         return true;
     }
   }
@@ -1094,11 +1344,15 @@
     init: init, load: load, loadSoon: loadSoon, open: open, close: close, onEvent: onEvent, TOPICS: TOPICS,
     items: function () { return Q.items.slice(); }, loaded: function () { return Q.loaded; },
     isOpen: function () { return D.open; }, current: current, readCurrent: function () { readCard(current()); },
-    voiceAnswer: voiceAnswer, forSession: function (sid) { var it = Q.items.find(function (x) { return x.sid === sid; }); return it ? it.key : null; },
+    voiceAnswer: voiceAnswer, cancelHold: function (silent) { return cancelHold(!!silent); }, onBarge: function () { return cancelHold(); }, holding: function () { return !!VA.hold; }, forSession: function (sid) { var it = Q.items.find(function (x) { return x.sid === sid; }); return it ? it.key : null; },
     has: function (key) { return Q.items.some(function (x) { return x.key === key; }); },
     viewerOpen: function () { return !!PV; }, closeViewer: function (fromHistory) { if (PV) PV.close(!!fromHistory); },
     KIND_WORD: KIND_WORD,
     // Pure helpers, for the tests (src/phone-deck.test.ts).
-    _t: { intentOf: intentOf, groupProof: groupProof, lineFails: lineFails, pairShots: pairShots, firstSentence: firstSentence, handoffItem: handoffItem, questionItem: questionItem, draftItem: draftItem, blockedItem: blockedItem, readout: readout, decide: decide, setCtx: function (c) { C = c; }, OK_LINE: OK_LINE, hidden: hidden, record: record, draftHash: draftHash, draftCanon: draftCanon, ledgerItem: ledgerItem },
+    _t: { intentOf: intentOf, groupProof: groupProof, lineFails: lineFails, pairShots: pairShots, firstSentence: firstSentence, handoffItem: handoffItem, questionItem: questionItem, draftItem: draftItem, blockedItem: blockedItem, readout: readout, decide: decide, setCtx: function (c) { C = c; }, OK_LINE: OK_LINE, hidden: hidden, record: record, draftHash: draftHash, draftCanon: draftCanon, ledgerItem: ledgerItem,
+      SAY: SAY, STRONG_YES: STRONG_YES, WEAK_YES: WEAK_YES, STRONG_PHRASE: STRONG_PHRASE, IRREVERSIBLE: IRREVERSIBLE, pageWords: pageWords, deckLines: deckLines, reprompt: reprompt, voiceAnswer: voiceAnswer,
+      setHold: function (ms, wait) { HOLD_MS = ms; if (wait != null) HOLD_WAIT_MS = wait; }, va: function () { return VA; }, act: act,
+      // Put items on the deck without a page (the vm tests): open, first card current.
+      mount: function (items) { Q.items = items.slice(); Q.loaded = true; D.open = true; D.idx = 0; } },
   };
 })(typeof window !== "undefined" ? window : globalThis);

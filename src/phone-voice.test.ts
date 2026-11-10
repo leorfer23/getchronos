@@ -90,6 +90,66 @@ test("echo guard: words that are nearly all his own are the room hearing him", (
   assert.equal(T.isEcho("sí", recent), false, "one short word is never judged an echo");
 });
 
+test("the conversation: what the page just said, heard back, is never his next turn", () => {
+  const was = (k: string, end: number) => ({ k: T.norm(k), end });
+  const said = [was("La primera es una terminal de cedar que se frenó.", 9_000), was("¿Querés que le avise?", 10_000)];
+  // His sentence back right after it ended (a car's speakers, a room's reverb): dropped.
+  assert.equal(T.echoVerdict("una terminal de cedar que se frenó", { t0: 10_300, afterPlay: 300 }, said), true);
+  // A short echo over his audio — two words he was saying: dropped.
+  assert.equal(T.echoVerdict("le avise", { t0: 9_800, overlap: true }, said), true);
+  // A barge made of his own words: dropped, and his audio carries on (bargeFalse).
+  assert.equal(T.echoVerdict("querés que le avise", { t0: 9_900, barge: true, overlap: true }, said), true);
+  // Your answer is yours, even right after him or over him.
+  assert.equal(T.echoVerdict("sí", { t0: 10_300, afterPlay: 300 }, said), false);
+  assert.equal(T.echoVerdict("esperá, mergealo después", { t0: 9_900, barge: true, overlap: true }, said), false);
+  // His last sentence, back late through a slow route: dropped.
+  assert.equal(T.echoVerdict("te aviso cuando esté", { t0: 10_500, afterPlay: 500 }, [was("Te aviso cuando esté.", 10_000)]), true);
+  // Long after he stopped, words that repeat his are yours.
+  assert.equal(T.echoVerdict("una terminal de cedar que se frenó", { t0: 12_000, afterPlay: 2_000 }, said), false);
+  // A short reply the page itself invited is his, even said the moment it stopped: "O decí después."
+  // then "después"; the options read out, then one of them by name.
+  const card = [was("¿Qué le digo? O decí después.", 20_000), was("Opciones: Keep both for a week, o Switch today.", 30_000)];
+  assert.equal(T.echoVerdict("después", { t0: 20_500, afterPlay: 500 }, card), false);
+  assert.equal(T.echoVerdict("Switch today", { t0: 30_500, afterPlay: 500 }, card), false);
+  // …but the same words over the page's audio are its echo.
+  assert.equal(T.echoVerdict("después", { t0: 19_800, overlap: true }, card), true);
+  assert.equal(T.echoVerdict("switch today", { t0: 29_800, overlap: true }, card), true);
+  // A sentence that ended more than 3 s before you started is not what is coming back.
+  assert.equal(T.echoVerdict("la primera es una terminal", { t0: 13_500, afterPlay: 300 }, [was("La primera es una terminal de cedar.", 5_000), was("Algo más.", 13_200)]), false);
+  assert.ok(T.ECHO_MS >= 1000, "the window covers a Bluetooth route's delay on top of the deaf window");
+});
+
+test("a stop is always his: the page saying «decí cancelar» never swallows his «cancelar»", () => {
+  const hold = [{ k: T.norm("Mergeo el arreglo del login. Decí cancelar para frenar."), end: 10_000 }];
+  for (const t of ["cancelar", "Cancelá.", "no", "no, no", "pará", "stop", "esperá", "cancel"]) {
+    assert.equal(T.isStop(t), true, t);
+    assert.equal(T.echoVerdict(t, { t0: 9_500, overlap: true }, hold), false, `${t} over the hold line`);
+    assert.equal(T.echoVerdict(t, { t0: 10_200, afterPlay: 200 }, hold), false, `${t} right after it`);
+  }
+  // Anything longer that is all his words is still his echo.
+  assert.equal(T.echoVerdict("decí cancelar para frenar", { t0: 10_200, afterPlay: 200 }, hold), true);
+  assert.equal(T.isStop("no lo mandes todavía"), false);
+});
+
+test("the call's clock rides with every utterance — when it began, whether the page was playing — and an echo never reaches the page", () => {
+  const ear = T.makeEar();
+  let r = feed(ear, 0.002, 600, 0);
+  const began = r.t;
+  r = feed(ear, 0.2, 600, r.t);
+  r = feed(ear, 0.002, 1200, r.t);
+  const close = r.events.find((e) => e.type === "close");
+  assert.equal(close.t0, began, "t0 = when the speech began");
+  assert.ok(close.t1 > close.t0 + 600);
+  assert.equal(close.overlap, false);
+  // The page marks a segment that ran while it was playing, and drops what the echo guard flags —
+  // before Robert or a card ever sees it.
+  assert.match(src, /if \(V\.audible\) seg\.overlap = true;/);
+  assert.match(src, /var echo = !!text && echoVerdict\(text, m, V\.recent\);/);
+  assert.match(src, /var real = !!text && !HEARD_NOISE\.test\(text\) && !echo;/);
+  assert.match(src, /if \(real\) heard\(text, m\);/);
+  assert.match(src, /try \{ C\.onHeard\(text, meta \|\| \{\}\); \}/);
+});
+
 test("whisper's phantoms on silence are never a turn; real short answers are", () => {
   for (const t of ["Gracias.", "Thank you.", "[Music]", "(silence)", "...", "Subtítulos por la comunidad"]) assert.ok(T.HEARD_NOISE.test(t), t);
   for (const t of ["Sí.", "dale", "después", "no"]) assert.ok(!T.HEARD_NOISE.test(t), t);
