@@ -39,7 +39,7 @@ comes from a real shipped bug or a destroyed checkout. Read before writing code.
   (a host's loopback `mc` API, queued writes, evicted output) · `src/remote-runs.ts` + `src/hostd/procs.ts` (headless runs on
   hosts) · `src/memory-tree.ts` · `src/dream-pass.ts`. Three different "artifacts": `src/artifacts.ts` (`mc artifact` HTML
   pages), `src/session-artifacts.ts` (PRs/docs/pages pinned on a terminal's rail), and the claude.ai Artifact tool.
-- **Tests:** `npm test` = the fast suite (~3.3k tests in ~320 files + the `scripts/mc-*` tests + evals, ~1 min on a loaded
+- **Tests:** `npm test` = the fast suite (~3.3k tests in ~320 files + the `scripts/mc-*` tests + evals, ~30 s on a busy
   Mac; run it in the background, prefixed `nice -n 19`). `npm run test:all` adds the slow suite (`*.pty.test.ts`,
   `*.integration.test.ts`, swiftc compiles, real audio, a real browser) — CI runs that, in three shards. One file:
   `npm test -- src/foo.test.ts` (same env, slow tests in it included); fewer workers: `npm test -- --test-concurrency=4`.
@@ -101,7 +101,7 @@ comes from a real shipped bug or a destroyed checkout. Read before writing code.
 - **Branch → PR → merge. Never commit to `main`.**
 - **Before merging any PR:** read the full diff yourself (subagent tests being green is not
   evidence — every subagent PR to date had ≥1 real bug its tests missed) and rerun
-  `npm test` (~1 min, in-memory DB; run it in the background) — `npm run test:all` if you touched ptys, hosts or the browser. Watch for accidental reverts of files you didn't touch.
+  `npm test` (~30 s, in-memory DB; run it in the background) — `npm run test:all` if you touched ptys, hosts or the browser. Watch for accidental reverts of files you didn't touch.
 - **Deploy = `npm run deploy` only** (build + restart). launchd runs `dist/`, so editing
   `src/` without deploying changes nothing. Check the fleet is idle first:
   `curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" localhost:7777/api/agents/rollup` (every API call names its caller — a tokenless one is refused).
