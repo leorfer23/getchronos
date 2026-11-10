@@ -6377,9 +6377,12 @@ const CLIENT = "desk-" + Math.random().toString(36).slice(2, 12);
 const DICT = { rec: null, id: null, busy: false }; // terminal dictation (see dictStart)
 const VC = { on: false, ctx: null, stream: null, src: null, node: null, rate: 48000, seg: null, pre: [], preMs: 0, noise: 0.01, deafUntil: 0,
   sending: 0, chain: Promise.resolve(), audio: null, speakQ: [], playing: null, turn: null, buf: "", spoken: new Set(), pick: null, shown: "", connecting: false,
-  bargeMs: 0, muted: null, recent: [],
+  bargeMs: 0, muted: null, recent: [], holdUntil: 0, flight: null, held: null,
   speed: (() => { try { return Number(localStorage.getItem("desk-voice-speed")) || 1; } catch { return 1; } })(),
-  lang: (() => { try { return localStorage.getItem("desk-voice-lang") || "en"; } catch { return "en"; } })() };
+  // The language of the call: the one picked on the call strip (kept, and then never guessed — see
+  // vcLangQ), else the browser's.
+  langPicked: (() => { try { return /^(en|es)$/.test(localStorage.getItem("desk-voice-lang") || ""); } catch { return false; } })(),
+  lang: (() => { try { const l = localStorage.getItem("desk-voice-lang"); if (l === "en" || l === "es") return l; } catch {} return /^es\b/i.test(navigator.language || "") ? "es" : "en"; })() };
 // Robert writes markdown; an 8-char id in his text is a terminal he is talking about — it becomes a
 // chip that puts that terminal on the stage. Sanitized: this is model output landing in the page.
 const chipLabel = (s) => clip(title(s), 40);
@@ -8434,7 +8437,19 @@ loadRobertModel();
 // While he talks the mic still listens, at a higher bar: speak over him and he stops mid-word, the
 // rest of that turn stays in the chat, and what you said goes in with his turn cut (barge-in). A
 // barge whose words are only his own echo is dropped. Nothing leaves the machine.
-const VAD = { start: 0.025, hold: 0.012, speech: 0.04, endMs: 800, minSpeechMs: 220, maxMs: 45000, preMs: 350, barge: 0.06, bargeMs: 300 };
+// minWordMs: a one-word answer ("sí", "no", "dale") is ~200–350 ms of voice and, said quietly, never
+// holds the `speech` level for the 220 ms a sentence must. A segment that stayed above the level that
+// OPENED it for minWordMs is kept too — never one that ran over Robert's own voice (a barge keeps the
+// strict rule). What that lets through of a knock, whisper answers with a phantom HEARD_NOISE drops.
+const VAD = { start: 0.025, hold: 0.012, speech: 0.04, endMs: 800, minSpeechMs: 220, minWordMs: 130, maxMs: 45000, preMs: 350, barge: 0.06, bargeMs: 300 };
+// A sentence cut by a breath: when you speak again within `ms` of a cut and the first half has not
+// become a turn yet (its transcript is still out, or it came back while you were already talking),
+// the two halves go again as ONE clip and become one turn. A complete sentence is never delayed by
+// this; short answers and commands are never held, a barge never joins.
+const JOIN = { ms: 1500, minLoudMs: 800, minWords: 3 };
+// Whisper writes the rioplatense «colgá» as "colgar" — and as "colgada".
+const HANG_UP = /^ (hang up|end (the )?call|disconnect|colgar|colga|colgada|colgado|colgalo|cuelga|corta|cortar|cortala|chau robert|bye robert) $/;
+const STOP_TALKING = /^ (stop|para|parar|detente|basta|silencio|stop robert|para robert) $/;
 // Whisper's stock phantoms on breath and room noise — never a command.
 const HEARD_NOISE = /^(\[.*\]|\(.*\)|\*.*\*|thank you\.?|thanks for watching.*|you\.?|bye\.?|gracias( por ver.*)?\.?|subt[ií]tulos.*|amara\.org.*|[.…,!? ]+)$/i;
 const vcAuth = () => (TOKEN ? { "x-mc-admin": TOKEN } : {});
@@ -8444,6 +8459,8 @@ const VA = VoiceAlerts.create({
   post: (p, b) => fetch(p, { method: "POST", headers: { "content-type": "application/json", ...vcAuth() }, body: JSON.stringify(b) }),
 });
 const vcSpeaking = () => !!VC.playing || VC.speakQ.length > 0;
+// fixed=1: the language was picked by hand, so the daemon transcribes in it and guesses nothing.
+const vcLangQ = () => "lang=" + VC.lang + (VC.langPicked ? "&fixed=1" : "");
 const vcNorm = (t) => " " + String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim() + " ";
 
 async function vcStart() {
@@ -8474,13 +8491,13 @@ async function vcStart() {
   const sink = VC.ctx.createGain(); sink.gain.value = 0;
   VC.node.onaudioprocess = (ev) => vcFrame(ev.inputBuffer.getChannelData(0));
   VC.src.connect(VC.node); VC.node.connect(sink); sink.connect(VC.ctx.destination);
-  Object.assign(VC, { seg: null, pre: [], preMs: 0, noise: 0.01, deafUntil: performance.now() + 250 });
+  Object.assign(VC, { seg: null, pre: [], preMs: 0, noise: 0.01, deafUntil: performance.now() + 250, holdUntil: 0, flight: null, held: null });
   earcon("on");
   vcPresence(true);
   vcState();
   // A cold whisper model costs seconds on the first sentence; a blank clip loads it now. And his
   // warm process for the thread you are on.
-  fetch("/api/transcribe?lang=" + VC.lang, { method: "POST", headers: { "content-type": "audio/wav", ...vcAuth() }, body: vcWav([new Float32Array(Math.round(VC.rate * 0.4))]) }).catch(() => {});
+  fetch("/api/transcribe?" + vcLangQ(), { method: "POST", headers: { "content-type": "audio/wav", ...vcAuth() }, body: vcWav([new Float32Array(Math.round(VC.rate * 0.4))]) }).catch(() => {});
   api("/agent/warm", { method: "POST", body: JSON.stringify({ ws: OV.sticky || null }) }).catch(() => {});
 }
 function vcStop(silent) {
@@ -8488,7 +8505,7 @@ function vcStop(silent) {
   vcSkip();
   VC.on = false;
   vcPresence(false);
-  Object.assign(VC, { seg: null, pre: [], preMs: 0, pick: null, buf: "", turn: null });
+  Object.assign(VC, { seg: null, pre: [], preMs: 0, pick: null, buf: "", turn: null, flight: null, held: null });
   try { if (VC.node) { VC.node.onaudioprocess = null; VC.node.disconnect(); } VC.src?.disconnect(); } catch {}
   VC.node = VC.src = null;
   VC.stream?.getTracks().forEach((t) => t.stop()); VC.stream = null;
@@ -8509,7 +8526,7 @@ qs("#v-speed").onclick = () => {
   if (VC.audio) VC.audio.playbackRate = VC.speed;
 };
 qs("#v-lang").onclick = () => {
-  VC.lang = VC.lang === "en" ? "es" : "en";
+  VC.lang = VC.lang === "en" ? "es" : "en"; VC.langPicked = true;
   try { localStorage.setItem("desk-voice-lang", VC.lang); } catch {}
   qs("#v-lang").textContent = VC.lang.toUpperCase();
   VC.shown = ""; vcState();
@@ -8518,7 +8535,10 @@ qs("#v-lang").onclick = () => {
 // The ear. Every ~40ms of mic: a level, and a small state machine — idle keeps 350ms of pre-roll so
 // the first syllable is not lost; a frame over the start level opens a segment; 800ms under the
 // hold level closes it. A segment that never had ~220ms of real speech in it (a cough, a door, the
-// keyboard) is dropped. The start level floats above the room's own noise.
+// keyboard) is dropped — unless it is a short word (VAD.minWordMs). The start level floats above the
+// room's own noise. deafUntil: frames are thrown away (the room's echo of his last word). holdUntil:
+// nothing opens, but the pre-roll keeps rolling — the call's own "sent" beep must not open a segment,
+// and what you say right after a cut must not lose its first syllable to it.
 const vOrb = qs("#v-orb");
 // A click on the orb while he speaks stops him at once and listens (the barge-in that always works).
 vOrb.addEventListener("click", (e) => { if (VC.on && vcSpeaking()) { e.stopPropagation(); VC.muted = VC.turn; vcSkip(true); VC.deafUntil = performance.now() + 150; } });
@@ -8528,6 +8548,8 @@ function vcFrame(f) {
   const rms = Math.sqrt(sum / f.length), now = performance.now(), ms = (f.length / VC.rate) * 1000;
   const lvl = vcSpeaking() ? 0 : Math.round(Math.min(1, rms * 8) * 10) / 10;
   if (lvl !== VC.lvl) { VC.lvl = lvl; vOrb.style.setProperty("--lvl", lvl); } // a style write only when the level moves a step
+  // A held first half whose second half never came (a noise the ear dropped, the ear went deaf): it is your turn as it is.
+  if (VC.held && !VC.seg) vcFlushHeld();
   if (now < VC.deafUntil) { if (VC.seg) { VC.seg = null; vcState(); } VC.pre = []; VC.preMs = 0; VC.bargeMs = 0; return; }
   const frame = new Float32Array(f);
   if (!VC.seg && vcSpeaking()) {
@@ -8536,7 +8558,7 @@ function vcFrame(f) {
     while (VC.preMs > VAD.preMs + VAD.bargeMs && VC.pre.length > 1) VC.preMs -= (VC.pre.shift().length / VC.rate) * 1000;
     VC.bargeMs = rms > Math.max(VAD.barge, VC.noise * 6) ? VC.bargeMs + ms : Math.max(0, VC.bargeMs - ms / 2);
     if (VC.bargeMs < VAD.bargeMs) return;
-    VC.seg = { frames: VC.pre, ms: VC.preMs, loudMs: VC.bargeMs, last: now, barge: true };
+    VC.seg = { frames: VC.pre, ms: VC.preMs, loudMs: VC.bargeMs, voicedMs: VC.bargeMs, last: now, barge: true, t0: now - VC.bargeMs };
     VC.pre = []; VC.preMs = 0; VC.bargeMs = 0;
     vcBargeIn();
     return;
@@ -8545,7 +8567,8 @@ function vcFrame(f) {
     VC.pre.push(frame); VC.preMs += ms;
     while (VC.preMs > VAD.preMs && VC.pre.length > 1) VC.preMs -= (VC.pre.shift().length / VC.rate) * 1000;
     if (rms > Math.max(VAD.start, VC.noise * 3)) {
-      VC.seg = { frames: VC.pre, ms: VC.preMs, loudMs: rms > VAD.speech ? ms : 0, last: now };
+      if (now < VC.holdUntil) return;
+      VC.seg = { frames: VC.pre, ms: VC.preMs, loudMs: rms > VAD.speech ? ms : 0, voicedMs: ms, last: now, t0: now };
       VC.pre = []; VC.preMs = 0;
       vcState();
     } else VC.noise = Math.min(0.02, VC.noise * 0.97 + rms * 0.03);
@@ -8556,10 +8579,13 @@ function vcFrame(f) {
   // His words while he talks (display only): the open segment re-transcribed every ~700 ms.
   if (!VC.partial && s.ms >= 600 && now - (VC.partialAt || 0) >= 700) vcPartial(s, now);
   if (rms > Math.max(VAD.hold, VC.noise * 2)) { s.last = now; if (rms > VAD.speech) s.loudMs += ms; }
+  if (vcSpeaking()) s.overPlay = true;
+  else if (rms > Math.max(VAD.start, VC.noise * 3)) s.voicedMs += ms;
   if (!s.barge && vcSpeaking() && s.loudMs >= VAD.bargeMs) { s.barge = true; vcBargeIn(); } // you were already talking when he started
   if (now - s.last > VAD.endMs || s.ms > VAD.maxMs) {
     VC.seg = null;
-    if (s.loudMs >= VAD.minSpeechMs) vcSend(s.frames, s.barge);
+    const full = s.loudMs >= VAD.minSpeechMs, word = !full && !s.barge && !s.overPlay && s.voicedMs >= VAD.minWordMs;
+    if (full || word) vcSend(s.frames, s.barge, { t0: s.t0, t1: now, loudMs: s.loudMs, short: word });
     vcState();
   }
 }
@@ -8600,29 +8626,68 @@ function vcPartial(seg, now) {
   const keep = []; let ms = 0;
   for (let i = seg.frames.length - 1; i >= 0 && ms < 12000; i--) { keep.unshift(seg.frames[i]); ms += (seg.frames[i].length / VC.rate) * 1000; }
   const p = VC.partial = { seg };
-  vcTranscribe(vcWav(keep), "partial=1&lang=" + VC.lang, 0).then((j) => {
+  vcTranscribe(vcWav(keep), "partial=1&" + vcLangQ(), 0).then((j) => {
     const text = typeof j?.text === "string" ? j.text.replace(/\s+/g, " ").trim() : "";
     if (VC.partial === p && VC.on && text && !HEARD_NOISE.test(text) && (VC.seg === seg || VC.sending)) qs("#v-sub").textContent = "“" + text + "…”";
   }).catch(() => {}).finally(() => { if (VC.partial === p) VC.partial = null; });
 }
-// One transcript at a time, in the order you said them.
-function vcSend(frames, barge) {
+// One transcript at a time, in the order you said them. A second half that follows a cut within
+// JOIN.ms replaces a first half that is not a turn yet: both go again as one clip (see JOIN).
+function vcJoins(prev, t0, barge) {
+  return !!prev && !barge && t0 - prev.meta.t1 < JOIN.ms && prev.ms < VAD.maxMs / 2;
+}
+function vcFlushHeld() {
+  const h = VC.held;
+  if (!h) return;
+  VC.held = null;
+  vcHeard(h.text, false);
+}
+function vcSend(frames, barge, meta) {
+  meta = meta || {};
+  let first = VC.held && vcJoins(VC.held, meta.t0, barge) ? VC.held : null;
+  if (VC.held && !first) vcFlushHeld();
+  if (!first && VC.flight && !VC.flight.done && VC.flight.loudMs >= JOIN.minLoudMs && vcJoins(VC.flight, meta.t0, barge)) { first = VC.flight; first.superseded = true; }
+  if (first) {
+    VC.held = null;
+    frames = first.frames.concat(frames);
+    meta = { t0: first.meta.t0, t1: meta.t1, loudMs: (first.loudMs || 0) + (meta.loudMs || 0) };
+  }
   const wav = vcWav(frames);
-  VC.sending++; earcon("sent"); vcState();
+  // No "sent" beep for a sound kept only by the one-word rule: it may be a knock.
+  VC.sending++; if (!meta.short) earcon("sent"); vcState();
+  const me = { frames, meta, loudMs: meta.loudMs || 0, ms: (frames.reduce((n, f) => n + f.length, 0) / VC.rate) * 1000, done: false, superseded: false };
+  if (!barge) VC.flight = me;
   VC.chain = VC.chain.then(async () => {
+    let text = "";
     try {
-      const text = String((await vcTranscribe(wav, "lang=" + VC.lang, 2)).text || "").replace(/\s+/g, " ").trim();
-      VC.partial = null;
-      if (VC.on && text && !HEARD_NOISE.test(text) && !(barge && vcEcho(text))) vcHeard(text, barge);
+      // A first half already replaced by the joined clip is not worth a transcription.
+      if (!me.superseded) text = String((await vcTranscribe(wav, vcLangQ(), 2)).text || "").replace(/\s+/g, " ").trim();
     } catch (err) { if (VC.on) toast("transcribe failed: " + String(err.message || err).slice(0, 100)); }
-    finally { VC.sending--; vcState(); }
+    finally { VC.sending--; VC.partial = null; }
+    me.done = true;
+    if (VC.flight === me) VC.flight = null;
+    if (!VC.on || me.superseded) return vcState();
+    const real = !!text && !HEARD_NOISE.test(text) && !(barge && vcEcho(text));
+    // You are already talking again: this was half a sentence. Keep it for the clip that is open now.
+    const seg = VC.seg;
+    if (real && !barge && seg && !seg.barge && seg.t0 - meta.t1 < JOIN.ms && !vcIsCommand(text) && vcNorm(text).trim().split(" ").length >= JOIN.minWords) {
+      VC.held = { frames, meta, text, loudMs: me.loudMs, ms: me.ms };
+      return vcState();
+    }
+    if (real) vcHeard(text, barge);
+    vcState();
   });
+}
+// A word that acts by itself (hang up, stop): never held back to be joined to anything.
+function vcIsCommand(text) {
+  const n = vcNorm(text);
+  return HANG_UP.test(n) || STOP_TALKING.test(n);
 }
 // A few words the call answers itself; everything else is a turn for Robert.
 function vcHeard(text, barge) {
   const n = vcNorm(text);
-  if (/^ (hang up|end (the )?call|disconnect|colgar|corta|cortar|chau robert|bye robert) $/.test(n)) return vcStop();
-  if (/^ (stop|para|parar|detente|stop robert|para robert) $/.test(n)) { vcSkip(); return stopTurn(); }
+  if (HANG_UP.test(n)) return vcStop();
+  if (STOP_TALKING.test(n)) { vcSkip(); return stopTurn(); }
   if (vcPicked(n, text)) return;
   // Said over him: his turn is cut and this goes in now. Said while he works silently: it queues.
   queueAsk(text, !!barge && OV.busy, true);
@@ -8842,7 +8907,7 @@ function earcon(kind) {
     g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.07, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
     o.connect(g).connect(c.destination); o.start(t); o.stop(t + 0.18);
   });
-  if (kind === "sent") VC.deafUntil = Math.max(VC.deafUntil, performance.now() + 220);
+  if (kind === "sent") VC.holdUntil = Math.max(VC.holdUntil, performance.now() + 220);
 }
 
 // ── token prompt ─────────────────────────────────────────────────────────────────────────────
