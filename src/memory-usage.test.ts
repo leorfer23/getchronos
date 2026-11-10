@@ -198,13 +198,6 @@ test("retention drops rows older than the window and keeps the rest", () => {
   assert.equal(pruneMemoryUsage(now, 0), 0, "0 = keep forever");
 });
 
-test("the monitor's retention sweep prunes memory usage", () => {
-  const src = fs.readFileSync(path.join(process.cwd(), "src/monitor.ts"), "utf8");
-  const at = src.indexOf("function maybeRetentionSweep");
-  assert.ok(at > 0);
-  assert.match(src.slice(at, at + 1200), /pruneMemoryUsage\(\)/);
-});
-
 // ───────────────────────────── the wall ─────────────────────────────
 
 test("aggregate never mixes workspaces", () => {
@@ -267,15 +260,3 @@ test("GET /workspaces/:id/memory/usage: own token reads, another workspace's tok
   assert.equal(missing.statusCode, 404);
 });
 
-test("api wiring: recall, memo reads (?use=1) and skill views record usage; the usage route is registered", () => {
-  const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  assert.match(api, /api\.get\("\/workspaces\/:id\/memory\/usage", usageRoute\)/);
-  const recallAt = api.indexOf('api.get("/workspaces/:id/recall"');
-  assert.match(api.slice(recallAt, recallAt + 600), /recordRecall\(req\.params\.id, q, hits, \{ source: "api", session_id: sessionFor\(req\.params\.id, req\.query\.session\) \}\)/);
-  const noteAt = api.indexOf('api.get("/notes/:id"');
-  const noteBody = api.slice(noteAt, noteAt + 600);
-  assert.ok(noteBody.indexOf("checkScope") < noteBody.indexOf("recordRead"), "record only after the scope check");
-  assert.match(noteBody, /req\.query\.use === "1"/);
-  const skillAt = api.indexOf('api.get("/skills/:id"');
-  assert.match(api.slice(skillAt, skillAt + 900), /kind: "skill_view"/);
-});

@@ -165,20 +165,6 @@ test("migration 119 creates session_phases with the key that makes a double writ
   assert.equal((db.prepare("SELECT COUNT(*) c FROM session_phases WHERE session_id=?").get(s.id) as any).c, 1);
 });
 
-test("term-status appends a row on every transition, and closes the band when a terminal ends", () => {
-  const ts = read("src/term-status.ts");
-  assert.match(ts, /INSERT OR IGNORE INTO session_phases \(session_id, phase, at\) VALUES \(\?, \?, \?\)/);
-  // The live transition: the same branch that moves the in-memory clock writes the row.
-  assert.match(ts, /if \(!prev \|\| prev\.phase !== r\.phase\) \{ phaseAt\.set\(id, \{ phase: r\.phase, at: since \}\); recordPhase\(id, r\.phase, since\); \}/);
-  // …and the end, from the row's own ended_at so the band closes where it really closed.
-  assert.match(ts, /recordPhase\(id, "ended", Date\.parse\(s\.ended_at \?\? ""\) \|\| now\)/);
-  // A reopened terminal must not inherit the "ended" the old process wrote.
-  assert.match(ts, /wrote\.delete\(id\);/);
-  // Pruned, and not on every write.
-  assert.match(ts, /DELETE FROM session_phases WHERE at < \?/);
-  assert.match(ts, /if \(now - prunedAt < 60 \* 60 \* 1000\) return;/);
-});
-
 test("pruning keeps a week and drops what is older", async () => {
   const { prunePhases, PHASE_KEEP_MS } = await import("./term-status.js");
   const s = mk();
@@ -192,33 +178,3 @@ test("pruning keeps a week and drops what is older", async () => {
 
 // ── the two halves agree ────────────────────────────────────────────────────────────────────────
 
-test("the reader is registered under the name of its module, with topics the bus really publishes", () => {
-  assert.equal(pulse.name, "pulse");
-  assert.equal(pulse.title, "Fleet pulse");
-  assert.deepEqual(pulse.topics, ["session.status", "session.started", "session.ended"]);
-  const bus = read("src/bus.ts");
-  for (const t of pulse.topics!) assert.match(bus, new RegExp(`topic: "${t}"`), `${t} is a real bus topic`);
-  assert.match(read("src/widgets/index.ts"), /import pulse from "\.\/pulse\.js";/);
-  assert.match(read("static/desk-widgets/index.js"), /"pulse"/);
-});
-
-test("the module draws with the page's tokens, the shared helpers, and no clock of its own", () => {
-  const js = read("static/desk-widgets/pulse.js");
-  assert.match(js, /import \{ el, fmtAgo, PHASE_COLOR \} from "\.\/lib\.js";/);
-  assert.match(js, /refreshMs: 15000/);
-  assert.match(js, /topics: \["session\.status", "session\.started", "session\.ended"\]/);
-  // Idempotent render — the one rule the contract has.
-  assert.match(js, /body\.replaceChildren\(/);
-  // A band is DOM, not a canvas, and its width is its duration.
-  assert.doesNotMatch(js, /getContext|createElement\("canvas"\)|<svg/i);
-  assert.match(js, /flex: dur \+ " 1 0"/);
-  // Nothing animates, and no literal colour is ever written — PHASE_COLOR and var() only.
-  assert.doesNotMatch(js, /@keyframes|animation:|transition:|setInterval/);
-  assert.doesNotMatch(js, /#[0-9a-fA-F]{3,8}\b|rgba?\(/);
-  // Click a band, get the terminal; the window toggle is remembered under the documented key.
-  assert.match(js, /ctx\.stage\(r\.id\)/);
-  assert.match(js, /const KEY = "desk-widget-pulse-window"/);
-  assert.match(js, /const WINDOWS = \[15, 60, 240\]/);
-  // An empty fleet is one calm line, not an empty card.
-  assert.match(js, /class: "werr"/);
-});

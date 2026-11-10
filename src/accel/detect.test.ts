@@ -62,25 +62,11 @@ test("detectGraphify: installed reflects the trusted-bin probe, not the skill fi
   assert.equal(s.version, cliProbe.version);
 });
 
-test("detectGraphify uses tryResolveTrustedBin (PATH + ~/.local/bin fallbacks), same as execution", () => {
-  const src = fs.readFileSync(new URL("./detect.ts", import.meta.url), "utf8");
-  const fn = src.slice(src.indexOf("export function detectGraphify"));
-  assert.match(fn, /tryResolveTrustedBin\(\s*"graphify"\s*\)/);
-  assert.match(fn, /tryResolveTrustedBin\(\s*"graphify-mcp"\s*\)/);
-});
-
 test("detectTool routes to the right detector per tool name", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-accel-cfg-"));
   assert.equal(detectTool("graphify", dir).tool, "graphify");
   assert.equal(detectTool("ast-grep", dir).tool, "ast-grep");
   assert.equal(detectTool("repomix", dir).tool, "repomix");
-});
-
-test("detectGraphify probes graphify-mcp via --help (it has no --version)", () => {
-  const src = fs.readFileSync(new URL("./detect.ts", import.meta.url), "utf8");
-  const fn = src.slice(src.indexOf("export function detectGraphify"));
-  assert.match(fn, /versionOf\(\s*mcpBin\s*,\s*\["--help"\]\s*,\s*graphifyChildEnv\(\)\s*\)/);
-  assert.doesNotMatch(fn, /versionOf\(\s*"graphify-mcp"\s*\)/);
 });
 
 test("versionOf probe with graphifyChildEnv cannot observe a planted provider secret", () => {
@@ -101,18 +87,26 @@ test("versionOf probe with graphifyChildEnv cannot observe a planted provider se
   }
 });
 
-test("Graphify version/help probes pass graphifyChildEnv; ast-grep and repomix do not", () => {
-  const detect = fs.readFileSync(new URL("./detect.ts", import.meta.url), "utf8");
-  const graphify = fs.readFileSync(new URL("./graphify.ts", import.meta.url), "utf8");
-  const detectFn = detect.slice(detect.indexOf("export function detectGraphify"));
-  const canary = graphify.slice(graphify.indexOf("function requireCanary"), graphify.indexOf("function validateSession"));
-  const astFn = detect.slice(detect.indexOf("export function detectAstGrep"), detect.indexOf("export function detectRepomix"));
-  const repomixFn = detect.slice(detect.indexOf("export function detectRepomix"), detect.indexOf("export function detectGraphify"));
-  assert.match(detectFn, /versionOf\(\s*cliBin\s*,\s*\["--version"\]\s*,\s*graphifyChildEnv\(\)\s*\)/);
-  assert.match(detectFn, /versionOf\(\s*mcpBin\s*,\s*\["--help"\]\s*,\s*graphifyChildEnv\(\)\s*\)/);
-  assert.match(canary, /versionOf\(\s*bin\s*,\s*\["--version"\]\s*,\s*graphifyChildEnv\(\)\s*\)/);
-  assert.match(astFn, /versionOf\("ast-grep"\)/);
-  assert.match(repomixFn, /versionOf\("repomix"\)/);
-  assert.doesNotMatch(astFn, /graphifyChildEnv/);
-  assert.doesNotMatch(repomixFn, /graphifyChildEnv/);
+
+test("detectGraphify probes the resolved CLI with --version and graphify-mcp with --help, both without provider secrets", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-accel-fake-"));
+  const cli = path.join(dir, "graphify"), mcp = path.join(dir, "graphify-mcp");
+  // Each fake answers only the probe it is meant to get, and only when the secret is NOT in its env.
+  fs.writeFileSync(cli, `#!${process.execPath}\nif (process.env.OPENAI_API_KEY || !process.argv.includes("--version")) process.exit(1);\nconsole.log("graphify 1.2.3");\n`, { mode: 0o755 });
+  fs.writeFileSync(mcp, `#!${process.execPath}\nif (process.env.OPENAI_API_KEY || !process.argv.includes("--help")) process.exit(1);\nconsole.log("usage: graphify-mcp");\n`, { mode: 0o755 });
+  const saved = { cli: process.env.CHRONOS_GRAPHIFY_BIN, mcp: process.env.CHRONOS_GRAPHIFY_MCP_BIN, key: process.env.OPENAI_API_KEY };
+  process.env.CHRONOS_GRAPHIFY_BIN = cli;
+  process.env.CHRONOS_GRAPHIFY_MCP_BIN = mcp;
+  process.env.OPENAI_API_KEY = "planted-provider-secret";
+  try {
+    const s = detectGraphify(null);
+    assert.equal(s.installed, true);
+    assert.equal(s.version, "1.2.3");
+    assert.match(s.detail!, /graphify-mcp present/);
+  } finally {
+    for (const [k, v] of [["CHRONOS_GRAPHIFY_BIN", saved.cli], ["CHRONOS_GRAPHIFY_MCP_BIN", saved.mcp], ["OPENAI_API_KEY", saved.key]] as const) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

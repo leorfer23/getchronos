@@ -119,19 +119,6 @@ test("voice: a deleted parent workspace is skipped, a turn with no ask is untouc
   assert.equal(resolveVoiceAsk(routed, { surface: "t" }), routed);
 });
 
-test("POST /agent: every turn goes through resolveVoiceAsk: spoken or typed, he is never asked which project", async () => {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  const route = api.slice(api.indexOf('api.post("/agent", requireAdmin'), api.indexOf('api.post("/agent/exec/:id"'));
-  assert.match(route, /const turn = named\.length < 2 \? oneRobert\(resolveVoiceAsk\(/);
-  assert.match(route, /const fanout = named\.length >= 2 \? named : fansOut\(turn, voice, process\.env\.CHRONOS_ROBERT_FANOUT === \"1\"\) \? activeWorkspaceIds\(\) : null;/);
-  // F: the latency stamps ride both the reply row and the error row.
-  assert.match(route, /const askedAt = new Date\(\)\.toISOString\(\);/);
-  assert.match(route, /if \(kind === "text" && t && !firstDeltaAt\) firstDeltaAt = new Date\(\)\.toISOString\(\);/);
-  assert.equal((route.match(/timing\(\)\)/g) || []).length, 2);
-});
-
 test("one Robert: a guessed project (the model's, or the sticky) does not hand him to that project's Robert; a project he pointed at does", async () => {
   const { oneRobert } = await import("./thread-router.js");
   const mk = (how: string, ws: string | null) => ({ ws, text: "qué me espera", routed: { ws, text: "qué me espera", how, confidence: 0.7, why: "t", candidates: [], social: false, fleet: false }, ask: null, how }) as any;

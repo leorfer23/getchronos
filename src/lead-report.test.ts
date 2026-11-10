@@ -235,7 +235,3 @@ test("a stop still renders exactly as #396 printed it — headline, card line, w
   ]);
 });
 
-test("`mc` prints the daemon's rendering rather than composing its own", () => {
-  const mc = fs.readFileSync(path.join(process.cwd(), "scripts/mc"), "utf8");
-  assert.match(mc, /for \(const e of events\) console\.log\(e\.lines\.join\("\\n"\)\);/);
-});

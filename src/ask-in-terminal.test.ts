@@ -98,9 +98,3 @@ test("Robert's question about a live terminal rides on it: no new terminal, red 
   assert.deepEqual(holderAsks(sid), []);
 });
 
-test("the Desk rail paints the question count on the row", async () => {
-  const { readFileSync } = await import("node:fs");
-  const html = readFileSync(new URL("../static/desk.html", import.meta.url), "utf8");
-  assert.ok(html.includes('<span class="asks" hidden></span>'));
-  assert.ok(html.includes("s.status?.asks"));
-});

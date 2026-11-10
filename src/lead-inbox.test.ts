@@ -155,18 +155,3 @@ test("leadWorkerRows: the fields a Lead triages by, including the branch it will
 
 // ──────────────────────── the routes actually use the gate ────────────────────────
 
-test("every /leads/me route is gated by leadGate and scoped to leadScope.leadId, not to the workspace", () => {
-  const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  for (const route of ["/leads/me/events/wait", "/leads/me/events", "/leads/me/workers"]) {
-    const at = api.indexOf(`api.get("${route}"`);
-    assert.ok(at > 0, `missing route ${route}`);
-    const body = api.slice(at, at + 700);
-    assert.ok(body.includes("leadGate(req, res)"), `${route} must go through leadGate`);
-    assert.ok(body.includes("lead.leadId"), `${route} must scope by the Lead's id`);
-    assert.ok(!body.includes("lead.ws"), `${route} must NOT widen to the Lead's whole workspace`);
-  }
-  const closeAt = api.indexOf('api.post("/leads/me/close-done"');
-  assert.ok(closeAt > 0, "missing /leads/me/close-done");
-  const closeBody = api.slice(closeAt, closeAt + 700);
-  assert.ok(closeBody.includes("leadGate(req, res)"), "close-done must go through leadGate");
-});

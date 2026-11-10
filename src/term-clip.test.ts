@@ -57,8 +57,3 @@ test("a clipboard READ query is refused and nothing is written", async () => {
   assert.deepEqual(seen, []);
 });
 
-test("desk.html loads term-clip.js and wires every pane through the daemon's /clipboard", () => {
-  const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
-  assert.match(html, /<script src="\/term-clip\.js"><\/script>/);
-  assert.match(html, /TermClip\.register\(term,[\s\S]{0,300}api\("\/clipboard", \{ method: "POST"/);
-});

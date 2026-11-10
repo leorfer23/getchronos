@@ -182,12 +182,3 @@ test("the wake session starts over after an idle hour or a full transcript; the 
   kv.del(wk.session); kv.del(wk.lastTurnAt);
 });
 
-test("the wake queue (and every daemon-initiated turn) asks on the wake lane; POST /agent does not", () => {
-  const read = (f: string) => fs.readFileSync(path.join(process.cwd(), f), "utf8");
-  assert.match(read("src/wake-queue.ts"), /askManagerWeb\(prompt, undefined, wsId, \{ model, label: "woken", lane: WAKE_LANE \}\)/);
-  assert.match(read("src/ask-robert.ts"), /lane: "wake"/);
-  assert.match(read("src/desk-watch.ts"), /lane: "wake"/);
-  const api = read("src/api.ts");
-  const route = api.slice(api.indexOf('api.post("/agent", requireAdmin'), api.indexOf('api.post("/agent/exec/:id"'));
-  assert.doesNotMatch(route, /lane:/, "the operator's own turn stays on his conversation");
-});

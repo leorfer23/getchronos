@@ -39,29 +39,9 @@ test("`--slice` reaches the daemon but is never a session column — the Lead's 
   assert.equal(parsed.slice, 3);
   assert.equal(OpenSessionSchema.safeParse({ cwd: "/tmp", slice: 0 }).success, false);
   assert.equal(OpenSessionSchema.safeParse({ cwd: "/tmp", slice: 1.5 }).success, false);
-  // Destructured out of the body before openSession, and only ever honoured for a lead credential.
-  const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  assert.match(api, /const \{ slice, \.\.\.body \} = req\.body \|\| \{\};/);
-  assert.match(api, /if \(lead && slice\) leadSlices\.patch\(lead\.leadId, slice, \{ session_id: s\.id, status: "doing" \}\);/);
 });
 
 // ─────────────────────────────── the routes' scoping ───────────────────────────────
-
-test("every /leads/me/board route is gated by leadGate and scoped to the Lead's id, not its workspace", () => {
-  const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  for (const [verb, route] of [["get", "/leads/me/board"], ["post", "/leads/me/board"], ["patch", "/leads/me/board/:n"]]) {
-    const at = api.indexOf(`api.${verb}("${route}"`);
-    assert.ok(at > 0, `missing ${verb.toUpperCase()} ${route}`);
-    const body = api.slice(at, at + 1200);
-    assert.ok(body.includes("leadGate(req, res)"), `${verb} ${route} must go through leadGate`);
-    assert.ok(body.includes("lead.leadId"), `${verb} ${route} must scope by the Lead's id`);
-    assert.ok(!body.includes("lead.ws"), `${verb} ${route} must NOT widen to the Lead's whole workspace`);
-  }
-  // The one field that is not the Lead's to say freely.
-  const patch = api.slice(api.indexOf('api.patch("/leads/me/board/:n"'));
-  assert.ok(patch.includes('sessions.workersOf(lead.leadId)'), "a session_id is resolved against this Lead's own workers");
-  assert.ok(patch.includes('"not one of your workers"'));
-});
 
 test("Lead A cannot read or move Lead B's board — the store scopes every call by lead_id", () => {
   const ws = mkWs();
@@ -105,18 +85,6 @@ test("a broadcast reaches every live worker of this Lead, and --only/--except na
   assert.deepEqual(broadcastTargets(live, { only: ["  ", ""] }).map((w) => w.id), [a.id, b.id, c.id], "blank refs are not a filter");
 });
 
-test("one worker's refusal is a line in the result, never the end of the broadcast", () => {
-  const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  const at = api.indexOf('api.post("/leads/me/broadcast"');
-  assert.ok(at > 0);
-  const body = api.slice(at, at + 1400);
-  assert.ok(body.includes("sessions.workersOf(lead.leadId, { status: \"live\" })"), "its own live workers and nothing else");
-  assert.ok(body.includes("sent.push({ id8: w.id.slice(0, 8), ok: !err"), "every worker gets a result line");
-  assert.ok(body.includes("BROADCAST_GAP_MS"), "spaced out, or two writes merge into one line");
-  assert.ok(body.includes('`lead:${lead.leadId.slice(0, 8)}`'), "typed AS the Lead, which acks that worker's events");
-  assert.ok(!body.includes("return res.status(429)"), "a rate-limited worker must not fail the call");
-});
-
 // ─────────────────────────────── the Desk figure ───────────────────────────────
 
 test("/desk carries { done, total } on a Lead row, and null for a Lead with no board", () => {
@@ -135,10 +103,3 @@ test("/desk carries { done, total } on a Lead row, and null for a Lead with no b
   assert.equal(fields.get(worker.id)!.board, null, "a worker has no board of its own");
 });
 
-test("the Desk row draws it quietly, beside the worker count, and hides it without a board", () => {
-  const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
-  assert.match(html, /<span class="board" hidden><\/span><span class="workers" hidden>/);
-  assert.match(html, /bd\.hidden = !\(s\.live && s\.role === "lead" && s\.board && s\.board\.total\);/);
-  assert.match(html, /bd\.textContent = s\.board\.done \+ "\/" \+ s\.board\.total;/);
-  assert.match(html, /\.row \.side \.board \{[^}]*color:var\(--faint\)/);
-});

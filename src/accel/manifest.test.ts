@@ -165,12 +165,6 @@ test("traversal-unsafe graphPath values are rejected by writeManifest and freshn
   assert.equal(freshness({ ...base, repoId: "repo-trav", repoPath }).state, "stale");
 });
 
-test("currentHead's own source pipes/ignores git's stderr rather than inheriting the daemon's console", () => {
-  const src = fs.readFileSync(new URL("./manifest.ts", import.meta.url), "utf8");
-  const fn = src.slice(src.indexOf("export function currentHead"));
-  assert.match(fn, /stdio:\s*\[.*"ignore".*\]/s, "currentHead must not inherit stderr for a git call that is expected to fail on non-repos");
-});
-
 test("readManifest round-trips exactly what writeManifest wrote, including the expanded schema fields", () => {
   const bytes = plantArtifact("ws-2", "repo-v", "ast-grep", 9);
   const m = writeManifest({

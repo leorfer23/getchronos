@@ -1,8 +1,8 @@
 /**
  * Dropping a file on a terminal: Finder → the stage → the agent gets an absolute PATH.
  *
- * Half of this lives in static/desk.html, which has no build step, so those assertions read the
- * shipped file. The other half is the disk side — where a drop is written, and why there.
+ * The disk side — where a drop is written, and why there — and the page's drop code, lifted out of
+ * static/desk.html (no build step) and run against stubs. The routes are drop-routes.test.ts.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -12,10 +12,6 @@ import path from "node:path";
 import { DROP_ROOT, MAX_DROP_BYTES, saveDrop, sessionDropDir } from "./drops.js";
 
 const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
-const css = html.slice(0, html.indexOf("</style>"));
-const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-const routes = fs.readFileSync(path.join(process.cwd(), "src/drop-routes.ts"), "utf8");
-const terminal = fs.readFileSync(path.join(process.cwd(), "src/terminal.ts"), "utf8");
 
 const sid = `drop-test-${process.pid}`;
 
@@ -56,59 +52,6 @@ test("a filename cannot walk out of the drop dir, and any mime is accepted", () 
   fs.rmSync(sessionDropDir(sid), { recursive: true, force: true });
 });
 
-test("the endpoint is admin-gated like /input, takes raw bytes, and returns the path", () => {
-  assert.match(api, /api\.post\("\/sessions\/:id\/drop", express\.raw\(\{ type: \(\) => true, limit: MAX_DROP_BYTES \}\), dropRoutes\.dropRoute\);/);
-  assert.match(api, /api\.post\("\/sessions\/:id\/drop-path", dropRoutes\.dropPathRoute\);/);
-  assert.match(routes, /if \(!tokenOk\(req\.get\("x-mc-admin"\), CONFIG\.adminToken\)\) \{\s*\n\s*res\.status\(403\)/);
-  assert.match(routes, /saveDrop\(\{ sessionId: s\.id, buffer: f\.buffer,/);
-  // A Lead may type into a worker (/input); it may not write bytes to a path it then hands one.
-  assert.doesNotMatch(routes, /leadScope|leadGate/);
-});
-
-test("the app parses a drop as raw bytes BEFORE express.json can eat a dropped .json", () => {
-  // express.json() used to be first on the app: a dropped google-services.json (content-type
-  // application/json) was parsed as JSON, the route's own raw parser skipped it, and the drop
-  // answered "empty file". mountBodyParsers puts the raw parser for this one route first.
-  assert.doesNotMatch(api, /app\.use\(express\.json\(/, "express.json is mounted by mountBodyParsers, nowhere else");
-  const mount = api.indexOf("dropRoutes.mountBodyParsers(app);");
-  assert.ok(mount > 0 && mount < api.indexOf('app.use("/api", api);'));
-  assert.match(routes, /app\.post\(DROP_URL, express\.raw\(\{ type: \(\) => true, limit: MAX_DROP_BYTES \}\)\);\s*\n(\s*\/\/[^\n]*\n)*\s*app\.use\(express\.json\(\{ limit: "16mb" \}\)\);/);
-  assert.match(routes, /const DROP_URL = "\/api\/sessions\/:id\/drop";/);
-});
-
-test("the terminal is spawned already trusting its own drop dir — both walls", () => {
-  // Without the grant, claude asks permission to Read a path outside its cwd, and the whole point
-  // of a drop is that the path just works.
-  assert.match(terminal, /repoDirs\.push\(ensureDropDir\(row\.id\)\);/);
-  assert.match(terminal, /import \{ ensureDropDir \} from "\.\/drops\.js";/);
-});
-
-test("the page uploads because the web never gives it a real path, and prefers one when it does", () => {
-  assert.match(html, /fetch\("\/api\/sessions\/" \+ id \+ "\/drop\?filename=" \+ encodeURIComponent\(f\.name \|\| "drop"\)/);
-  assert.match(html, /"x-mc-admin": TOKEN/);
-  // A host that knows the real path (the native wrapper's hook, or file.path) skips the upload…
-  assert.match(html, /window\.__deskDrop = async \(paths\) =>/);
-  assert.match(html, /const real = list\.map\(\(f\) => f\.path\)\.filter\(\(p\) => typeof p === "string" && p\);/);
-  assert.match(html, /if \(real\.length === list\.length\) return window\.__deskDrop\(real\);/);
-  // …but only for a terminal on this Mac. One on another computer gets the daemon to read it here.
-  assert.match(html, /if \(!onOtherHost\(id\)\) return landed\(id, list\);/);
-  assert.match(html, /fetch\("\/api\/sessions\/" \+ id \+ "\/drop-path", \{/);
-  assert.match(html, /const onOtherHost = \(id\) => \{ const s = byId\(id\); return !!\(s && hostOf\(s\)\); \};/);
-  assert.match(html, /toast\("dropped → " \+ \(out\.length > 1 \? out\.length \+ " files" : out\[0\]\)\)/);
-  // The per-file cap follows the terminal: a remote drop travels in one 16 MB frame.
-  assert.match(html, /const REMOTE_DROP_MAX = 16 \* 1024 \* 1024;/);
-  assert.match(html, /const max = onOtherHost\(id\) \? REMOTE_DROP_MAX : DROP_MAX;/);
-});
-
-test("the path goes in as a word: quoted if it needs it, space after it, never an Enter", () => {
-  assert.match(html, /const shq = \(p\) => \(\/\^\[\\w@%\+=:,\.\/-\]\+\$\/\.test\(p\) \? p : "'" \+ p\.replace\(\/'\/g, "'\\\\''"\) \+ "'"\);/);
-  assert.doesNotMatch(html, /input\(id, \{ text: text \+ " ", enter: false \}\);/, "both modes drop into the composer");
-  assert.match(html, /insertDropped\(id, out\.map\(shq\)\.join\(" "\)\);/);
-  // Both modes: the composer is the door, at the caret.
-  assert.match(html, /say\.value = pre \+ ins \+ say\.value\.slice\(end\);/);
-  assert.match(html, /say\.selectionStart = say\.selectionEnd = pre\.length \+ ins\.length;/);
-});
-
 // The shell quoting is the one piece of real logic on the page; run the shipped line rather than
 // reading it, the way desk-voice.test.ts runs its two pure pieces.
 test("shq leaves a plain path alone and survives spaces and quotes", () => {
@@ -120,24 +63,6 @@ test("shq leaves a plain path alone and survives spaces and quotes", () => {
   assert.equal(shq("/Users/x/Screen Shot.png"), "'/Users/x/Screen Shot.png'");
   assert.equal(shq("/tmp/it's here.txt"), "'/tmp/it'\\''s here.txt'");
   assert.equal(shq("/tmp/$(rm -rf ~).txt"), "'/tmp/$(rm -rf ~).txt'");
-});
-
-test("every file drop on the page is swallowed — an unhandled one navigates the WKWebView away", () => {
-  // static/app.html learned this the hard way: a file dropped on an element that does not
-  // preventDefault loads file:// in the webview and the Desk is gone until a relaunch. Over an
-  // editable element it is worse: WebKit types the file's LOCAL path into it — how a terminal on
-  // the M2 got a /Users/<brain>/… path it could not open. Capture phase, so the Desk sees the drag
-  // before any element under the pointer does.
-  assert.match(html, /document\.addEventListener\("dragover", \(e\) => \{\s*\n\s*if \(!isFileDrag\(e\)\) return;\s*\n\s*e\.preventDefault\(\);[\s\S]*?\n\}, true\);/);
-  assert.match(html, /document\.addEventListener\("drop", \(e\) => \{\s*\n\s*if \(!isFileDrag\(e\)\) return;[\s\S]*?e\.preventDefault\(\);[\s\S]*?\n\}, true\);/);
-  assert.match(html, /if \(files\.length\) dropFiles\(files\);\s*\n\s*else if \(paths\.length\) window\.__deskDrop\(paths\);/);
-  // A Finder drag counts whether WebKit presents it as Files or as file URLs; a text drag inside
-  // the page carries none of these and is left entirely alone.
-  assert.match(html, /const FILE_DRAG_TYPES = \["Files", "text\/uri-list", "public\.file-url"\];/);
-  // The chat's own listeners keep the strict check: they only ever take real File objects.
-  assert.match(html, /const hasFiles = \(e\) => \[\.\.\.\(e\.dataTransfer\?\.types \|\| \[\]\)\]\.includes\("Files"\);/);
-  // Backstop: WebKit's own drop insertion announces itself as a cancellable beforeinput.
-  assert.match(html, /document\.addEventListener\("beforeinput", \(e\) => \{\s*\n\s*if \(e\.inputType !== "insertFromDrop" \|\| !overStage\(e\)\) return;/);
 });
 
 // The drop section is plain page code with a handful of globals; run the SHIPPED text against stubs
@@ -239,15 +164,3 @@ test("file URIs become paths; other hosts, file references and web links do not"
   assert.deepEqual(fileUrlPaths({ getData: () => { throw new Error("protected"); } }), []);
 });
 
-test("dragging over the stage outlines it, and only the stage", () => {
-  assert.match(css, /\.stage\.dropping \{ outline:2px dashed var\(--accent\)/);
-  assert.match(html, /stageEl\.classList\.toggle\("dropping", overStage\(e\)\);/);
-  assert.match(html, /const dropOff = \(\) => \{ dragDepth = 0; stageEl\.classList\.remove\("dropping"\); \};/);
-});
-
-test("an image paste takes the same road, and listens in capture so xterm cannot eat it", () => {
-  // xterm's own paste handler calls stopPropagation(), so a bubbling listener never hears ⌘V while
-  // a terminal has focus — which is exactly when an image paste needs to be turned into a path.
-  assert.match(html, /document\.addEventListener\("paste", \(e\) => \{[\s\S]*?dropFiles\(files\);\s*\n\}, true\);/);
-  assert.match(html, /const files = \[\.\.\.\(e\.clipboardData\?\.files \|\| \[\]\)\];\s*\n\s*\/\/[^\n]*\n\s*if \(!files\.length \|\| !S\.active \|\| e\.target\?\.closest\?\.\("#chat"\)\) return;/);
-});

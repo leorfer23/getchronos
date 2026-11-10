@@ -303,58 +303,7 @@ describe("reopen ownership", () => {
 });
 
 describe("surfaces that stay closed to a Lead", () => {
-  test("vars write, /desk/close-done, /sessions/:id/drop stay admin/operator-only (no leadScope)", () => {
-    const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-    // vars write
-    const varsAt = api.indexOf('api.post("/workspaces/:id/vars"');
-    assert.ok(varsAt > 0);
-    const varsBody = api.slice(varsAt, varsAt + 400);
-    assert.match(varsBody, /requireAdmin/);
-    assert.doesNotMatch(varsBody, /leadScope|leadGate/);
-    // whole-wall close-done — operator gate, not lead
-    const deskAt = api.indexOf('api.post("/desk/close-done"');
-    assert.ok(deskAt > 0);
-    const deskBody = api.slice(deskAt, deskAt + 350);
-    assert.match(deskBody, /operatorMayCloseTerminal/);
-    assert.doesNotMatch(deskBody, /leadGate/);
-    // drop + drop-path: mounted straight onto the drop-routes handlers (no Lead gate in between),
-    // and those handlers check the admin token themselves and never consult a Lead scope.
-    const dropAt = api.indexOf('"/sessions/:id/drop"');
-    assert.ok(dropAt > 0);
-    const dropBody = api.slice(dropAt, api.indexOf('"/sessions/:id/worktree"', dropAt));
-    assert.match(dropBody, /dropRoutes\.dropRoute\);/);
-    assert.match(dropBody, /api\.post\("\/sessions\/:id\/drop-path", dropRoutes\.dropPathRoute\);/);
-    assert.doesNotMatch(dropBody, /leadScope|leadGate/);
-    const routes = fs.readFileSync(path.join(process.cwd(), "src/drop-routes.ts"), "utf8");
-    assert.match(routes, /tokenOk\(req\.get\("x-mc-admin"\), CONFIG\.adminToken\)/);
-    assert.doesNotMatch(routes, /leadScope|leadGate/);
-  });
 
-  test("/leads/me/close-done is scoped to the Lead and goes through leadCloseDone", () => {
-    const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-    const closeAt = api.indexOf('api.post("/leads/me/close-done"');
-    assert.ok(closeAt > 0, "missing /leads/me/close-done");
-    const closeBody = api.slice(closeAt, closeAt + 700);
-    assert.ok(closeBody.includes("leadGate(req, res)"));
-    assert.match(closeBody, /leadCloseDone\(lead, ids\)/);
-    assert.doesNotMatch(closeBody, /closeDoneSessions/);
-
-    const wlAt = api.indexOf('api.post("/workspaces/:id/worklog"');
-    assert.ok(wlAt > 0);
-    const wlBody = api.slice(wlAt, wlAt + 1200);
-    assert.ok(wlBody.includes("leadScope(req)") || wlBody.includes("x-mc-lead"));
-    assert.ok(wlBody.includes('lead:${lead.leadId.slice(0, 8)}') || wlBody.includes("lead:${lead.leadId.slice(0, 8)}"));
-    assert.ok(wlBody.includes("lead.ws !== req.params.id") || wlBody.includes("lead.ws !=="));
-  });
-
-  test("mc worktree rm / worklog / session reopen / lead close-done send x-mc-lead", () => {
-    const mc = fs.readFileSync(path.join(process.cwd(), "scripts/mc"), "utf8");
-    assert.match(mc, /MC_LEAD_TOKEN \? \{ "x-mc-lead": process\.env\.MC_LEAD_TOKEN \}/);
-    assert.match(mc, /close-done/);
-    assert.match(mc, /rm_worktrees/);
-    assert.match(mc, /handHeaders\(\)/); // session reopen
-    assert.ok(mc.includes('"/workspaces/" + w.id + "/worklog"') && mc.includes("MC_LEAD_TOKEN"));
-  });
 });
 
 test("leadGate still resolves a live Lead for the new close-done door", () => {

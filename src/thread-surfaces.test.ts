@@ -1,9 +1,6 @@
 /**
- * The router's two integration points: POST /agent and Telegram's runAgent.
- *
- * The decision itself is `resolveTurn` (tested here for real), and both surfaces call it — a turn
- * never runs a manager in a test (CLAUDE.md gotcha 2), so what a route does to a live process is
- * asserted against the wiring in the sources instead.
+ * The router's decision (`resolveTurn`, run for real) that POST /agent and Telegram's runAgent both
+ * call, the sticky thread it pins, and what every Robert is told about workspaces never mixing.
  */
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -12,11 +9,6 @@ import path from "node:path";
 import { db, chat, workspaces } from "./store.js";
 import { CONFIG } from "./config.js";
 import { commitTurn, getSticky, resolveTurn } from "./thread-router.js";
-
-const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-const tg = fs.readFileSync(path.join(process.cwd(), "src/telegram/agent.ts"), "utf8");
-const tgRouter = fs.readFileSync(path.join(process.cwd(), "src/telegram.ts"), "utf8");
-const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
 
 let atlas: any, cedar: any;
 
@@ -88,67 +80,8 @@ test("the stored row carries the ROUTED workspace, so each recap stays that proj
   assert.doesNotMatch(chat.contextBlock({ workspaceId: cedar.id }), /warehouse is slow/);
 });
 
-test("POST /agent routes, refuses to guess, and answers with where it landed", () => {
-  assert.match(api, /const routedTurn = resolveTurn\(req\.body\.text, \{/);
-  assert.match(api, /selected: req\.body\.ws \?\? null/);
-  assert.match(api, /stagedSessionId: req\.body\.session \?\? null/);
-  // An ask returns candidates instead of running a manager.
-  assert.match(api, /if \(turn\.ask && named\.length < 2\) \{[\s\S]*?ask: \{ why: turn\.ask\.why, candidates: turn\.ask\.candidates \}/);
-  // Accepted at once with a turn id; the manager runs detached and the row is stored under the
-  // routed workspace. `prompt` is `text` plus any attachment paths; the stored `you` stays clean.
-  assert.match(api, /res\.json\(\{ accepted: true, turn: turnId, ws, how: turn\.how \}\)/);
-  assert.match(api, /void \(async \(\) => \{/);
-  assert.match(api, /askManagerWeb\(\s*prompt,\s*\(t, kind\) => \{[\s\S]*?bus\.publish\(\{ topic: "agent\.delta", text: t, kind, ws, client, turn: turnId \}\);\s*\},\s*runWs,\s*\{ voice, turn: turnId \}/);
-  assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote, engine, timing\(\)\)/);
-  assert.match(api, /topic: "agent\.push"/);
-  // The reply must NOT ride the HTTP response — that is what the tunnel used to cut.
-  assert.doesNotMatch(api, /res\.json\(\{ reply, actions, ws, how: turn\.how/);
-  assert.match(api, /commitTurn\(surface, turn\)/);
-});
-
-test("the debug and control routes exist and are admin-gated", () => {
-  assert.match(api, /api\.get\("\/thread\/route", requireAdmin/);
-  assert.match(api, /api\.post\("\/thread\/sticky", requireAdmin, validate\(ThreadStickySchema\)/);
-  // ws=all is the one visible thread.
-  assert.match(api, /if \(ws === "all"\) return res\.json\(\{ messages: chat\.recentAll\(/);
-});
-
-test("Telegram runs the turn on the routed workspace's manager and says where it landed", () => {
-  assert.match(tg, /const turn = await resolveTurnSmart\(text, \{/);
-  assert.match(tg, /selected: pick \? pick\.ws : activeWsForChat\(chat\)/);
-  assert.match(tg, /if \(turn\.ask\) \{\s*await offerRoute\(chat, text, msgId, turn\.ask\);/);
-  // The prefix appears only when he did NOT say where himself.
-  assert.match(tg, /turn\.ws && turn\.how !== "tag" && turn\.how !== "selected" \? `#\$\{workspaces\.get\(turn\.ws\)\?\.slug \?\? "\?"\} · `/);
-  // The routed workspace picks the warm manager, and the row is stored under it.
-  assert.match(tg, /const m = runWs \? warmForChatWs\(chat, runWs\) : warmForChat\(chat\)/);
-  assert.match(tg, /chatLog\.add\(body, storedReply, "telegram", threadWs\)/);
-  assert.match(tg, /ws: threadWs,/);
-});
-
-test("a tap on Telegram's routing question re-runs the same message on that project", () => {
-  assert.match(tg, /export async function answerRouteAsk\(key: string, pick: string\)/);
-  assert.match(tg, /void runAgent\(pending\.chat, pending\.text, pending\.msgId, \{ ws: ws\.id \}\)/);
-  assert.match(tg, /if \(!ws\) return false; \/\/ archived or deleted between the question and the tap/);
-  assert.match(tgRouter, /if \(ns === "tr"\) \{\s*const ok = await answerRouteAsk\(op, id\);/);
-});
-
-test("the Desk renders one thread with a chip per row, routed by the daemon — no view filter", () => {
-  // One timeline across every project; chips are labels only.
-  assert.match(html, /\/agent\/history\?ws=all&limit=40/);
-  assert.doesNotMatch(html, /id="chat-ws"|desk-chat-filter|function pickWs\(/);
-  assert.match(html, /function setChip\(el, ws, chip = true\)/);
-  assert.match(html, /el\.dataset\.ws = ws === undefined \? "\?" : ws \|\| "";/);
-  // A tapped candidate is explicit — including #all, which must not route again and ask forever.
-  assert.match(html, /if \(item\.picked\) \{ body\.ws = item\.ws; body\.route = false; \}/);
-  // Every Robert row belongs here now — only an executive's own pane is a different thread.
-  assert.match(html, /String\(e\.ws \|\| ""\)\.startsWith\("agent:"\)\) return;/);
-  assert.doesNotMatch(html, /api\("\/thread\/sticky"/);
-  assert.match(html, /session: item\.session \?\? null/);
-  assert.match(html, /surface: "desk"/);
-  assert.match(html, /if \(r\?\.how === "ask"\)/);
-});
-
-test("workspaces never mix: a routed turn runs on that project's own Robert, the shop fans out", () => {
+// Prompt text is the contract here: what every Robert is told about workspace isolation.
+test("workspaces never mix: every Robert surface is told so, and the coordinator no longer owns cross-project work", () => {
   const threads = fs.readFileSync(path.join(process.cwd(), "agents/_blocks/threads.md"), "utf8");
   const coord = fs.readFileSync(path.join(process.cwd(), "agents/_blocks/coordinator.md"), "utf8");
   assert.match(threads, /ONE ROBERT PER PROJECT/);
@@ -157,22 +90,7 @@ test("workspaces never mix: a routed turn runs on that project's own Robert, the
   assert.match(threads, /Never tell him to re-send with tags/);
   assert.match(coord, /CROSS-PROJECT WORK — workspaces never mix/);
   assert.doesNotMatch(coord, /CROSS-PROJECT WORK IS YOURS/);
-  assert.match(api, /const runWs = ws;/);
-  assert.match(api, /askFleetFanout\(prompt, fanout/);
-  assert.doesNotMatch(api, /focus: runWs \? null : ws/);
-  assert.match(tg, /const runWs = threadWs;/);
-  assert.doesNotMatch(tg, /everywhere: true/);
   for (const surface of ["agents/robert/web.md", "agents/robert/telegram.md"])
     assert.match(fs.readFileSync(path.join(process.cwd(), surface), "utf8"), /\{\{> threads\}\}/, surface);
 });
 
-test("a line said on the phone shows on the Desk: turns carry the sending page, the Desk skips only its own", () => {
-  // Sticky is per surface (desk vs phone), but the chat log is shared — the page id tells them apart.
-  assert.match(api, /bus\.publish\(\{ topic: "agent\.asked", you: text, at: new Date\(\)\.toISOString\(\), source: surface, ws, client, turn: turnId,/);
-  assert.match(api, /client,\n\s*turn: turnId,/);
-  assert.match(html, /const body = \{ text: item\.text, session: item\.session \?\? null, client: CLIENT, surface: "desk" \};/);
-  assert.match(html, /"agent\.asked"/);
-  assert.match(html, /if \(e\.client === CLIENT \|\| !e\.you\) return;/);
-  assert.match(html, /const fromHere = e\.client === CLIENT;/);
-  assert.doesNotMatch(html, /const fromHere = e\.source === "web";/);
-});

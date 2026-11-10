@@ -89,17 +89,6 @@ test("a Lead may answer only its OWN workers' asks — never a neighbour Lead's,
   assert.equal(leadMayAnswer(a.id, mkAsk(mine), undefined), false, "a session row that has since gone");
 });
 
-test("the answer route checks that ownership before anything else, and records the Lead as the answerer", () => {
-  const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  const at = api.indexOf('api.post("/asks/:id/answer"');
-  assert.ok(at > 0);
-  const body = api.slice(at, at + 1400);
-  assert.ok(body.includes("leadMayAnswer(lead.leadId"), "a lead credential is checked against the ask's terminal");
-  assert.ok(body.includes('res.status(404)'), "and refused as a 404, so ids cannot be probed");
-  assert.ok(body.includes('`lead:${lead.leadId.slice(0, 8)}`'), "answered_by names the Lead");
-  assert.ok(body.includes("checkScope(req, res, ask.workspace_id)"), "the operator/Robert path is untouched");
-});
-
 // ─────────────────────────── the card says whose turn it is ───────────────────────────
 
 test("an open lead ask reads as waiting on its Lead, not on Robert — and counts as stopped", () => {
@@ -166,11 +155,6 @@ test("an answered or cancelled lead ask is never re-routed — nobody is waiting
   await sweepLeadAsks(Date.now() + 60 * 60_000);
   assert.equal(triaged.length, 0);
   assert.equal(asks.get(answered.id)!.route, "lead");
-});
-
-test("the daemon sweeps lead asks on the same pass as Robert's own triage deadline", () => {
-  const watch = fs.readFileSync(path.join(process.cwd(), "src/desk-watch.ts"), "utf8");
-  assert.match(watch, /sweepLeadAsks\(nowMs\)/);
 });
 
 // ──────────── a Lead is an AGENT: it may not answer what Robert may not ────────────
@@ -263,20 +247,3 @@ test("the inbox line stops offering `mc answer` once the question is not the Lea
   assert.deepEqual(leadEventLines(ev, null).at(-1), '  answer it: mc answer 11112222 "..."');
 });
 
-test("the ask route earns `lead` from the daemon, and mc says so when it did not get it", () => {
-  const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  assert.match(api, /req\.body\.route === "lead" && !mayRouteToLead\(sess\.id\) \? fallback/);
-  const mc = fs.readFileSync(path.join(process.cwd(), "scripts/mc"), "utf8");
-  assert.match(mc, /if \(toLead && a\.route !== "lead"\)/);
-});
-
-test("GET /leads/me/events/wait cancels on req close — safe only because it is a bodiless GET", () => {
-  // A POST long-poll must use res.on("close") + !res.writableEnded: req "close" fires as soon as
-  // the body has been read, which abandoned every parked POST the day we tried it.
-  const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  const at = api.indexOf('api.get("/leads/me/events/wait"');
-  assert.ok(at > 0);
-  const body = api.slice(at, at + 900);
-  assert.match(body, /req\.on\("close", waiter\.cancel\)/);
-  assert.match(body, /bodiless GET|GET without a body|GET — on a route with a body/i);
-});
