@@ -138,7 +138,7 @@ import { flowData } from "./flow.js";
 import { transcribe, audioFilename, transcribeFailure } from "./transcribe.js";
 import { speak, voiceFor, listVoices, neuralHealth } from "./speak.js";
 import { activeWorkspaceIds, askFleetFanout, askManagerWeb, handFilesTo, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
-import { askLine, commitTurn, explainRoute, getSticky, resolveTurnSmart, resolveVoiceAsk, setSticky, fansOut } from "./thread-router.js";
+import { askLine, commitTurn, explainRoute, getSticky, resolveTurn, oneRobert, resolveVoiceAsk, setSticky, fansOut } from "./thread-router.js";
 import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type LeadEvent } from "./store.js";
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
 import { leadEventPayload, waitForLeadEvents } from "./robert-drive.js";
@@ -5115,7 +5115,9 @@ export function startServer() {
     // message (a #tag, a ticket key, a project name, the terminal on screen, the bubble being
     // answered, or where the last one landed). Each workspace answers on its OWN warm Robert, so no
     // context can cross between them.
-    const routedTurn = await resolveTurnSmart(req.body.text, {
+    // Rules only, no router-model round trip: its guess no longer picks a Robert (oneRobert, below),
+    // so the call was seconds of waiting before he heard a word.
+    const routedTurn = resolveTurn(req.body.text, {
       selected: req.body.ws ?? null,
       route: req.body.route,
       surface,
@@ -5135,7 +5137,8 @@ export function startServer() {
       : [];
     // Never "which project?", spoken or typed — he talks to one Robert, who does not ask him to sort
     // his own words: the bubble answered, then the sticky, then the unscoped Robert.
-    const turn = named.length < 2 ? resolveVoiceAsk(routedTurn, { replyWorkspace: quote?.workspace_id ?? null, surface }) : routedTurn;
+    // …and a project's own Robert only when he pointed at that project himself (oneRobert).
+    const turn = named.length < 2 ? oneRobert(resolveVoiceAsk(routedTurn, { replyWorkspace: quote?.workspace_id ?? null, surface }), quote?.workspace_id ?? null) : routedTurn;
     if (turn.ask && named.length < 2) {
       return res.json({ reply: askLine(turn.ask), ask: { why: turn.ask.why, candidates: turn.ask.candidates }, actions: [], ws: null, how: "ask" });
     }
