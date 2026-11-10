@@ -39,10 +39,18 @@ comes from a real shipped bug or a destroyed checkout. Read before writing code.
   (a host's loopback `mc` API, queued writes, evicted output) · `src/remote-runs.ts` + `src/hostd/procs.ts` (headless runs on
   hosts) · `src/memory-tree.ts` · `src/dream-pass.ts`. Three different "artifacts": `src/artifacts.ts` (`mc artifact` HTML
   pages), `src/session-artifacts.ts` (PRs/docs/pages pinned on a terminal's rail), and the claude.ai Artifact tool.
-- **Tests:** `npm test` takes ~100s (~2.7k tests + evals) — run it in the background. Expected, not your diff: inside a
-  sandboxed (guard) Desk terminal, `sandbox-exec: sandbox_apply: Operation not permitted` (nested sandbox);
-  `src/brainbar-install.test.ts` fails when the worktree path contains `secret` or `token` (it scans the plist for them); if
-  still red, `src/hostd/procs.test.ts` "a kill frame ends it…" on ubuntu CI.
+- **Tests:** `npm test` = the fast suite (~3.3k tests in ~320 files + the `scripts/mc-*` tests + evals, ~30 s on a busy
+  Mac; run it in the background, prefixed `nice -n 19`). `npm run test:all` adds the slow suite (`*.pty.test.ts`,
+  `*.integration.test.ts`, swiftc compiles, real audio, a real browser) — CI runs that, in three shards. One file:
+  `npm test -- src/foo.test.ts` (same env, slow tests in it included); fewer workers: `npm test -- --test-concurrency=4`.
+  Everything runs through `scripts/test.mjs` with `scripts/test-setup.mjs` preloaded: the env, the agent CLIs (claude,
+  codex, cursor-agent, grok, opencode, gws, ical) stubbed by `scripts/test-bin/no-cli` (a test that needs one writes its own
+  fake and sets `CHRONOS_<NAME>_BIN`), and no socket but loopback. Test behaviour, not source text: a test that reads a
+  `.ts`/`.html` file is for a contract where the text IS the rule (a deny list, a CSS token rule), at the smallest token;
+  for routes, call them (`src/route-guards.test.ts`); for page code, lift the function out and run it (`vm` / `new Function`).
+  Expected, not your diff: inside a sandboxed (guard) Desk terminal, `sandbox-exec: sandbox_apply: Operation not permitted`
+  (nested sandbox); `src/brainbar-install.test.ts` fails when the worktree path contains `secret` or `token` (it scans the
+  plist for them).
 - **Desk CSS:** `src/desk-companion.test.ts` bans literal hex colours and `animation`/`transition` in the companion's CSS
   block — use theme tokens (`var(--danger)`, `var(--p-work)`, …).
 - **Merge ≠ deploy.** Never run `npm run deploy` unless the operator explicitly said deploy.
@@ -93,7 +101,7 @@ comes from a real shipped bug or a destroyed checkout. Read before writing code.
 - **Branch → PR → merge. Never commit to `main`.**
 - **Before merging any PR:** read the full diff yourself (subagent tests being green is not
   evidence — every subagent PR to date had ≥1 real bug its tests missed) and rerun
-  `npm test` (~100s, in-memory DB; run it in the background). Watch for accidental reverts of files you didn't touch.
+  `npm test` (~30 s, in-memory DB; run it in the background) — `npm run test:all` if you touched ptys, hosts or the browser. Watch for accidental reverts of files you didn't touch.
 - **Deploy = `npm run deploy` only** (build + restart). launchd runs `dist/`, so editing
   `src/` without deploying changes nothing. Check the fleet is idle first:
   `curl -s -H "x-mc-admin: $(cat ~/chronos/.admin-token)" localhost:7777/api/agents/rollup` (every API call names its caller — a tokenless one is refused).

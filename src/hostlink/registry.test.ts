@@ -210,14 +210,6 @@ test("the join command, npm flavour: npx the brain's own version; CHRONOS_HOST_I
   assert.equal(hostInstallMode({ CHRONOS_HOST_INSTALL: "brew" } as any), "git");
 });
 
-test("tunnel join command prefixes CF_ACCESS_* when a service token is passed", () => {
-  const cf = { id: "cid.access", secret: "s3cret" };
-  const cmd = hostJoinCommand("wss://desk.example.com/host", "CHR1-x", "r", "git", "0.1.0", cf);
-  assert.match(cmd, /^CF_ACCESS_CLIENT_ID=cid\.access CF_ACCESS_CLIENT_SECRET=s3cret node -e /);
-  assert.match(cmd, /join wss:\/\/desk\.example\.com\/host CHR1-x$/);
-  assert.doesNotMatch(hostJoinCommand("wss://desk.example.com/host", "CHR1-x", "r", "git", "0.1.0", null), /CF_ACCESS/);
-});
-
 test("mintJoin: Anywhere command carries CF_ACCESS from the brain env; Same network does not", () => {
   const prev = { id: process.env.CF_ACCESS_CLIENT_ID, secret: process.env.CF_ACCESS_CLIENT_SECRET };
   process.env.CF_ACCESS_CLIENT_ID = "brain-cid.access";

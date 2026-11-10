@@ -54,13 +54,13 @@ const INFO_SITES: Array<[string, string]> = [
   ["self-deploy.ts", "Chronos deployed"],
 ];
 
-for (const [file, needle] of INFO_SITES) {
-  test(`${file}: "${needle}" does not interrupt him`, () => {
+test("narration call sites are notifyInfo: they do not interrupt him", () => {
+  for (const [file, needle] of INFO_SITES) {
     const line = read(file).split("\n").find((l) => l.includes(needle) && /notify/.test(l));
     assert.ok(line, `no notify line containing "${needle}" in ${file}`);
     assert.match(line!, /notifyInfo\(/, `"${needle}" should be narration, not an interruption`);
-  });
-}
+  }
+});
 
 // The other half of the contract: these MUST keep reaching the phone.
 const ACTION_SITES: Array<[string, string]> = [
@@ -76,15 +76,11 @@ const ACTION_SITES: Array<[string, string]> = [
   ["self-deploy.ts", "Chronos is stale"],
 ];
 
-for (const [file, needle] of ACTION_SITES) {
-  test(`${file}: "${needle}" still reaches him`, () => {
+test("call sites that need a human are never downgraded to notifyInfo", () => {
+  for (const [file, needle] of ACTION_SITES) {
     const line = read(file).split("\n").find((l) => l.includes(needle) && /notify/.test(l));
     assert.ok(line, `no notify line containing "${needle}" in ${file}`);
     assert.ok(!/notifyInfo\(/.test(line!), `"${needle}" needs a human — it must not be downgraded`);
-  });
-}
-
-test("Robert's proactive brief is signed, so his voice is findable in the stream", () => {
-  const src = read("heartbeat.ts");
-  assert.match(src, /👔 <b>Robert<\/b>/, "the hourly brief must be attributed to him, not to the system");
+  }
 });
+

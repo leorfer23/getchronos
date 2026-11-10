@@ -34,7 +34,7 @@ test("text goes in on stdin, so it can never be read as a flag", () => {
 const hasSay = (() => {
   try { execFileSync("which", ["say"]); return process.platform === "darwin"; } catch { return false; }
 })();
-test("renders real AAC audio on a Mac", { skip: !hasSay }, async () => {
+test("renders real AAC audio on a Mac", { skip: !hasSay ? "no say(1) on this machine" : process.env.CHRONOS_TEST_SLOW ? false : "slow suite: npm run test:all" }, async () => {
   const prev = process.env.CHRONOS_TTS_URL;
   process.env.CHRONOS_TTS_URL = "off"; // `say` itself — never the Kokoro service a dev Mac may run
   try {

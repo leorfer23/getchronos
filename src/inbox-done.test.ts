@@ -246,7 +246,6 @@ test("done closes a mirror ticket as the inbox (not a write-back trigger), and t
   assert.equal(t.status_source, "external");
   assert.ok(events.some((e) => e.topic === "ticket.updated" && e.status === "done" && e.actor === INBOX_DONE_ACTOR));
   assert.ok(events.some((e) => e.topic === "inbox.updated" && e.item_id === a.id));
-  assert.match(fs.readFileSync(path.join(import.meta.dirname, "writeback.ts"), "utf8"), /e\.actor === "inbox-done"\) return;/);
 
   pull = [task({ status: "done", statusRaw: "Done" })];
   await syncWorkspace(ws);
@@ -302,18 +301,6 @@ test("clickup.logTime: cfg.team_id skips the lookup, time_billable is passed thr
 });
 
 // ───────────────────────────── Desk + CLI ─────────────────────────────
-
-test("the Desk row: ✓ Done (hours prompt for tracker rows), Won't do behind ⋯, ✕ unchanged", () => {
-  const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
-  assert.match(html, /data-a="done"/);
-  assert.match(html, /class="ib-hours" type="number"/);
-  assert.match(html, /data-a="more" title="More">⋯</);
-  assert.match(html, /data-a="wontdo"/);
-  assert.match(html, /data-a="dismiss" title="Dismiss">✕</);
-  assert.match(html, /api\("\/inbox\/" \+ id \+ "\/done", \{ method: "POST"/);
-  assert.match(html, /api\("\/inbox\/" \+ id \+ "\/wontdo", \{ method: "POST"/);
-  assert.match(html, /\$\{esc\(IB\.err\[i\.id\]\)\}/, "errors are escaped and shown on the row");
-});
 
 async function mcAgainst(args: string[], reply: (url: string) => unknown) {
   const got: { method?: string; url?: string; headers: http.IncomingHttpHeaders; body: any }[] = [];

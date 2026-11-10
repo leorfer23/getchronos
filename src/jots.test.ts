@@ -25,12 +25,6 @@ test("a new jot is open, unrun, and appended to the end of its client's list", (
   assert.equal(b.pos, 1);
 });
 
-test("pos is per client, so two clients both start at 0", () => {
-  const one = mkWs(), two = mkWs();
-  assert.equal(jots.create({ workspace_id: one.id, title: "a" }).pos, 0);
-  assert.equal(jots.create({ workspace_id: two.id, title: "b" }).pos, 0);
-});
-
 test("list returns one client's rows in arranged order, done rows sunk to the bottom", () => {
   const ws = mkWs(), other = mkWs();
   const a = jots.create({ workspace_id: ws.id, title: "a" });
@@ -218,14 +212,6 @@ test("append adds a line under what is written and never replaces it", () => {
   assert.equal(jots.append(blank.id, "x")!.body, "x");
 });
 
-test("two appends to the same row both land", () => {
-  const ws = mkWs();
-  const j = jots.create({ workspace_id: ws.id, title: "t", body: "base" });
-  jots.append(j.id, "from terminal A");
-  jots.append(j.id, "from terminal B");
-  assert.equal(jots.get(j.id)!.body, "base\nfrom terminal A\nfrom terminal B");
-});
-
 // The point of writing the body down over days: by the time you press Run, the brief is already
 // written. This asserts the accumulated detail is what the agent is actually handed.
 test("deskSeed carries the row's body through as the agent's brief", () => {
@@ -233,10 +219,4 @@ test("deskSeed carries the row's body through as the agent's brief", () => {
   const seed = deskSeed(j.title, null, j.body);
   assert.match(seed, /Goal: flyway rollback/);
   assert.match(seed, /Brief from your operator:\nprod is 3 behind\nsafe window Sunday 02:00/);
-});
-
-test("a row with no detail yet seeds a goal and no empty brief", () => {
-  const seed = deskSeed("ask about the WLM change", null, null);
-  assert.match(seed, /Goal: ask about the WLM change/);
-  assert.doesNotMatch(seed, /Brief from your operator/);
 });

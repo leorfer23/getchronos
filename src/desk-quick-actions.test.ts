@@ -1,14 +1,12 @@
 /**
  * Quick actions: the chips in the stage footer that type what the operator would have typed.
  *
- * Three halves, for the three places the feature lives:
+ * Two halves:
  *   · the rule (src/quick-actions.ts) — which chips a phase gets, in what order, with which ⌥ number;
  *   · the mirror (static/desk-quick-actions.js) — run in a vm, the way src/desk-companion.test.ts
  *     runs the companion's, and asserted EQUAL to the TS one. desk.html has no build step and the
  *     daemon needs the same defaults, so the list exists twice; this is what notices when the two
- *     drift apart;
- *   · the wiring (static/desk.html, src/api.ts) — read as text, because nothing else would notice a
- *     regression in a page with no build step.
+ *     drift apart. The route's admin gate is route-guards.test.ts.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -17,7 +15,7 @@ import path from "node:path";
 import vm from "node:vm";
 import {
   DEFAULT_QUICK_ACTIONS, MAX_LABEL, MAX_QUICK_ACTIONS, MAX_TEXT, MAX_VISIBLE, QA_KINDS, QA_PHASES,
-  QUICK_ACTIONS_KV, defaultQuickActions, visibleActions, type QuickAction,
+  defaultQuickActions, visibleActions, type QuickAction,
 } from "./quick-actions.js";
 import { QuickActionsSchema } from "./validation.js";
 
@@ -27,11 +25,6 @@ const MIRROR = ctx.window.QuickActions;
 // Values cross a vm realm boundary, so their prototypes are not this realm's: round-trip through
 // JSON before comparing, the way src/desk-companion.test.ts does.
 const plain = (v: unknown) => JSON.parse(JSON.stringify(v));
-
-const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
-const css = html.slice(0, html.indexOf("</style>"));
-const phone = fs.readFileSync(path.join(process.cwd(), "static/phone.html"), "utf8");
-const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
 
 const labels = (acts: { label: string }[]) => acts.map((a) => a.label);
 
@@ -160,18 +153,6 @@ test("static/desk-quick-actions.js is the same list and the same rule as src/qui
         );
 });
 
-// ── the route ────────────────────────────────────────────────────────────────────────────────
-test("the route is admin-only, schema-checked, and stored whole under one kv key", () => {
-  assert.match(api, /api\.get\("\/desk\/quick-actions", requireAdmin,/);
-  assert.match(api, /api\.put\("\/desk\/quick-actions", requireAdmin, validate\(QuickActionsSchema\)/);
-  assert.match(api, /kv\.set\(QUICK_ACTIONS_KV, JSON\.stringify\(req\.body\.actions\)\)/);
-  assert.equal(QUICK_ACTIONS_KV, "desk.quick_actions");
-  // An unreadable or outdated value must give the operator the defaults, not an empty footer.
-  assert.match(api, /function readQuickActions\(\): QuickAction\[\] \{/);
-  assert.match(api, /if \(!raw\) return defaultQuickActions\(\);/);
-  assert.match(api, /parsed\.success \? parsed\.data\.actions : defaultQuickActions\(\)/);
-});
-
 test("the schema refuses what would break the footer", () => {
   const ok = QuickActionsSchema.safeParse({ actions: defaultQuickActions() });
   assert.equal(ok.success, true, ok.success ? "" : JSON.stringify(ok.error.issues));
@@ -192,84 +173,4 @@ test("the schema refuses what would break the footer", () => {
   const min = QuickActionsSchema.safeParse({ actions: [{ label: "x" }] });
   assert.equal(min.success, true);
   assert.deepEqual(min.success ? min.data.actions[0] : null, { label: "x", text: "", kind: "text", phases: [], key: null });
-});
-
-// ── the footer ───────────────────────────────────────────────────────────────────────────────
-test("the chips sit on the left of #sbar and go through the composer's own door", () => {
-  assert.match(html, /<script src="\/desk-quick-actions\.js"><\/script>/);
-  // Left of the bar, before the spacer that pushes Close/Next right.
-  assert.match(html, /if \(!ask\) bar\.push\(\.\.\.qaChips\(\)\);/);
-  assert.match(html, /const ask = compAskOwns\(s\) \|\| inFocus \? null : askOf\(s\);\n\s+const last = inFocus \? null : qaLastLine\(s\);/);
-  assert.match(html, /if \(!ask\) bar\.push\(\.\.\.qaChips\(\)\);\n\s+if \(ask\) \{/);
-  assert.match(html, /bar\.push\(`<span class="sp"><\/span>`\);/);
-  // The same route and body as the composer — nothing here is a second way to talk to an agent.
-  assert.match(html, /answer\(s\.id, \{ text: a\.text, enter: true \}\);/);
-  assert.match(html, /answer\(s\.id, optionBody\(p\.options\[0\]\)\); return back\(\);/);
-  assert.match(html, /if \(p\.kind === "yn"\) \{ answer\(s\.id, \{ text: "y", enter: true \}\); return back\(\); \}/);
-  // Hover/title is the exact text.
-  assert.match(html, /: QA_TIP\[a\.kind\] \|\| a\.text \|\| a\.label;/);
-  assert.match(html, /title="\$\{esc\(tip\(a\)\)\}/);
-  // A chip never takes the keyboard off the pane.
-  assert.match(html, /qs\("#sbar"\)\.addEventListener\("mousedown", \(e\) => \{ if \(e\.target\.closest\("button\.qa"\)\) e\.preventDefault\(\); \}\);/);
-  assert.match(html, /const back = \(\) => compFocusBack\(\);/);
-});
-
-test("the chips follow the phase, and step aside for a question the bar is already showing", () => {
-  assert.match(html, /return QuickActions\.visible\(QA\.list, phaseOf\(s\), !!\(p && p\.kind !== "turn"\)\);/);
-  assert.match(html, /if \(!compAskOwns\(s\) && askOf\(s\)\) return null;/);
-  assert.match(html, /if \(!s \|\| !s\.live \|\| S\.mode === "fleet"\) return null;/);
-  // An empty list still gets the ⚙ — deleting every action must not be a one-way door.
-  assert.match(html, /const acts = qaVisible\(\);\n\s+if \(!acts\) return \[\];/);
-  // Recomputed per render and per chord, never cached — a phase change must not leave ⌥2 stale.
-  assert.match(html, /function qaFire\(i\) \{\n\s+const s = S\.active && byId\(S\.active\); if \(!s \|\| !s\.live\) return;\n\s+const a = \(qaVisible\(\) \|\| \[\]\)\[i\];/);
-});
-
-test("⌥1…⌥9 fire the chips, read from e.code, and the pty never sees the chord", () => {
-  assert.match(html, /const qaKey = \(e\) => \{ const m = \/\^Digit\(\[1-9\]\)\$\/\.exec\(e\.code \|\| ""\); return m && e\.altKey && !e\.metaKey && !e\.ctrlKey && !e\.shiftKey \? Number\(m\[1\]\) : null; \};/);
-  assert.match(html, /compKey\(e\) \|\| railKey\(e\) \|\| qaKey\(e\) !== null \|\|/);
-  assert.match(html, /if \(qk !== null\) \{ if \(qs\("dialog\[open\]"\)\) return; e\.preventDefault\(\); return qaFire\(\(qaVisible\(\) \|\| \[\]\)\.findIndex\(\(a\) => a\.n === qk\)\); \}/);
-  // Read before the blanket "any modifier is not ours" bail, or it would never run.
-  const chord = html.indexOf("const qk = qaKey(e);");
-  const bail = html.indexOf("if (e.metaKey || e.ctrlKey || e.altKey) return;");
-  assert.ok(chord > 0 && bail > chord, "the ⌥ chord must be read before the modifier bail");
-  // The number hint on the chip.
-  assert.match(html, /\$\{a\.n \? `<kbd>\$\{a\.n\}<\/kbd>` : ""\}/);
-  assert.match(css, /\.sbar button\.qa kbd \{[^}]*font-variant-numeric:tabular-nums;/);
-});
-
-test("the last command is said once: the muted line yields to the companion's ticker", () => {
-  assert.match(html, /function qaLastLine\(s\) \{\n\s+if \(C\.on && S\.mode === "term"\) return null;/);
-  assert.match(html, /TermCompanion\.lastCommand\(F\.events\)/);
-  // …and the ticker is exactly what shows in that mode.
-  assert.match(css, /body\.mode-term\.comp-on \.ticker:not\(\[hidden\]\) \{ display:flex; \}/);
-  // Its own row, above the chips.
-  assert.match(css, /\.sbar \.qa-last \{ flex:0 0 100%;/);
-  assert.match(html, /if \(last\) bar\.push\(`<span class="qa-last" title="\$\{esc\(last\.title\)\}">\$\{last\.html\}<\/span>`\);/);
-});
-
-test("the dialog is a plain <dialog> of rows, and Close is a real cancel", () => {
-  assert.match(html, /<dialog id="dlg-quick">/);
-  assert.match(html, /<div class="qa-rows" id="qa-rows"><\/div>/);
-  for (const id of ["qa-add", "qa-reset", "qa-cancel", "qa-save"]) assert.match(html, new RegExp(`id="${id}"`), id);
-  // Edits are held in QD.list and only QA.list is replaced on a successful save.
-  assert.match(html, /QD\.list = QA\.list\.map\(\(a\) => \(\{ \.\.\.a, phases: \[\.\.\.\(a\.phases \|\| \[\]\)\] \}\)\);/);
-  assert.match(html, /qs\("#qa-reset"\)\.onclick = \(\) => \{ QD\.list = QuickActions\.defaults\(\); qaRender\(\); \};/);
-  assert.match(html, /api\("\/desk\/quick-actions", \{ method: "PUT", body: JSON\.stringify\(\{ actions \}\) \}\)/);
-  // A row: label · text · phases · key · reorder · delete.
-  assert.match(html, /<input class="label" maxlength="\$\{QuickActions\.MAX_LABEL\}"/);
-  assert.match(html, /<input class="text" maxlength="\$\{QuickActions\.MAX_TEXT\}"/);
-  assert.match(html, /QuickActions\.PHASES\.map\(\(ph\) =>/);
-  assert.match(html, /data-m="up"[\s\S]{0,200}data-m="down"[\s\S]{0,200}data-m="del"/);
-  assert.match(html, /<button type="button" class="qa gear" data-qa-cfg/);
-  assert.match(html, /if \(e\.target\.closest\("\[data-qa-cfg\]"\)\) return qaOpen\(\);/);
-  // Tokens only, no animation of its own.
-  assert.match(css, /#dlg-quick \{ width:min\(620px,94vw\); \}/);
-  assert.doesNotMatch(css.slice(css.indexOf("#dlg-quick {"), css.indexOf(".qa-row .phs input")), /animation|transition/);
-  assert.doesNotMatch(css.slice(css.indexOf(".sbar .qa-last"), css.indexOf(".sbar button.qa.gear")), /animation|transition/);
-});
-
-test("the phone has no quick-action strip — Focus only, Desk keeps the chips", () => {
-  assert.doesNotMatch(phone, /desk-quick-actions\.js/);
-  assert.doesNotMatch(phone, /\/desk\/quick-actions/);
-  assert.doesNotMatch(phone, /PQA|data-qa|class="qk qa"/);
 });

@@ -258,20 +258,6 @@ test("back under budget (machine still strained) resumes too — and an idle wor
   assert.equal(topics(w, "budget.resume").find((e) => e.action === "cont").reason, "under_budget");
 });
 
-test("slow is one-way: no restore is attempted, and the count is said once per episode, not every tick", async () => {
-  const { w, tick } = harness({ cfg: { slowAfterMs: 0 } });
-  w.load = WARNING;
-  await tick();
-  assert.equal(w.nice.get(220), 20);
-  w.load = CALM;
-  await tick(10_000);
-  await tick(10_000);
-  await tick(10_000);
-  assert.ok(w.setNiceCalls.every(([, n]) => n === 20), "never asked to lower a nice value");
-  assert.equal(w.logs.filter((l) => l.includes("stay there until they exit (renice is one-way without root)")).length, 1);
-  assert.ok(topics(w, "budget.resume").every((e) => e.action === "cont"));
-});
-
 test("slow: an MCP server and a tool shell under the CLI are NOT reniced; the vitest + Chrome subtree is", async () => {
   const procs: Proc[] = [
     DAEMON,

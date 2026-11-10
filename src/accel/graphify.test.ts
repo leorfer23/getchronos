@@ -493,23 +493,6 @@ test("orphan versionDir removed when writeManifest fails after promote", () => {
   // Simulate the build catch path: rmrf orphan after a failed manifest swap.
   fs.rmSync(installed.versionDir, { recursive: true, force: true });
   assert.equal(fs.existsSync(installed.versionDir), false);
-  // Source contract: build path must rmrf(installed.versionDir) on writeManifest failure.
-  const src = fs.readFileSync(new URL("./graphify.ts", import.meta.url), "utf8");
-  assert.match(src, /rmrf\(installed\.versionDir\)/);
-});
-
-test("route scope: build is requireAdmin; query checkScope before queryGraphify", () => {
-  const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  const buildIdx = api.indexOf('api.post("/repos/:id/accel/graphify/build"');
-  const queryIdx = api.indexOf('api.post("/repos/:id/accel/graphify/query"');
-  assert.ok(buildIdx > 0 && queryIdx > buildIdx);
-  const buildBlock = api.slice(buildIdx, queryIdx);
-  const queryBlock = api.slice(queryIdx, queryIdx + 600);
-  assert.match(buildBlock, /requireAdmin/);
-  assert.match(queryBlock, /checkScope\(req,\s*res,\s*repo\.workspace_id\)/);
-  const scopeAt = queryBlock.indexOf("checkScope");
-  const callAt = queryBlock.indexOf("queryGraphify");
-  assert.ok(scopeAt >= 0 && callAt > scopeAt, "checkScope must run before queryGraphify");
 });
 
 test("zero prompt tax still holds after graphify build/query APIs exist", () => {

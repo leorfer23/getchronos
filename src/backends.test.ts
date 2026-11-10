@@ -137,6 +137,7 @@ test("listBackends flags headless capability", () => {
   const list = listBackends();
   assert.equal(list.find((b) => b.name === "grok")?.supportsHeadless, true);
   assert.equal(list.find((b) => b.name === "claude-code")?.supportsHeadless, true);
+  for (const b of list) assert.ok(b.kind === "local" || b.kind === "cloud", `${b.name} has a kind (the picker badges from it)`);
 });
 
 test("grok buildArgs: -p + streaming-json + bypass, model/rules only when set", () => {

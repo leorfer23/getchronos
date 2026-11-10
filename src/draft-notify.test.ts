@@ -80,11 +80,3 @@ test("a draft is kept whole for the phone: the text verbatim, the newest wording
   clearRecentDrafts();
 });
 
-test("the draft list is the operator's only, and its words never ride the bus (every event lands in the activity table)", () => {
-  const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  assert.match(api, /api\.get\("\/drafts", requireAdmin, /);
-  assert.match(api, /bus\.publish\(\{ topic: "draft\.ready", session_id: s\.id, workspace_id: s\.workspace_id, draft_id: d\.id \}\);/);
-  const mc = fs.readFileSync(path.join(process.cwd(), "scripts/mc"), "utf8");
-  assert.match(mc, /if \(ev\.event === "draft"\) \{/);
-  assert.match(mc, /text: str\(input\.message \?\? input\.text\)\.slice\(0, 20000\) \|\| null/, "same fallbacks as the ledger's draft hash");
-});

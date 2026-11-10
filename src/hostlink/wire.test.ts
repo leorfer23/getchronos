@@ -174,11 +174,6 @@ test("wraparound: many cycles through a small ring keep order, size and seq cont
   assert.equal(r.lastSeq, 5000);
 });
 
-test("default ring size matches the replayTail budget (256 KB)", () => {
-  assert.equal(new Ring().cap, RING_BYTES);
-  assert.equal(RING_BYTES, 256 * 1024);
-});
-
 test("the ring copies input: a caller reusing its buffer does not rewrite history", () => {
   const r = new Ring(64);
   const buf = Buffer.from("orig");

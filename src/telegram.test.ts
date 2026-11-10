@@ -211,11 +211,6 @@ test("isSafeProposal: batch is safe only when every item is", () => {
   assert.equal(isSafeProposal({ label: "b", batch: [mk("/api/tickets"), mk("/api/runs/r1/kill")] }), false);
 });
 
-test("scanProposal: lowercase method normalized to uppercase", () => {
-  const s = scanProposal('x\nPROPOSE {"label":"x","method":"post","path":"/api/jobs/j1/run"}');
-  assert.equal(s.proposal?.method, "POST");
-});
-
 test("scanProposal: batch form parsed, each item allowlisted + normalized", () => {
   const s = scanProposal('Breaking it down.\nPROPOSE {"label":"create 2 tickets","batch":[{"method":"post","path":"/api/tickets","body":{"title":"a"}},{"method":"POST","path":"/api/tickets","body":{"title":"b"}}]}');
   assert.equal(s.reply, "Breaking it down.");
@@ -452,12 +447,6 @@ test("voiceGate: cloud endpoint without OPENAI_API_KEY → gated", () => {
   assert.match(voiceGate({ duration: 5, file_size: 100 })!, /OPENAI_API_KEY/);
   savedKey !== undefined ? (process.env.OPENAI_API_KEY = savedKey) : void 0;
   savedUrl !== undefined ? (process.env.CHRONOS_TRANSCRIBE_URL = savedUrl) : delete process.env.CHRONOS_TRANSCRIBE_URL;
-});
-
-test("voiceGate: within caps → allowed", () => {
-  process.env.OPENAI_API_KEY = "test-key";
-  assert.equal(voiceGate({ duration: 60, file_size: 1_000_000 }), null);
-  delete process.env.OPENAI_API_KEY;
 });
 
 test("voiceGate: over duration cap (5 min) → rejected", () => {

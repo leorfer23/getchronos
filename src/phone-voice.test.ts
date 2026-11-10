@@ -270,29 +270,6 @@ test("streamed text is cut into sentences as it arrives", () => {
   assert.deepEqual(JSON.parse(JSON.stringify("Hola. Todo bien? Sí: listo".split(T.SENTENCE_CUT))), ["Hola.", "Todo bien?", "Sí:", "listo"]);
 });
 
-test("the call unlocks sound inside the tap and survives what a phone does to a page", () => {
-  // Inside the gesture: the AudioContext and the one <audio> element (iOS refuses both afterwards).
-  assert.match(src, /V\.audio = V\.audio \|\| new Audio\(\);/);
-  assert.match(src, /V\.audio\.setAttribute\("playsinline", ""\); V\.audio\.src = silent\(\);/);
-  assert.match(src, /V\.ctx = new \(root\.AudioContext \|\| root\.webkitAudioContext\)\(\)/);
-  // Interruptions, background, a lost route.
-  assert.match(src, /s === "interrupted" \|\| s === "suspended"/);
-  assert.match(src, /track\.addEventListener\("ended"/);
-  assert.match(src, /track\.addEventListener\("mute"/);
-  assert.match(src, /addEventListener\("devicechange", onDevices\)/);
-  assert.match(src, /navigator\.wakeLock\.request\("screen"\)/);
-  assert.match(src, /document\.addEventListener\("visibilitychange", onVisibility\)/);
-  // A barge pauses, it does not throw away: an echo or a cough lets him carry on.
-  assert.match(src, /function bargeFalse\(\)[\s\S]*?V\.audio\.play\(\)/);
-  // Capture keeps every frame when the page is busy.
-  assert.match(src, /registerProcessor\('chronos-ear',P\)/);
-  assert.match(src, /createScriptProcessor\(2048, 1, 1\)/);
-  // Same doors as the Desk's call.
-  assert.match(src, /fetch\("\/api\/transcribe\?lang=" \+ C\.lang\(\)/);
-  assert.match(src, /fetch\("\/api\/speak"/);
-  assert.doesNotMatch(src, /SpeechRecognition|speechSynthesis/, "no cloud speech, no browser voices");
-});
-
 test("say() resolves only when the words were played to the end — first:true goes ahead of the line", () => {
   assert.match(src, /if \(o\.first\) V\.speakQ = items\.concat/);
   assert.match(src, /a\.onended = function \(\) \{ done\(true\); \};/);

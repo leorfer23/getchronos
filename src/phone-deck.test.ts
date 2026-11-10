@@ -251,14 +251,6 @@ test("a draft yes on the ledger needs the exact words: the phone's hash must equ
   assert.equal(calls.length, 0, "nothing recorded for words he did not hear");
 });
 
-test("the adapter prefers the ledger and falls back to today's endpoints", () => {
-  assert.match(src, /var led = await C\.api\("\/ledger\/queue"\)\.catch\(function \(\) \{ return null; \}\);/);
-  assert.match(src, /if \(led && Array\.isArray\(led\.items\)\)/);
-  assert.match(src, /C\.api\("\/asks\?status=open"\)/);
-  assert.match(src, /C\.api\("\/drafts"\)/);
-  assert.match(src, /decisionsFor\(s\)/);
-});
-
 // ── a spoken yes on something irreversible must not be easy to trigger ─────────────────────────────
 
 // One card of every kind, written with neutral agent text (no yes-word in it): any yes-word found in

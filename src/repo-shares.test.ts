@@ -276,24 +276,3 @@ describe("agent awareness", () => {
   });
 });
 
-describe("API surface (source contract)", () => {
-  const api = fs.readFileSync(path.join(import.meta.dirname, "api.ts"), "utf8");
-  test("every share route is admin-gated", () => {
-    for (const route of ['api.get("/repos/:id/shares", requireAdmin', 'api.post("/repos/:id/shares", requireAdmin, validate(ShareRepoSchema)', 'api.delete("/repos/:id/shares/:workspaceId", requireAdmin'])
-      assert.ok(api.includes(route), route);
-  });
-  test("sharing with the owner is a 400, an unknown repo/workspace a 404", () => {
-    const at = api.indexOf('api.post("/repos/:id/shares"');
-    const body = api.slice(at, api.indexOf('api.delete("/repos/:id/shares/', at));
-    assert.match(body, /status\(404\)\.json\(\{ error: "repo not found" \}\)/);
-    assert.match(body, /status\(404\)\.json\(\{ error: "workspace not found" \}\)/);
-    assert.match(body, /ws\.id === repo\.workspace_id\) return res\.status\(400\)/);
-    assert.match(body, /workspace\.changed/);
-  });
-  test("the worktree claim resolves through findClaimRepo (owned ∪ shared), not repos.list", () => {
-    const at = api.indexOf('api.post("/sessions/:id/worktree"');
-    const body = api.slice(at, api.indexOf("api.get(\"/worktrees\"", at));
-    assert.match(body, /checkScope\(req, res, sess\.workspace_id\)/);
-    assert.match(body, /findClaimRepo\(sess\.workspace_id, ref\)/);
-  });
-});

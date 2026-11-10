@@ -129,8 +129,6 @@ test("off (the default), POST /agent does not hand anything to the front; files 
   assert.equal(T.talkerOn(), true);
   assert.equal(frontTakes({}, T.talkerOn()), true);
   assert.equal(frontTakes({ attachments: [{ id: "a" }] }, true), false, "a line with files stays on today's path");
-  const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-  assert.match(api, /if \(frontTakes\(req\.body, talkerOn\(\)\)\) \{/, "POST /agent asks the front only through frontTakes");
 });
 
 // ───────────────────────────── engines + credentials ─────────────────────────────

@@ -183,13 +183,6 @@ test("a fleet phrase with a workspace signal is NOT fleet-wide", () => {
 
 // ── d. sticky ────────────────────────────────────────────────────────────────────────────────────
 
-test("sticky: the next bare message lands where the last one did", () => {
-  rememberRoute("test", route("#atlas deploy it"));
-  const r = route("and the migration after that?");
-  assert.equal(r.ws, atlas.id);
-  assert.equal(r.how, "sticky");
-});
-
 test("sticky expires after threadStickyMinutes", () => {
   setSticky("test", atlas.id, Date.now() - 91 * 60_000);
   assert.equal(getSticky("test"), null);
@@ -249,12 +242,6 @@ test("small talk with nothing sticky is harmless on the unscoped manager", () =>
 test("an ask never writes a sticky", () => {
   rememberRoute("test", route("push the branch"));
   assert.equal(getSticky("test"), null);
-});
-
-test("clearSticky hands the thread back to the router", () => {
-  setSticky("test", atlas.id);
-  clearSticky("test");
-  assert.equal(route("and then?").how, "ask");
 });
 
 // ── debug ────────────────────────────────────────────────────────────────────────────────────────

@@ -197,54 +197,14 @@ test("the bus: an event for another client, or for another client's Robert, neve
   assert.equal(ok({ topic: "host.online" }), true);
 });
 
+// The client lock is a privacy wall for a shared screen, and the page applies it at two doors only:
+// every api() answer and every bus event. Minimum tokens, because the wiring is the contract.
 test("the page: the lens sits on api() and on the bus — not on any one surface", () => {
-  assert.match(html, /<script src="\/desk-scope\.js"><\/script>/);
-  assert.match(html, /const LOCK = DeskScope\.get\(\);/);
-  // Every answer, every method: a PATCH can hand a whole host or settings page back.
-  assert.match(html, /\.then\(\(d\) => DeskScope\.lens\(p, d, LOCK\)\);/);
-  assert.match(html, /let e; try \{ e = JSON\.parse\(ev\.data\); \} catch \{ return; \}\n\s*if \(!DeskScope\.passes\(e, LOCK\)\) return;/);
-  // The modules the page hands its `api` to are covered by that one line.
-  assert.match(html, /AskCard\.init\(\{ api, /);
-  assert.match(html, /DeskCockpit\.init\(\{\n\s*el: qs\("#cockpit"\), api, /);
-  assert.match(html, /window\.DeskWidgets = \{ S, api, /);
-});
-
-test("the switcher is in the Mac menu bar — never a picker or a badge inside the shared window", () => {
-  for (const gone of [/id="lock"/, /lockchip/, /id="menu-lock"/, /id="btn-lock"/, /🔒/]) assert.doesNotMatch(html, gone);
-  // The menu calls this; every change reloads, so nothing drawn can outlive a lock.
-  assert.match(html, /window\.deskLock = async \(id\) => \{/);
-  assert.match(html, /DeskScope\.set\(w, i\);\n\s*location\.reload\(\);/);
-  // Every workspace's name goes around the lens and straight to the menu bar — a raw fetch, not api().
-  assert.match(html, /const lockList = \(\) => fetch\("\/api\/workspaces", /);
-  assert.match(html, /bridge\(\)\.postMessage\(\{ type: "workspaces", list: all\.map\(\(w\) => \(\{ id: w\.id, name: w\.name \}\)\), lock: LOCK \? LOCK\.id : null \}\)/);
-  // Altitude is a different page with every client on it.
-  assert.match(html, /if \(LOCK\) qs\("#lnk-altitude"\)\.hidden = true;/);
-  assert.match(html, /\.menu \[hidden\] \{ display:none; \}/);
-
-  const swift = fs.readFileSync(path.join(process.cwd(), "desktop/app.swift"), "utf8");
-  assert.match(swift, /let wsMenu = NSMenu\(title: "Workspace"\)/);
-  assert.match(swift, /add\("All Workspaces", id: nil, on: lock == nil\)/);
-  assert.match(swift, /case "workspaces":\n\s*workspaceMenu\.fill\(/);
-  assert.match(swift, /web\.evaluateJavaScript\("window\.deskLock && window\.deskLock\(\\\(arg\)\); void 0;"\)/);
-});
-
-test("the page: locked, Robert is this client's and his own memory stays shut", () => {
-  assert.match(html, /if \(LOCK\) \{ body\.ws = LOCK\.id; body\.route = false; \}/);
-  assert.match(html, /OV\.sticky = LOCK \? LOCK\.id : sticky\?\.sticky\?\.ws \?\? null;/);
-  assert.match(html, /Promise\.all\(\[api\("\/briefs"\), LOCK \? null : api\("\/agents\/robert\/memory"\)\]\)/);
-  assert.match(html, /\(LOCK \? "" : `<button data-tab="robert"/);
-});
-
-test("the page: a one-client view never overwrites what was saved for all of them", () => {
-  assert.match(html, /if \(LOCK\) return render\(\);\n\s*\/\/ A row you removed from Recent must stay removed/);
-  assert.match(html, /if \(!LOCK\) localStorage\.setItem\("jobs-ws", J\.ws\);/);
-  assert.match(html, /if \(!LOCK\) localStorage\.setItem\("mc-plan-ws"/);
-  assert.match(html, /if \(!LOCK\) localStorage\.setItem\("mc-start-off"/);
+  assert.match(html, /DeskScope\.lens\(p, d, LOCK\)/);
+  assert.match(html, /if \(!DeskScope\.passes\(e, LOCK\)\) return;/);
 });
 
 test("widgets: the card asks for one client and is not drawn unless the reader says it complied", async () => {
-  assert.match(html, /const q = \[w\.q, LOCK \? "ws=" \+ encodeURIComponent\(LOCK\.id\) : ""\]\.filter\(Boolean\)\.join\("&"\);/);
-  assert.match(html, /if \(LOCK && r\.ws !== LOCK\.id\) \{ w\.body\.innerHTML = `<div class="werr">hidden while the Desk shows one client<\/div>`; return; \}/);
   // Every card on the board holds itself to `q.ws` — one that does not is blank on a shared screen.
   assert.deepEqual(WIDGETS.filter((w) => !w.scoped).map((w) => w.name), []);
   for (const w of WIDGETS) {

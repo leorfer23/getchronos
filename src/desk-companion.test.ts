@@ -3,11 +3,9 @@
  * and everything that has happened since — so the operator can stay in Terminal mode without losing
  * the thread.
  *
- * Two halves are pinned here. The derivation (static/desk-companion.js) is run in a vm, the way
- * term-links.js is, because it is a plain script the page loads rather than a module it imports —
- * the page and these assertions therefore read the SAME source, with nothing to keep in sync. The
- * wiring (static/desk.html) is read as text, because desk.html has no build step and nothing else
- * would notice a regression.
+ * The derivation (static/desk-companion.js) is run in a vm, the way term-links.js is, because it is
+ * a plain script the page loads rather than a module it imports — the page and these assertions
+ * therefore read the SAME source, with nothing to keep in sync.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -138,95 +136,6 @@ test("marks are bounded: the oldest are handed back to be disposed", () => {
   assert.equal(list.length, 500);
   assert.deepEqual(dropped.map((d: any) => d.id), [0, 1, 2]);
   assert.deepEqual(TC.trimMarks([{ id: 0 }], 500), [], "under the cap nothing is dropped");
-  assert.match(html, /TermCompanion\.trimMarks\(p\.marks, TermCompanion\.MAX_MARKS\)/);
-  assert.match(html, /for \(const d of TermCompanion\.trimMarks[\s\S]{0,80}d\.mk\.dispose\(\)/);
-});
-
-// ── the page ────────────────────────────────────────────────────────────────────────────────────
-
-test("the rail is a layer of Terminal mode, and the pane shrinks for it", () => {
-  assert.match(html, /<script src="\/desk-companion\.js"><\/script>/, "the page and this test read one file");
-  assert.match(html, /<aside class="comp" id="comp">/);
-  assert.match(css, /body\.mode-term\.comp-on \.comp \{ display:flex; \}/);
-  // Shrink, never overlay: only #term's right edge moves, and its own ResizeObserver refits the pty
-  // 60ms later — nothing here resizes a pty directly, so nothing can do it under a drag.
-  assert.match(css, /body\.mode-term\.comp-on \.term \{ right:var\(--comp-w\); \}/);
-  assert.match(css, /body\.mode-term\.comp-on\.comp-min \.term \{ right:8px; \}/);
-  assert.doesNotMatch(html, /compSync|sendSize\(\)[^;]*comp/, "the companion never resizes a pty itself");
-  for (const id of ["comp-strip", "comp-ws", "comp-goal", "comp-when", "comp-prompt", "comp-now", "comp-tl", "comp-new", "gut", "ticker", "askbar", "h-comp"])
-    assert.match(html, new RegExp(`id="${id}"`), id);
-});
-
-test("collapsed is an 8px strip of phase colour, and it remembers", () => {
-  assert.match(css, /body\.comp-min \.comp \{ width:8px; \}/);
-  assert.match(css, /body\.comp-min \.comp-strip \{ display:flex; \}/);
-  assert.match(html, /qs\("#comp-strip"\)\.onclick = \(\) => compMin\(false\);/);
-  // Nothing keeps a hidden timeline up to date, so opening it back up clears the render signature.
-  assert.match(html, /C\.min = min === undefined \? !C\.min : !!min;[\s\S]{0,120}C\.sig = "";\s*compRender\(\);/);
-  assert.match(html, /if \(!C\.min\) compRows\(s\);/);
-  assert.match(html, /localStorage\.setItem\("desk-companion-min", C\.min \? "1" : "0"\)/);
-  assert.match(html, /min: localStorage\.getItem\("desk-companion-min"\) === "1"/);
-});
-
-test("on by default, off by ⌘⇧T or the header icon, and the pty never sees the chord", () => {
-  assert.match(html, /on: localStorage\.getItem\("desk-companion"\) !== "0"/, "default ON");
-  assert.match(html, /localStorage\.setItem\("desk-companion", C\.on \? "1" : "0"\)/);
-  assert.match(html, /const compKey = \(e\) => \(e\.metaKey \|\| e\.ctrlKey\) && e\.shiftKey && !e\.altKey && e\.key\.toLowerCase\(\) === "t";/);
-  assert.match(html, /if \(compKey\(e\)\) \{ e\.preventDefault\(\); return compToggle\(\); \}/);
-  assert.match(html, /fontKey\(e\) !== null \|\| jumpKey\(e\) \|\| modeKey\(e\) \|\| compKey\(e\)/, "the chord is swallowed before the pty");
-  assert.match(html, /qs\("#h-comp"\)\.onclick/);
-});
-
-test("the composer keeps the keyboard: every companion click hands it straight back", () => {
-  assert.match(html, /function compFocusBack\(\) \{ if \(S\.mode === "term"\) focusSay\(\); \}/);
-  // mousedown is where focus moves, so that is where it is refused.
-  assert.match(html, /for \(const sel of \["#askbar", "#comp", "#ticker", "#gut"\]\) qs\(sel\)\.addEventListener\("mousedown"[\s\S]{0,120}e\.preventDefault\(\)/);
-  for (const re of [/compScrollTo\(Number\(row\.dataset\.at\) \|\| 0\);\s*compFocusBack\(\);/, /compCopy\(f\.dataset\.file\);\s*compFocusBack\(\);/])
-    assert.match(html, re);
-});
-
-test("the ask bar answers through the one door, and does not move the stage", () => {
-  // Same body as every other option chip on the Desk: keys relative to the cursor, via /input.
-  assert.match(html, /if \(o && p\?\.options\) \{ const opt = p\.options\[Number\(o\.dataset\.aopt\)\]; if \(opt\) answer\(s\.id, optionBody\(opt\)\); return compFocusBack\(\); \}/);
-  assert.match(html, /if \(y\) \{ answer\(s\.id, \{ text: y\.dataset\.ayn, enter: true \}\); return compFocusBack\(\); \}/);
-  assert.match(html, /const optionBody = \(o\) => \(\{ keys: \[\.\.\.Array\(Math\.abs\(o\.offset\)\)\.fill\(o\.offset > 0 \? "down" : "up"\), "enter"\] \}\);/);
-  assert.match(html, /api\("\/sessions\/" \+ id \+ "\/input", \{ method: "POST", body: JSON\.stringify\(\{ \.\.\.body, by: "operator" \}\)/);
-  // Only on the three phases that are actually waiting on a person, and only with a parsed prompt.
-  assert.match(html, /const COMP_ASK_PHASES = new Set\(\["decide", "your_turn", "blocked"\]\);/);
-  assert.match(html, /return !!p && p\.kind !== "turn" && COMP_ASK_PHASES\.has\(phaseOf\(s\)\);/);
-  // One question on screen: while this bar owns the ask, #sbar draws the three moves and nothing else.
-  assert.match(html, /const ask = compAskOwns\(s\) \|\| inFocus \? null : askOf\(s\);/);
-  assert.doesNotMatch(html, /data-aopt[\s\S]{0,200}advance\(/, "answering here does not walk to the next terminal");
-});
-
-test("chapter marks are xterm markers, drawn only where the viewport is", () => {
-  assert.match(html, /mk = p\.term\.registerMarker\(0\)/);
-  assert.match(html, /if \(line < top \|\| line >= top \+ rows\) continue;/);
-  // xterm fires onRender constantly; the gutter only moves when the viewport does.
-  assert.match(html, /const sig = b\.viewportY \+ ":" \+ b\.baseY \+ ":" \+ p\.marks\.length;\s*if \(sig === C\.gutSig\) return;/);
-  assert.match(html, /term\.onScroll\(\(\) => compGutSoon\(\)\);/);
-  assert.match(html, /for \(const m of p\.marks \|\| \[\]\) \{ try \{ m\.mk\.dispose\(\); \} catch \{\} \}/, "unmounting a pane drops its markers");
-});
-
-test("one render per frame, appended not rebuilt", () => {
-  assert.match(html, /function compSoon\(\) \{ if \(C\.raf\) return; C\.raf = requestAnimationFrame\(\(\) => \{ C\.raf = 0; compRender\(\); \}\); \}/);
-  assert.match(html, /while \(i < rows\.length && i < kids\.length && kids\[i\]\.dataset\.k === compKeyOf\(rows\[i\]\)\) i\+\+;/);
-  // Unfolding a Read run changes nothing about the row's identity, so the key carries the fold too.
-  assert.match(html, /const compKeyOf = \(r\) => r\.k \+ \(r\.kind === "reads" && C\.open\.has\(r\.k\) \? "\+open" : ""\);/);
-  assert.match(html, /const sig = F\.events\.length \+ ":" \+ C\.chapters\.length \+ ":" \+ C\.open\.size[\s\S]{0,60}if \(sig === C\.sig\) return;/);
-  assert.match(html, /const setTxt = \(el, t\) => \{ if \(el && el\.textContent !== t\) el\.textContent = t; \};/);
-  // The story feed is loaded in Terminal mode too — openStory runs on every select, whatever the mode.
-  assert.match(html, /compOpen\(id\);\s*decisionsLoad\(byId\(id\), true\);\s*const req = \+\+F\.req;/);
-  assert.match(html, /if \(e\.session_id === C\.id\) compChapter\(e\.status\.phase, e\.status\.line, e\.status\.since\);/);
-});
-
-test("tokens only, and no clock of its own", () => {
-  const block = css.slice(css.indexOf("── the companion"), css.indexOf("/* A small menu")).replace(/\/\*[\s\S]*?\*\//g, "");
-  assert.doesNotMatch(block, /#[0-9a-fA-F]{3,8}\b/, "no literal colours in the companion's CSS");
-  assert.doesNotMatch(block, /animation|transition|@keyframes/);
-  assert.match(html, /const COMP_PH_COLOR = \{[\s\S]*?blocked: "var\(--danger\)"[\s\S]*?working: "var\(--p-work\)"/);
-  // The elapsed clock rides the page's 1Hz blink, like every other indicator.
-  assert.match(html, /document\.body\.classList\.toggle\("blink"\); if \(compLive\(\)\) compSoon\(\);/);
 });
 
 test("a write to workspace memory is the one tool call that becomes a timeline row", () => {
@@ -241,32 +150,6 @@ test("a write to workspace memory is the one tool call that becomes a timeline r
     ["memory", "Noted: flyway lives in db/migration", "session-learnings"],
     ["memory", "Added to memory-index: - one more", "memory-index"],
   ]);
-  assert.match(html, /memory: "🧠"/);
-  assert.match(html, /row\.classList\.contains\("memory"\)[\s\S]{0,160}openMemory\(/);
-});
-
-test("the PR and the doc are pinned above the timeline, not inside it", () => {
-  // The rail asks the daemon, because only the daemon can ask GitHub whether a PR landed.
-  assert.match(html, /await api\("\/sessions\/" \+ id \+ "\/artifacts"/);
-  assert.match(html, /if \(C\.id !== id\) return;/, "a slow answer must not land on another terminal's rail");
-  // Rate: the 1s tick drives it, the staleness check paces it — no timer of its own.
-  assert.match(html, /const PIN_EVERY_MS = 30000;/);
-  assert.match(html, /if \(!force && Date\.now\(\) - C\.pinAt < PIN_EVERY_MS\) return;/);
-  assert.match(html, /compTop\(s\); compNow\(s\); compAsk\(s\); compTicker\(s\); compStrip\(\); compPins\(s\);/);
-  // ✓ merged / ⧗ still yours to merge — and an unknown state is never drawn as merged.
-  assert.match(html, /const PIN_MARK = \{ merged: "✓", open: "⧗", closed: "✕" \};/);
-  assert.match(html, /const st = p\.state \|\| "open";/);
-  // A doc is a link when it is hosted and a path to copy when it is on this machine.
-  assert.match(html, /data-pin-path="\$\{esc\(d\.path\)\}"/);
-  assert.match(html, /const d = e\.target\.closest\("\[data-pin-path\]"\);\s*if \(d\) compCopy\(d\.dataset\.pinPath\);/);
-  // Selecting another terminal clears the pins with everything else the rail holds.
-  assert.match(html, /C\.pins = \{ prs: \[\], docs: \[\], pages: \[\] \}; C\.pinAt = 0; C\.pinSig = "";/);
-  // A page it published opens in the Desk's viewer (ArtifactView answers [data-afopen]), and a bus event
-  // about this terminal's page refreshes the pins at once instead of on the next poll.
-  assert.match(html, /function pinPageHtml\(a\)[\s\S]{0,400}data-afopen="\$\{esc\(a\.id\)\}"/);
-  assert.match(html, /e\.session_id === C\.id[^\n]*compPinsLoad\(C\.id, true\)/);
-  // A page link printed in the terminal opens in place, whatever host it names.
-  assert.match(html, /\/desk#artifact=\(\[0-9a-f-\]\{8,36\}\)\$\/\.exec\(uri\);\s*if \(page\) return ArtifactView\.open\(page\[1\]\);/);
 });
 
 test("a PR the terminal only printed is read off the pane, bounded so a frame never pays for the whole day", () => {
@@ -276,17 +159,13 @@ test("a PR the terminal only printed is read off the pane, bounded so a frame ne
     "https://example.com/not-a-pr",
     "https://github.com/o/r/tree/main",
   ])), ["https://github.com/o/r/pull/7"]);
-  assert.match(html, /const PIN_SCAN_ROWS = 400, PIN_SCAN_DEEP = 3000;/);
-  assert.match(html, /TermLinks\.scan\(b, p\.term\.cols, Math\.max\(0, to - \(deep \? PIN_SCAN_DEEP : PIN_SCAN_ROWS\)\), to\)/);
-  // Deep sweep once, when the terminal comes on stage (pinAt still 0); the newest rows after that.
-  assert.match(html, /const seen = compScreenPrs\(!C\.pinAt\);/);
-  assert.match(html, /"\/artifacts" \+ \(seen\.length \? "\?urls=" \+ encodeURIComponent\(seen\.join\(","\)\) : ""\)/);
 });
 
-test("Terminal mode types in the composer, not the xterm: local until enter, bare keys pass through", () => {
-  assert.match(html, /body\.mode-focus \.composer\.live, body\.mode-term \.composer\.live \{ display:flex; \}/);
-  assert.match(html, /if \(S\.mode === "term"\) setTimeout\(focusSay, 60\);/);
-  assert.match(html, /setTimeout\(focusSay, 30\);/, "mounting the pane does not steal the keyboard");
-  assert.match(html, /const SAY_KEYS = \{ Enter: "enter", Escape: "esc", ArrowUp: "up", ArrowDown: "down" \};/);
-  assert.match(html, /if \(S\.mode === "term" && !say\.value && S\.active && SAY_KEYS\[e\.key\][^\n]*\n\s*e\.preventDefault\(\); e\.stopPropagation\(\);\n\s*return input\(S\.active, \{ key: SAY_KEYS\[e\.key\] \}\);/);
+// The one rule kept as text, because the text is the rule (CLAUDE.md "Desk CSS"): the companion's
+// CSS uses theme tokens and runs no animation of its own.
+test("the companion's CSS: theme tokens only, no animation or transition", () => {
+  const block = css.slice(css.indexOf("── the companion"), css.indexOf("/* A small menu")).replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.ok(block.length > 200, "the companion's CSS block is where this test looks for it");
+  assert.doesNotMatch(block, /#[0-9a-fA-F]{3,8}\b/, "no literal colours in the companion's CSS");
+  assert.doesNotMatch(block, /animation|transition|@keyframes/);
 });

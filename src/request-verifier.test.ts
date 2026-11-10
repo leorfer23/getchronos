@@ -349,7 +349,11 @@ test("the second reader is a read-only run: it never parks on an ask, and cannot
   const run = db.prepare("SELECT * FROM runs WHERE job_id = ?").get(job.id) as any;
   // The reader asks something mid-run — exactly what a writing run would park on.
   asks.create({ run_id: run.id, job_id: job.id, question: "should I also check the docs?" });
-  const out = await pending;
+  // The daemon's own timers are unref'd, so while the run is held or between its events nothing may
+  // keep this test's event loop alive: on CI node cancelled the await before it settled ("Promise
+  // resolution is still pending but the event loop has already resolved"). Hold it open here.
+  const keepAlive = setInterval(() => {}, 1000);
+  const out = await pending.finally(() => clearInterval(keepAlive));
   assert.equal(out.status, "success", "finished, not paused");
   assert.notEqual(runs.get(run.id)!.status, "paused");
 });

@@ -103,11 +103,3 @@ test("mime by extension, and a screenshot tool's saved path survives into the fe
   assert.equal(describeTool("mcp__chrome__take_screenshot", {}), "mcp__chrome__take_screenshot");
 });
 
-test("the Desk draws a Media section in the rail and refreshes it after a drop", () => {
-  const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
-  assert.match(html, /<div class="comp-media" id="comp-media" hidden>/);
-  assert.match(html, /compPins\(s\); compMedia\(s\);/);
-  assert.match(html, /window\.deskMediaDropped\?\.\(id\);\s*toast\("dropped → "/);
-  assert.match(html, /window\.deskMediaDropped = \(id\) => \{ if \(id === C\.id\) setTimeout\(\(\) => compMediaLoad\(id, true\), 1500\); \};/);
-  assert.match(html, /"\/api\/sessions\/" \+ id \+ "\/media\/file\?path=" \+ encodeURIComponent\(m\.path\), \{ headers: \{ "x-mc-admin": TOKEN \} \}/);
-});

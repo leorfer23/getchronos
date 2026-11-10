@@ -19,6 +19,21 @@ test("migrate throws when DB version is newer than binary", () => {
   db.close();
 });
 
+test("an empty DB gets every migration, once each, in version order", () => {
+  const db = new Database(":memory:");
+  const seen: number[] = [];
+  const log = console.log;
+  console.log = (msg?: unknown, ...rest: unknown[]) => {
+    const m = /^\[chronos\] migration (\d+) applied/.exec(String(msg));
+    if (m) seen.push(Number(m[1])); else log(msg, ...rest);
+  };
+  try { migrate(db); } finally { console.log = log; }
+  assert.deepStrictEqual(seen, MIGRATIONS.map((m) => m.version));
+  assert.deepStrictEqual([...seen].sort((a, b) => a - b), seen, "versions ascend");
+  assert.strictEqual(db.pragma("user_version", { simple: true }), LATEST_VERSION);
+  db.close();
+});
+
 // Apply every migration up to (and including) `ceiling`, honoring user_version like migrate() does —
 // lets a test seed rows at a pre-migration schema shape, then apply exactly one later migration.
 function applyUpTo(db: Database.Database, ceiling: number): void {

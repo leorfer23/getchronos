@@ -130,11 +130,6 @@ describe("1. per-Lead worker budget vs workspace seat cap", () => {
 });
 
 describe("2. mc session new signing", () => {
-  test("scripts/mc signs agent:<MC_SESSION id8> when MC_AGENT_NAME is unset", () => {
-    const mc = fs.readFileSync(path.join(process.cwd(), "scripts/mc"), "utf8");
-    assert.match(mc, /agent:\$\{process\.env\.MC_SESSION\.slice\(0, 8\)\}/);
-    assert.match(mc, /Without MC_AGENT_NAME, a bare `mc session new` used to sign "operator"/);
-  });
 });
 
 describe("3. cost rollup", () => {
@@ -188,15 +183,6 @@ describe("4. adopt", () => {
     assert.equal(leadEvents.recent(old.id, { all: true }).length, 0);
   });
 
-  test("/leads/me/adopt is leadGate-scoped and refuses a live target", () => {
-    const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
-    const at = api.indexOf('api.post("/leads/me/adopt"');
-    assert.ok(at > 0);
-    const body = api.slice(at, at + 900);
-    assert.ok(body.includes("leadGate(req, res)"));
-    assert.ok(body.includes("that Lead is still live"));
-    assert.ok(body.includes("lead.adopted"));
-  });
 });
 
 describe("5. orphan stop context for Robert", () => {

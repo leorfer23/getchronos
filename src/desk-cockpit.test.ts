@@ -148,17 +148,7 @@ test("today's follow-ups: due today or overdue, or being worked — never tomorr
   assert.deepEqual(Array.from(rows, (r: any) => r.id), ["over", "late", "live"]);
 });
 
-test("the Desk carries the panel and the full-screen toggle; the Ask widget exposes what the panel reuses", () => {
-  const html = read("static/desk.html");
-  assert.match(html, /<script src="\/desk-cockpit\.js"><\/script>/);
-  assert.match(html, /<div class="ck" id="cockpit" hidden><\/div>/);
-  assert.match(html, /id="chat-full"/);
-  assert.match(html, /desk-chat-full/, "full screen is remembered per viewer");
-  // Reply-to (#74) and the Ask cards (#75) keep their anchors inside the reorganised pane.
-  for (const id of ["chat-log", "chat-att", "chat-ask", "chat-input"]) assert.match(html, new RegExp(`id="${id}"`));
-  // Questions live in their terminals now: no "? N" list in the chat head, no Questions section here.
-  for (const id of ["askpop", "chat-asks"]) assert.doesNotMatch(html, new RegExp(`id="${id}"`));
-  assert.doesNotMatch(read("static/desk-cockpit.js"), /"Questions"/);
+test("the Ask widget exposes what the cockpit panel reuses", () => {
   const ask: any = {};
   vm.runInNewContext(read("static/ask-card.js"), ask);
   for (const k of ["items", "onChange", "host", "wire", "answer"]) assert.equal(typeof ask.AskCard[k], "function", k);

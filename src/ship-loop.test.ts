@@ -358,7 +358,3 @@ test("auto-merge workspaces are never offered — they merge their own", async (
   assert.equal(calls.opened.length, 0);
 });
 
-test("a Ship terminal's ask always routes to the operator (api.ts POST /asks)", () => {
-  const api = fs.readFileSync(path.join(import.meta.dirname, "api.ts"), "utf8");
-  assert.match(api, /const route = isShipTerminal\(sess\)\s*\?\s*"operator"/);
-});

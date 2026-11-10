@@ -147,16 +147,3 @@ test("one goal per line: the box the operator types into is the queue", () => {
   assert.deepEqual(splitGoalText(null), []);
 });
 
-test("the Desk and the skill both carry the queue", () => {
-  const desk = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
-  // The dialog takes several, the header counts them, the card lets you tick one.
-  assert.match(desk, /one per line = several, worked in order/);
-  assert.match(desk, /goals_total > 1/);
-  assert.match(desk, /data-gtick/);
-  assert.match(desk, /goal_done_all/, "closing a card ticks the whole queue, not just the one showing");
-  // Every claude terminal is handed this file (installMcSkill) — it is where an agent learns that a
-  // tick is a step, not the end.
-  const skill = fs.readFileSync(path.join(process.cwd(), "skills/mission-control/SKILL.md"), "utf8");
-  assert.match(skill, /mc goal list/);
-  assert.match(skill, /mc goal add/);
-});

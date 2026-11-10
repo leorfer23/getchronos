@@ -83,8 +83,8 @@ test("rejects retired model / unknown backend before creating a run", () => {
   assert.equal(runs.list(unknown.id).length, 0);
 });
 
-// The gate itself (src/backends/index.ts validateSpawnTarget) is unit-tested in
-// src/backends/cursor-cloud.test.ts. This covers the wiring: dispatch() must actually derive the
+// The gate (src/backends/index.ts validateSpawnTarget) is covered here, through dispatch(), which
+// is where it matters: dispatch() must actually derive the
 // job's repo (job → ticket → repo, same two-step as runner.ts) and pass it through, or the gate
 // never fires and a cursor-cloud job against a non-GitHub repo launches happily.
 function ticketedJob(over: { git_remote: string | null; delivery: "commit" | "pr" }) {

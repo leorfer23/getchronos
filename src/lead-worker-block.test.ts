@@ -67,19 +67,3 @@ test("agentBlock reads agents/_blocks, fills what the closed var list cannot, an
   assert.throws(() => agentBlock("lead-worker"), /unknown placeholder \{\{lead_id8\}\}/);
 });
 
-test("terminal.ts folds it in ahead of the reporting contract, and exports the Lead's id to the worker", () => {
-  const src = fs.readFileSync(path.join(process.cwd(), "src/terminal.ts"), "utf8");
-  // Persona (a Lead) → the Lead block (a worker) → the inbox box (auto-opened) → FOCUS_CONTRACT: who you are before how you report.
-  assert.match(src, /\[row\.role === "lead" \? agentPrompt\("lead"\) : null, leadBlock, isInboxAuto\(row\) \? INBOX_AUTO_RULES : null, FOCUS_CONTRACT, hostBlock, browserBlock\(\), artifactChoiceBlock\(backend\.name, opts\.workspace_id\), ctx, rel\]/);
-  // Backends with no system-prompt channel (cursor) get it in the seed, or their workers would be
-  // the only ones never told they have a Lead.
-  assert.match(src, /const pre = \[leadBlock, isInboxAuto\(row\) \? INBOX_AUTO_RULES : null, FOCUS_CONTRACT, hostBlock, browserBlock\(\), ctx\]\.filter\(Boolean\)\.join\("\\n\\n"\);/);
-  // An id, not a credential: `mc` reads it only to know it has a Lead to ask.
-  assert.match(src, /MC_LEAD_ID: row\.lead_id/);
-});
-
-test("`mc` routes a worker's ask-robert to its Lead off that env var, and --robert goes over its head", () => {
-  const mc = fs.readFileSync(path.join(process.cwd(), "scripts/mc"), "utf8");
-  assert.match(mc, /const toLead = \(asLead \|\| !!process\.env\.MC_LEAD_ID\) && !opt\.robert && !toOperator;/);
-  assert.match(mc, /\.\.\.\(toOperator \? \{ route: "operator" \} : toLead \? \{ route: "lead" \} : \{\}\)/);
-});

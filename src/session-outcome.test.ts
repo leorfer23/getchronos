@@ -18,7 +18,6 @@ import { resolve, setProgress, statusOf } from "./term-status.js";
 process.env.CHRONOS_OUTCOMES = fs.mkdtempSync(path.join(os.tmpdir(), "outcomes-"));
 const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
 const MC = path.join(import.meta.dirname, "..", "scripts", "mc");
-const api = fs.readFileSync(path.join(import.meta.dirname, "api.ts"), "utf8");
 
 beforeEach(() => {
   db.exec("DELETE FROM asks; DELETE FROM sessions; DELETE FROM workspaces;");
@@ -47,17 +46,8 @@ test("ship is stored at spawn and patchable; null reads as ask everywhere", () =
   assert.equal(sessions.get(b.id)!.ship, "merge");
 });
 
-test("only the operator grants ship — at spawn and on the card", () => {
-  // The PATCH refuses a workspace/Lead caller BEFORE writing anything, and the spawn route drops the
-  // field unless the admin token came with it: an agent cannot widen its own permission.
-  assert.match(api, /if \(ship !== undefined && !admin\) return res\.status\(403\)/);
-  const patchAt = api.indexOf('api.patch("/sessions/:id"');
-  const gate = api.indexOf("if (ship !== undefined && !admin)", patchAt);
-  const firstWrite = api.indexOf("sessionGoals.patch(", patchAt);
-  assert.ok(gate > patchAt && gate < firstWrite, "the gate runs before the first write");
-  assert.match(api, /if \(!tokenOk\(req\.get\("x-mc-admin"\), CONFIG\.adminToken\)\) delete body\.ship;/);
-  // A change reaches the running agent as a typed line, because its first prompt predates it.
-  assert.match(api, /sendInput\(s\.id, \{ text: shipLine\(ship \?\? "ask"\), enter: true \}, "operator"\)/);
+test("a ship change reaches the agent as one plain line", () => {
+  // Who may grant ship at all is route-guards.test.ts.
   assert.match(shipLine("deploy"), /merge it and deploy/);
   assert.match(shipLine("merge"), /Do NOT deploy/);
   assert.match(shipLine("ask"), /stop and ask/);
@@ -119,8 +109,6 @@ test("Focus reads every ask a terminal filed, open and answered, oldest first", 
   asks.create({ session_id: other.id, route: "robert", question: "not mine" });
   const rows = asks.forSession(s.id);
   assert.deepEqual(rows.map((r) => r.id), [a.id, b.id]);
-  assert.match(api, /api\.get\("\/sessions\/:id\/decisions"/);
-  assert.match(api, /if \(!checkScope\(req, res, s\.workspace_id\)\) return;\s*const own = asks\.forSession\(s\.id\);/, "scoped like every other per-terminal read");
 });
 
 test("progress carries the agent's step words and its guess of the time left", () => {
@@ -270,12 +258,7 @@ test("--shipped re-files land on the hand-off on top, even right after the opera
   assert.deepEqual(r.latest.changes, ["three cards"]);
 });
 
-test("POST /outcome refuses an empty summary unless it is a --shipped re-file onto a hand-off", () => {
-  assert.match(api, /if \(!o\.summary && !\(o\.shipped\.length && s\.outcome\)\) return res\.status\(400\)/);
-  assert.match(api, /const filed = fileOutcome\(s\.outcome, s\.outcome_prev, o, operatorSaidAt\(s\.id\)\);/);
-  assert.match(api, /earlier: s\.outcome_prev,/, "Focus reads the earlier ones with the rest of its decisions");
-  // The rail learns a hand-off waits for a yes without carrying hand-off bodies on every row.
-  assert.match(api, /handoff: s\.outcome && !s\.outcome\.shipped\?\.length && \["merge", "deploy", "merge\+deploy"\]\.includes\(s\.outcome\.ask\)/);
+test("the earlier hand-offs ride beside the one on top, and clearing clears them all", () => {
   const s = sessions.create({ cwd: "/tmp" });
   sessions.setOutcome(s.id, ho("two"), [ho("one")]);
   assert.deepEqual(sessions.get(s.id)!.outcome_prev.map((o) => o.summary), ["one"]);
@@ -374,17 +357,6 @@ test("a show keeps only images this terminal uploaded, rides the row, and the ol
   assert.equal(list[list.length - 1].caption, "c" + (MAX_SHOWN + 4), "the newest is kept");
 });
 
-test("the show route is workspace-scoped, Focus reads the list from /decisions, and /desk rows carry only its time", () => {
-  const at = api.indexOf('api.post("/sessions/:id/show"');
-  assert.ok(at > 0);
-  const body = api.slice(at, api.indexOf("\n  });", at));
-  assert.match(body, /validate\(SessionShowSchema\)/);
-  assert.match(body, /checkScope\(req, res, s\.workspace_id\)/);
-  assert.match(body, /normalizeShow\(s\.id, req\.body\)/);
-  assert.match(api, /shown: s\.shown,/);
-  assert.match(api, /outcome_prev: null,\s*\/\/[^\n]*\n\s*shown: null,/);
-});
-
 test("mc show uploads every image as bytes — a directory's in order, name=file labelled — then files one show", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-show-"));
   fs.writeFileSync(path.join(dir, "b-actions.png"), PNG);
@@ -423,12 +395,3 @@ test("mc show uploads every image as bytes — a directory's in order, name=file
   assert.equal(s.hits.length, before, "a refused show uploads nothing");
 });
 
-test("every terminal is told to show images with mc show, and the skill says how", () => {
-  const term = fs.readFileSync(path.join(import.meta.dirname, "terminal.ts"), "utf8");
-  const contract = term.slice(term.indexOf("const FOCUS_CONTRACT"), term.indexOf("## Checkout + load"));
-  assert.match(contract, /mc show <file\|dir>/);
-  assert.match(contract, /shows them nothing/);
-  const skill = fs.readFileSync(path.join(import.meta.dirname, "..", "skills", "mission-control", "SKILL.md"), "utf8");
-  assert.match(skill, /## Showing images — `mc show`/);
-  assert.match(skill, /\| \*\*Talk\*\* \|/);
-});

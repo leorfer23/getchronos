@@ -22,7 +22,7 @@ process.env.CHRONOS_CLAUDE_BIN = "/usr/bin/true";
 const { startServer } = await import("./api.js");
 const { CONFIG } = await import("./config.js");
 const { robertScopeOf, robertToken } = await import("./authz.js");
-const { buildProfile } = await import("./sandbox.js");
+const { buildProfile, sandboxAvailable } = await import("./sandbox.js");
 const { sessions, workspaces } = await import("./store.js");
 const { resolveNotesDir } = await import("./repo-root.js");
 const base = `http://127.0.0.1:${PORT}/api`;
@@ -96,7 +96,7 @@ test("his sandbox: other workspaces' repos, notes, tickets and transcripts denie
   assert.ok(CONFIG.sandbox.secrets.some((s: string) => s.endsWith(".secrets")));
 });
 
-test("a foreign place nested inside his own dir stays denied after the re-grant", () => {
+test("a foreign place nested inside his own dir stays denied after the re-grant", { skip: sandboxAvailable() ? false : "sandbox-exec is macOS-only — no profile to read" }, () => {
   const own = path.join(tmp, "own");
   const foreign = path.join(own, "notes", "initech");
   const prof = buildProfile("guard", own, [], path.join(tmp, "cfg-a"), [foreign], false) as string;
