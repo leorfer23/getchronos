@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { ffmpegProblem } from "../bin/ffmpeg-check.mjs";
+import { pickWhisperModel, pickFinalModel } from "./whisper-models.mjs";
 
 const argv = process.argv.slice(2);
 const printOnly = argv.includes("--print");
@@ -46,17 +47,10 @@ const subs = {
 // Only the daemon is mandatory. whisper needs a downloaded model, the app needs its bundle —
 // installing an agent whose program does not exist just gets launchd into a crash-restart loop,
 // so each optional agent states its precondition and is skipped when unmet.
-/** Multilingual before English-only; small (the latency pick) first; an explicit name wins when it exists. */
-export function pickWhisperModel(models, pinned) {
-  if (pinned && models.includes(pinned)) return pinned;
-  const rank = (f) => {
-    if (/\.en\b|\.en\.bin$/.test(f)) return 100; // English-only: last resort
-    const order = ["small", "large-v3-turbo", "large-v3", "large-v2", "large", "medium", "base", "tiny"];
-    const i = order.findIndex((o) => f.includes(o));
-    return i < 0 ? 50 : i;
-  };
-  return [...models].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))[0];
-}
+const whisperModels = () => {
+  const dir = path.join(home, ".cache", "whisper");
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".bin")).sort() : [];
+};
 
 const AGENTS = [
   { label: "sh.chronos.daemon", required: true },
@@ -69,8 +63,7 @@ const AGENTS = [
     // 19% word errors on mixed Spanish-English; large-v3-turbo ~1.2–1.4 s, 7%. For accuracy over speed:
     // CHRONOS_WHISPER_MODEL=ggml-large-v3-turbo.bin.
     precondition: () => {
-      const dir = path.join(home, ".cache", "whisper");
-      const models = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".bin")).sort() : [];
+      const models = whisperModels();
       if (!models.length) return "no model in ~/.cache/whisper (see README → Voice)";
       if (!fs.existsSync("/opt/homebrew/bin/whisper-server")) return "whisper-server not installed (brew install whisper-cpp)";
       // The template runs --convert (webm/mp4/ogg → wav via ffmpeg): a missing or dyld-broken ffmpeg
@@ -78,6 +71,32 @@ const AGENTS = [
       const ff = ffmpegProblem();
       if (ff) return `${ff} — whisper-server --convert needs a working ffmpeg (brew reinstall ffmpeg)`;
       subs.__WHISPER_MODEL__ = pickWhisperModel(models, process.env.CHRONOS_WHISPER_MODEL);
+      return null;
+    },
+  },
+  {
+    // The second engine: finished sentences go to a larger model on its own port, so the fast one
+    // stays free for the live words and a sentence never queues behind a preview (src/transcribe.ts).
+    // Skipped when no larger model is downloaded — the daemon then keeps finals on the fast engine.
+    // CHRONOS_WHISPER_FINAL_MODEL names the file; CHRONOS_WHISPER_FINAL_PORT moves the port (the
+    // daemon then needs CHRONOS_TRANSCRIBE_FINAL_URL to match).
+    label: "sh.chronos.whisper-final",
+    precondition: () => {
+      const models = whisperModels();
+      if (!fs.existsSync("/opt/homebrew/bin/whisper-server")) return "whisper-server not installed (brew install whisper-cpp)";
+      const fast = pickWhisperModel(models, process.env.CHRONOS_WHISPER_MODEL);
+      const model = pickFinalModel(models, fast, process.env.CHRONOS_WHISPER_FINAL_MODEL);
+      if (!model) {
+        return process.env.CHRONOS_WHISPER_FINAL_MODEL
+          ? `CHRONOS_WHISPER_FINAL_MODEL=${process.env.CHRONOS_WHISPER_FINAL_MODEL} is not in ~/.cache/whisper (or is the fast engine's own model)`
+          : "no larger multilingual model in ~/.cache/whisper (ggml-large-v3-turbo.bin) — finished sentences stay on the fast engine";
+      }
+      const ff = ffmpegProblem();
+      if (ff) return `${ff} — whisper-server --convert needs a working ffmpeg (brew reinstall ffmpeg)`;
+      const port = process.env.CHRONOS_WHISPER_FINAL_PORT ?? "7781";
+      if (!/^\d{2,5}$/.test(port)) return `CHRONOS_WHISPER_FINAL_PORT=${port} is not a port`;
+      subs.__WHISPER_FINAL_MODEL__ = model;
+      subs.__WHISPER_FINAL_PORT__ = port;
       return null;
     },
   },

@@ -53,6 +53,48 @@ must happen, ends with `§delegate <project> ids=… back=… kind=…` lines th
 - **End of turn:** 750 ms of silence (was 850). What he says while Robert is busy is shown at once and
   sent as one follow-up the moment the turn ends.
 
+## Hearing: two engines, his vocabulary, short answers
+
+Measured on synthetic speech only (three local TTS voices, Spanish with English tech words, run through
+the phone's own VAD and WAV encoder at phone level: 250–3800 Hz, echo, room noise). No recording of a
+real voice was used — `voice.keep_clips` below is how the next round gets real data.
+`node scripts/stt-bench.mjs` reproduces every number on any folder of clips.
+
+- **Two engines** (`voice.final_engine`, `accurate`). Live words stay on the fast whisper
+  (`sh.chronos.whisper`, small, :7778). A finished sentence goes to a second server
+  (`sh.chronos.whisper-final`, large-v3-turbo, :7781) so it never waits behind a preview. Not installed,
+  still loading, crashed → the same clip goes to the fast engine (30 s before the second is tried again).
+  30 sentences, 360 words: small 11.1% word errors at 0.39 s · large-v3-turbo 6.7% at 1.26 s.
+- **Half the time on the large model** (`audio_ctx`, per request). whisper encodes 30 s whatever the
+  clip's length, and on the large model that pass is the latency: beam 1 instead of 5 saved nothing
+  (1.23 s both), `temperature_inc=0` nothing, and `--no-fallback` is parsed but never applied by
+  whisper-server 1.9.1. With `audio_ctx=768` (15 s) the same sentences cost 0.66 s and came back no
+  worse. It is not free below that: 384 gave 62% errors, and on 13–21 s clips 1250 already cost accuracy
+  (3.9% → 6.2%) — so only clips up to 8 s get it; longer ones keep the full window.
+- **His vocabulary** (`voice.vocab`, empty by default): comma-separated names and terms, sent as
+  whisper's `prompt` with each finished sentence, written as a sentence in the language being
+  transcribed. With the terms the test sentences use: small 11.1% → 5.3%, large-v3-turbo + 768 → 3.9% at
+  0.66 s (best case — the list held exactly the words that were said).
+- **One-word answers stay on the fast engine, without the prompt** (clips under 2 s). On 27 clips of
+  "sí / no / dale / pará / colgá / listo" the large model was no better (20 right vs 22), four times
+  slower, and worse with a cut window (5 of 11 at 512); the prompt helped none and, as a bare list of
+  English-looking terms, turned "Cancelar" into "Can feel that". Padding them with a second of silence
+  changed nothing — with the phone's own pre-roll and closing silence they are long enough.
+- **Why "sí" was not heard: it never reached whisper.** The phone kept a segment only after 220 ms above
+  the `speech` level (0.04); a one-word answer on a quiet mic is 200–350 ms and mostly under it. At
+  phone level 13 of 24 one-word commands were dropped by the ear. Now a segment that stayed above the
+  level that opened it for 130 ms is kept too: 24 of 24. The price is more noises sent (17 of 24
+  synthetic knocks, hums and coughs instead of 3); whisper answered every one with a bracketed phantom
+  or nothing, which the call already drops, and those clips play no "sent" beep.
+- **«Colgá»** is written "Colgar" by both models (and "Colgada" on a real call): all of them hang up.
+- **A sentence cut by a breath** (750 ms of quiet ends a clip — unchanged). When he speaks again within
+  1.5 s of a cut and the first half has not reached the page yet, both halves are sent again as one clip
+  and become one turn. A complete sentence is never delayed by this; short answers and stops never wait.
+  Not measured on real speech: the trace now counts how often it happens (`reopen`, `join`).
+- **After the "sent" beep** nothing opens for 220 ms, but the pre-roll keeps recording (it used to be
+  thrown away, with the first syllable of whatever he said next). Neutral on the synthetic set
+  (8.3% vs 8.8% on 18 second-halves); kept because frames are no longer lost.
+
 ## A call that can be cut into
 
 - Barge-in threshold = p90 of what the mic hears while Robert plays and he is silent × 2.2, between
@@ -73,5 +115,12 @@ must happen, ends with `§delegate <project> ids=… back=… kind=…` lines th
 
 - `mc voice traces` — the last calls' traces (posted at hang-up, or ⋯ → Send call trace): barge-ins,
   taps, and the mic levels measured while Robert spoke. No audio.
+- **His real voice** (`voice.keep_clips`, off): keeps the last 40 clips a call sent for transcription,
+  with what was heard, in `~/.mc/voice-clips` — outside the checkout, sealed from every agent sandbox,
+  operator-only, 48 MB at most, deleted when the setting goes off. `mc voice clips` lists them (length,
+  level, whether a clip starts mid-word, how long the quiet tail was). Compare engines on them:
+  `node scripts/stt-bench.mjs --dir "$(mc voice clips --dir)" --engine fast=http://127.0.0.1:7778/inference --engine "final=http://127.0.0.1:7781/inference;audio_ctx=768"`
+  (write what was really said in a `<clip>.txt` next to a clip, or as `ref` in `index.json`, to get
+  error rates instead of a side-by-side).
 - `node scripts/talk-latency.mjs --since 7d` — time to first word and whole reply, front vs today's path.
 - `GET /api/voice/config` — is the front on, which engine, warm.

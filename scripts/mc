@@ -560,6 +560,9 @@ const HELP = `mc — Mission Control backlog CLI
   mc vpn [status] [--json]           state, whether Chronos turned it on, who holds it
   mc voice traces [--limit N] [--json]   the last phone calls' traces: barge-ins, taps, and the mic
                                      levels measured while Robert spoke (operator only; no audio)
+  mc voice clips [--limit N] [--json] [--dir]   the last things you said on a call and what was heard —
+                                     only while Settings → Voice → "Keep the last call clips" is on
+                                     (operator only; the audio stays in a folder no agent can read)
   mc service [ls] [--workspace <slug>] [--json]
                                      always-on processes the daemon keeps running (SERVICES.md): state,
                                      uptime, restarts, CPU/RAM. A workspace token sees its own
@@ -4027,7 +4030,23 @@ function askCap(question) {
     // The workspace's VPN (src/vpn.ts): on while a terminal/run holds it, off after the last hold.
     if (cmd === "voice") {
       const sub = pos[1] || "traces";
-      if (sub !== "traces") die("usage: mc voice traces [--limit N] [--json]");
+      // The clips kept for diagnosis (Settings → Voice → "Keep the last call clips"): what was heard,
+      // how long each engine took, and the levels that say whether a clip starts mid-word.
+      if (sub === "clips") {
+        const r = await req("GET", "/voice/clips", undefined, adminHeaders());
+        if (opt.json) return console.log(JSON.stringify(r, null, 2));
+        if (opt.dir) return console.log(r.dir);
+        if (!r.on) return console.log("call clips are off — turn on Settings → Voice → \"Keep the last call clips\", make a call, then run this again");
+        if (!r.clips?.length) return console.log(`no clips yet — they are kept as you talk on a call (${r.dir})`);
+        for (const c of r.clips.slice(0, Number(opt.limit) || 40)) {
+          const s = c.stats || {};
+          console.log(`${c.at}  ${c.file}  ${s.audio_ms ?? "?"} ms audio · ${c.engine ?? "?"} ${c.ms ?? "?"} ms · level ${s.rms ?? "-"} (peak ${s.peak ?? "-"}, first 60 ms ${s.head_rms ?? "-"}, quiet tail ${s.tail_quiet_ms ?? "-"} ms)`);
+          console.log(`  heard: ${c.text || "(nothing)"}${c.ref ? `\n  said:  ${c.ref}` : ""}`);
+        }
+        console.log(`\n${r.clips.length} clip(s) in ${r.dir}\ncompare engines on them: node scripts/stt-bench.mjs --dir "$(mc voice clips --dir)" --engine fast=http://127.0.0.1:7778/inference --engine final=http://127.0.0.1:7781/inference`);
+        return;
+      }
+      if (sub !== "traces") die("usage: mc voice traces [--limit N] [--json] | mc voice clips [--limit N] [--json] [--dir]");
       const r = await req("GET", `/voice/traces?limit=${Number(opt.limit) || 5}`, undefined, adminHeaders());
       if (opt.json) return console.log(JSON.stringify(r.traces, null, 2));
       if (!r.traces?.length) return console.log("no call traces yet — they arrive when a phone call hangs up, or from ⋯ → Send call trace");
@@ -4035,6 +4054,7 @@ function askCap(question) {
         const s = t.summary || {};
         console.log(`${t.at}  ${t.surface} · ${t.why} · ${s.call_s ?? "?"}s call · ${t.ua.slice(0, 70)}`);
         console.log(`  barge-ins ${s.barges ?? 0} (words ${s.barge_words ?? 0}, echo/noise ${s.barge_false ?? 0}) · tap-stops ${s.taps_stop ?? 0}`);
+        if (s.segs_kept != null) console.log(`  heard: ${s.segs_kept} clips + ${s.segs_word ?? 0} one-word · ${s.segs_dropped ?? 0} sounds dropped · spoke again right after a cut ${s.reopens ?? 0}× (${s.joins ?? 0} joined into one turn)`);
         console.log(`  mic while Robert spoke: p50 ${s.play_rms_p50 ?? "-"} · p90 ${s.play_rms_p90 ?? "-"} · max ${s.play_rms_max ?? "-"} · echo est ${s.echo ?? "-"} · threshold ${s.threshold ?? s.threshold_last ?? "-"} (ceiling ${s.barge_ceiling ?? "-"})`);
         const tail = t.events.slice(-12).map((e) => e[1]).join(" · ");
         if (tail) console.log(`  last moves: ${tail}`);

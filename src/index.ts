@@ -58,7 +58,8 @@ import { startRobertSweep } from "./robert-sweep.js";
 import { startDraftNotify } from "./draft-notify.js";
 import { alertsOwnPush, startStuckAlerts } from "./stuck-alerts.js";
 import { resetTalker, warmTalker } from "./talker.js";
-import { onSettingChange } from "./settings.js";
+import { onSettingChange, settingOn } from "./settings.js";
+import { wipeClips } from "./voice-clips.js";
 import { startTerminalFailover } from "./terminal-failover.js";
 import { startWorklog } from "./worklog.js";
 import { startCloudReconcile } from "./cloud-reconcile.js";
@@ -141,6 +142,11 @@ startStuckAlerts();
 // The voice front's warm process (src/talker.ts), when it is on: his first sentence must not pay for a boot.
 setTimeout(() => warmTalker(), 20_000).unref?.();
 for (const k of ["voice.talker", "voice.talker_engine", "voice.talker_cli_model"]) onSettingChange(k, () => { resetTalker(); warmTalker(); });
+// Call clips kept for diagnosis exist only while their setting is on: off (now, or found off at
+// start) deletes them.
+const dropClipsWhenOff = () => { if (!settingOn("voice.keep_clips")) wipeClips(); };
+onSettingChange("voice.keep_clips", dropClipsWhenOff);
+dropClipsWhenOff();
 startTerminalFailover();
 // Standing watches on single terminals + the deadlines that stop a question sitting with Robert forever.
 startDeskWatch();
