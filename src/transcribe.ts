@@ -3,7 +3,7 @@
 // endpoint (+ OPENAI_API_KEY) to use a cloud model instead. Both Telegram voice notes and the web
 // dashboard mic funnel through here.
 import { ffmpegProblem } from "../bin/ffmpeg-check.mjs";
-import { askCloud, cloudReady, cloudFailed, cloudKeyterms, CloudError, CLOUD_OTHER_LANG_MIN, type CloudAsk, type CloudHeard } from "./transcribe-cloud.js";
+import { askCloud, cloudReady, cloudFailed, cloudAnswered, cloudKeyterms, CloudError, CLOUD_OTHER_LANG_MIN, type CloudAsk, type CloudHeard } from "./transcribe-cloud.js";
 
 const LOCAL_URL = "http://127.0.0.1:7778/inference";
 // The second local engine (sh.chronos.whisper-final): a larger model for finished sentences, on its
@@ -235,6 +235,25 @@ export function finalFields(audioMs: number | null, env: Record<string, string |
   return { audio_ctx: String(ctx) };
 }
 
+/**
+ * whisper with a reduced audio context sometimes writes a sentence two or three times over (seen on
+ * ~6 s clips with audio_ctx 768). A transcript that is nothing but the same sentence repeated is
+ * that sentence, once. Only whole-text repeats of 3+ words: "no, no" and "dale dale" stay.
+ */
+export function collapseRepeat(text: string): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  const words = t.split(" ");
+  for (let n = 2; n <= 4; n++) {
+    if (words.length % n || words.length / n < 3) continue;
+    const size = words.length / n;
+    const key = (i: number) => words.slice(i * size, (i + 1) * size).join(" ").toLowerCase().replace(/[^\p{L}\p{N} ]/gu, "");
+    let same = true;
+    for (let i = 1; i < n; i++) if (key(i) !== key(0)) { same = false; break; }
+    if (same) return words.slice(0, size).join(" ");
+  }
+  return t;
+}
+
 export type FinalHeard = { text: string; lang?: Lang2; passes: number; engine: EngineName };
 
 /**
@@ -280,16 +299,18 @@ export async function hearFinal(
     const one = (b: Buffer, a: AskOpts) => ask(b, { ...a, ...extra, prompt: vocabPrompt(o.vocab, a.language, ms) });
     if (o.language && o.bilingual !== false) {
       const out = await transcribeBilingual(buf, { filename: o.filename, contentType: o.contentType, hint: o.language, audioMs: ms }, one);
-      return { ...out, engine };
+      return { ...out, text: collapseRepeat(out.text), engine };
     }
     const h = await one(buf, { filename: o.filename, contentType: o.contentType, language: o.language });
-    return { text: h.text, lang: o.language, passes: 1, engine };
+    return { text: collapseRepeat(h.text), lang: o.language, passes: 1, engine };
   };
   const now = o.now ?? Date.now();
   let first = pickEngine({ partial: false, mode: o.mode, finalUrl: finalUrl(), audioMs: ms, now });
   if (first === "cloud") {
     try {
-      return await hearCloud(buf, o, cloud);
+      const heard = await hearCloud(buf, o, cloud);
+      cloudAnswered();
+      return heard;
     } catch (e) {
       cloudFailed(e, now);
     }

@@ -220,6 +220,9 @@ test("back-off: a timeout or an outage leaves the cloud alone for a while, a bad
     cloudFailed(new CloudError("http", "HTTP 422", 422), t0);
     cloudFailed(new CloudError("language", "third language"), t0);
     assert.equal(cloudReady(t0), true);
+    // One slow answer is a blip; the second in a row is an outage.
+    cloudFailed(new CloudError("timeout", "no answer in 2500 ms"), t0);
+    assert.equal(cloudReady(t0 + 1), true, "one timeout does not turn the engine off");
     cloudFailed(new CloudError("timeout", "no answer in 2500 ms"), t0);
     assert.equal(cloudReady(t0 + CLOUD_DOWN_MS - 1), false);
     assert.equal(cloudReady(t0 + CLOUD_DOWN_MS), true, "tried again afterwards");
@@ -234,10 +237,12 @@ test("back-off: a timeout or an outage leaves the cloud alone for a while, a bad
     const askC = async (): Promise<CloudHeard> => { asked++; throw new CloudError("timeout", "no answer"); };
     const askL = async (): Promise<Heard> => ({ text: "ok", probs: null });
     await hearFinal(wav(4000), { language: "es", mode: "cloud", now: t0 }, askL, askC);
+    await hearFinal(wav(4000), { language: "es", mode: "cloud", now: t0 + 1000 }, askL, askC);
+    assert.equal(asked, 2, "the second timeout in a row is what turns it off");
     await hearFinal(wav(4000), { language: "es", mode: "cloud", now: t0 + 5000 }, askL, askC);
-    assert.equal(asked, 1);
-    await hearFinal(wav(4000), { language: "es", mode: "cloud", now: t0 + CLOUD_DOWN_MS }, askL, askC);
     assert.equal(asked, 2);
+    await hearFinal(wav(4000), { language: "es", mode: "cloud", now: t0 + 1000 + CLOUD_DOWN_MS }, askL, askC);
+    assert.equal(asked, 3);
     lines.length = 0;
   });
   resetCloud({ key: null }); resetFinalEngine();
