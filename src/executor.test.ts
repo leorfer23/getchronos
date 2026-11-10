@@ -17,7 +17,7 @@ import { requests } from "./store/requests.js";
 import { executorStore } from "./store/executor.js";
 import * as L from "./ledger.js";
 import * as X from "./executor.js";
-import { draftHash } from "./ledger-model.js";
+import { draftHash, WORK } from "./ledger-model.js";
 import { writeSetting, _resetSettingsCache } from "./settings.js";
 import { setRemoteReader } from "./pr-ownership.js";
 import { bus } from "./bus.js";
@@ -83,9 +83,10 @@ function build(prUrl = PR): Fx {
   const item = requests.items(r.id).find((i) => i.action === "merge")!;
   return { A, B, s, r, d, item };
 }
-/** The verifier's four required checks for a backend PR, all passing on `hash`. */
+/** The verifier's required checks for a backend PR, all passing on `hash` (whatever WORK[pr] requires now). */
+const PR_CHECKS = WORK.pr.evidence.filter((e) => e.required).map((e) => e.name);
 function passChecks(f: Fx, hash = SHA, over: Record<string, "pass" | "fail" | "skip"> = {}) {
-  for (const name of ["tests", "regression", "pr_ready", "matches_request"]) {
+  for (const name of PR_CHECKS) {
     requests.addCheck({ request_id: f.r.id, deliverable_id: f.d.id, name, status: over[name] ?? "pass", target_hash: hash, ran_by: "verifier" } as any);
   }
 }
@@ -361,7 +362,7 @@ test("checks for an older head, a failing check, a missing or skipped required c
 test("checksGate: the newest run of a check counts, and only a check that names this head", () => {
   const row = (name: string, status: "pass" | "fail", ran_at: string, target_hash = SHA) =>
     ({ id: name + ran_at, request_id: "r", deliverable_id: "d", name, status, evidence: [], note: null, target_hash, ran_by: "verifier", ran_at, created_at: ran_at }) as any;
-  const all = ["tests", "regression", "pr_ready", "matches_request"].map((n) => row(n, "pass", "2026-01-02"));
+  const all = PR_CHECKS.map((n) => row(n, "pass", "2026-01-02"));
   assert.deepEqual(X.checksGate("pr", "d", SHA, all, "refuse", null), { ok: true, override: null });
   // A failure, then a later pass of the same check: the later run counts.
   assert.equal(X.checksGate("pr", "d", SHA, [row("tests", "fail", "2026-01-01"), ...all], "refuse", null).ok, true);

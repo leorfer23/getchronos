@@ -139,15 +139,24 @@ export function withoutOperatorToken<E extends Record<string, string | undefined
 }
 
 /**
- * Closing a Desk terminal is the operator's hand only — Desk ✕, phone Kill, or a Telegram ✅ on a
- * proposed kill. Robert, Leads and workers may PROPOSE; they never execute. The positive signal is
- * `x-mc-operator: 1`, which only those three surfaces set (never `mc`, never a Lead credential).
- * Daemon-internal `killSession` (host failover, etc.) does not go through HTTP and is unchanged.
+ * Closing a Desk terminal: the operator's own hand — Desk ✕, phone Kill, or a Telegram ✅ on a
+ * proposed kill (the token itself from this Mac, no agent header, `x-mc-operator: 1`, which only those
+ * surfaces set) — OR the fleet-wide rw Robert, who is the operator's main work surface and closes
+ * terminals across the fleet as part of driving them (the coordinator's requirement; his credential is
+ * derived from the admin token and lane-tagged, so a model cannot forge it). A project Robert, a Lead,
+ * a worker and the read-only Robert still only PROPOSE. Daemon-internal `killSession` (host failover)
+ * does not go through HTTP and is unchanged.
  */
 export function operatorMayCloseTerminal(req: express.Request, res: express.Response): boolean {
+  // The fleet-wide rw Robert closes terminals directly; nothing else derived or agent-held does.
+  if (forwardedHost(req) === null) {
+    const fl = fleetScopeOf(req.get("x-mc-admin"));
+    if (fl && fl.role === "rw" && !req.get("x-mc-lead") && !req.get("x-mc-session") && !req.get("x-mc-agent") && !req.get("x-mc-workspace-token")) return true;
+  }
   if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) {
+    const robert = forwardedHost(req) === null && robertIdentity(req.get("x-mc-admin"));
     res.status(403).json({
-      error: "closing a terminal is operator-only (Desk ✕, phone, or Telegram confirm)",
+      error: robert ? "only the fleet-wide Robert or the operator closes terminals — a project Robert proposes it" : "closing a terminal is operator-only (Desk ✕, phone, or Telegram confirm)",
     });
     return false;
   }

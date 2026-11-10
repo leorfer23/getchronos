@@ -33,6 +33,7 @@ const L = await import("./ledger.js");
 const X = await import("./executor.js");
 const { writeSetting, setting, _resetSettingsCache } = await import("./settings.js");
 const { setRemoteReader } = await import("./pr-ownership.js");
+const { WORK } = await import("./ledger-model.js");
 const { mcEnv } = await import("./terminal.js");
 const { childEnv } = await import("./child-env.js");
 const { robertCredential } = await import("./telegram/agent.js");
@@ -81,8 +82,8 @@ function build(): Fx {
   const r = requests.get(requests.primaryAt(s.id)!.request_id)!;
   const d = requests.deliverables(r.id).find((x) => x.kind === "pr")!;
   requests.bindTarget(d.id, SHA);
-  for (const name of ["tests", "regression", "pr_ready", "matches_request"]) {
-    requests.addCheck({ request_id: r.id, deliverable_id: d.id, name, status: "pass", target_hash: SHA, ran_by: "verifier" } as any);
+  for (const e of WORK.pr.evidence.filter((x) => x.required)) {
+    requests.addCheck({ request_id: r.id, deliverable_id: d.id, name: e.name, status: "pass", target_hash: SHA, ran_by: "verifier" } as any);
   }
   return { r, item: requests.items(r.id).find((i) => i.action === "merge")!, d, s };
 }
@@ -263,7 +264,7 @@ test("no Robert credential weakens a workspace's sandbox, re-grants secrets, or 
   assert.equal(workspaces.get(A.id)!.sandbox_mode, "guard");
 });
 
-test("the fleet-wide Robert no longer reaches what only the operator should: services, self-deploy, review merges, shared secrets", async () => {
+test("the fleet-wide Robert does not reach the operator-only set: services, self-deploy, review approve/merge, shared vars, triggers, his chat, the clipboard", async () => {
   const h = { "x-mc-admin": robertToken(null, "rw") };
   const refused: Array<[string, string, unknown]> = [
     ["POST", "/services", { workspace: A.slug, name: "x", command: "cat ~/chronos/.admin-token", cwd: tmp }],
@@ -271,16 +272,16 @@ test("the fleet-wide Robert no longer reaches what only the operator should: ser
     ["POST", "/reviews/00000000-0000-0000-0000-000000000000/merge", {}],
     ["POST", "/reviews/00000000-0000-0000-0000-000000000000/approve", {}],
     ["POST", `/workspaces/${A.id}/vars`, { name: "X", value: "y", hours: 1 }],
+    ["POST", "/triggers", { job_id: "x" }],
     ["GET", "/clipboard", undefined],
-    ["POST", "/agent", { text: "hola" }],
-    ["DELETE", `/workspaces/${B.id}`, undefined],
+    ["POST", "/agent", { text: "hola" }],         // his own chat surface — he does not talk to himself
   ];
   for (const [m, p, body] of refused) {
     const r = await call(m, p, h, body);
     assert.equal(r.status, 403, `${m} ${p}: ${r.status} ${JSON.stringify(r.json)}`);
   }
-  assert.ok(workspaces.get(B.id), "nothing was deleted");
-  // He still reads the fleet as before.
+  // But the broad surface he had with the operator's token stays his: he still reads the fleet and the
+  // settings, and (coverage in robert-fleet.test.ts) files tickets, dispatches, drives and closes terminals.
   assert.equal((await call("GET", "/fleet", h)).status, 200);
   assert.equal((await call("GET", "/settings", h)).status, 200);
 });

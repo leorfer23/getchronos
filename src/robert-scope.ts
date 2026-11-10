@@ -159,29 +159,46 @@ export function derivedWriteRefusal(req: express.Request): string | null {
 }
 
 /**
- * What the fleet-wide Robert may WRITE on an admin route. He reads every workspace (an admin GET
- * passes unless FLEET_PRIVATE_READS names it) — the operator granted that, and it is what he did with
- * the operator's token. His writes are this list and only this list, so a new admin route is the
- * operator's until someone decides otherwise. Never on it: recording or carrying out a decision
- * (ledger decisions, the executor, review approve/merge, self-deploy); anything that runs a process or
- * a command the daemon does not sandbox (services, triggers, calendars' CLI dirs); spending or reading
- * credentials (shared vars, the broker, repo shares, backend logins, host join codes); and the
- * operator's own surfaces (his chat with Robert, voice, the clipboard, capture, opening things on his
- * screen, thread routing, quick actions).
+ * The fleet-wide Robert is the operator's main work surface now (he answers every unscoped turn —
+ * thread-router.ts oneRobert, ledger.ts openWorkBlock), and he used to hold the operator's token and
+ * run the whole admin surface. So his boundary is a DENY-list, not an allow-list: he keeps the broad
+ * write access he had, and loses exactly the routes a model must never reach. The executor's own
+ * integrity does NOT lean on this list — recording or carrying out a yes is gated by operatorHand
+ * (the token itself), and loosening a wall by derivedWriteRefusal, both independent of it. This set is
+ * the rest: the sensitive non-executor writes.
+ *
+ * On it (operator-only), by why:
+ *  - shipping / deciding for him: self-deploy, review approve & merge (he may request changes),
+ *    the ledger's own decide/close/verify are operatorHand already.
+ *  - a process or command the daemon runs UNSANDBOXED: always-on services, event triggers, connecting
+ *    a calendar (the gws CLI, its own OAuth dir) — refresh stays his.
+ *  - spending, minting or handing out credentials: shared workspace vars, host join codes, a backend
+ *    login, sharing a repo across the wall, the egress policy.
+ *  - the operator's OWN surfaces, which a model speaking as him would misuse: his chat with Robert
+ *    (/agent*), the clipboard, capture, voice presence/trace, opening things on his screen, quick
+ *    actions, thread routing, registering a device for push.
+ * A new admin route is his by default — if it belongs to one of the groups above, add it here.
  */
-export const FLEET_ROBERT_WRITES = new Set([
-  // Everything a project's Robert may write in his workspace, here across the fleet.
-  ...[...ROBERT_ADMIN_ROUTES].filter((r) => !r.startsWith("GET ")),
-  // The fleet's own: the board, settings (never the executor's or a wall's — derivedWriteRefusal),
-  // acknowledging wakes and alerts, workspace creation, computers, review rework, his memory.
-  "POST /board", "PUT /settings", "POST /settings",
-  "POST /robert/wakes/:id/ack", "POST /alerts/:id/ack", "POST /calendars/refresh",
-  "POST /workspaces",
-  "PATCH /hosts/:id", "POST /hosts/:id/update", "POST /hosts/update-all", "DELETE /hosts/:id",
-  "POST /reviews/:id/changes",
-  "POST /agents/:name/stow",
+export const FLEET_OPERATOR_ONLY = new Set([
+  "POST /self-deploy",
+  "POST /reviews/:id/approve", "POST /reviews/:id/merge",
+  "POST /services", "PATCH /services/:id", "DELETE /services/:id",
+  "POST /services/:id/start", "POST /services/:id/stop", "POST /services/:id/restart",
+  "POST /triggers", "PATCH /triggers/:id", "DELETE /triggers/:id",
+  "POST /calendars", "PATCH /calendars/:id", "DELETE /calendars/:id", "POST /calendars/ingest", "POST /calendars/import-local",
+  "POST /workspaces/:id/vars", "PATCH /workspaces/:id/vars/:varId", "DELETE /workspaces/:id/vars/:varId",
+  "POST /repos/:id/shares", "DELETE /repos/:id/shares/:workspaceId",
+  "PUT /workspaces/:id/egress",
+  "POST /hosts/join-codes",
+  "POST /backends/:name/login",
+  "POST /agent", "POST /agent/exec/:id", "POST /agent/reset", "POST /agent/heartbeat", "POST /agent/warm", "POST /agent/model",
+  "POST /push/subscribe", "DELETE /push/subscribe",
+  "POST /voice/presence", "POST /voice/trace",
+  "POST /open", "PUT /desk/quick-actions", "POST /thread/sticky",
+  "POST /capture/open", "POST /capture/resolve", "DELETE /capture/routes/:key",
+  "POST /speak", "POST /transcribe",
 ]);
-/** Admin reads that are the operator's alone, even for the fleet-wide Robert. */
+/** Admin reads that are the operator's alone, even for the fleet-wide Robert (his clipboard contents). */
 export const FLEET_PRIVATE_READS = new Set(["GET /clipboard"]);
 
 /** The fleet-wide Robert on an admin route: null = allowed, else why not. */
@@ -191,9 +208,10 @@ export function fleetRefusal(req: express.Request, fl: FleetScope): string | nul
   const key = `${req.method} ${pattern}`;
   if (req.method === "GET" || req.method === "HEAD") return FLEET_PRIVATE_READS.has(key) ? "the operator's own — not for a Robert" : null;
   if (fl.role === "ro") return "read-only Robert: propose it, the operator confirms";
+  // The hard guarantees first (independent of this list), then the sensitive-write deny set.
   const wall = derivedWriteRefusal(req);
   if (wall) return wall;
-  return FLEET_ROBERT_WRITES.has(key) ? null : `operator-only: ${key} is not one of the writes the fleet-wide Robert makes — ask the operator`;
+  return FLEET_OPERATOR_ONLY.has(key) ? `operator-only: ${key} — the operator does this himself (not a Robert credential)` : null;
 }
 
 /** A project's Robert on an admin route: null = allowed, else why not. */
