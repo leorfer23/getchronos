@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { db, sessions, workspaces } from "./store.js";
-import { applyHook, declare, menuTick, permissionOf, resolve, sessionGoalReached, setMenuProbe, signalsOf, HOOK_WORKING_SILENCE_MS, MENU_GRACE_MS, REACHED_GRACE_MS, type ResolveInput, type Signals } from "./term-status.js";
+import { applyHook, declare, frozenFor, menuTick, permissionOf, resolve, sessionGoalReached, setFrozenProbe, setMenuProbe, signalsOf, HOOK_WORKING_SILENCE_MS, MENU_GRACE_MS, REACHED_GRACE_MS, type ResolveInput, type Signals } from "./term-status.js";
 import type { DeskPrompt } from "./desk-prompt.js";
 import { SessionHookSchema } from "./validation.js";
 import { claudeStyleHooks, grokHooksToml, installClaudeHooks, installCursorHooks, installGrokHooks, mergeHooks, nudgeCmd, rtkCmd } from "./term-hooks.js";
@@ -406,4 +406,51 @@ test("the same rule for a surface that has only the row and its activity", () =>
     sessionGoalReached({ goal_done_at: iso(NOW - 10 * 60_000) }, { last_in: null, quiet: false }, NOW), false,
     "printing long after the tick: not done either",
   );
+});
+
+// ── frozen mid-turn ───────────────────────────────────────────────────────────────────────────────
+const MIN = 60_000;
+const RUNNING = ["● Running the full test suite now.", "", "✻ Compiling… (3m 12s · ↓ 1.2k tokens · esc to interrupt)", "", "╭──────────╮", "│ >        │", "╰──────────╯", "  ? for shortcuts"];
+const IDLE = ["● Done: all 214 tests pass.", "", "╭──────────╮", "│ >        │", "╰──────────╯", "  ? for shortcuts"];
+
+test("frozen mid-turn reads stalled — but a turn waiting on its own subagents is waiting, never stalled", () => {
+  const sig: Signals = { turn: { state: "working", at: NOW - 10 * MIN } };
+  const r = resolve(base({ quiet: true, lastOut: NOW - 4 * MIN, frozenMs: 4 * MIN }, sig));
+  assert.equal(r.phase, "stalled");
+  assert.equal(r.line, "no output for 4m in the middle of its turn");
+  const bg = resolve(base({ quiet: true, lastOut: NOW - 4 * MIN, frozenMs: 4 * MIN }, { ...sig, subagents: { a: { label: "run the e2e suite", at: NOW - 5 * MIN } } }));
+  assert.equal(bg.phase, "waiting");
+  assert.equal(bg.on, "subagents");
+  assert.equal(resolve(base({ quiet: true, lastOut: NOW - 4 * MIN, frozenMs: null }, sig)).phase, "your_turn", "not frozen: the old reading stands");
+});
+
+test("frozenFor: hooks working + the interrupt hint frozen on screen + minutes of AWAKE silence + its computer online", () => {
+  const working: Signals = { turn: { state: "working", at: NOW - 10 * MIN } };
+  let frame: string[] = RUNNING;
+  let awake = NOW - 60 * MIN;
+  let online = true;
+  setFrozenProbe({ screen: () => frame, awakeSince: () => awake, hostOnline: () => online });
+  try {
+    const local = { id: "t1", host_id: "local" };
+    assert.equal(frozenFor(local, working, NOW - 4 * MIN, NOW), 4 * MIN);
+    assert.equal(frozenFor(local, working, NOW - 2 * MIN, NOW), null, "under term.frozen_min (3)");
+    assert.equal(frozenFor(local, { turn: { state: "stopped", at: NOW - MIN } }, NOW - 9 * MIN, NOW), null, "a turn that ended is not frozen");
+    assert.equal(frozenFor(local, {}, NOW - 9 * MIN, NOW), null, "no hooks: no claim about a turn at all");
+    awake = NOW - MIN;
+    assert.equal(frozenFor(local, working, NOW - 30 * MIN, NOW), null, "the Mac woke a minute ago: its sleep is nobody's silence");
+    awake = NOW - 5 * MIN;
+    assert.equal(frozenFor(local, working, NOW - 30 * MIN, NOW), 5 * MIN, "counted from the wake, not the last byte");
+    awake = NOW - 60 * MIN;
+    frame = IDLE;
+    assert.equal(frozenFor(local, working, NOW - 30 * MIN, NOW), null, "a missed Stop over an idle composer stays your turn");
+    frame = [...RUNNING.slice(0, 3), ...Array(12).fill("│ log line │")];
+    assert.equal(frozenFor(local, working, NOW - 30 * MIN, NOW), null, "the hint must be in the bottom rows, not in old scrollback");
+    frame = RUNNING;
+    online = false;
+    assert.equal(frozenFor({ id: "t2", host_id: "m2" }, working, NOW - 30 * MIN, NOW), null, "its computer is offline: host failover's, not frozen");
+    online = true;
+    assert.equal(frozenFor({ id: "t2", host_id: "m2" }, working, NOW - 30 * MIN, NOW), 30 * MIN);
+  } finally {
+    setFrozenProbe(null);
+  }
 });

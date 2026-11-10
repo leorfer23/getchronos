@@ -72,6 +72,11 @@ export type BusEvent = (
   // The resolved card of a terminal (term-status.ts): phase, one-liner, subagents, progress. Every
   // surface reads this instead of re-deriving it from activity + agent.state + focus events.
   | { topic: "session.status"; session_id: string; status: unknown }
+  // Stuck work, to be SPOKEN now (src/stuck-alerts.ts): the first rung of the alert ladder. `client`
+  // is the one live voice call picked to say it — every other page ignores it — and that page answers
+  // POST /api/alerts/:id/spoken, or the alert moves on to the phone. Carries workspace_id so a Desk
+  // locked to one client for a screen share drops another client's alert (static/desk-scope.js).
+  | { topic: "alert.raised"; alert_id: string; workspace_id: string | null; session_id: string | null; kind: string; say: string; lang: string; client: string | null }
   // Someone read or wrote the operator's Mac clipboard through the daemon (`mc clip`). The CONTENT is
   // deliberately absent — only who, and a shape description — because the clipboard is exactly where
   // a password passes through, and an activity trail that quoted it would be the leak itself.
