@@ -45,6 +45,7 @@ import { startUsageTicker } from "./session-usage.js";
 import { startCacheKeeper } from "./cache-keeper.js";
 import { startTermStatus, statusOf } from "./term-status.js";
 import { startLedger } from "./ledger.js";
+import { startVerifier } from "./request-verifier.js";
 import { startBoardWatcher } from "./board.js";
 import { startRobertWake } from "./robert-wake.js";
 import { startWakeQueue } from "./wake-queue.js";
@@ -111,6 +112,7 @@ startPush({ activity: sessionActivity, prompt: sessionPrompt, phase: (id) => sta
 startTermStatus();
 // The request ledger follows the session/ask/turn events from here on (src/ledger.ts, LEDGER.md).
 startLedger();
+startVerifier();
 startMergeGate();
 startSelfDeploy();
 startAgentLifecycleBridge();
