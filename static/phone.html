@@ -2019,10 +2019,14 @@ function presence(live) {
   ping(!!live);
   if (live) presT = setInterval(() => ping(true), 20000);
 }
+// The client contract is the alerts branch's static/voice-alerts.js: "started" when its audio begins,
+// "done" only when it played to the end, nothing if it could not be rendered or was talked over.
 function onAlert(e) {
-  if (!PhoneVoice.on || !e.say || (e.client && e.client !== CLIENT)) return;
-  PhoneVoice.say(e.say, { first: true, lang: e.lang === "es" || e.lang === "en" ? e.lang : undefined }).then((played) => {
-    if (played) api("/alerts/" + encodeURIComponent(e.alert_id) + "/spoken", { method: "POST", body: JSON.stringify({ client: CLIENT }) }).catch(() => {});
+  if (!PhoneVoice.on || !e.say || !e.alert_id || (e.client && e.client !== CLIENT)) return;
+  if (PhoneVoice.state() === "paused") return; // it cannot be heard now: unreported, it goes to the phone
+  const report = (stage) => api("/alerts/" + encodeURIComponent(e.alert_id) + "/spoken", { method: "POST", body: JSON.stringify({ client: CLIENT, stage }) }).catch(() => {});
+  PhoneVoice.say(e.say, { first: true, lang: e.lang === "es" || e.lang === "en" ? e.lang : undefined, onStart: () => report("started") }).then((played) => {
+    if (played) report("done");
   });
 }
 // Words the page answers itself on a call, before anything goes to Robert.

@@ -89,8 +89,9 @@ test("stuck work reaches a live call: presence every 20 s, the alert said first,
   assert.match(html, /api\("\/voice\/presence", \{ method: "POST", body: JSON\.stringify\(\{ client: CLIENT, surface: "phone", live: on, lang: voiceLang\(\), lock: null \}\) \}\)/);
   assert.match(html, /presT = setInterval\(\(\) => ping\(true\), 20000\)/);
   assert.match(html, /"alert\.raised"/);
-  assert.match(html, /if \(!PhoneVoice\.on \|\| !e\.say \|\| \(e\.client && e\.client !== CLIENT\)\) return;/);
-  assert.match(html, /PhoneVoice\.say\(e\.say, \{ first: true,[\s\S]*?\.then\(\(played\) => \{\s*if \(played\) api\("\/alerts\/" \+ encodeURIComponent\(e\.alert_id\) \+ "\/spoken"/);
+  assert.match(html, /if \(!PhoneVoice\.on \|\| !e\.say \|\| !e\.alert_id \|\| \(e\.client && e\.client !== CLIENT\)\) return;/);
+  assert.match(html, /api\("\/alerts\/" \+ encodeURIComponent\(e\.alert_id\) \+ "\/spoken", \{ method: "POST", body: JSON\.stringify\(\{ client: CLIENT, stage \}\) \}\)/);
+  assert.match(html, /onStart: \(\) => report\("started"\) \}\)\.then\(\(played\) => \{\s*if \(played\) report\("done"\);/);
 });
 
 test("voice goes to the Mac: push-to-talk posts raw audio to /api/transcribe with the admin token", () => {

@@ -485,6 +485,7 @@
       items.push(enqueue(s, o, true));
     }
     if (!items.length) return Promise.resolve(true);
+    if (o.onStart) items[0].onStart = o.onStart; // told when its audio actually begins (alerts: "started")
     // Ahead of the line, in their own order: right after the sentence playing now.
     if (o.first) V.speakQ = items.concat(V.speakQ.filter(function (x) { return items.indexOf(x) < 0; }));
     paint();
@@ -521,7 +522,8 @@
         a.onended = function () { done(true); };
         a.onerror = function () { done(false); };
         a.src = url; a.defaultPlaybackRate = a.playbackRate = C.speed();
-        var p = a.play(); if (p && p.catch) p.catch(function () { done(false); });
+        var p = a.play();
+        if (p && p.then) p.then(function () { if (item.onStart && V.playing === item) { var f = item.onStart; item.onStart = null; try { f(); } catch (e) {} } }, function () { done(false); });
       });
       URL.revokeObjectURL(url);
       if (V.playing !== item) return item.resolve(false);
