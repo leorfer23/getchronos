@@ -114,3 +114,24 @@ test("files pasted into a turn are handed to that project's Robert in his own di
   assert.equal(fs.readFileSync(f.path, "utf8"), "png");
   assert.equal(handFilesTo(null, [{ path: src }])[0].path, src, "the fleet-wide Robert keeps the original");
 });
+
+test("the drafts agents leave are the operator's alone: no Robert lists them, a workspace token gets nothing", async () => {
+  const { recordDraft } = await import("./draft-notify.js");
+  const { ROBERT_ADMIN_ROUTES } = await import("./robert-scope.js");
+  // Every workspace's outgoing words in one list (the phone's stopgap read): never on a Robert's routes.
+  assert.ok(!ROBERT_ADMIN_ROUTES.has("GET /drafts"));
+  recordDraft({ session_id: null, workspace_id: A.id, where: "a work", label: "draft", kind: "slack", to: null, channel: "#general", subject: null, text: "Prices hold until March." });
+  recordDraft({ session_id: null, workspace_id: B.id, where: "b work", label: "draft", kind: "email", to: "ana@example.com", channel: null, subject: "Numbers", text: "The numbers are attached." });
+  const none = (r: { status: number; json: any }, who: string) => {
+    assert.ok(r.status === 401 || r.status === 403, `${who}: ${r.status}`);
+    assert.equal(JSON.stringify(r.json ?? {}).includes("Prices hold"), false, `${who} read no draft`);
+    assert.equal(r.json?.drafts, undefined, `${who} got no list`);
+  };
+  none(await call("GET", "/drafts", asRobertA), "his project's Robert (rw)");
+  none(await call("GET", "/drafts", asReaderA), "his Telegram Robert (ro)");
+  none(await call("GET", "/drafts", { "content-type": "application/json", "x-mc-workspace-token": workspaces.get(A.id)!.token }), "the workspace's own token");
+  none(await call("GET", "/drafts", { "content-type": "application/json" }), "no token");
+  const op = await call("GET", "/drafts", { "content-type": "application/json", "x-mc-admin": CONFIG.adminToken });
+  assert.equal(op.status, 200, "the operator's phone reads them");
+  assert.ok(op.json.drafts.some((d: any) => d.text === "Prices hold until March."));
+});
