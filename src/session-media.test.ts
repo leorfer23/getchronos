@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { CONFIG } from "./config.js";
 import { findMedia, mediaMime, mediaPathsFromFeed, sessionMedia } from "./session-media.js";
 import { describeTool } from "./focus.js";
 import type { FocusEvent } from "./focus.js";
@@ -67,10 +68,27 @@ test("a symlink named in the feed is listed as its target, and only if that targ
   const secret = write(path.join(tmp, "secret.txt"), "nope");
   const link = path.join(tmp, "looks.png");
   fs.symlinkSync(secret, link);
-  const list = sessionMedia(s, [ev(1, "act", `Read ${link}`)], drops);
+  // The daemon reading the list runs unsandboxed: a .png that is really a text file is not media at all.
+  assert.deepEqual(sessionMedia(s, [ev(1, "act", `Read ${link}`)], drops), []);
+  const pic = write(path.join(tmp, "real.png"), "png");
+  const alias = path.join(tmp, "alias.png");
+  fs.symlinkSync(pic, alias);
+  const list = sessionMedia(s, [ev(1, "act", `Read ${alias}`)], drops);
   assert.equal(list.length, 1);
-  assert.equal(list[0].path, secret);
-  assert.equal(list[0].image, false, "served as a download, never as an inline picture");
+  assert.equal(list[0].path, pic);
+});
+
+test("nothing the agents' sandbox denies is ever media — not through a link in the feed, not through one in the drop dir", () => {
+  const s = { id: "sess-4", host_id: null };
+  // A stand-in for ~/chronos/.admin-token: whatever config.ts lists as a secret every sandbox denies.
+  const tokenFile = CONFIG.sandbox.secrets.find((p) => p.endsWith(".admin-token"))!;
+  assert.ok(tokenFile && fs.existsSync(tokenFile), "the test daemon has an admin token file");
+  const viaFeed = path.join(tmp, "token.png");
+  fs.symlinkSync(tokenFile, viaFeed);
+  assert.deepEqual(sessionMedia(s, [ev(1, "say", `saved ${viaFeed}`)], drops), [], "a link named in the feed");
+  fs.mkdirSync(path.join(drops, s.id), { recursive: true });
+  fs.symlinkSync(tokenFile, path.join(drops, s.id, "dropped.bin"));
+  assert.deepEqual(sessionMedia(s, [], drops), [], "a link left in its own drop dir");
 });
 
 test("a terminal on another computer lists nothing: its files are on its own disk", () => {

@@ -81,7 +81,8 @@ import { plainFailure } from "./turn-failure.js";
 import { frontTakes } from "./agent-route.js";
 import { noteVoiceTrace, voiceTraces } from "./voice-trace.js";
 import { mountLedgerRoutes } from "./ledger-routes.js";
-import { robertMay } from "./robert-scope.js";
+import { mountExecutorRoutes } from "./executor-routes.js";
+import { robertGateFor } from "./robert-scope.js";
 import { isShipTerminal } from "./ship-guard.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
@@ -159,7 +160,7 @@ import { RepoGitError, resolveRepoGitFields } from "./repo-git.js";
 import type { GoalKind, LessonState, Session } from "./types.js";
 import { redactConnectorConfig, publicTrigger } from "./redact.js";
 import { sharedRepoViews } from "./shared-repos.js";
-import { checkToken, operatorOrRobertOf, robertScopeOf, setRobertGate, requireAdmin, tokenlessGate, tokenlessMode, tokenlessReport, tokenOk, callerScope, checkScope, checkRepoScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
+import { checkToken, operatorOrFleet, operatorOrRobertOf, robertIdentity, robertScopeOf, setRobertGate, requireAdmin, tokenlessGate, tokenlessMode, tokenlessReport, tokenOk, callerScope, checkScope, checkRepoScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
 import { wsByIdOrSlug, wsRefs } from "./ws-ref.js";
 import { auditProfiles } from "./profile-audit.js";
 import { findHost, hostOnline } from "./hosts/index.js";
@@ -582,8 +583,10 @@ export function startServer() {
   const api = express.Router();
   // Requests an agent on another computer made through its host (HOSTS.md): remote, never loopback-
   // trusted, and bound to their own session and host. A no-op for everything else.
-  // A project's Robert: admin inside his own workspace only (authz.ts robertToken, robert-scope.ts).
-  setRobertGate(robertMay);
+  // Every Robert credential (authz.ts robertToken): a project's Robert is admin inside his own workspace
+  // only; the fleet-wide one reads every workspace and writes what robert-scope.ts lists. Neither is
+  // ever the operator.
+  setRobertGate(robertGateFor);
   api.use(forwardedGate);
   // No token = no identity: recorded (and refused once CHRONOS_TOKENLESS=deny) — authz.ts.
   api.use(tokenlessGate);
@@ -1040,11 +1043,12 @@ export function startServer() {
     // own lead_id is null.) The workspace check stays as a second wall in case a row ever crosses.
     const admin = tokenOk(req.get("x-mc-admin"), CONFIG.adminToken);
     const target = sessions.get(req.params.id);
-    // The project's Robert types into his own project's terminals (drive: the next step), never another's.
-    const robert = !admin && operatorOrRobertOf(req, target?.workspace_id);
+    // The project's Robert types into his own project's terminals (drive: the next step), never another's;
+    // the fleet-wide Robert drives any terminal, as he did with the operator's token.
+    const robert = !admin && operatorOrRobertOf(req, target?.workspace_id, { fleet: true });
     const lead = admin || robert ? null : leadScope(req);
     if (!admin && !robert && !lead) {
-      if (robertScopeOf(req.get("x-mc-admin"))) return res.status(404).json({ error: "not found" });
+      if (robertIdentity(req.get("x-mc-admin"))) return res.status(404).json({ error: "not found" });
       return res.status(403).json({ error: "typing into a terminal is admin-gated (x-mc-admin)" });
     }
     const s = target;
@@ -1058,7 +1062,10 @@ export function startServer() {
       if ("error" in r) return res.status(409).json({ error: r.error });
       return res.json({ ok: true, run_id: r.run_id });
     }
-    const err = sendInput(req.params.id, req.body, req.body.by || "operator");
+    // A Robert credential never types as the operator, whatever its body says: the trail (and the
+    // ledger) must be able to tell his keystrokes from the operator's own.
+    const by = robert ? (req.body.by && req.body.by !== "operator" ? req.body.by : "robert") : req.body.by || "operator";
+    const err = sendInput(req.params.id, req.body, by);
     if (err) return res.status(err.startsWith("rate limit") ? 429 : 409).json({ error: err });
     // His hand, counted for src/proactive-score.ts: the admin token with no other `by` (Desk composer,
     // Focus buttons, phone, his own `mc session send`). Robert and agents send their own `by`
@@ -1144,7 +1151,8 @@ export function startServer() {
   api.delete("/worktrees", validate(RemoveWorktreeSchema), async (req, res) => {
     const out = await removeWorktreeAs(
       {
-        admin: tokenOk(req.get("x-mc-admin"), CONFIG.adminToken),
+        // Robert's power over any worktree is the fleet-wide Robert's now (he no longer holds the admin token).
+        admin: operatorOrFleet(req, { write: true }),
         scope: callerScope(req),
         session: req.body.session,
         agent: req.get("x-mc-agent"),
@@ -1628,7 +1636,7 @@ export function startServer() {
   // window holds the page, and the page has no OS hand of its own in a plain browser tab.
   api.post("/desk/notify", validate(DeskNotifySchema), (req, res) => {
     // The operator, or a project's Robert telling him something (a notification is to him, never out).
-    if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken) && robertScopeOf(req.get("x-mc-admin"))?.role !== "rw")
+    if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken) && robertIdentity(req.get("x-mc-admin"))?.role !== "rw")
       return res.status(403).json({ error: "admin-gated (x-mc-admin)" });
     if (!CONFIG.desktopNotify) return res.status(204).end();
     desktopNotify(req.body.title, req.body.body ?? "");
@@ -1946,7 +1954,7 @@ export function startServer() {
     const touchesGlobal =
       req.body?.scope === "global" ||
       (targetId ? noteSvc.getNote(targetId)?.scope === "global" : false);
-    if (touchesGlobal && !tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) {
+    if (touchesGlobal && !operatorOrFleet(req, { write: true })) {
       res.status(403).json({ error: "global notes cross all workspaces — admin token required" });
       return true;
     }
@@ -2266,7 +2274,7 @@ export function startServer() {
   // operational.status can be "degraded" when connectors, recoveries, or stale reviews need a human.
   api.get("/health", (req, res) => {
     // Public liveness; the rollup names every workspace and its connector errors — operator only.
-    if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return res.json({ ok: true });
+    if (!operatorOrFleet(req)) return res.json({ ok: true });
     res.json({ ok: true, ...dispatchStatus(), deploy: deployStatus(), operational: operationalHealth() });
   });
 
@@ -2399,6 +2407,8 @@ export function startServer() {
   mountCaptureRoutes(api, { openSession });
   // The request ledger: what he asked → where it went → what came back → what he owes (LEDGER.md).
   mountLedgerRoutes(api);
+  // What the executor carried out (src/executor.ts): its log (the operator's) and its switches.
+  mountExecutorRoutes(api);
 
   api.get("/stats", requireAdmin, (_req, res) => {
     const days = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
@@ -2444,7 +2454,7 @@ export function startServer() {
   // Telegram calls in-process, so a command added once shows up on every surface.
   // Admin-gated: the table includes mutations (stop, auto).
   api.post("/command", async (req, res) => {
-    if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken))
+    if (!operatorOrFleet(req, { write: true }))
       return res.status(403).json({ error: "admin token required" });
     const line = String(req.body?.line ?? "").trim();
     if (!line) return res.status(400).json({ error: "line required" });
@@ -2904,7 +2914,7 @@ export function startServer() {
    * /input and /desk/notify) since this is called from a route registered above that declaration.
    */
   function holdRoute(req: express.Request, res: express.Response, kind: HoldKind) {
-    if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken))
+    if (!operatorOrFleet(req, { write: true }))
       return res.status(403).json({ error: "later/hold is admin-gated (x-mc-admin)" });
     const target = resolveHoldTarget(kind, req.params.id);
     if (!target) return res.status(404).json({ error: "not found" });

@@ -247,3 +247,27 @@ test("the front's rows never reach a project Robert's recap", () => {
   assert.ok(!recap.includes("Alpha tiene"), "cross-workspace text from the front stays out of the unscoped Robert's recap");
   assert.ok(recap.includes("hola"));
 });
+
+test("a hand-over that was simply answered is closed; one a terminal took, or that left something to decide, stays open", async () => {
+  const B = mkWs("bravo-close");
+  T.setTalkerDelegator(async () => ({ reply: "Hay 15 abiertos." }));
+  const st = { turn: "t-close", words: "contá los PR abiertos", earlier: [], scope: null, via: "voice", surface: "phone", delegations: [] } as any;
+  const d = T.buildDelegation({ project: B.slug }, st);
+  assert.ok(d.ok);
+  if (!d.ok) return;
+  const a = T.startDelegation(d, st);
+  await a.done;
+  assert.ok(requests.get(a.request)!.closed_at, "answered and nothing else: closed");
+  // Something came back that waits on him: it must stay open.
+  T.setTalkerDelegator(async (_p, _ws, turn) => {
+    const r = requests.list({ workspace_id: B.id, limit: 20 }).find((x) => x.turn_id === turn)!;
+    requests.upsertDeliverable({ request_id: r.id, kind: "pr", ref: "https://github.com/acme/app/pull/7", label: "PR" });
+    assert.equal(requests.deliverables(r.id).length, 1);
+    return { reply: "Abrí el PR." };
+  });
+  const st2 = { ...st, turn: "t-open", delegations: [] };
+  const b = T.startDelegation(T.buildDelegation({ project: B.slug }, st2) as any, st2);
+  await b.done;
+  assert.equal(requests.get(b.request)!.closed_at, null, "a deliverable keeps it open");
+  assert.equal(requests.deliverables(b.request).length, 1, "and the delegator really ran");
+});

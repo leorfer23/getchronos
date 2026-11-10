@@ -46,6 +46,7 @@ import { startCacheKeeper } from "./cache-keeper.js";
 import { startTermStatus, statusOf } from "./term-status.js";
 import { startLedger } from "./ledger.js";
 import { startVerifier } from "./request-verifier.js";
+import { startExecutor } from "./executor.js";
 import { startBoardWatcher } from "./board.js";
 import { startRobertWake } from "./robert-wake.js";
 import { startWakeQueue } from "./wake-queue.js";
@@ -115,6 +116,8 @@ startTermStatus();
 // The request ledger follows the session/ask/turn events from here on (src/ledger.ts, LEDGER.md).
 startLedger();
 startVerifier();
+// An approval nobody used died with the process that was about to run it: void it, never run it late.
+startExecutor();
 startMergeGate();
 startSelfDeploy();
 startAgentLifecycleBridge();

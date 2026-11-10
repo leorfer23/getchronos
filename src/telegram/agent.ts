@@ -24,7 +24,7 @@ import { authNotice } from "../turn-failure.js";
 import { agentDef, agentPrompt } from "../agent-defs.js";
 import { widgetPromptBlock } from "../widgets/index.js";
 import { askLine, commitTurn, resolveTurnSmart, type Route } from "../thread-router.js";
-import { robertToken } from "../authz.js";
+import { robertToken, withoutOperatorToken, type RobertLane } from "../authz.js";
 import { childEnv } from "../child-env.js";
 import { send, sendChatAction, esc } from "./api.js";
 import { kb, type Btn } from "./keyboards.js";
@@ -849,7 +849,7 @@ export function spawnManager(opts: {
     const child = spawn(cmd, cmdArgs, {
       cwd,
       // The operator's personal daemon-level agent keeps the full env; a project's turn gets its workspace's.
-      env: { ...(wall.baseEnv ?? process.env), ...spec.env, ...(claude ? PERSONA_ENV : {}), ...(opts.extraEnv ?? {}) },
+      env: withoutOperatorToken({ ...(wall.baseEnv ?? process.env), ...spec.env, ...(claude ? PERSONA_ENV : {}), ...(opts.extraEnv ?? {}) }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     opts.onChild?.(child);
@@ -1122,7 +1122,7 @@ export class WarmManager {
     );
     const child = spawn(cmd, cmdArgs, {
       cwd,
-      env: { ...(this.opts.baseEnv ?? process.env), CLAUDE_CONFIG_DIR: profileDir, ...PERSONA_ENV, ...(this.opts.extraEnv ?? {}) },
+      env: withoutOperatorToken({ ...(this.opts.baseEnv ?? process.env), CLAUDE_CONFIG_DIR: profileDir, ...PERSONA_ENV, ...(this.opts.extraEnv ?? {}) }),
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child = child;
@@ -1362,7 +1362,7 @@ export const WAKE_IDLE_KILL_MS = 3 * 60_000;
  *  ever-growing transcript only makes every later wake slower and dearer. */
 export const WAKE_SESSION_MAX_TURNS = 40;
 /** Whose conversation a Robert turn belongs to: the operator's own, or the background wake lane. */
-export type RobertLane = "operator" | "wake";
+export type { RobertLane };
 // Workspace → its Claude profile dir; no workspace (or unknown id) → the operator's default.
 export function webProfileDir(wsId?: string | null): string {
   const pinned = (wsId ? workspaces.get(wsId)?.config_dir : null) || DEFAULT_PROFILE_DIR;
@@ -1523,7 +1523,9 @@ function webManager(key: string, wsId: string | null, lane: RobertLane = "operat
     // workspace, so every workspace-scoped `mc` command (pad, idea, skill, learn) can default to it
     // instead of making him carry a uuid around. Absent for the unscoped/personal manager, where
     // there is no one right answer and the command should say so rather than guess.
-    extraEnv: { CHRONOS_ADMIN: robertCredential(wsId), MC_AGENT_NAME: "robert", ...(wsId ? { MC_WORKSPACE: wsId } : {}) },
+    // CHRONOS_ADMIN is HIS credential — derived per workspace (or the fleet) and per lane, never the operator's
+    // token (authz.ts robertToken): the server can always tell his calls from the operator's own devices.
+    extraEnv: { CHRONOS_ADMIN: robertCredential(wsId, "rw", lane), MC_AGENT_NAME: "robert", ...(wsId ? { MC_WORKSPACE: wsId } : {}) },
       // Each lane resumes ITS OWN session: the wake lane never writes the operator's id, or the next
       // operator turn would --resume into a transcript full of wakes.
       resumeSessionId: getWebSession(key, lane),
@@ -1622,9 +1624,10 @@ export const VOICE_TURN =
   "(VOICE — the operator is talking to you on the Desk voice call. What follows is speech-to-text: names of projects, terminals and people may be misheard, so match them generously against the fleet and the briefs, and if two things fit, ask which. Your reply is READ ALOUD: first sentence = the outcome or your one question; at most three short sentences in total; plain spoken words — no markdown, lists, tables, ids, keys, paths, URLs or emoji. Clear commands you execute directly as always, then say what you did. Anything destructive, outward-facing or ambiguous: ask one short yes/no question he can answer out loud, and act on his spoken yes. UI lines still go after the reply; they are not read out.)";
 
 /**
- * What a Robert carries as CHRONOS_ADMIN: his project's own credential (authz.ts robertToken —
- * admin inside that workspace, nothing outside it). Only the fleet-wide Robert, whose prompt holds no
- * client's content, keeps the operator's token.
+ * What a Robert carries as CHRONOS_ADMIN: always a credential of his own (robertCredential below,
+ * authz.ts robertToken) — a project's Robert is admin inside that workspace and nothing outside it;
+ * the fleet-wide Robert reads every workspace and writes what robert-scope.ts lists. None of them
+ * holds the operator's token any more, so none of them can record or carry out his yes.
  */
 /**
  * Where a project's Robert lives on disk, and what he may not read: his workspace's landing dir (or a
@@ -1663,8 +1666,8 @@ export function handFilesTo<T extends { path: string; text_path?: string | null 
   return files.map((f) => ({ ...f, path: copy(f.path), ...(f.text_path ? { text_path: copy(f.text_path) } : {}) }));
 }
 
-export function robertCredential(wsId: string | null | undefined, role: "rw" | "ro" = "rw"): string {
-  return wsId ? robertToken(wsId, role) : CONFIG.adminToken;
+export function robertCredential(wsId: string | null | undefined, role: "rw" | "ro" = "rw", lane: RobertLane = "operator"): string {
+  return robertToken(wsId ?? null, role, lane);
 }
 
 /** Projects with something going on: a live terminal, or one opened in the last 3 days. */
@@ -1791,7 +1794,7 @@ export async function askManagerWeb(
     // MC_AGENT_NAME signs what he does through `mc`; MC_WORKSPACE is which client this desk
     // Robert belongs to (see the warm-manager spawn above). The fallback engine has to carry both,
     // or a degraded turn silently loses the workspace default the primary had.
-    extraEnv: { CHRONOS_ADMIN: robertCredential(realWsId), MC_AGENT_NAME: "robert", ...(realWsId ? { MC_WORKSPACE: realWsId } : {}) },
+    extraEnv: { CHRONOS_ADMIN: robertCredential(realWsId, "rw", lane), MC_AGENT_NAME: "robert", ...(realWsId ? { MC_WORKSPACE: realWsId } : {}) },
     profileDir: m.profileDir,
     // A fallback engine keeps his walls: his dir, the deny list, his workspace's env.
     ...robertSandbox(realWsId),

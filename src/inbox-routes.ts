@@ -22,7 +22,7 @@
  */
 import type express from "express";
 import { CONFIG } from "./config.js";
-import { callerScope, checkScope, tokenOk } from "./authz.js";
+import { callerScope, checkScope, operatorOrFleet, tokenOk } from "./authz.js";
 import { bus } from "./bus.js";
 import { inbox, jots, workspaces, INBOX_STATES, type InboxItem } from "./store.js";
 import { guard } from "./guard.js";
@@ -36,6 +36,9 @@ type Req = express.Request;
 type Res = express.Response;
 
 const isAdmin = (req: Req) => tokenOk(req.get("x-mc-admin"), CONFIG.adminToken);
+/** Bookkeeping the fleet-wide Robert keeps (file, resolve, rank a row). Done / dismiss / snooze /
+ *  dispatch / won't do stay the operator's own press: done can post a comment on a tracker task. */
+const isAdminOrFleet = (req: Req) => operatorOrFleet(req, { write: true });
 const truthy = (v: unknown) => v === "1" || v === "true";
 
 /** ?all=1 everything · ?open=1 new+snoozed (what a re-check looks at) · ?state=resolved one state. */
@@ -67,7 +70,7 @@ export function addRoute(req: Req, res: Res): void {
   if (!workspaces.get(req.params.id)) { res.status(404).json({ error: "workspace not found" }); return; }
   // Loopback with no token is reachable from inside a sandbox: it is not the operator, and it is not
   // this workspace's job either.
-  if (!isAdmin(req) && callerScope(req)?.ws !== req.params.id) {
+  if (!isAdminOrFleet(req) && callerScope(req)?.ws !== req.params.id) {
     res.status(403).json({ error: "filing to the inbox needs this workspace's token (run it from the workspace's job) or the admin token" });
     return;
   }
@@ -146,7 +149,7 @@ export function resolveRoute(req: Req, res: Res): void {
   const item = inbox.find(req.params.id);
   if (!item) { res.status(404).json({ error: "not found" }); return; }
   if (!checkScope(req, res, item.workspace_id)) return;
-  if (!isAdmin(req) && callerScope(req)?.ws !== item.workspace_id) {
+  if (!isAdminOrFleet(req) && callerScope(req)?.ws !== item.workspace_id) {
     res.status(403).json({ error: "resolving needs this workspace's token or the admin token" });
     return;
   }
@@ -196,7 +199,7 @@ export function rankRoute(req: Req, res: Res): void {
   const wsId = req.params.id;
   if (!checkScope(req, res, wsId)) return;
   if (!workspaces.get(wsId)) { res.status(404).json({ error: "workspace not found" }); return; }
-  if (!isAdmin(req) && callerScope(req)?.ws !== wsId) {
+  if (!isAdminOrFleet(req) && callerScope(req)?.ws !== wsId) {
     res.status(403).json({ error: "ranking needs this workspace's token or the admin token" });
     return;
   }

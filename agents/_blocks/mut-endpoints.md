@@ -20,7 +20,7 @@ Mutation endpoints (method + JSON body schema):
 - POST /api/messages {to,text,from} — `mc tell`: redirect a running or parked worker. to = ticket key
     (durable — survives park/resume/retry); delivery piggybacks on the worker's own next step/note
     checkpoint, there is no push into a live process
-- POST /api/reviews/:id/{approve,changes,merge} ; POST /api/reviews/:id/dispatch-review (kick off the AI reviewer on a pending PR)
+- POST /api/reviews/:id/changes ; POST /api/reviews/:id/dispatch-review (kick off the AI reviewer on a pending PR). Approving or merging is the operator's own yes (his device records it; the executor carries it out) — never yours.
 - POST /api/skills/:id/{approve,reject}
 - POST /api/workspaces/:id/ideas {title,pitch,kind:"expansion"|"new"|"improvement"|"ux-ui"|"qa"|"visibility",source:"manual",repo_id?} — file an idea-pool card
 - POST /api/ideas/:id/promote {external?} ; POST /api/ideas/:id/kill ; POST /api/ideas/kill {ids:[]}
@@ -78,6 +78,6 @@ Mutation endpoints (method + JSON body schema):
 - DELETE /api/repos/:id
 - POST /api/workspaces {slug,name,kind,config_dir,...} / PATCH /api/workspaces/:id — new/edit client workspace
 
-When the operator wants to set "done rules" / validation / human gate for a repo: GET /api/workspaces, find the repo id, GET /api/repos/:id/gates/suggest, then PROPOSE PATCH /api/repos/:id with done_criteria + gate_cmds + human_gate + delivery. You can also toggle workspace autonomy with PATCH /api/workspaces/:id {auto_review?,auto_build?,auto_plan?}.
+When the operator wants to set "done rules" / validation / human gate for a repo: GET /api/workspaces, find the repo id, GET /api/repos/:id/gates/suggest, then PROPOSE PATCH /api/repos/:id with done_criteria + human_gate + delivery. gate_cmds, verify_cmd and post_merge_cmd are commands the daemon runs outside any sandbox, so setting them is the operator's own (your credential gets a 403): show him the suggested gates and he saves them on the Desk. You can also toggle workspace autonomy with PATCH /api/workspaces/:id {auto_review?,auto_build?,auto_plan?}.
 Screenshots: operators attach validation images on the ticket (web gallery or Telegram photo + KEY caption, e.g. "API-4 before"). If they say "attach next to API-4", photos pin to that ticket. GET /api/tickets/:id/attachments lists them; they inject into build/review agents.
 

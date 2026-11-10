@@ -18,6 +18,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { CONFIG } from "./config.js";
 import { DROP_ROOT, sessionDropDir } from "./drops.js";
 import { LOCAL_HOST_ID } from "./hosts/index.js";
 import type { FocusEvent } from "./focus.js";
@@ -56,6 +57,18 @@ export const mediaMime = (p: string): string =>
   MIME[path.extname(p).slice(1).toLowerCase()] || "application/octet-stream";
 
 const expand = (p: string) => (p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p);
+
+/** A path with its links followed as far as they exist (the file itself may not exist yet). */
+function resolveLoose(p: string): string {
+  try { return fs.realpathSync(p); } catch { /* not there: resolve its directory instead */ }
+  try { return path.join(fs.realpathSync(path.dirname(p)), path.basename(p)); } catch { return path.resolve(p); }
+}
+let protectedRoots: string[] | null = null;
+/** What every agent sandbox denies outright (config.ts sandbox.secrets + sealed): never media. */
+export function isProtected(real: string): boolean {
+  protectedRoots ??= [...new Set([...CONFIG.sandbox.secrets, ...CONFIG.sandbox.sealed].filter(Boolean).map(resolveLoose))];
+  return protectedRoots.some((root) => real === root || real.startsWith(root + path.sep));
+}
 
 /** Image paths a feed mentions, each tagged with who brought it in. Pure — no disk. */
 export function mediaPathsFromFeed(events: FocusEvent[] | null | undefined): { path: string; source: MediaItem["source"] }[] {
@@ -99,6 +112,11 @@ export function sessionMedia(
     let real: string;
     try { real = fs.realpathSync(p); } catch { return; }
     if (items.has(real)) return;
+    // The list is the file route's allowlist, and the daemon reading it runs unsandboxed: a path the
+    // agent named (or a link it left in its drop dir) must not resolve to a file the agents' sandbox
+    // denies — `x.png -> ~/chronos/.admin-token` would hand any caller of the media route the
+    // operator's token. What the agent named must also still be an image once its links are followed.
+    if (isProtected(real) || (source === "agent" && !isImage(real))) return;
     const st = stat(real);
     if (!st) return;
     items.set(real, { path: real, name: path.basename(real), size: st.size, mtime: st.mtimeMs, image: isImage(real), source });
