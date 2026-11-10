@@ -188,7 +188,8 @@ already settled, adopts orphans, backfills terminals older than `kv ledger.since
   already ranks verified items first and the detail view already shows the missing slots.
 - **Executor**: act on `decided`/`yes` items whose `target_hash` still matches, then move the deliverable
   (`merged` / `sent` / `deployed`), which closes the request.
-- **Voice front**: `openRequest` + `bindTurn` to delegate with a request id; `queueView` and `ledgerText` to speak from.
+- **Voice front**: built (VOICE.md, `src/talker.ts`, setting `voice.talker`, off by default) — it speaks from
+  `ledgerText` + `queueView` and opens one request per delegation with `openRequest` (turn bound).
 - Telegram turns do not publish `agent.asked`, so a terminal Robert opens from Telegram is recorded as his own.
 - Dashboards and documents are read from links in the hand-off's text: the hand-off has no link field of its own
   yet, and nothing tells an agent to name its deliverable's link (KIND_CONTRACT for `investigation` is unchanged).
