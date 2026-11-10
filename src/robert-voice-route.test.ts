@@ -119,15 +119,29 @@ test("voice: a deleted parent workspace is skipped, a turn with no ask is untouc
   assert.equal(resolveVoiceAsk(routed, { surface: "t" }), routed);
 });
 
-test("POST /agent: a voice turn goes through resolveVoiceAsk; a typed one keeps the ask", async () => {
+test("POST /agent: every turn goes through resolveVoiceAsk: spoken or typed, he is never asked which project", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
   const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
   const route = api.slice(api.indexOf('api.post("/agent", requireAdmin'), api.indexOf('api.post("/agent/exec/:id"'));
-  assert.match(route, /const turn = voice && named\.length < 2 \? resolveVoiceAsk\(routedTurn, \{ replyWorkspace: quote\?\.workspace_id \?\? null, surface \}\) : routedTurn;/);
-  assert.match(route, /const fanout = named\.length >= 2 \? named : wantsFanout\(turn\) \? activeWorkspaceIds\(\) : null;/);
+  assert.match(route, /const turn = named\.length < 2 \? oneRobert\(resolveVoiceAsk\(/);
+  assert.match(route, /const fanout = named\.length >= 2 \? named : fansOut\(turn, voice, process\.env\.CHRONOS_ROBERT_FANOUT === \"1\"\) \? activeWorkspaceIds\(\) : null;/);
   // F: the latency stamps ride both the reply row and the error row.
   assert.match(route, /const askedAt = new Date\(\)\.toISOString\(\);/);
   assert.match(route, /if \(kind === "text" && t && !firstDeltaAt\) firstDeltaAt = new Date\(\)\.toISOString\(\);/);
   assert.equal((route.match(/timing\(\)\)/g) || []).length, 2);
+});
+
+test("one Robert: a guessed project (the model's, or the sticky) does not hand him to that project's Robert; a project he pointed at does", async () => {
+  const { oneRobert } = await import("./thread-router.js");
+  const mk = (how: string, ws: string | null) => ({ ws, text: "qué me espera", routed: { ws, text: "qué me espera", how, confidence: 0.7, why: "t", candidates: [], social: false, fleet: false }, ask: null, how }) as any;
+  for (const how of ["model", "sticky"]) {
+    const r = oneRobert(mk(how, "ws-a"));
+    assert.equal(r.ws, null, how);
+    assert.equal(r.routed!.fleet, false, "one reply, not a fan-out");
+  }
+  assert.equal(oneRobert(mk("sticky", "ws-a"), "ws-a").ws, "ws-a", "answering that project's bubble");
+  for (const how of ["tag", "key", "name"]) assert.equal(oneRobert(mk(how, "ws-a")).ws, "ws-a", how);
+  const picked = { ws: "ws-a", text: "x", routed: null, ask: null, how: "selected" } as any;
+  assert.equal(oneRobert(picked), picked);
 });

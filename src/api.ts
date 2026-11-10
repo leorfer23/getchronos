@@ -75,7 +75,7 @@ import { recordSessionPrs } from "./terminal-automerge.js";
 import { draftFields, recentDrafts, recordDraft } from "./draft-notify.js";
 import { openProactive } from "./robert-selfwake.js";
 import { notifyDraft } from "./draft-notify.js";
-import { markVoiceTurn, noteDraft } from "./ledger.js";
+import { markVoiceTurn, noteDraft, openWorkBlock } from "./ledger.js";
 import { mountLedgerRoutes } from "./ledger-routes.js";
 import { robertMay } from "./robert-scope.js";
 import { isShipTerminal } from "./ship-guard.js";
@@ -138,7 +138,7 @@ import { flowData } from "./flow.js";
 import { transcribe, audioFilename, transcribeFailure } from "./transcribe.js";
 import { speak, voiceFor, listVoices, neuralHealth } from "./speak.js";
 import { activeWorkspaceIds, askFleetFanout, askManagerWeb, handFilesTo, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
-import { askLine, commitTurn, explainRoute, getSticky, resolveTurnSmart, resolveVoiceAsk, setSticky, wantsFanout } from "./thread-router.js";
+import { askLine, commitTurn, explainRoute, getSticky, resolveTurn, oneRobert, resolveVoiceAsk, setSticky, fansOut } from "./thread-router.js";
 import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type LeadEvent } from "./store.js";
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
 import { leadEventPayload, waitForLeadEvents } from "./robert-drive.js";
@@ -157,6 +157,7 @@ import { redactConnectorConfig, publicTrigger } from "./redact.js";
 import { sharedRepoViews } from "./shared-repos.js";
 import { checkToken, operatorOrRobertOf, robertScopeOf, setRobertGate, requireAdmin, tokenlessGate, tokenlessMode, tokenlessReport, tokenOk, callerScope, checkScope, checkRepoScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
 import { wsByIdOrSlug, wsRefs } from "./ws-ref.js";
+import { auditProfiles } from "./profile-audit.js";
 import { findHost, hostOnline } from "./hosts/index.js";
 import { RemoteHost } from "./hosts/remote.js";
 import { resolveHostRef, sessionHostOffline } from "./remote-terminals.js";
@@ -576,6 +577,13 @@ export function startServer() {
   // Who is still calling with no token — the list to empty before flipping CHRONOS_TOKENLESS=deny.
   api.get("/authz/tokenless", requireAdmin, (_req, res) => {
     res.json({ mode: tokenlessMode(), callers: tokenlessReport() });
+  });
+
+  // What this machine shares between projects outside any sandbox rule (linked profile dirs, a
+  // client's plugin marketplace in a second profile, secrets exported to every shell, one credential
+  // file for two projects). Names and paths only — src/profile-audit.ts.
+  api.get("/isolation/audit", requireAdmin, (_req, res) => {
+    res.json({ findings: auditProfiles({ profileDirs: Object.values(CONFIG.profiles), workspaces: workspaces.list() }) });
   });
 
   api.get("/backends", (_req, res) => {
@@ -5107,7 +5115,9 @@ export function startServer() {
     // message (a #tag, a ticket key, a project name, the terminal on screen, the bubble being
     // answered, or where the last one landed). Each workspace answers on its OWN warm Robert, so no
     // context can cross between them.
-    const routedTurn = await resolveTurnSmart(req.body.text, {
+    // Rules only, no router-model round trip: its guess no longer picks a Robert (oneRobert, below),
+    // so the call was seconds of waiting before he heard a word.
+    const routedTurn = resolveTurn(req.body.text, {
       selected: req.body.ws ?? null,
       route: req.body.route,
       surface,
@@ -5125,8 +5135,10 @@ export function startServer() {
     const named = routedTurn.ask && /two tags|more than one project/.test(routedTurn.ask.why)
       ? routedTurn.ask.candidates.map((c) => c.ws).filter((x): x is string => !!x)
       : [];
-    // Spoken: never "which project?" — the bubble answered, then the sticky, then the unscoped Robert.
-    const turn = voice && named.length < 2 ? resolveVoiceAsk(routedTurn, { replyWorkspace: quote?.workspace_id ?? null, surface }) : routedTurn;
+    // Never "which project?", spoken or typed — he talks to one Robert, who does not ask him to sort
+    // his own words: the bubble answered, then the sticky, then the unscoped Robert.
+    // …and a project's own Robert only when he pointed at that project himself (oneRobert).
+    const turn = named.length < 2 ? oneRobert(resolveVoiceAsk(routedTurn, { replyWorkspace: quote?.workspace_id ?? null, surface }), quote?.workspace_id ?? null) : routedTurn;
     if (turn.ask && named.length < 2) {
       return res.json({ reply: askLine(turn.ask), ask: { why: turn.ask.why, candidates: turn.ask.candidates }, actions: [], ws: null, how: "ask" });
     }
@@ -5138,7 +5150,7 @@ export function startServer() {
     // the fleet-wide Robert, whose prompt carries no client's content at all.
     const runWs = ws;
     // Fan-out only for a real shop-wide question or two named projects — never for "hola".
-    const fanout = named.length >= 2 ? named : wantsFanout(turn) ? activeWorkspaceIds() : null;
+    const fanout = named.length >= 2 ? named : fansOut(turn, voice, process.env.CHRONOS_ROBERT_FANOUT === "1") ? activeWorkspaceIds() : null;
     const text = turn.text; // the #tag never reaches the model
     const client = req.body.client;
     const turnId = randomUUID();
@@ -5155,7 +5167,11 @@ export function startServer() {
     const quoted = quote ? { id: quote.id, side: quote.side, text: quoteExcerpt(quote.text) } : null;
     // A project's Robert cannot read Chronos's attachments root (every client's files): this turn's
     // files are copied into his own dir and he gets those paths.
-    const prompt = quotePrompt(quote) + text + chatAttachmentsBlock(fanout?.length ? files : handFilesTo(runWs, files));
+    // The unscoped Robert answers for the whole shop on his own, so he is handed what is open right now
+    // (the request ledger, every project — the operator reads everything, and so does his front Robert)
+    // instead of re-scanning the Desk with tools before he can say a word.
+    const open = !runWs && !fanout?.length ? openWorkBlock() : "";
+    const prompt = open + quotePrompt(quote) + text + chatAttachmentsBlock(fanout?.length ? files : handFilesTo(runWs, files));
     const shown = files.map((a) => ({ id: a.id, url: a.url, mime: a.mime, name: a.name }));
     // First streamed TEXT delta of the reply (chat_messages.first_delta_at): when speech can start.
     let firstDeltaAt: string | null = null;

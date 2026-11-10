@@ -89,7 +89,7 @@ test("the stored row carries the ROUTED workspace, so each recap stays that proj
 });
 
 test("POST /agent routes, refuses to guess, and answers with where it landed", () => {
-  assert.match(api, /const routedTurn = await resolveTurnSmart\(req\.body\.text, \{/);
+  assert.match(api, /const routedTurn = resolveTurn\(req\.body\.text, \{/);
   assert.match(api, /selected: req\.body\.ws \?\? null/);
   assert.match(api, /stagedSessionId: req\.body\.session \?\? null/);
   // An ask returns candidates instead of running a manager.
