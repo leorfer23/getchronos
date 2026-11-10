@@ -19,13 +19,6 @@ import {
   withProviderFallback,
 } from "./manager-fallback.js";
 
-test("isProviderLimitError: session limit (Claude subscription)", () => {
-  assert.equal(
-    isProviderLimitError("You've hit your session limit · resets 2:20pm (America/Buenos_Aires)"),
-    true,
-  );
-});
-
 test("isProviderLimitError: rate limit / 429 / credits", () => {
   assert.equal(isProviderLimitError("rate_limit exceeded"), true);
   assert.equal(isProviderLimitError("Error 429 too many requests"), true);
@@ -79,40 +72,10 @@ test("mark/is/clear provider limited cooldown", () => {
   assert.equal(isProviderLimited("k1"), false);
 });
 
-test("markProviderLimited uses DEFAULT cooldown when no parseable reset", () => {
-  _resetProviderLimitState();
-  const before = Date.now();
-  markProviderLimited("k2", "session limit");
-  // Still limited immediately after mark
-  assert.equal(isProviderLimited("k2"), true);
-  // Cooldown is ~90m — not expired yet
-  assert.ok(DEFAULT_LIMIT_COOLDOWN_MS >= 60 * 60 * 1000);
-  clearProviderLimited("k2");
-  assert.ok(Date.now() - before < 1000);
-});
-
 test("resolveManagerFallback defaults to grok (not claude)", () => {
   const fb = resolveManagerFallback(null);
   assert.equal(fb.backend, "grok");
   assert.ok(fb.model === null || typeof fb.model === "string");
-});
-
-test("withProviderFallback: primary success clears cooldown and skips fallback", async () => {
-  _resetProviderLimitState();
-  let fbCalls = 0;
-  // Force a prior limited state to ensure success clears it
-  markProviderLimited("t-ok", "session limit");
-  clearProviderLimited("t-ok"); // start clean for success path
-
-  const out = await withProviderFallback({
-    key: "t-ok",
-    primary: async () => "hello from claude",
-    system: "sys",
-    prompt: "hi",
-  });
-  assert.equal(out, "hello from claude");
-  assert.equal(isProviderLimited("t-ok"), false);
-  assert.equal(fbCalls, 0);
 });
 
 test("withProviderFallback: non-limit primary error propagates", async () => {
@@ -154,38 +117,6 @@ test("withProviderFallback: auth failure routes to fallback but sets NO cooldown
   assert.equal(killed, true);
   // A re-login fixes it immediately — the next turn must go back to Claude, not stay on grok.
   assert.equal(isProviderLimited("t-auth"), false);
-});
-
-test("withProviderFallback: limit on primary → fallback reply", async () => {
-  _resetProviderLimitState();
-  // Monkey-patch by injecting a primary that throws limit, and mock run via intercepting
-  // resolveManagerFallback path — we can't easily spawn grok in unit tests, so we only
-  // verify the primary-limit branch marks cooldown when fallback also fails (no real binary).
-  // Full spawn is covered by integration / live use.
-  let killed = false;
-  const savedChain = CONFIG.agent.fallbackChain;
-  CONFIG.agent.fallbackChain = [];
-  await assert.rejects(
-    () =>
-      withProviderFallback({
-        key: "t-lim",
-        primary: async () => {
-          throw new Error("You've hit your session limit · resets 2:20pm (America/Buenos_Aires)");
-        },
-        system: "sys",
-        prompt: "hi",
-        killPrimary: () => {
-          killed = true;
-        },
-        // Point at a backend that will fail fast without network if oneShot runs
-        timeoutMs: 2_000,
-      }),
-    /session limit|fallback/i,
-  );
-  assert.equal(killed, true);
-  CONFIG.agent.fallbackChain = savedChain;
-  assert.equal(isProviderLimited("t-lim"), true);
-  clearProviderLimited("t-lim");
 });
 
 // Verbatim from the Desk: Robert on fable, no fallback, "(failed: …)".

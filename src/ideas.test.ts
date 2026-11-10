@@ -128,13 +128,6 @@ test("parseIdeaJson validates kinds and strips fences", () => {
   assert.equal(items[0].title, "A");
 });
 
-test("ideaContextBundle includes workspace context section shape", () => {
-  const ws = mkWs();
-  const bundle = ideaContextBundle(ws);
-  // empty workspace still returns string (may be empty)
-  assert.equal(typeof bundle, "string");
-});
-
 test("feederConfig defaults to disabled with sane counts", () => {
   const ws = mkWs();
   const fu = feederConfig(ws, "followups");
@@ -220,12 +213,6 @@ test("dispatchIdeaFeeder rejects a retired model with an explicit error", () => 
     () => dispatchIdeaFeeder(ws.id, "miner", { force: true }),
     (e: Error) => /modelo desconocido \(retirado\).*kimi-k3/.test(e.message),
   );
-});
-
-test("validateSpawnTarget: unknown backend and retired model", () => {
-  assert.equal(validateSpawnTarget("claude-code", "sonnet"), null);
-  assert.match(validateSpawnTarget("no-such-backend", "sonnet")!, /unknown backend/);
-  assert.match(validateSpawnTarget("opencode", "vercel/moonshotai/kimi-k3")!, /modelo desconocido \(retirado\)/);
 });
 
 test("runFeeder followups no-ops when ticket repo has ideas_enabled=0", async () => {

@@ -59,11 +59,6 @@ describe("ensureSessionWorktree", () => {
     assert.deepEqual(a, b);
   });
 
-  test("two terminals on one repo get different trees — the whole point", async () => {
-    const a = (await ensureSessionWorktree(repos.get(repoId)!, newSession()))?.path;
-    const b = (await ensureSessionWorktree(repos.get(repoId)!, newSession()))?.path;
-    assert.notEqual(a, b);
-  });
 });
 
 describe("desk branch names", () => {

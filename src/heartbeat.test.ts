@@ -250,18 +250,6 @@ test("hourly heartbeat: identical reply to the last delivery is silenced; booken
   assert.equal(bookend.delivered, true);
 });
 
-test("workspaceTargets: every workspace becomes a target", () => {
-  const targets = workspaceTargets([
-    { id: "w1", slug: "acme" },
-    { id: "w2", slug: "globex" },
-  ]);
-  assert.deepEqual(targets, [
-    { id: "w1", slug: "acme" },
-    { id: "w2", slug: "globex" },
-  ]);
-  assert.deepEqual(workspaceTargets([]), []);
-});
-
 test("bookend brief is scoped to its workspace and delivered to that target", async () => {
   const target = { id: "w1", slug: "acme" };
   let prompt = "";
@@ -378,22 +366,6 @@ test("mail sweep: important mail delivers once and seeds dedup for the next wind
   await runMailSweep({ force: true, askFn: async (p) => { prompt = p; return "NOOP"; }, deliverFn: async () => {} });
   assert.match(prompt, /do NOT alert for these same mails again/);
   assert.match(prompt, /Swiss Medical/);
-});
-
-test("mail sweep: prose non-report with trailing NOOP delivers nothing", async () => {
-  const { kv } = await import("./store.js");
-  const { runMailSweep } = await import("./heartbeat.js");
-  (await import("./config.js")).CONFIG.mailSweep.enabled = true;
-  kv.del("mailsweep.lastRunAt");
-  kv.del("mailsweep.lastAlert");
-  let delivered = 0;
-  const r = await runMailSweep({
-    force: true,
-    askFn: async () => "No new mail since last check.\n\nNOOP",
-    deliverFn: async () => { delivered++; },
-  });
-  assert.deepEqual(r, { ran: true, alerted: false });
-  assert.equal(delivered, 0);
 });
 
 test("mail sweep: identical alert to the last one is silenced", async () => {

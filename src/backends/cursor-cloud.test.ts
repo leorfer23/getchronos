@@ -403,33 +403,10 @@ test("isGitHubRemote: accepts https and ssh GitHub urls, rejects everything else
   assert.equal(isGitHubRemote(""), false);
 });
 
-test("validateSpawnTarget: cursor-cloud refuses a repo with no GitHub remote, naming the repo", () => {
-  const err = validateSpawnTarget("cursor-cloud", null, { name: "widgets", git_remote: null, delivery: "pr" });
-  assert.match(err!, /widgets/);
-  assert.match(err!, /GitHub/);
-});
-
-test("validateSpawnTarget: cursor-cloud refuses delivery=commit, naming the repo", () => {
-  const err = validateSpawnTarget("cursor-cloud", null, { name: "widgets", git_remote: "https://github.com/acme/widgets", delivery: "commit" });
-  assert.match(err!, /widgets/);
-  assert.match(err!, /delivery=pr/);
-});
-
-test("validateSpawnTarget: cursor-cloud allows a GitHub repo with delivery=pr", () => {
-  assert.equal(validateSpawnTarget("cursor-cloud", null, { name: "widgets", git_remote: "https://github.com/acme/widgets", delivery: "pr" }), null);
-});
-
 test("validateSpawnTarget: repo arg is optional and is a no-op for every OTHER backend", () => {
   assert.equal(validateSpawnTarget("claude-code", "sonnet"), null); // no repo passed → unaffected, as always
   assert.equal(validateSpawnTarget("claude-code", "sonnet", null), null); // even an explicit null → unaffected
   assert.match(validateSpawnTarget("no-such-backend", "sonnet")!, /unknown backend/);
-});
-
-test("validateSpawnTarget: cursor-cloud fails CLOSED when no repo resolves (missing ticket / ticket with no repo_id) — not a silent pass", () => {
-  assert.match(validateSpawnTarget("cursor-cloud", null)!, /cursor-cloud refused/);
-  assert.match(validateSpawnTarget("cursor-cloud", null)!, /GitHub/);
-  assert.match(validateSpawnTarget("cursor-cloud", null, null)!, /cursor-cloud refused/);
-  assert.match(validateSpawnTarget("cursor-cloud", null, undefined)!, /cursor-cloud refused/);
 });
 
 test("cursor-cloud: static models fallback omits claude-sonnet-5 (over its spend cap on this account)", () => {

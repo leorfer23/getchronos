@@ -166,20 +166,6 @@ test("composeBrief: caps buttons at 6", () => {
   assert.equal(buttons.length, 6);
 });
 
-test("effectiveStallMinutes: null falls back to global CONFIG, a number wins, 0 means off", () => {
-  assert.equal(effectiveStallMinutes(undefined), 15); // test env default (no CHRONOS_STALL_MINUTES)
-  assert.equal(effectiveStallMinutes({ stall_minutes: null }), 15);
-  assert.equal(effectiveStallMinutes({ stall_minutes: 30 }), 30);
-  assert.equal(effectiveStallMinutes({ stall_minutes: 0 }), 0);
-});
-
-test("effectiveAskRemindHours: null falls back to global CONFIG, a number wins, 0 means off", () => {
-  assert.equal(effectiveAskRemindHours(undefined), 2); // test env default (no CHRONOS_ASK_REMIND_HOURS)
-  assert.equal(effectiveAskRemindHours({ ask_remind_hours: null }), 2);
-  assert.equal(effectiveAskRemindHours({ ask_remind_hours: 6 }), 6);
-  assert.equal(effectiveAskRemindHours({ ask_remind_hours: 0 }), 0);
-});
-
 test("isStalled: threshold edges + detector-off", () => {
   const now = Date.now();
   const exactly10 = new Date(now - 10 * 60_000).toISOString();

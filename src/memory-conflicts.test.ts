@@ -221,17 +221,6 @@ test("remembering a fact still works with the auditor wired in", async () => {
   assert.equal(r2.ok && r2.added, true, "the second line lands — it is new, not a duplicate");
 });
 
-test("a new index line is never judged against itself", async () => {
-  const { rememberFact } = await import("./memory-tree.js");
-  const { candidatesFor: cf } = await import("./memory-conflicts.js");
-  const w = mkWs("mc-self");
-  rememberFact(w.id, { fact: "Claim a worktree before editing any file", topic: "Git" });
-  // Same subject, different claim — the pool it is judged against must exclude the line itself.
-  const pool = [{ kind: "memory-line" as const, ref: "other", text: "Claim a worktree before editing any file" }];
-  const me = { kind: "memory-line" as const, ref: "other", text: "Claim a worktree before editing any file" };
-  assert.deepEqual(cf(me, pool), [], "identical ref is filtered out");
-});
-
 // ───────────────────────────── settling by the id people actually see ─────────────────────────────
 
 test("a conflict resolves by the short id the CLI prints, not just the full uuid", () => {

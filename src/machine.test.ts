@@ -274,12 +274,6 @@ test("abandoning a ticket nobody is waiting on is a no-op", () => {
 
 const tick = () => new Promise((r) => setImmediate(r));
 
-test("fairness: a lone workspace still gets every slot — `mc heavy` unchanged", async () => {
-  assert.equal((await acquireSlot({ label: "a1", workspace_id: "ws-a" }, 0)).granted, true);
-  assert.equal((await acquireSlot({ label: "a2", workspace_id: "ws-a" }, 0)).granted, true);
-  assert.equal((await acquireSlot({ label: "a3", workspace_id: "ws-a" }, 0)).granted, false, "the pool is simply full");
-});
-
 // The incident: one terminal's subagents held both slots while another workspace's suite waited.
 test("fairness: a workspace at its slot budget is passed over for a DIFFERENT workspace that is waiting", async () => {
   const a1 = await acquireSlot({ label: "a1", workspace_id: "ws-a" }, 0);

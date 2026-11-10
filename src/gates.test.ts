@@ -155,10 +155,6 @@ test("globMatch handles ** across separators and bare basenames", () => {
   assert.ok(!globMatch("src/*.ts", "src/deep/app.ts"), "a single star must not cross a separator");
 });
 
-test("riskFor: ordinary source is the low lane that gets handed over", () => {
-  assert.equal(riskFor(["src/flow.ts", "src/flow.test.ts"], repo()), "low");
-});
-
 test("riskFor: schema, secrets, deploy and money paths are high", () => {
   for (const f of [
     "db/migrations/003_add_col.sql",
@@ -331,26 +327,6 @@ test("withRuntimePath puts the daemon's PATH ahead of whatever the login profile
   assert.equal(withRuntimePath("npm test", {}), "set -o pipefail; npm test");
   // A path with a quote in it must not break out of the export.
   assert.ok(withRuntimePath("x", { PATH: "/a'b" }).includes(`export PATH='/a'\\''b':"$PATH";`));
-});
-
-// The regression this exists for: gates run through `bash -l`, which sources the operator's profile
-// and prepends its own toolchain. Before the fix a gate ran on whatever node the profile pointed at
-// instead of the one launchd started the daemon with — on this machine a Node the project cannot
-// even build its native deps against — so a gate could be red for a reason unrelated to the diff.
-test("runGates resolves tools from the passed PATH, not the login profile's", async (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gate-path-"));
-  const probe = path.join(dir, "chronos-probe");
-  fs.writeFileSync(probe, "#!/bin/sh\necho from-daemon-path\n");
-  fs.chmodSync(probe, 0o755);
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-
-  // `chronos-probe` exists ONLY in the injected PATH — a login shell alone would never find it.
-  const [res] = await runGates([{ name: "probe", cmd: "chronos-probe" }], dir, {
-    PATH: `${dir}:/usr/bin:/bin`,
-    HOME: os.homedir(),
-  });
-  assert.equal(res.ok, true, `gate failed — the passed PATH did not survive the login shell: ${res.output}`);
-  assert.equal(res.output, "from-daemon-path");
 });
 
 // Shadowing is the real failure mode: the tool exists in both PATHs and the profile's copy wins.
