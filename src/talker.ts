@@ -233,8 +233,11 @@ export function buildDelegation(
   const rows: RequestRow[] = [];
   for (const id of ids) {
     const r = requests.resolve(id.trim());
-    // The wall: an id from another workspace (or the operator's own fleet-wide row) is refused whole.
-    if (!r || r.workspace_id !== p.id) return { ok: false, error: `request ${clip(id, 12)} is not one of ${p.name}'s` };
+    // The wall: only THIS project's own rows ride along. An id that is another workspace's (or the
+    // operator's fleet-wide row, or a mistyped one) is dropped — nothing of it is in the payload — and
+    // the work still goes out with his words. Refusing the whole hand-over left him with "dale, lo
+    // miro" and nothing happening.
+    if (!r || r.workspace_id !== p.id) continue;
     rows.push(r);
   }
   const back = Math.max(0, Math.min(Number(input.back) || 0, 2));
@@ -605,6 +608,14 @@ export async function startTalkerTurn(o: {
     }
     if (refused.length) console.warn("[talker] refused delegation:", refused.join("; "));
     let reply = shown.trim();
+    // He is never told work started when it did not: a hand-over that was refused, or a promise
+    // ("lo miro", "on it") with no hand-over behind it, is said out loud at once.
+    if (reply && !st.delegations.length && (refused.length || PROMISE_RE.test(reply))) {
+      const sorry = langOf(o.text) === "es" ? " Perdón, no llegué a arrancarlo. Decime de nuevo en qué proyecto y qué querés." : " Sorry, that did not start. Tell me again which project and what you want.";
+      console.warn("[talker] promised with no hand-over:", reply.slice(0, 120));
+      filter.push(sorry);
+      reply += sorry;
+    }
     if (!reply) {
       if (error) {
         const f = plainFailure(error, o.text);
@@ -634,6 +645,9 @@ export async function startTalkerTurn(o: {
   };
   return { ok: true, turn, ws, go };
 }
+
+/** A reply that says work is starting. Exported for tests. */
+export const PROMISE_RE = /\b(lo miro|lo reviso|lo veo|me pongo|estoy en eso|me fijo|ya lo hago|lo hago|on it|i'?ll (look|check|do)|looking into)\b/i;
 
 /** Cheap language guess for the front's own fallback lines. */
 function langOf(text: string): "es" | "en" {
