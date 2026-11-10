@@ -5,8 +5,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  briefFromSeed, deliveredLinks, derivePrereqs, draftHash, expectedChecks, ledgerLines, PICKUP_GRACE_MS, queueOrder, rollUp, viaOf, WORK, wordsOfSession,
-  type ItemView, type QueueCandidate, type RollUpInput, type TerminalView,
+  briefFromSeed, deliveredLinks, derivePrereqs, draftHash, pickTurn, sameWords, STEP_EVIDENCE_MS, TIE_MS, expectedChecks, ledgerLines, PICKUP_GRACE_MS, queueOrder, rollUp, viaOf, WORK, wordsOfSession,
+  type ItemView, type LiveStepView, type LiveTurnView, type QueueCandidate, type RollUpInput, type TerminalView,
 } from "./ledger-model.js";
 import { GOAL_KINDS } from "./validation.js";
 
@@ -246,4 +246,70 @@ test("prerequisites: an analysis in a workspace with a VPN needs it up first; co
   assert.deepEqual(derivePrereqs("investigation", ws).map((p) => p.kind), ["vpn"]);
   assert.deepEqual(derivePrereqs("pr", ws), []);
   assert.deepEqual(derivePrereqs("investigation", { vpn_config: null }), []);
+});
+
+// ── which turn made a move (two lanes in one workspace) ─────────────────────────────────────────
+const T0 = 1_000_000;
+const st = (at: number, over: Partial<LiveStepView> = {}): LiveStepView => ({ at, move: null, goal: null, sid: null, text: null, done: false, used: false, ...over });
+const lane = (turn: string, l: "operator" | "wake", steps: LiveStepView[]): LiveTurnView => ({ turn, lane: l, lastAt: Math.max(T0, ...steps.map((x) => x.at)), steps });
+const OPEN = (goal: string | null) => ({ kind: "open" as const, goal });
+const TYPE = (sessionId: string, text: string | null) => ({ kind: "type" as const, sessionId, text });
+
+test("pickTurn: an announcement that names the terminal decides, whoever moved last", () => {
+  const op = lane("op", "operator", [st(T0, { move: "open", goal: "fix the export" })]);
+  const wake = lane("wk", "wake", [st(T0 + 5_000, { move: "open", goal: "rotate logs" }), st(T0 + 6_000)]);
+  assert.deepEqual(pickTurn([op, wake], OPEN("fix the export"), T0 + 7_000), { turn: "op", lane: "operator", how: "exact", ambiguous: false, step: op.steps[0] });
+  assert.equal(pickTurn([op, wake], OPEN("rotate logs"), T0 + 7_000)?.turn, "wk");
+  // Clipped goals ("…") match by their head; case and spacing do not matter.
+  const long = lane("op", "operator", [st(T0, { move: "open", goal: "Fix the flaky export job that…" })]);
+  assert.equal(pickTurn([long], OPEN("fix the  flaky export job that fails every night"), T0)?.how, "exact");
+});
+
+test("pickTurn: typing — the terminal named and the words said; another terminal is never evidence", () => {
+  const op = lane("op", "operator", [st(T0, { move: "type", sid: "aaaa1111", text: "use bigint" })]);
+  const wake = lane("wk", "wake", [st(T0 + 100, { move: "type", sid: "aaaa1111", text: "<down><enter>" })]);
+  assert.equal(pickTurn([op, wake], TYPE("aaaa1111-full", "use bigint"), T0 + 200)?.turn, "op");
+  assert.equal(pickTurn([op, wake], TYPE("aaaa1111-full", "<down><enter>"), T0 + 200)?.turn, "wk");
+  // Words not said (a raw POST /input) rank above words that differ.
+  const raw = lane("wk", "wake", [st(T0 + 100, { move: "type", sid: "aaaa1111", text: null })]);
+  assert.equal(pickTurn([op, raw], TYPE("aaaa1111-full", "y"), T0 + 200)?.turn, "wk");
+  // A step typing into ANOTHER terminal says nothing about this one.
+  const elsewhere = lane("wk", "wake", [st(T0, { move: "type", sid: "bbbb2222", text: "y" })]);
+  assert.equal(pickTurn([op, elsewhere], TYPE("aaaa1111-full", "use bigint"), T0)?.turn, "op");
+  assert.equal(pickTurn([elsewhere], TYPE("aaaa1111-full", "y"), T0)?.how, "recent", "only a guess is left");
+});
+
+test("pickTurn: announcements that name nothing — the oldest first, a tie to the operator, always a guess", () => {
+  const raw = (at: number) => st(at, { move: "open", goal: null });
+  const fifo = pickTurn([lane("op", "operator", [raw(T0 + 3_000)]), lane("wk", "wake", [raw(T0)])], OPEN("x"), T0 + 4_000);
+  assert.deepEqual([fifo?.turn, fifo?.how, fifo?.ambiguous], ["wk", "step", true]);
+  const tie = pickTurn([lane("op", "operator", [raw(T0 + TIE_MS - 1)]), lane("wk", "wake", [raw(T0)])], OPEN("x"), T0 + 4_000);
+  assert.deepEqual([tie?.turn, tie?.ambiguous], ["op", true]);
+  // A raw open outranks an open announced with another goal.
+  const other = lane("op", "operator", [st(T0, { move: "open", goal: "something else" })]);
+  assert.equal(pickTurn([other, lane("wk", "wake", [raw(T0 + 500)])], OPEN("x"), T0 + 600)?.turn, "wk");
+});
+
+test("pickTurn: no announcement at all — his turn, flagged; spent, finished and stale announcements do not count", () => {
+  const none = pickTurn([lane("op", "operator", [st(T0)]), lane("wk", "wake", [st(T0 + 9_000)])], OPEN("x"), T0 + 10_000);
+  assert.deepEqual([none?.turn, none?.how, none?.ambiguous], ["op", "recent", true]);
+  const wakesOnly = pickTurn([lane("w1", "wake", [st(T0)]), lane("w2", "wake", [st(T0 + 9_000)])], OPEN("x"), T0 + 10_000);
+  assert.deepEqual([wakesOnly?.turn, wakesOnly?.ambiguous], ["w2", true]);
+  for (const spoiled of [{ used: true }, { done: true }]) {
+    const p = pickTurn([lane("op", "operator", [st(T0, { move: "open", goal: "x", ...spoiled })]), lane("wk", "wake", [st(T0 + 1, { move: "open", goal: null })])], OPEN("x"), T0 + 10);
+    assert.equal(p?.turn, "wk", JSON.stringify(spoiled));
+  }
+  const stale = pickTurn([lane("op", "operator", [st(T0, { move: "open", goal: "x" })]), lane("wk", "wake", [st(T0 + STEP_EVIDENCE_MS)])], OPEN("x"), T0 + STEP_EVIDENCE_MS + 1);
+  assert.equal(stale?.how, "recent", "a refused open from minutes ago is not evidence");
+  assert.equal(pickTurn([], OPEN("x"), T0), null);
+  // One turn at work is the answer, whatever it announced.
+  assert.deepEqual([pickTurn([lane("op", "operator", [st(T0)])], OPEN("x"), T0)?.ambiguous], [false]);
+});
+
+test("sameWords: clipped heads match, other words do not", () => {
+  assert.equal(sameWords("Fix the Export", "fix the  export"), true);
+  assert.equal(sameWords("fix the export job th…", "fix the export job that fails"), true);
+  assert.equal(sameWords("fix the export", "fix the export job"), false);
+  assert.equal(sameWords("…", "anything"), false);
+  assert.equal(sameWords(null, "x"), false);
 });

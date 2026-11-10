@@ -304,7 +304,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc when show <id8>                 one continuation: condition, last look, evidence
   mc when fire <id8> ["evidence"]    it happened — continue that work now (any terminal of the workspace)
   mc when cancel <id8> ["why"]       stop waiting
-  mc ledger [list] [--state open|active|all|needs_operator,stuck,…] [--needs] [--since 2h] [--workspace slug] [--json]
+  mc ledger [list] [--state open|active|all|needs_operator,stuck,…] [--needs] [--ambiguous] [--since 2h] [--workspace slug] [--json]
                                      the request ledger: what was asked, where it went, its state, what it owes (LEDGER.md)
   mc ledger show <id8>               one request: its words, terminals, result, deliverables, decisions, checks
   mc ledger queue                    what waits for the operator's word, in the order he should hear it
@@ -1820,6 +1820,7 @@ function askCap(question) {
         const q = new URLSearchParams();
         if (opt.state) q.set("state", opt.state);
         if (opt.needs) q.set("needs", "decision");
+        if (opt.ambiguous) q.set("ambiguous", "1");
         if (opt.since) q.set("since", opt.since);
         if (opt.workspace) q.set("workspace", opt.workspace);
         if (opt.limit) q.set("limit", opt.limit);
@@ -1855,7 +1856,8 @@ function askCap(question) {
       ];
       if (r.work) out.push(`done means: ${r.work.done}`);
       if (r.prereqs?.length) out.push(`needs first: ${r.prereqs.map((p) => p.kind + (p.why ? ` (${p.why})` : "")).join(", ")}`);
-      if (r.terminals.length) out.push("terminals:", ...r.terminals.map((t) => `  ${t.session_id.slice(0, 8)} ${t.role}${t.primary ? "" : " (steer)"}${t.until ? " · handed over" : ""} · ${t.phase || "?"} · ${t.goal || "(no goal)"}`));
+      if (r.terminals.length) out.push("terminals:", ...r.terminals.map((t) => `  ${t.session_id.slice(0, 8)} ${t.role}${t.primary ? "" : " (steer)"}${t.until ? " · handed over" : ""} · ${t.phase || "?"} · ${t.goal || "(no goal)"}` +
+        (t.attribution ? ` · turn by ${t.attribution}${t.ambiguous ? " (AMBIGUOUS — a guess)" : ""}` : "")));
       if (r.result.length) out.push("result:", ...r.result.map((x) => `  ${x.outcome.at.slice(0, 16).replace("T", " ")} ${x.outcome.summary}${x.outcome.prs.length ? ` · ${x.outcome.prs.join(" ")}` : ""}${x.outcome.shipped.length ? ` · shipped: ${x.outcome.shipped.join(", ")}` : ""}`));
       if (r.deliverables.length) out.push("deliverables:", ...r.deliverables.map((d) => `  ${d.kind} · ${d.label || d.ref} · ${d.state}${d.target_hash ? ` · target ${d.target_hash.slice(0, 19)}` : ""}`));
       if (r.decisions.length) out.push("decisions:", ...r.decisions.map((d) => `  [${d.id.slice(0, 8)}] ${d.action} · ${d.label} · ${d.status}${d.decision ? ` · ${d.decision}${d.words ? ` "${d.words}"` : ""}` : ""}${d.target_hash ? ` · target ${d.target_hash.slice(0, 19)}` : ""}`));

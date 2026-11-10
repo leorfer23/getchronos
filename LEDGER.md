@@ -58,11 +58,31 @@
 | Anything live and unknown (a ship terminal, a handoff, a missed event) | the sweep adopts it after a 2-minute grace | from `created_by` |
 | Live when the ledger first started | the boot sweep backfills it (goal as words) | `backfill` |
 
-**The turn test needs nothing from the model.** Each workspace's Robert is one process that runs one turn at a
-time, and every tool call it makes is published (`agent.step`, and `agent.delta` for operator turns) before the
-tool runs. So the turn a `mc session new` belongs to is the turn its workspace's Robert is on when the open
-arrives. A turn ended (`agent.push`) or silent for 3 minutes is not "now". The voice front can open a request
-first and `bindTurn(turn, request)` so what a project Robert opens in that turn joins it.
+**The turn test needs nothing from the model.** A workspace runs more than one Robert at once — his conversation
+(the operator lane) and the daemon's wakes (the wake lane: wakes, ask triage, desk watches) — on separate
+processes with the same credential, so a terminal they open or a line they type says nothing about which turn
+sent it. What does: every tool call a turn makes is announced before it runs (`agent.step`), and
+`robert-steps.ts terminalMove` reads the announcement back — `mc session new --goal "…"` says the goal,
+`mc session send <id> "…"` / `mc session key <id> …` / `POST /sessions/<id>/input` name the terminal and the
+words. The ledger keeps every turn at work per workspace (its lane: operator if `agent.asked` named it, else
+wake; its announcements; which came back — `tool_done`, known for the operator lane) and matches each
+open/keystroke to the announcement that describes it (`ledger-model.ts pickTurn`):
+
+| tier | evidence | `attribution` |
+|---|---|---|
+| 0 | an unspent, in-flight announcement that names it — the goal; the terminal typed into, its words | `exact` |
+| 1–2 | an announcement of that kind of move that names nothing (a raw POST), or another goal | `step` |
+| 3–4 | no announcement: the turns with a call in flight, else whoever moved last | `recent` |
+
+One candidate at the best tier is the answer. Several: the oldest announcement (an earlier call lands first);
+within a second of each other, or with no announcement at all, **the operator's turn** — losing his words is the
+costlier error — and the link is marked `ambiguous` (`GET /api/ledger?ambiguous=1`, `mc ledger --ambiguous`).
+An ambiguous keystroke never moves who owns a terminal's hand-offs: it only rides along as a steer. A spent
+announcement accounts for one terminal; one older than 2 minutes (a refused open) is not evidence. A turn is
+over when its `agent.push` names it, or after 3 minutes without a move. The seam: when the API knows the caller's
+turn or lane (a lane-tagged credential per Robert process — planned), it puts `turn` / `lane` on
+`session.started` / `session.input` and nothing is guessed (`attribution: caller`). The voice front can open a
+request first and `bindTurn(turn, request)` so what a project Robert opens in that turn joins it.
 
 **Steers.** Robert typing the operator's words into a terminal that is still working on its own request is an
 adjustment: the new request rides along as a secondary link and closes once the terminal hands off (its result

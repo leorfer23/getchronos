@@ -3,7 +3,8 @@
  *
  *   GET  /ledger               rows, most urgent first. ?state=needs_operator,stuck… | open | active (default) | all
  *                              · ?needs=decision · ?workspace=<id|slug> (operator only) · ?since=ISO | 2h | 3d
- *                              · ?session=<id> · ?limit · ?format=text (the compact lines a coordinator reads)
+ *                              · ?session=<id> · ?ambiguous=1 (a terminal's turn was a guess — the audit list)
+ *                              · ?limit · ?format=text (the compact lines a coordinator reads)
  *   GET  /ledger/queue         the approval queue, in the order he should hear it, and what he deferred
  *   GET  /ledger/:id           one request in full: terminals, result, deliverables, decisions, checks
  *   POST /ledger/:id/decision  {item?, decision: yes|no|later|change, words?, target_hash?, until?, by?, audio_ref?}
@@ -116,6 +117,7 @@ export function mountLedgerRoutes(api: express.Router): void {
     const rows = requests.list({
       workspace_id: ws, states, since, limit,
       needsDecision: req.query.needs === "decision" || req.query.needs === "1",
+      ambiguous: req.query.ambiguous === "1" || req.query.ambiguous === "true",
       session_id: typeof req.query.session === "string" && req.query.session ? req.query.session : undefined,
     });
     // Belt and braces: whatever the query said, a scoped caller leaves with its own workspace's rows only.

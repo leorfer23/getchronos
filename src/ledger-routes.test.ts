@@ -149,6 +149,17 @@ test("filters: state, needs a decision, since, the terminal it serves; bad value
   assert.equal((await call("GET", "/ledger?since=yesterdayish", ADMIN())).status, 400);
 });
 
+test("the audit list: ?ambiguous=1 is the requests whose turn was a guess, and the detail says how each link was decided", async () => {
+  const s = sessions.create({ workspace_id: fx.A.id, cwd: "/tmp", goal: "a guessed one", created_by: "robert" } as any);
+  requests.link({ request_id: fx.ra.id, session_id: s.id, role: "opened", primary: true, attribution: "recent", ambiguous: true });
+  const list = await call("GET", "/ledger?ambiguous=1&state=all", ADMIN());
+  assert.deepEqual(list.json.map((r: any) => r.id), [fx.ra.id]);
+  const d = (await call("GET", `/ledger/${fx.ra.id}`, ADMIN())).json;
+  const t = d.terminals.find((x: any) => x.session_id === s.id);
+  assert.deepEqual([t.attribution, t.ambiguous], ["recent", true]);
+  assert.equal((await call("GET", "/ledger?ambiguous=1&state=all", { "x-mc-workspace-token": fx.B.token })).json.length, 0, "and only one's own");
+});
+
 test("one request in full: terminals, result, deliverables, decisions, checks and the evidence slots of its work type", async () => {
   const d = (await call("GET", `/ledger/${fx.ra.id}`, ADMIN())).json;
   assert.equal(d.work.kind, "pr");

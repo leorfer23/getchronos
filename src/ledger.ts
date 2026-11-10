@@ -4,19 +4,23 @@
  *
  *   entry                                      how it is seen
  *   the operator's words to Robert             agent.asked (turn id, words, surface, voice)
- *   Robert opens a terminal in that turn       session.started, created_by "robert", while that
- *                                              workspace's Robert is on the turn (agent.delta/step)
- *   Robert types his words into a terminal     session.input by "robert", same turn test
+ *   Robert opens a terminal in that turn       session.started, created_by "robert", matched to the
+ *                                              turn that announced that open (agent.step)
+ *   Robert types his words into a terminal     session.input by "robert", same matching
  *   a terminal opened by hand, capture, inbox, session.started, by `sessions.created_by`
  *   job-check, proactive, follow-up
  *   a Lead's worker                            session.started with lead_id → the Lead's request
  *   failover / continuation stand-ins          session.failover · session.host_failover · continuation.fired
  *   anything else live and unknown             the sweep adopts it (and backfills at first start)
  *
- * The turn test needs nothing from the model: each workspace's Robert is one process that runs one
- * turn at a time, and every tool call it makes is published (agent.step) before the tool runs, so
- * the turn a `mc session new` belongs to is the turn its workspace's Robert is on when it arrives.
- * A turn the operator started (agent.asked) carries his words; any other turn is Robert's own.
+ * The turn test needs nothing from the model. A workspace runs more than one Robert at once — his
+ * conversation and the wake lane, on separate processes with the same credential — so the request a
+ * terminal arrives with says nothing about which turn sent it. But every tool call a turn makes is
+ * announced before it runs (agent.step: `mc session new --goal "…"` says its goal, `mc session send
+ * <id>` names the terminal), so each open or keystroke is matched to the announcement that describes
+ * it (ledger-model.ts pickTurn); only when no announcement tells the turns apart is it a guess, and
+ * that guess is written on the link. A turn the operator started (agent.asked) carries his words; any
+ * other turn is Robert's own.
  *
  * State follows session.status / session.updated / session.ended, asks and drafts — every write is
  * an idempotent upsert and every state is re-derived from rows, so a replayed, repeated or
@@ -29,10 +33,12 @@ import { requests, type DecisionItem, type Deliverable, type RequestLink, type R
 import { heldBy, holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { statusOf } from "./term-status.js";
 import {
-  DEFERRED_OPENERS, EXECUTABLE, FINAL_DELIVERABLE, OPEN_STATES, WORK, deliveredLinks, derivePrereqs, expectedChecks, ledgerLines, queueOrder, rollUp,
-  viaOf, wordsOfSession,
-  type Action, type DeliverableKind, type DeliverableState, type ItemView, type LineRow, type LinkRole, type Prereq, type TerminalView, type Via,
+  DEFERRED_OPENERS, EXECUTABLE, FINAL_DELIVERABLE, OPEN_STATES, WORK, deliveredLinks, derivePrereqs, expectedChecks, ledgerLines, pickTurn, queueOrder,
+  rollUp, viaOf, wordsOfSession,
+  type Action, type AttributionHow, type DeliverableKind, type DeliverableState, type ItemView, type LineRow, type LinkRole, type LiveStepView,
+  type LiveTurnView, type Prereq, type TerminalAct, type TerminalView, type TurnLane, type Via,
 } from "./ledger-model.js";
+import { terminalMove } from "./robert-steps.js";
 import type { GoalKind, Outcome, Session } from "./types.js";
 
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -41,13 +47,17 @@ const clip = (s: string | null | undefined, n: number) => {
   return t.length > n ? t.slice(0, n - 1) + "…" : t;
 };
 
-// ───────────────────────────── turns: which request is Robert on right now ─────────────────────────────
+// ───────────────────────────── turns: which of Robert's turns made a move ─────────────────────────────
 
 type Turn = { words: string; surface: string | null; voice: boolean; ws: string | null; at: string; seen: number };
 /** Operator turns (POST /agent's agent.asked), by turn id. Short-lived: a turn lasts minutes. */
 const turns = new Map<string, Turn>();
-/** Each Robert process (its workspace, or "default" for the fleet-wide one) → the turn it is running. */
-const live = new Map<string, { turn: string; at: number }>();
+/** One turn at work: the label its steps carry, when it last moved, and every tool call it announced. */
+type LiveTurn = { turn: string; label: string | null; lastAt: number; steps: LiveStepView[] };
+/** Workspace (or "default" for the fleet-wide Robert) → every turn at work in it, whatever its lane. */
+const live = new Map<string, Map<string, LiveTurn>>();
+/** A turn keeps its last few announcements: enough to match the moves still in flight. */
+const MAX_STEPS = 30;
 /** A request opened before its turn (the voice front delegating with a request id): turn → request. */
 const bound = new Map<string, string>();
 /** Last resolved status per terminal, from session.status — saves re-resolving it on every roll-up. */
@@ -69,24 +79,71 @@ function noteAsked(e: { turn?: string; you?: string; source?: string; ws?: strin
   turns.set(e.turn, { words: String(e.you ?? ""), surface: e.source ?? null, voice: !!e.voice, ws: e.ws ?? null, at: e.at ?? iso(nowMs), seen: nowMs });
   if (turns.size > 200) for (const [k, t] of turns) if (nowMs - t.seen > TURN_KEEP_MS) turns.delete(k);
 }
-function noteActive(e: { turn?: string; ws?: string | null }, nowMs: number): void {
-  if (!e.turn || (typeof e.ws === "string" && e.ws.startsWith("agent:"))) return;
-  live.set(procKey(e.ws), { turn: e.turn, at: nowMs });
+const isExecThread = (ws: unknown) => typeof ws === "string" && ws.startsWith("agent:");
+function liveTurn(ws: string | null | undefined, turn: string, nowMs: number): LiveTurn {
+  const key = procKey(ws);
+  let m = live.get(key);
+  if (!m) live.set(key, (m = new Map()));
+  let t = m.get(turn);
+  if (!t) m.set(turn, (t = { turn, label: null, lastAt: nowMs, steps: [] }));
+  return t;
 }
-/** A turn ended: every Robert process that was on it is free. */
+/** agent.step: one tool call announced, before it runs — read as a terminal move when it is one. */
+function noteStep(e: { turn?: string; ws?: string | null; step?: unknown; label?: string | null }, nowMs: number): void {
+  if (!e.turn || isExecThread(e.ws)) return;
+  const t = liveTurn(e.ws, e.turn, nowMs);
+  t.lastAt = nowMs;
+  if (e.label) t.label = e.label;
+  const mv = terminalMove(e.step as any);
+  t.steps.push({
+    at: nowMs, move: mv?.move ?? null, goal: mv?.move === "open" ? mv.goal : null,
+    sid: mv?.move === "type" ? mv.sid : null, text: mv?.move === "type" ? mv.text : null, done: false, used: false,
+  });
+  if (t.steps.length > MAX_STEPS) t.steps.splice(0, t.steps.length - MAX_STEPS);
+}
+/**
+ * agent.delta (the operator's own turns stream them): the turn is alive, and a `tool_done` says its
+ * oldest call still in flight came back — that call can no longer be the one making a request.
+ */
+function noteDelta(e: { turn?: string; ws?: string | null; kind?: string }, nowMs: number): void {
+  if (!e.turn || isExecThread(e.ws)) return;
+  const t = liveTurn(e.ws, e.turn, nowMs);
+  t.lastAt = nowMs;
+  if (e.kind === "tool_done") {
+    const s = t.steps.find((x) => !x.done);
+    if (s) s.done = true;
+  }
+}
+/** A turn ended (its agent.push names it): it can no longer have made anything. */
 function endTurn(turn: string): void {
-  for (const [k, v] of live) if (v.turn === turn) live.delete(k);
+  for (const m of live.values()) m.delete(turn);
 }
-/** POST /agent's turn is over on this thread (agent.turn.done names only the thread). Operator turns only. */
-function endThread(ws: string | null | undefined): void {
-  const v = live.get(procKey(ws));
-  if (v && turns.has(v.turn)) live.delete(procKey(ws));
-}
-/** The turn the Robert of this workspace is running right now, if any. */
-function currentTurn(ws: string | null, nowMs = Date.now()): { turn: string; operator: boolean } | null {
-  const v = live.get(procKey(ws));
-  if (!v || nowMs - v.at > LIVE_TURN_MS) return null;
-  return { turn: v.turn, operator: turns.has(v.turn) || bound.has(v.turn) };
+const laneOf = (turn: string): TurnLane => (turns.has(turn) || bound.has(turn) ? "operator" : "wake");
+
+export type Attribution = { turn: string; lane: TurnLane; how: AttributionHow; ambiguous: boolean };
+/** What the API can say about who made a request, when it knows (a lane-tagged credential — not yet). */
+export type CallerHint = { turn?: string | null; lane?: TurnLane | null } | null | undefined;
+
+/**
+ * Which of Robert's turns in this workspace opened a terminal or typed into one (ledger-model.ts
+ * pickTurn on every turn still at work). The seam: a caller that knows the turn — or the lane — says
+ * so and that is the answer (or the only lane looked at); today no caller does. The announcement that
+ * matched is spent: one announced call accounts for one terminal.
+ */
+export function attributeTurn(ws: string | null, act: TerminalAct, nowMs = Date.now(), caller?: CallerHint): Attribution | null {
+  if (caller?.turn) return { turn: caller.turn, lane: caller.lane ?? laneOf(caller.turn), how: "caller", ambiguous: false };
+  const m = live.get(procKey(ws));
+  const cands: LiveTurnView[] = [];
+  for (const t of m ? [...m.values()] : []) {
+    if (nowMs - t.lastAt > LIVE_TURN_MS) { m!.delete(t.turn); continue; }
+    const lane = laneOf(t.turn);
+    if (caller?.lane && lane !== caller.lane) continue;
+    cands.push({ turn: t.turn, lane, lastAt: t.lastAt, steps: t.steps });
+  }
+  const pick = pickTurn(cands, act, nowMs);
+  if (!pick) return null;
+  if (pick.step) pick.step.used = true;
+  return { turn: pick.turn, lane: pick.lane, how: pick.how, ambiguous: pick.ambiguous };
 }
 
 /**
@@ -111,13 +168,13 @@ export function openRequest(r: { workspace_id: string | null; words: string; via
 // ───────────────────────────── linking terminals ─────────────────────────────
 
 /** A terminal that opens a request of its own: the request, and the link that makes it the owner. */
-function openOwn(s: Session, via: Via, role: LinkRole): RequestRow {
+function openOwn(s: Session, via: Via, role: LinkRole, a?: Attribution | null): RequestRow {
   const ws = s.workspace_id ? workspaces.get(s.workspace_id) : undefined;
   const r = requests.create({
     workspace_id: s.workspace_id ?? null, words: wordsOfSession(s, via), via, opened_by: s.created_by ?? "operator",
     kind: s.goal_kind ?? null, kind_source: "terminal", prereqs: derivePrereqs(s.goal_kind, ws as any), asked_at: s.created_at,
   });
-  requests.link({ request_id: r.id, session_id: s.id, role, primary: true, linked_at: s.created_at, linked_by: s.created_by });
+  requests.link({ request_id: r.id, session_id: s.id, role, primary: true, linked_at: s.created_at, linked_by: s.created_by, attribution: a?.how ?? null, ambiguous: !!a?.ambiguous });
   syncSession(s.id);
   return r;
 }
@@ -155,7 +212,7 @@ function requestForOwnTurn(turn: string, s: Session): RequestRow {
   });
 }
 
-function onStarted(id: string, nowMs: number): void {
+function onStarted(id: string, nowMs: number, caller?: CallerHint): void {
   const s = sessions.get(id);
   if (!s) return;
   // A reopen, a revive, a promote-to-Lead: the same terminal, already in the ledger.
@@ -164,18 +221,23 @@ function onStarted(id: string, nowMs: number): void {
   if (s.lead_id && inheritFromLead(s)) return;
   // A stand-in carries someone else's request; its own event links it (or the sweep adopts it).
   if (DEFERRED_OPENERS.has(by)) return;
-  if (by === "robert") return attributeRobertOpen(s, nowMs);
+  if (by === "robert") return attributeRobertOpen(s, nowMs, caller);
   openOwn(s, viaOf(by), "opened");
 }
 
-function attributeRobertOpen(s: Session, nowMs: number): void {
-  const cur = currentTurn(s.workspace_id ?? null, nowMs);
-  const r = cur ? (cur.operator ? requestForTurn(cur.turn, s.workspace_id ?? null) : requestForOwnTurn(cur.turn, s)) : undefined;
+/**
+ * Robert opened it: the operator's request if the turn that announced it was his, a request of
+ * Robert's own if it was a wake's. Whatever decided it — and whether it was a guess — is on the link.
+ */
+function attributeRobertOpen(s: Session, nowMs: number, caller?: CallerHint): void {
+  const ws = s.workspace_id ?? null;
+  const a = attributeTurn(ws, { kind: "open", goal: s.spawn_goal ?? s.goal ?? null }, nowMs, caller);
+  const r = a ? (a.lane === "operator" ? requestForTurn(a.turn, ws) : requestForOwnTurn(a.turn, s)) : undefined;
   if (!r) {
-    openOwn(s, "robert", "opened");
+    openOwn(s, "robert", "opened", a);
     return;
   }
-  requests.link({ request_id: r.id, session_id: s.id, role: "opened", primary: true, linked_at: s.created_at, linked_by: "robert" });
+  requests.link({ request_id: r.id, session_id: s.id, role: "opened", primary: true, linked_at: s.created_at, linked_by: "robert", attribution: a!.how, ambiguous: a!.ambiguous });
   syncSession(s.id);
 }
 
@@ -205,20 +267,22 @@ function finishedThrough(s: Session, l: RequestLink): boolean {
  * request keeps what it hands off, and this request follows it as a steer until it does. Once the
  * terminal had already handed its request off, the words are new work: this request takes it over.
  * A turn of Robert's own (a wake answering a prompt) is him driving existing work — no new request.
+ * A guess never moves who owns a terminal's hand-offs: an ambiguous steer only rides along.
  */
-function onRobertTyped(id: string, nowMs: number): void {
+function onRobertTyped(id: string, nowMs: number, text: string | null, caller?: CallerHint): void {
   const s = sessions.get(id);
   if (!s) return;
-  const cur = currentTurn(s.workspace_id ?? null, nowMs);
-  if (!cur?.operator) return;
-  const r = requestForTurn(cur.turn, s.workspace_id ?? null);
-  if (!r || (r.workspace_id ?? null) !== (s.workspace_id ?? null)) return;
+  const ws = s.workspace_id ?? null;
+  const a = attributeTurn(ws, { kind: "type", sessionId: id, text }, nowMs, caller);
+  if (!a || a.lane !== "operator") return;
+  const r = requestForTurn(a.turn, ws);
+  if (!r || (r.workspace_id ?? null) !== ws) return;
   if (requests.linksOfSession(id).some((l) => l.request_id === r.id)) return;
   const prim = requests.primaryAt(id);
   const at = iso(nowMs);
-  const takeOver = !prim || finishedThrough(s, prim);
+  const takeOver = !prim || (!a.ambiguous && finishedThrough(s, prim));
   if (prim && takeOver) requests.closeLink(prim.request_id, id, at);
-  requests.link({ request_id: r.id, session_id: id, role: "steer", primary: takeOver, linked_at: at, linked_by: "robert" });
+  requests.link({ request_id: r.id, session_id: id, role: "steer", primary: takeOver, linked_at: at, linked_by: "robert", attribution: a.how, ambiguous: a.ambiguous });
   syncSession(id);
   if (prim) recompute(prim.request_id, nowMs);
 }
@@ -572,17 +636,19 @@ export function sweepLedger(nowMs = Date.now()): void {
 export function onLedgerEvent(e: any, nowMs = Date.now()): void {
   switch (e?.topic) {
     case "agent.asked": return noteAsked(e, nowMs);
-    case "agent.delta":
-    case "agent.step": return noteActive(e, nowMs);
+    case "agent.step": return noteStep(e, nowMs);
+    case "agent.delta": return noteDelta(e, nowMs);
     // Only a push that names its turn ends one: chat dividers, ask cards and Telegram replies name none
-    // and must not cut short a turn still running on that thread.
+    // and must not cut short a turn still running on that thread. (agent.turn.done names only a thread,
+    // which two lanes share — it ends nothing; POST /agent's own push names its turn.)
     case "agent.push":
       if (e.turn) endTurn(e.turn);
       return;
-    case "agent.turn.done": return endThread(e.ws);
-    case "session.started": return onStarted(e.session_id, nowMs);
+    // The seam (ledger.ts attributeTurn): when the API knows which turn or lane made a request — a
+    // lane-tagged credential, planned — it puts `turn` / `lane` on these events and nothing is guessed.
+    case "session.started": return onStarted(e.session_id, nowMs, { turn: e.turn ?? null, lane: e.lane ?? null });
     case "session.input":
-      if (e.by === "robert") onRobertTyped(e.session_id, nowMs);
+      if (e.by === "robert") onRobertTyped(e.session_id, nowMs, typeof e.text === "string" ? e.text : null, { turn: e.turn ?? null, lane: e.lane ?? null });
       return;
     case "session.status":
       if (e.status && typeof e.status.phase === "string") lastStatus.set(e.session_id, { phase: e.status.phase, line: e.status.line ?? null });
@@ -775,7 +841,7 @@ export function summaryOf(r: RequestRow) {
     terminals: links.map((l) => {
       const s = sessions.get(l.session_id);
       const st = s?.status === "live" ? phaseOf(l.session_id) : null;
-      return { session_id: l.session_id, role: l.role, primary: l.primary, current: !l.until, goal: s?.goal ?? null, phase: s?.status === "live" ? st?.phase ?? null : "ended" };
+      return { session_id: l.session_id, role: l.role, primary: l.primary, current: !l.until, goal: s?.goal ?? null, phase: s?.status === "live" ? st?.phase ?? null : "ended", ambiguous: l.ambiguous };
     }),
     open_decisions: open.length,
     next: open[0] ? `${ITEM_VERB[open[0].action]}: ${open[0].label}` : null,
@@ -804,6 +870,7 @@ export function detailOf(r: RequestRow, opts: { operator: boolean }) {
       const v = terminalView(l);
       return {
         session_id: l.session_id, role: l.role, primary: l.primary, linked_at: l.linked_at, until: l.until,
+        attribution: l.attribution, ambiguous: l.ambiguous,
         goal: s?.goal ?? null, goal_kind: s?.goal_kind ?? null, done_when: s?.done_when ?? [], done_checked: s?.done_checked ?? [],
         live: v.live, phase: v.phase, line: v.line, created_by: s?.created_by ?? null,
       };

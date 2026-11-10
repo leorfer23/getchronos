@@ -9,7 +9,7 @@ import { db } from "./db.js";
 import { now } from "./util.js";
 import type { GoalKind } from "../types.js";
 import type {
-  Action, CheckStatus, Decision, DeliverableKind, DeliverableState, Evidence, ItemStatus, LinkRole, Prereq, RequestState, Via,
+  Action, AttributionHow, CheckStatus, Decision, DeliverableKind, DeliverableState, Evidence, ItemStatus, LinkRole, Prereq, RequestState, Via,
 } from "../ledger-model.js";
 
 export interface RequestRow {
@@ -68,6 +68,10 @@ export interface RequestLink {
   /** When it was handed over (to a stand-in or a later request). Null = still serving. */
   until: string | null;
   linked_by: string | null;
+  /** For a link a Robert turn made: how that turn was picked (ledger-model.ts pickTurn). Null otherwise. */
+  attribution: AttributionHow | null;
+  /** The evidence could not separate two turns: the pick is a guess, kept for audit. */
+  ambiguous: boolean;
 }
 
 export interface Deliverable {
@@ -135,7 +139,7 @@ const json = <T>(raw: unknown, fallback: T): T => {
   try { return JSON.parse(raw) as T; } catch { return fallback; }
 };
 const reqRow = (r: any): RequestRow | undefined => (r ? { ...r, prereqs: json<Prereq[]>(r.prereqs, []) } : undefined);
-const linkRow = ({ is_primary, ...r }: any): RequestLink => ({ ...r, primary: !!is_primary });
+const linkRow = ({ is_primary, ambiguous, ...r }: any): RequestLink => ({ ...r, primary: !!is_primary, ambiguous: !!ambiguous });
 const checkRow = (r: any): CheckRow => ({ ...r, evidence: json<Evidence[]>(r.evidence, []) });
 const clip = (s: string | null | undefined, n: number) => (s == null ? null : String(s).slice(0, n));
 
@@ -149,6 +153,8 @@ export type RequestFilter = {
   since?: string;
   /** Only rows linked to this terminal. */
   session_id?: string;
+  /** Only rows with a link whose turn attribution was a guess — the audit list. */
+  ambiguous?: boolean;
   parent_id?: string;
   /** Fleet-wide parents are shown by default only to the operator; children by default. */
   limit?: number;
@@ -191,6 +197,7 @@ export const requests = {
     if (f.needsDecision) where.push("EXISTS (SELECT 1 FROM request_decisions d WHERE d.request_id = r.id AND d.status = 'open')");
     if (f.since) { where.push("(r.asked_at >= ? OR r.state_at >= ?)"); params.push(f.since, f.since); }
     if (f.session_id) { where.push("EXISTS (SELECT 1 FROM request_terminals l WHERE l.request_id = r.id AND l.session_id = ?)"); params.push(f.session_id); }
+    if (f.ambiguous) where.push("EXISTS (SELECT 1 FROM request_terminals l WHERE l.request_id = r.id AND l.ambiguous = 1)");
     if (f.parent_id) { where.push("r.parent_id = ?"); params.push(f.parent_id); }
     // Most urgent first, then the newest move within a state.
     const sql =
@@ -230,10 +237,10 @@ export const requests = {
 
   // ── links ────────────────────────────────────────────────────────────────────────────────────
   /** Idempotent: an existing (request, terminal) link is left as it is. True when it was created. */
-  link(l: { request_id: string; session_id: string; role: LinkRole; primary: boolean; linked_at?: string; linked_by?: string | null }): boolean {
+  link(l: { request_id: string; session_id: string; role: LinkRole; primary: boolean; linked_at?: string; linked_by?: string | null; attribution?: AttributionHow | null; ambiguous?: boolean }): boolean {
     const res = db.prepare(
-      "INSERT OR IGNORE INTO request_terminals (request_id,session_id,role,is_primary,linked_at,until,linked_by) VALUES (?,?,?,?,?,NULL,?)",
-    ).run(l.request_id, l.session_id, l.role, l.primary ? 1 : 0, l.linked_at ?? now(), clip(l.linked_by, 60));
+      "INSERT OR IGNORE INTO request_terminals (request_id,session_id,role,is_primary,linked_at,until,linked_by,attribution,ambiguous) VALUES (?,?,?,?,?,NULL,?,?,?)",
+    ).run(l.request_id, l.session_id, l.role, l.primary ? 1 : 0, l.linked_at ?? now(), clip(l.linked_by, 60), l.attribution ?? null, l.ambiguous ? 1 : 0);
     return res.changes > 0;
   },
   /** Hand a link over: its window closes now and nothing after counts for it. */

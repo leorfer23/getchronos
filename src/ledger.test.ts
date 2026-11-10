@@ -10,6 +10,7 @@ import { asks, continuations, db, kv, sessionPrs, sessions, workspaces } from ".
 import { requests } from "./store/requests.js";
 import * as L from "./ledger.js";
 import { draftHash } from "./ledger-model.js";
+import { humanizeStep } from "./robert-steps.js";
 import type { Outcome, Session } from "./types.js";
 
 const phases = new Map<string, { phase: string; line: string | null }>();
@@ -38,6 +39,11 @@ function open(ws: { id: string } | null, over: Partial<Session> & { first_prompt
 const asked = (turn: string, words: string, ws: { id: string } | null, extra: Record<string, unknown> = {}) =>
   ev({ topic: "agent.asked", turn, you: words, ws: ws?.id ?? null, source: "desk", at: "2026-11-09T10:00:00.000Z", ...extra });
 const step = (turn: string, ws: { id: string } | null, nowMs?: number) => ev({ topic: "agent.step", turn, ws: ws?.id ?? null, step: {} }, nowMs);
+/** A turn announcing a tool call exactly as askManagerWeb publishes it: the humanized step, and its lane's label. */
+const say = (turn: string, ws: { id: string } | null, cmd: string, label: string | null = null, nowMs?: number) =>
+  ev({ topic: "agent.step", turn, ws: ws?.id ?? null, step: humanizeStep(`run ${cmd}`), label }, nowMs);
+const ended = (turn: string) => ev({ topic: "agent.push", turn, you: "", reply: "", at: "x" });
+const typed = (sid: string, text: string, nowMs?: number) => ev({ topic: "session.input", session_id: sid, by: "robert", text, workspace_id: null }, nowMs);
 const status = (sid: string, phase: string, line: string | null = null) => {
   phases.set(sid, { phase, line });
   ev({ topic: "session.status", session_id: sid, status: { phase, line } });
@@ -110,8 +116,11 @@ test("a chat card or divider posted mid-turn (no turn id) does not end the turn"
   const s = open(atlas, { created_by: "robert", goal: "the login" });
   assert.equal(reqOf(s.id).turn_id, "t1");
   assert.equal(reqOf(s.id).via, "typed");
-  // POST /agent's own end of turn does end it.
+  // agent.turn.done names a thread, which two lanes share: it ends nothing. POST /agent's own push names its turn.
   ev({ topic: "agent.turn.done", ws: atlas.id });
+  const still = open(atlas, { created_by: "robert", goal: "still the same turn" });
+  assert.equal(reqOf(still.id).turn_id, "t1");
+  ended("t1");
   const later = open(atlas, { created_by: "robert", goal: "something else" });
   assert.equal(reqOf(later.id).via, "robert");
 });
@@ -189,32 +198,36 @@ test("Robert typing his words: mid-work it rides along as a steer; after a hand-
   const atlas = mkWs("atlas");
   const s = open(atlas, { created_by: "operator", goal: "fix the login redirect" });
   const r1 = reqOf(s.id);
+  const id8 = s.id.slice(0, 8);
   // Mid-work: an adjustment. R1 keeps the terminal and its hand-offs.
   asked("t2", "decile que use la librería nueva", atlas);
-  step("t2", atlas);
-  ev({ topic: "session.input", session_id: s.id, by: "robert", text: "use the new library", workspace_id: atlas.id });
+  say("t2", atlas, `mc session send ${id8} "use the new library"`);
+  typed(s.id, "use the new library");
   const r2 = requests.byTurn("t2", atlas.id)!;
-  assert.deepEqual(requests.linksFor(r2.id).map((l) => [l.role, l.primary]), [["steer", false]]);
+  assert.deepEqual(requests.linksFor(r2.id).map((l) => [l.role, l.primary, l.attribution, l.ambiguous]), [["steer", false, "exact", false]]);
   assert.equal(reqOf(s.id).id, r1.id);
-  // The same line typed twice in the turn is one link.
-  ev({ topic: "session.input", session_id: s.id, by: "robert", text: "again", workspace_id: atlas.id });
+  // A second line typed in the same turn is the same link.
+  say("t2", atlas, `mc session send ${id8} "again"`);
+  typed(s.id, "again");
   assert.equal(requests.linksFor(r2.id).length, 1);
+  ended("t2");
   handOff(s.id, out({ prs: [PR], ask: "merge" }));
   status(s.id, "your_turn", "finished its turn");
   assert.equal(requests.get(r1.id)!.state, "needs_operator", "R1 owns the hand-off and its merge");
   assert.equal(requests.get(r2.id)!.state, "closed", "the steer is carried into R1");
   // After that hand-off: new work. R3 takes the terminal; R1 keeps what it got.
   asked("t3", "ahora escribí los docs del cambio", atlas);
-  step("t3", atlas);
-  ev({ topic: "session.input", session_id: s.id, by: "robert", text: "now write the docs", workspace_id: atlas.id });
+  say("t3", atlas, `mc session send ${id8} "now write the docs"`);
+  typed(s.id, "now write the docs");
+  ended("t3");
   const r3 = requests.byTurn("t3", atlas.id)!;
   assert.equal(reqOf(s.id).id, r3.id);
   handOff(s.id, out({ prs: ["https://github.com/atlas/api/pull/13"], ask: "merge" }));
   assert.ok(requests.deliverables(r3.id).some((d) => d.ref.endsWith("/13")), "the docs PR is R3's");
   assert.ok(!requests.deliverables(r1.id).some((d) => d.ref.endsWith("/13")), "…not R1's");
   // A wake turn typing (Robert answering a prompt) is not the operator's request.
-  step("wake-9", atlas);
-  ev({ topic: "session.input", session_id: s.id, by: "robert", text: "y", workspace_id: atlas.id });
+  say("wake-9", atlas, `mc session send ${id8} y`, "woken");
+  typed(s.id, "y");
   assert.equal(requests.byTurn("wake-9", atlas.id), undefined);
 });
 
@@ -550,6 +563,159 @@ test("queue view and compact text: what he owes, in order; one line per open req
   assert.match(text, /- working · update the runbook — 1\/3 · reading/);
   assert.ok(!text.includes("atlas ·"), "a project's own view names no workspace");
   assert.match(L.ledgerText(undefined), /needs you · atlas · /, "the fleet view does");
+});
+
+// ── two Robert lanes in one workspace (his conversation + the wake lane, concurrently) ────────────
+
+const WS_NEW = (goal: string) => `mc session new --workspace w1 --goal "${goal}" --kind pr`;
+
+test("two lanes, opens: his terminal is his even when a wake moved last; a wake's terminal is never his", () => {
+  const atlas = mkWs("atlas");
+  asked("op", "arreglá el export que falla", atlas, { voice: true });
+  // (b) His turn announces the open, then a wake (same workspace, other process) moves after it.
+  say("op", atlas, WS_NEW("fix the failing export"));
+  say("wake", atlas, "mc desk digest", "woken");
+  const mine = open(atlas, { created_by: "robert", goal: "fix the failing export" });
+  const r = reqOf(mine.id);
+  assert.deepEqual([r.turn_id, r.via, r.words], ["op", "voice", "arreglá el export que falla"], "his words are kept");
+  assert.deepEqual([only(requests.linksOfSession(mine.id)).attribution, only(requests.linksOfSession(mine.id)).ambiguous], ["exact", false]);
+  // (a) While his turn streams its reply, a wake opens a terminal of its own.
+  ev({ topic: "agent.delta", turn: "op", ws: atlas.id, kind: "text", text: "dale, lo miro" });
+  say("wake", atlas, WS_NEW("check the nightly backup"), "woken");
+  ev({ topic: "agent.delta", turn: "op", ws: atlas.id, kind: "text", text: " — ya abrí una terminal" });
+  const theirs = open(atlas, { created_by: "robert", goal: "check the nightly backup" });
+  assert.equal(reqOf(theirs.id).via, "robert", "a wake's work is Robert's own request");
+  assert.equal(reqOf(theirs.id).turn_id, "wake");
+  assert.ok(!requests.linksFor(r.id).some((l) => l.session_id === theirs.id), "…never a part of what he asked");
+});
+
+for (const order of ["his first", "the wake's first"] as const) {
+  test(`two lanes, both open at once (${order} announced, the other's terminal lands first): each lands on its own turn`, () => {
+    const atlas = mkWs("atlas");
+    asked("op", "abrí una terminal para el login", atlas);
+    const announce = [() => say("op", atlas, WS_NEW("fix the login redirect")), () => say("wake", atlas, WS_NEW("rotate the stale logs"), "woken")];
+    (order === "his first" ? announce : [...announce].reverse()).forEach((f) => f());
+    const opens = [
+      () => open(atlas, { created_by: "robert", goal: "fix the login redirect" }),
+      () => open(atlas, { created_by: "robert", goal: "rotate the stale logs" }),
+    ];
+    // The terminals arrive in the opposite order to the announcements.
+    const [first, second] = order === "his first" ? [opens[1](), opens[0]()] : [opens[0](), opens[1]()];
+    const his = order === "his first" ? second : first;
+    const wakes = order === "his first" ? first : second;
+    assert.equal(reqOf(his.id).turn_id, "op");
+    assert.equal(reqOf(his.id).via, "typed");
+    assert.equal(reqOf(wakes.id).via, "robert");
+    for (const t of [his, wakes]) assert.deepEqual([only(requests.linksOfSession(t.id)).attribution, only(requests.linksOfSession(t.id)).ambiguous], ["exact", false]);
+  });
+
+  test(`two lanes, typing (${order}): only his keystrokes steer for him, whichever lands first`, () => {
+    const atlas = mkWs("atlas");
+    const target = open(atlas, { created_by: "operator", goal: "migrate the schema" });
+    const other = open(atlas, { created_by: "operator", goal: "answer a prompt" });
+    const own = (t: Session) => reqOf(t.id).id;
+    const [rt, ro] = [own(target), own(other)];
+    asked("op", "decile a la del esquema que use bigint", atlas);
+    const announce = [
+      () => say("op", atlas, `mc session send ${target.id.slice(0, 8)} "use bigint for the ids"`),
+      () => say("wake", atlas, `mc session key ${other.id.slice(0, 8)} down,enter`, "woken"),
+    ];
+    (order === "his first" ? announce : [...announce].reverse()).forEach((f) => f());
+    const keys = [() => typed(other.id, "<down><enter>"), () => typed(target.id, "use bigint for the ids")];
+    (order === "his first" ? keys : [...keys].reverse()).forEach((f) => f());
+    const steer = requests.byTurn("op", atlas.id)!;
+    assert.deepEqual(requests.linksFor(steer.id).map((l) => [l.session_id, l.role, l.attribution, l.ambiguous]), [[target.id, "steer", "exact", false]]);
+    assert.equal(own(other), ro, "the wake's keystroke left that terminal's request alone");
+    assert.equal(own(target), rt, "mid-work: he steered it, its own request still owns its hand-offs");
+  });
+}
+
+test("two lanes typing into the SAME terminal: the words he sent are his, the wake's key is the wake's", () => {
+  const atlas = mkWs("atlas");
+  const s = open(atlas, { created_by: "operator", goal: "deploy the fix" });
+  asked("op", "decile que espere al review", atlas);
+  say("wake", atlas, `mc session key ${s.id.slice(0, 8)} down,enter`, "woken");
+  say("op", atlas, `mc session send ${s.id.slice(0, 8)} "wait for the review"`);
+  typed(s.id, "<down><enter>"); // the wake's lands first
+  assert.equal(requests.byTurn("op", atlas.id), undefined, "his request does not take the wake's keystroke");
+  typed(s.id, "wait for the review");
+  const link = only(requests.linksFor(requests.byTurn("op", atlas.id)!.id));
+  assert.deepEqual([link.attribution, link.ambiguous], ["exact", false]);
+});
+
+test("one lane only: a wake's open is Robert's own; his own open is his — unchanged", () => {
+  const atlas = mkWs("atlas");
+  say("wake", atlas, WS_NEW("check the queue depth"), "woken");
+  const w = open(atlas, { created_by: "robert", goal: "check the queue depth" });
+  assert.deepEqual([reqOf(w.id).via, reqOf(w.id).turn_id], ["robert", "wake"]);
+  ended("wake");
+  asked("op", "abrí una para el login", atlas);
+  say("op", atlas, WS_NEW("the login"));
+  const o = open(atlas, { created_by: "robert", goal: "the login" });
+  assert.deepEqual([reqOf(o.id).via, reqOf(o.id).turn_id, only(requests.linksOfSession(o.id)).ambiguous], ["typed", "op", false]);
+});
+
+test("ambiguous: two raw opens announced at once, or none at all — his turn wins, and the link says it was a guess", () => {
+  const atlas = mkWs("atlas");
+  asked("op", "abrí una terminal", atlas);
+  const t0 = Date.now();
+  const raw = "curl -s -X POST -H 'x-mc-admin: $CHRONOS_ADMIN' http://localhost:7777/api/sessions -d '{}'";
+  say("wake", atlas, raw, "woken", t0);
+  say("op", atlas, raw, null, t0 + 200);
+  const s = sessions.create({ workspace_id: atlas.id, cwd: "/tmp", goal: "a terminal", created_by: "robert" } as any);
+  ev({ topic: "session.started", session_id: s.id }, t0 + 400);
+  const link = only(requests.linksOfSession(s.id));
+  assert.deepEqual([reqOf(s.id).turn_id, link.attribution, link.ambiguous], ["op", "step", true]);
+  // The other announcement is still unspent: the next terminal is the wake's, and that is no guess.
+  const s2 = sessions.create({ workspace_id: atlas.id, cwd: "/tmp", goal: "another", created_by: "robert" } as any);
+  ev({ topic: "session.started", session_id: s2.id }, t0 + 600);
+  assert.deepEqual([reqOf(s2.id).via, only(requests.linksOfSession(s2.id)).ambiguous], ["robert", false]);
+  // Nothing announced at all (a terminal daemon code opened mid-turn): his turn, flagged.
+  say("op", atlas, "mc desk digest", null, t0 + 700);
+  say("wake", atlas, "mc desk digest", "woken", t0 + 800);
+  const s3 = sessions.create({ workspace_id: atlas.id, cwd: "/tmp", goal: "Robert asks: which one?", created_by: "robert" } as any);
+  ev({ topic: "session.started", session_id: s3.id }, t0 + 900);
+  assert.deepEqual([reqOf(s3.id).turn_id, only(requests.linksOfSession(s3.id)).attribution, only(requests.linksOfSession(s3.id)).ambiguous], ["op", "recent", true]);
+  // The audit list.
+  assert.deepEqual(requests.list({ states: undefined, ambiguous: true }).map((r) => r.turn_id), ["op"]);
+});
+
+test("a call whose result already came back is not the one opening a terminal now", () => {
+  const atlas = mkWs("atlas");
+  asked("op", "abrí una terminal para el login", atlas);
+  say("op", atlas, WS_NEW("the login"));
+  ev({ topic: "agent.delta", turn: "op", ws: atlas.id, kind: "tool_done", text: "" }); // refused: the seat cap was full
+  say("wake", atlas, "curl -s -X POST http://localhost:7777/api/sessions -d '{}'", "woken");
+  const s = open(atlas, { created_by: "robert", goal: "the login" });
+  assert.equal(reqOf(s.id).via, "robert", "his open finished before this terminal existed; the wake's raw open is still in flight");
+});
+
+test("an ambiguous keystroke never takes a terminal's hand-offs away from its request", () => {
+  const atlas = mkWs("atlas");
+  const s = open(atlas, { created_by: "operator", goal: "fix the export" });
+  const r1 = reqOf(s.id);
+  handOff(s.id, out({ ask: "review", summary: "fixed" }));
+  asked("op", "decile que también agregue un test", atlas);
+  step("op", atlas); // two turns at work, neither announced typing (an unreadable command)
+  step("wake", atlas);
+  typed(s.id, "also add a test");
+  const steer = only(requests.linksFor(requests.byTurn("op", atlas.id)!.id));
+  assert.deepEqual([steer.primary, steer.ambiguous, steer.attribution], [false, true, "recent"]);
+  assert.equal(reqOf(s.id).id, r1.id, "R1 keeps the terminal: a guess does not move ownership");
+});
+
+test("the seam: a caller that knows the lane or the turn decides, nothing is guessed", () => {
+  const atlas = mkWs("atlas");
+  asked("op", "abrí una para el login", atlas);
+  say("op", atlas, WS_NEW("the login"));
+  const viaLane = sessions.create({ workspace_id: atlas.id, cwd: "/tmp", goal: "the login", created_by: "robert" } as any);
+  ev({ topic: "session.started", session_id: viaLane.id, lane: "wake" });
+  assert.equal(reqOf(viaLane.id).via, "robert", "told it was the wake lane: his announcement is not even looked at");
+  const viaTurn = sessions.create({ workspace_id: atlas.id, cwd: "/tmp", goal: "unrelated words", created_by: "robert" } as any);
+  ev({ topic: "session.started", session_id: viaTurn.id, turn: "op" });
+  assert.equal(reqOf(viaTurn.id).turn_id, "op");
+  assert.deepEqual([only(requests.linksOfSession(viaTurn.id)).attribution, only(requests.linksOfSession(viaTurn.id)).ambiguous], ["caller", false]);
+  assert.deepEqual(L.attributeTurn(atlas.id, { kind: "open", goal: "x" }, Date.now(), { turn: "op" }), { turn: "op", lane: "operator", how: "caller", ambiguous: false });
 });
 
 // Last: once started, the ledger listens on the real bus for the rest of this process.

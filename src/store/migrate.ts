@@ -2265,7 +2265,9 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     // LEDGER.md. One row per thing he asked for (or a terminal opened on its own), written by code at
     // every entry point. `request_terminals` links it to the terminals serving it — a request can fan
     // to several terminals, a terminal can serve a later request too — each link with the window
-    // [linked_at, until) its hand-offs count in, and one primary link per terminal at a time.
+    // [linked_at, until) its hand-offs count in, and one primary link per terminal at a time. A link a
+    // Robert turn made says how that turn was told from the others running in the workspace
+    // (`attribution`) and whether the evidence could not separate them (`ambiguous`), for audit.
     // `request_deliverables` is what came back (a PR, a draft, a page, a deploy, an answer) with the
     // hash of what it is now; `request_decisions` is what he owes, one item per deliverable that needs
     // his word, bound to that hash, and his answer. `request_checks` is the verifier's slot (empty until
@@ -2308,9 +2310,12 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
         linked_at TEXT NOT NULL,
         until TEXT,
         linked_by TEXT,
+        attribution TEXT,
+        ambiguous INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (request_id, session_id)
       );
       CREATE INDEX idx_request_terminals_session ON request_terminals(session_id, until);
+      CREATE INDEX idx_request_terminals_ambiguous ON request_terminals(request_id) WHERE ambiguous = 1;
 
       CREATE TABLE request_deliverables (
         id TEXT PRIMARY KEY,

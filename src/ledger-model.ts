@@ -235,6 +235,109 @@ export function wordsOfSession(
   return [goal, brief].filter(Boolean).join("\n\n").slice(0, 4000) || "(no goal given)";
 }
 
+// ───────────────────────────── which of Robert's turns made a move ─────────────────────────────
+
+/**
+ * Each workspace runs more than one Robert at once — his conversation (the operator lane) and the
+ * daemon's wakes (the wake lane) — on separate processes with the same credential, so a terminal they
+ * open or type into says nothing about which turn did it. Every tool call a turn makes is announced
+ * first (agent.step, read back by robert-steps.ts terminalMove), so the move is matched to the
+ * announcement that describes it.
+ */
+export type TurnLane = "operator" | "wake";
+/** One announced tool call. `done` = its result came back (known for the operator lane only); `used` = it already accounts for a terminal. */
+export type LiveStepView = { at: number; move: "open" | "type" | null; goal: string | null; sid: string | null; text: string | null; done: boolean; used: boolean };
+export type LiveTurnView = { turn: string; lane: TurnLane; lastAt: number; steps: LiveStepView[] };
+/** What the daemon saw: a terminal opened with this goal, or this line typed into this terminal. */
+export type TerminalAct = { kind: "open"; goal: string | null } | { kind: "type"; sessionId: string; text: string | null };
+/**
+ * exact = the announcement names this terminal (its goal, or the id typed into) · step = a turn
+ * announced this kind of move without naming it · recent = no turn announced it; the turn still at
+ * work · caller = the API said which turn (the seam a lane-tagged credential will use).
+ */
+export type AttributionHow = "caller" | "exact" | "step" | "recent";
+export type TurnPick = { turn: string; lane: TurnLane; how: Exclude<AttributionHow, "caller">; ambiguous: boolean; step: LiveStepView | null };
+
+/** An announced move older than this is not evidence for a terminal arriving now (a refused open leaves one behind). */
+export const STEP_EVIDENCE_MS = 120_000;
+/** Two announcements this close together cannot be told apart by time. */
+export const TIE_MS = 1_000;
+
+/** Does the goal a step announced (clipped, maybe ending in "…") name this terminal's goal? */
+export function sameWords(said: string | null | undefined, actual: string | null | undefined): boolean {
+  if (!said || !actual) return false;
+  const n = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+  const a = n(said);
+  const b = n(actual);
+  if (a.endsWith("…")) {
+    const head = a.slice(0, -1).trimEnd();
+    return head.length > 0 && b.startsWith(head);
+  }
+  return a === b;
+}
+
+/**
+ * The turn that made a move, best evidence first:
+ *   0 exact  — an unused, in-flight announcement that names it: the goal; or the terminal typed into
+ *              (its words matching, then words not said, then words that differ — a step can misquote)
+ *   1 step   — an unused, in-flight announcement of that kind of move that names nothing (a raw POST)
+ *   2 step   — (opens) an unused, in-flight open announced with ANOTHER goal (a goal the step could not quote faithfully)
+ *   3 recent — no turn announced it: the turns with a call still in flight
+ *   4 recent — nothing in flight anywhere: whoever moved last
+ * A lone candidate at the best tier is the answer. Several at tiers 0–2: the oldest announcement — an
+ * earlier call lands first, and once it is used the next move takes the next one; two within TIE_MS
+ * are a tie, and a tie goes to the operator's turn. Several
+ * at 3–4: the operator's turn — when nothing tells them apart, losing his words is the costlier error.
+ * Ambiguous = the evidence could not separate the candidates (a tie at tier 0, any choice at 1–4).
+ * Pure: the caller marks the returned step used.
+ */
+export function pickTurn(cands: LiveTurnView[], act: TerminalAct, nowMs: number): TurnPick | null {
+  if (!cands.length) return null;
+  const fresh = (s: LiveStepView) => !s.used && !s.done && nowMs - s.at <= STEP_EVIDENCE_MS;
+  type Ev = { c: LiveTurnView; tier: number; step: LiveStepView | null; at: number };
+  const ev: Ev[] = cands.map((c) => {
+    const steps = [...c.steps].sort((a, b) => a.at - b.at);
+    const pick = (tier: number, s: LiveStepView): Ev => ({ c, tier, step: s, at: s.at });
+    if (act.kind === "open") {
+      const opens = steps.filter((s) => s.move === "open" && fresh(s));
+      const exact = opens.filter((s) => sameWords(s.goal, act.goal));
+      if (exact.length) return pick(0, exact[0]);
+      const blind = opens.filter((s) => !s.goal);
+      if (blind.length) return pick(1, blind[0]);
+      if (opens.length) return pick(2, opens[0]);
+    } else {
+      // A typing step that names ANOTHER terminal is not evidence for this one.
+      const types = steps.filter((s) => s.move === "type" && fresh(s));
+      const exact = types.filter((s) => !!s.sid && act.sessionId.startsWith(s.sid));
+      const said = exact.filter((s) => sameWords(s.text, act.text));
+      if (said.length) return pick(0, said[0]);
+      const unsaid = exact.filter((s) => !s.text);
+      if (unsaid.length) return pick(0.5, unsaid[0]);
+      if (exact.length) return pick(0.75, exact[0]);
+      const blind = types.filter((s) => !s.sid);
+      if (blind.length) return pick(1, blind[0]);
+    }
+    const inflight = steps.filter((s) => !s.done);
+    if (inflight.length) return { c, tier: 3, step: null, at: inflight[inflight.length - 1].at };
+    return { c, tier: 4, step: null, at: c.lastAt };
+  });
+  const best = Math.min(...ev.map((e) => e.tier));
+  const pool = ev.filter((e) => e.tier === best);
+  const how: TurnPick["how"] = best < 1 ? "exact" : best <= 2 ? "step" : "recent";
+  const out = (e: Ev, ambiguous: boolean): TurnPick => ({ turn: e.c.turn, lane: e.c.lane, how, ambiguous, step: e.step });
+  if (pool.length === 1) return out(pool[0], false);
+  if (best >= 3) {
+    // Nothing announced this move. The operator's turn, flagged; failing that the latest at work.
+    const op = pool.filter((e) => e.c.lane === "operator").sort((a, b) => b.at - a.at)[0];
+    return out(op ?? pool.sort((a, b) => b.at - a.at)[0], true);
+  }
+  pool.sort((a, b) => a.at - b.at);
+  const tied = pool.filter((e) => e.at - pool[0].at <= TIE_MS);
+  if (tied.length > 1) return out(tied.find((e) => e.c.lane === "operator") ?? tied[0], true);
+  // The oldest announcement lands first. With content (tier 0) that is the answer; without, a guess.
+  return out(pool[0], best >= 1);
+}
+
 // ───────────────────────────── links a hand-off names ─────────────────────────────
 
 const URL_RE = /https?:\/\/[^\s<>()"'`]+[^\s<>()"'`.,;:!?\]]/g;
