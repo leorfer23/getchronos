@@ -36,7 +36,8 @@
  *
  * ctx = { token(), lang(), speed(), label(id8) → name|null, onState(state, why), onHeard(text, meta),
  *         onLevel(0..1), onSubtitle(text), onError(msg), busy() → Robert is mid-turn, onStopTurn(),
- *         onPartial(text|null), onTrace(dump) }
+ *         onPartial(text|null), onTrace(dump),
+ *         vad? — this surface's own ear numbers, any subset of VAD below (the Desk's on a Mac) }
  */
 (function (root) {
   // Tuned for a phone held in a hand or lying on a table: the Desk's numbers, with barge-in asking
@@ -827,9 +828,17 @@
     afterSpeech(barged);
   }
 
+  // The ear's numbers belong to the surface, not to this file: a phone's loudspeaker sits 10 cm from
+  // its mic, a Mac's does not. A page hands its own in ctx.vad (any subset of VAD's keys, numbers
+  // only); without it the phone's stay. The defaults are put back first, so a second init never
+  // inherits the first one's.
+  var VAD_DEFAULT = Object.assign({}, VAD);
   function init(ctx) {
     C = ctx;
-    // Prime the queue when the call starts later; nothing to do until then.
+    Object.assign(VAD, VAD_DEFAULT);
+    var v = (ctx && ctx.vad) || {};
+    Object.keys(v).forEach(function (k) { if (VAD_DEFAULT.hasOwnProperty(k) && typeof v[k] === "number" && isFinite(v[k]) && v[k] > 0) VAD[k] = v[k]; });
+    if (V.ear && !V.on) V.ear = makeEar(); // the ear reads its barge ceiling when it is made
   }
 
   root.PhoneVoice = {

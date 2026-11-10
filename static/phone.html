@@ -12,7 +12,7 @@
 <link rel="icon" href="/phone-icon.png">
 <link rel="apple-touch-icon" href="/phone-icon-512.png">
 <title>Robert</title>
-<meta name="chronos-build" content="2026-11-09r">
+<meta name="chronos-build" content="2026-11-10a">
 <style>
   :root {
     --bg:#0C0F0B; --surface:#151A16; --surface-2:#1E2520; --raised:#262E28; --ink:#E9EFEA; --muted:#98A59D;
@@ -45,6 +45,11 @@
   .top .who small.warn { color:var(--warn); }
   .ic { width:var(--tap); height:var(--tap); display:flex; align-items:center; justify-content:center; border-radius:14px; color:var(--muted); flex:none; }
   .ic:active { background:var(--surface); }
+  .deskb { height:34px; padding:0 12px; border-radius:999px; background:var(--surface); color:var(--muted); font-size:14px; font-weight:700; display:inline-flex; align-items:center; gap:8px; }
+  .deskb kbd { font:inherit; font-size:12px; font-weight:700; color:var(--faint); border:1px solid var(--line); border-radius:6px; padding:0 5px; }
+  .locked { margin:auto; max-width:420px; padding:24px; text-align:center; color:var(--muted); line-height:1.5; }
+  .locked b { display:block; color:var(--ink); font-size:20px; margin-bottom:6px; }
+  .locked button { margin-top:18px; height:44px; padding:0 20px; border-radius:999px; background:var(--surface-2); color:var(--ink); font-weight:700; }
   .upd { height:34px; padding:0 14px; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-size:14px; font-weight:700; }
 
   /* What is waiting for him: one compact entry, the next decision on it. */
@@ -189,8 +194,12 @@
   .dk-dots i.on { background:var(--ink); }
   .dk-track { flex:1; min-height:0; display:flex; overflow-x:auto; overflow-y:hidden; scroll-snap-type:x mandatory; scrollbar-width:none; overscroll-behavior-x:contain; }
   .dk-track::-webkit-scrollbar { display:none; }
-  .qcard { flex:0 0 100%; min-width:0; scroll-snap-align:center; scroll-snap-stop:always; display:flex; flex-direction:column; }
-  .qc-scroll { flex:1; min-height:0; overflow-y:auto; padding:8px 20px 28px; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+  /* pan-y: up/down is the browser's (a long card scrolls); left/right is the deck's own swipe (phone-deck.js
+     wireSwipe). On the card AND on its scroller: a browser reads touch-action only up to the nearest scroller. */
+  .qcard { flex:0 0 100%; min-width:0; scroll-snap-align:center; scroll-snap-stop:always; display:flex; flex-direction:column; touch-action:pan-y; }
+  .dk-nav { display:none; gap:4px; }
+  .dk-nav button { width:36px; height:36px; border-radius:10px; color:var(--muted); display:flex; align-items:center; justify-content:center; }
+  .qc-scroll { flex:1; min-height:0; overflow-y:auto; touch-action:pan-y; padding:8px 20px 28px; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
   .qc-top { display:flex; align-items:center; gap:10px; font-size:13px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
   .qc-ws { display:inline-flex; align-items:center; gap:7px; color:var(--ink); }
   .qc-ws::before { content:""; width:9px; height:9px; border-radius:50%; background:var(--c); }
@@ -477,6 +486,50 @@
   #toast { position:fixed; left:50%; bottom:calc(var(--sab) + 150px); transform:translateX(-50%); background:var(--raised); color:var(--ink); padding:10px 18px; border-radius:14px; font-size:15px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:90; max-width:90vw; text-align:center; display:flex; gap:14px; align-items:center; }
   #toast.show { opacity:1; }
   #toast button { color:var(--accent); font-weight:800; font-size:15px; pointer-events:auto; min-height:32px; }
+
+  /* ── a wide screen (the Mac): the same front, one centred column ───────────
+     Nothing here adds a control: the conversation, the deck and the sheets only get room. A card with
+     screenshots puts them beside its text, large enough to judge. */
+  @media (min-width: 900px) {
+    :root { --col:780px; --ba-h:66vh; }
+    .top, .nrow, .qentry, .dock { width:100%; max-width:var(--col); margin-left:auto; margin-right:auto; }
+    .top { padding-top:14px; }
+    .chat { padding:18px max(14px, calc((100% - var(--col)) / 2 + 14px)) 16px; gap:12px; }
+    .bub { max-width:80%; }
+    .dock { padding-bottom:18px; }
+    .talk, .send { width:56px; height:56px; }
+    .composer textarea { max-height:220px; }
+    #toast { bottom:118px; }
+    #recbar { left:50%; right:auto; width:min(560px, 92vw); transform:translateX(-50%); }
+    /* the deck */
+    .deck { --dk:760px; }
+    .dk-head { padding:12px max(14px, calc((100% - 1180px) / 2)) 6px; }
+    .dk-nav { display:inline-flex; }
+    .qcard:has(.qc-shots) { --dk:1180px; }
+    .qc-scroll { padding:14px max(20px, calc((100% - var(--dk)) / 2)) 40px; }
+    .qc-cols:has(> .qc-shots) { display:grid; grid-template-columns:minmax(320px, 400px) minmax(0, 1fr); grid-template-rows:auto 1fr; column-gap:40px; }
+    .qc-cols:has(> .qc-shots) > .qc-a { grid-column:1; grid-row:1; }
+    .qc-cols:has(> .qc-shots) > .qc-b { grid-column:1; grid-row:2; }
+    .qc-cols:has(> .qc-shots) > .qc-shots { grid-column:2; grid-row:1 / 3; margin-top:0; align-self:start; position:sticky; top:0; }
+    .qc-singles .sg { width:30%; }
+    .dr-text { font-size:16.5px; line-height:1.55; }
+    .dk-bar { justify-content:center; padding-bottom:16px; }
+    .db { flex:0 1 200px; } .db.later { flex:0 1 150px; } .db.yes { flex:0 1 280px; }
+    /* sheets are dialogs in the middle, not drawers */
+    .sheet-bg { align-items:center; justify-content:center; }
+    .sheet { width:min(560px, 92vw); max-height:86%; border-radius:22px; padding-bottom:18px; }
+    .sheet .grab { visibility:hidden; }
+    /* terminals and one terminal's story (behind ⋯) */
+    .thead { padding:10px max(8px, calc((100% - 860px) / 2)) 8px; }
+    .home-scroll, .fscroll { padding-left:max(16px, calc((100% - 828px) / 2)); padding-right:max(16px, calc((100% - 828px) / 2)); }
+    .fgoal, .fbar, .fcomposer, .strip { padding-left:max(12px, calc((100% - 836px) / 2)); padding-right:max(12px, calc((100% - 836px) / 2)); }
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .ic:hover, .dk-x:hover, .dk-nav button:hover, .deskb:hover { background:var(--surface-2); color:var(--ink); }
+    .qentry:hover, .db:hover:not(:disabled), .q-opt:hover, .ck:hover, .menu button:hover, .card:hover { filter:brightness(1.12); }
+    button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+    .chat, .qc-scroll, .home-scroll, .fscroll { scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
+  }
 </style>
 </head>
 <body>
@@ -486,6 +539,7 @@
     <header class="top">
       <div class="who"><b>Robert</b><small id="top-sub"></small></div>
       <button class="upd" id="upd" hidden>Update</button>
+      <button class="deskb" id="btn-desk" hidden title="Back to the Desk (Esc)">Desk <kbd>esc</kbd></button>
       <button class="ic" id="btn-more" aria-label="More"><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
     </header>
     <div class="nrow" id="nrow" hidden><span class="ni"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg></span><span class="tx"><b id="nr-t"></b><span id="nr-s"></span></span><button class="go" id="nr-go" hidden></button><button class="no" id="nr-no" aria-label="Not now">✕</button></div>
@@ -568,12 +622,35 @@ const qsa = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const WS_SCHEME = location.protocol === "https:" ? "wss:" : "ws:";
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }, del: (k) => { try { localStorage.removeItem(k); } catch {} } };
-let TOKEN = store.get("mc-token") || null;
+// The same front on the Mac. EMBED: the Desk opened this page over itself (an iframe on the same
+// origin) — it has no history of its own and Esc hands the screen back. DESKTOP is the machine, not
+// the window's width: a mouse and no touch means a Mac's microphone and speakers, whatever the size.
+const EMBED = (() => { try { return window.parent !== window && window.parent.location.origin === location.origin; } catch { return false; } })();
+// The Desk's native window injects the token into its main frame only (desktop/app.swift); a browser
+// keeps it in storage. Same token, same login as the Desk — never a second one.
+let TOKEN = (() => { try { return (EMBED && window.parent.__MC_TOKEN__) || window.__MC_TOKEN__ || null; } catch { return null; } })() || store.get("mc-token") || null;
 // iOS home-screen apps re-ask for the microphone after any navigation, a hash change included, and a
 // navigation stops a live capture (WebKit bug 215884). So on iOS the page never touches history: no
 // back-button entries, no hashes. Android keeps them — its back gesture closes sheets and screens.
 const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
-const USE_HISTORY = !IOS;
+const USE_HISTORY = !IOS && !EMBED;
+const DESKTOP = !IOS && !!window.matchMedia && matchMedia("(hover: hover) and (pointer: fine)").matches;
+// What the daemon is told this page is (sticky routing, call presence, call traces, who approved):
+// the Desk's front on a Mac, the phone everywhere else.
+const SURFACE = DESKTOP ? "desk" : "phone";
+// The Desk's ear on a Mac (static/desk.html `const VAD`): a longer pause before a cut, and a lower,
+// quicker barge-in — a laptop's speakers leak far less of Robert back than a phone's 10 cm away.
+const DESK_VAD = { endMs: 800, barge: 0.06, bargeMs: 300 };
+// The Desk's client lock (static/desk-scope.js) shows ONE workspace while the screen is shared. This
+// front is every workspace in one conversation and has no lens of its own, so while the lock is on it
+// does not draw at all — nothing below runs, nothing is read, nothing cached is shown.
+if (DESKTOP && (() => { try { const v = JSON.parse(localStorage.getItem("desk-lock") || "null"); return !!(v && v.id); } catch { return false; } })()) {
+  document.getElementById("app").innerHTML = '<div class="locked"><b>Hidden while the Desk shows one workspace</b>Robert’s conversation spans every workspace. Unlock the Desk to open it.<br><button type="button" id="locked-back">Back to the Desk</button></div>';
+  const back = () => { if (EMBED) window.parent.postMessage({ type: "robert:close" }, location.origin); else location.assign("/desk"); };
+  document.getElementById("locked-back").onclick = back;
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") back(); });
+  throw new Error("Robert front: hidden while the Desk is locked to one workspace");
+}
 // A flaky tunnel throws a network-level TypeError ("Failed to fetch" / "Load failed") before any
 // response arrives — cloudflared usually fails over inside a couple seconds. One retry on a GET
 // rides that out instead of surfacing it as an error; a write is never silently resent.
@@ -919,7 +996,8 @@ function closeSheet(animate = false, sh = null, bg = null, fromHistory = false) 
   // Drop the sheet's history entry so back does not have to be pressed twice.
   if (had && !fromHistory && USE_HISTORY && history.state?.sheet) history.back();
 }
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && qs("#sheets").firstChild) closeSheet(); });
+// preventDefault marks the key as taken: the layers under a sheet (the deck, the way back to the Desk) leave it alone.
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !e.defaultPrevented && qs("#sheets").firstChild) { e.preventDefault(); closeSheet(); } });
 function confirmSheet(text, label, fn) {
   const b = sheet(`<h3>${esc(text)}</h3><div class="menu"><button class="danger" data-ok><span class="i">!</span>${esc(label)}</button><button class="cancel" data-cancel>Cancel</button></div>`);
   qs("[data-ok]", b).onclick = async () => { fx.tap(); closeSheet(); try { await fn(); } catch (err) { fx.fail(); toast(err.message); } };
@@ -1794,7 +1872,7 @@ const rComposer = qs("#r-composer");
 // Tap a bubble → ↩ → it is quoted above the composer and the next line answers it (static/chat-reply.js).
 const RP = ChatReply({ log: qs("#chat"), input: rComposer, before: rComposer.closest(".composer"), onMissing: () => toast("that message is further back than the chat shows") });
 // This tab's id on each turn: the Desk draws a line it did not type itself (the bus echoes the id).
-const CLIENT = "phone-" + Math.random().toString(36).slice(2, 12);
+const CLIENT = SURFACE + "-" + Math.random().toString(36).slice(2, 12);
 // What the header says about Robert and the link: nothing when all is well.
 function robWork(on, what) {
   const sub = qs("#top-sub");
@@ -1862,8 +1940,8 @@ async function deliverRobert(text, el, ws, quote) {
   setPending({ text, at: Date.now(), after: R.lastId, voice: !!el._voice });
   let hold = false;
   try {
-    // `surface: "phone"` keeps sticky off the Desk's thread — both defaulted to "web" before.
-    const body = { text, client: CLIENT, surface: "phone" };
+    // The surface keeps sticky routing per place: the phone's is its own, a Mac's is the Desk's.
+    const body = { text, client: CLIENT, surface: SURFACE };
     if (ws !== undefined) { body.ws = ws; body.route = false; }
     if (quote) body.replyTo = { id: quote.id, side: quote.side };
     // Said on the call: his answer is read out, so he answers short and spoken.
@@ -1983,7 +2061,7 @@ const talk = qs("#talk");
 let callNoticeAt = Number(store.get("phone-call-notice") || 0);
 function callStart() {
   const t0 = performance.now();
-  rComposer.blur();
+  if (!DESKTOP) rComposer.blur(); // a phone's keyboard gets out of the way; a Mac's keeps the composer
   PhoneVoice.start().then((ok) => {
     if (!ok) return;
     window.__tapToListen = Math.round(performance.now() - t0);
@@ -2042,7 +2120,7 @@ qs("#call").addEventListener("click", (e) => {
 // The call's trace (moves + mic levels while he spoke, no audio) — kept by the daemon for `mc voice traces`.
 function sendTrace(dump) {
   if (!dump || (!dump.events?.length && !dump.levels?.length)) return Promise.resolve(false);
-  return api("/voice/trace", { method: "POST", body: JSON.stringify({ ...dump, client: CLIENT, surface: "phone" }) }).then(() => true, () => false);
+  return api("/voice/trace", { method: "POST", body: JSON.stringify({ ...dump, client: CLIENT, surface: SURFACE }) }).then(() => true, () => false);
 }
 // Stuck work said into the call (src/stuck-alerts.ts, on the alerts branch). While a call is up the
 // page tells the daemon so every 20 s (and once more on hang-up); an alert addressed to THIS call is
@@ -2052,7 +2130,7 @@ function sendTrace(dump) {
 // presence every 20 s, "started" when its audio begins, "done" only when it played to the end,
 // nothing if it could not be rendered or was talked over.
 const VA = VoiceAlerts.create({
-  client: CLIENT, surface: "phone", lang: () => voiceLang(), fixed: () => !!PREFS.lang, lock: () => null,
+  client: CLIENT, surface: SURFACE, lang: () => voiceLang(), fixed: () => !!PREFS.lang, lock: () => null,
   post: (p, body) => api(String(p).replace(/^\/api/, ""), { method: "POST", body: JSON.stringify(body) }),
 });
 let presT = 0;
@@ -2071,6 +2149,7 @@ const VIEW_RE = /^ (veamos|vamos|pendientes|que hay pendiente|que espera|que est
 const vnorm = (t) => " " + String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim() + " ";
 PhoneVoice.init({
   token: () => TOKEN,
+  vad: DESKTOP ? DESK_VAD : null,
   lang: voiceLang,
   speed: () => PREFS.speed,
   busy: () => R.busy,
@@ -2121,8 +2200,10 @@ PhoneDeck.init({
   el: qs("#v-deck"), api, token: () => TOKEN, toast, fx, md, lang: voiceLang, voice: PhoneVoice, history: USE_HISTORY,
   sessions: () => S.sessions, visible: (s) => !isWorker(s), askOf, wsColor, wsName,
   input, openTerminal: (id) => { if (byId(id)) openFocus(id); else toast("that terminal is gone"); },
-  compose: composeSheet,
-  onOpen: () => {},
+  compose: composeSheet, surface: SURFACE,
+  // The conversation under the deck is out of reach while it is up: no Tab into it, no key typed into
+  // its composer. On a Mac the composer takes the keyboard back when the deck closes.
+  onOpen: (open) => { qs("#v-home").inert = !!open; if (!open && DESKTOP && !qs("#v-home").hidden) rComposer.focus(); },
   onChange: (items) => {
     const n = items.length, e = qs("#qentry");
     e.hidden = !n;
@@ -2138,6 +2219,36 @@ PhoneDeck.init({
   },
 });
 qs("#qentry").onclick = () => { fx.tap(); PhoneDeck.open(); };
+
+// ── on a Mac: the keyboard, and the way back to the Desk ────────────────────
+// Enter sends and Shift+Enter is a new line (the composer's own handler). ⌘⇧V starts and ends the
+// call — the Desk's own chord for it. Esc walks out one layer at a time: a sheet and the deck close
+// themselves (they mark the key as taken), then a recording, a terminal's story, the terminals list,
+// Robert mid-sentence — and from the bare conversation, back to the Desk (⌘⇧R, the chord that opened
+// it, does the same). A live call is never dropped by a key: hang up first. No key answers a card.
+function toDesk() {
+  if (PhoneVoice.on) return toast(tr("Colgá primero: la charla vive en esta pantalla.", "Hang up first — the call lives on this screen."));
+  if (V.state) return;
+  if (rComposer.value) store.set("phone-draft", rComposer.value); else store.del("phone-draft");
+  if (EMBED) window.parent.postMessage({ type: "robert:close" }, location.origin); else location.assign("/desk");
+}
+if (DESKTOP) {
+  qs("#btn-desk").hidden = false;
+  qs("#btn-desk").onclick = () => toDesk();
+  talk.title = "Call Robert (⌘⇧V) · hold to dictate";
+  document.addEventListener("keydown", (e) => {
+    const chord = (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey, k = String(e.key || "").toLowerCase();
+    if (chord && k === "v") { e.preventDefault(); if (V.state) return; if (PhoneVoice.on) PhoneVoice.stop(); else callStart(); return; }
+    if (chord && k === "r") { e.preventDefault(); if (!PhoneDeck.isOpen() && !qs("#sheets").firstChild) toDesk(); return; }
+    if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    if (V.state) return voiceCancel();
+    if (!qs("#v-focus").hidden) return qs("#f-back").click();
+    if (!qs("#v-terms").hidden) return showHome();
+    if (PhoneVoice.on) { if (!PhoneVoice.tapStop()) toDesk(); return; }
+    toDesk();
+  });
+}
 
 // ── live updates ────────────────────────────────────────────────────────────
 const BUS_TOPICS = ["session.status", "session.activity", "agent.state", "session.started", "session.ended", "session.updated", "session.usage", "agent.delta", "agent.push", "agent.asked", "agent.turn.done", "ask.created", "ask.answered", "artifact.created", "artifact.updated", "artifact.event", "draft.ready", "alert.raised", "focus.event"].join(",");
@@ -2288,7 +2399,7 @@ function resume() {
   warmRobert();
   reloadSoon();
   checkBuild();
-  checkPush();
+  if (!DESKTOP) checkPush();
   if (R.awaitTurn || R.pending) robertHistory();
   if (S.current && isFocusUp()) {
     const id = S.current;
@@ -2488,7 +2599,9 @@ if (!TOKEN) { qs("#top-sub").textContent = "no token"; tokenSheet(); }
 else {
   // A reload while a screen or sheet was up leaves its history entry behind; start clean.
   if (history.state?.view || history.state?.sheet || history.state?.deck) history.replaceState(null, "", location.pathname);
-  PUSH.ready().then(checkPush);
+  // Alerts by push and the offline shell are the phone's; a Mac has the Desk for both.
+  if (!DESKTOP) PUSH.ready().then(checkPush);
+  else rComposer.focus();
   handleHash();
   // Warm + prefetch Robert before the first tap — cold Claude is the slow part, not the tunnel.
   warmRobert(true);

@@ -440,3 +440,25 @@ test("the language he picked on the call rides every transcription as fixed=1", 
   assert.match(html, /id="call-lang"/);
   assert.match(html, /fixed: \(\) => !!PREFS\.lang/);
 });
+
+test("the ear's numbers are the surface's: a page hands its own in ctx.vad, and the next init without them gets the phone's back", () => {
+  const base = { ...T.VAD };
+  PV.init({ lang: () => "en", token: () => "t", vad: { endMs: 800, barge: 0.06, bargeMs: 300, nonsense: 9, start: "0.5", hold: -1 } });
+  assert.equal(T.VAD.endMs, 800);
+  assert.equal(T.VAD.barge, 0.06);
+  assert.equal(T.VAD.bargeMs, 300);
+  assert.equal(T.VAD.start, base.start, "only numbers are taken");
+  assert.equal(T.VAD.hold, base.hold, "and only positive ones");
+  assert.equal("nonsense" in T.VAD, false, "an unknown key is not added");
+  // The ear follows them: a pause of 780 ms no longer cuts, and the barge ceiling is the Desk's.
+  const ear = T.makeEar();
+  assert.equal(ear.bargeTh(), 0.06);
+  let r = feed(ear, 0.002, 600, 0);
+  r = feed(ear, 0.2, 700, r.t);
+  r = feed(ear, 0.002, 730, r.t); // 18 frames = 768 ms: past the phone's 750, short of the Desk's 800
+  assert.ok(!r.events.some((e: any) => e.type === "close"), "768 ms of quiet is still the same sentence on a Mac");
+  r = feed(ear, 0.002, 120, r.t);
+  assert.ok(r.events.some((e: any) => e.type === "close"));
+  PV.init({ lang: () => "en", token: () => "t" });
+  assert.deepEqual({ ...T.VAD }, base, "no vad: the phone's numbers, untouched");
+});

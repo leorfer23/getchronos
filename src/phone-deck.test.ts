@@ -568,3 +568,105 @@ test("question cards are unchanged: a yes/no answered at once, an option by its 
   await tick(10);
   assert.deepEqual(plain(calls.filter((c) => c.kind === "api")), [{ kind: "api", path: "/asks/a7/answer", body: { answer: "Switch today", by: "operator" } }]);
 });
+
+// ── the same deck on a Mac, and the swipe between cards ─────────────────────────────────────────
+test("a decision is recorded under the surface it was taken on: desk for a click, desk-voice for a spoken yes", async () => {
+  const led = () => ({ ...T.handoffItem(sess, outcome), key: "ledger:i1", src: "ledger", ledger: { item: "i1", request: "r1", target_hash: "sha:abc", bound: true, action: "merge" } });
+  const withSurface = (surface?: string) => T.setCtx({ lang: () => "en", surface, api: async (p: string, o: any = {}) => { calls.push({ kind: "api", path: p, body: o.body && JSON.parse(o.body) }); return {}; }, input: async () => {}, sessions: () => [], wsName: () => "atlas", wsColor: () => "#000", voice, toast: () => {}, onChange: () => {}, onOpen: () => {} });
+  withSurface("desk");
+  await T.decide(led(), "yes");
+  await T.decide(led(), "yes", null, null, { voice: true, words: "yes", how: "confirmed" });
+  withSurface(undefined);
+  await T.decide(led(), "yes");
+  assert.deepEqual(calls.map((c) => c.body.by), ["desk", "desk-voice:confirmed", "phone"]);
+});
+
+test("a swipe is a swipe only after a clear horizontal intent; a scroll or a diagonal is left to the page", () => {
+  assert.equal(T.swipeIntent(6, 2), "wait", "not far enough to say");
+  assert.equal(T.swipeIntent(-30, 4), "navigate");
+  assert.equal(T.swipeIntent(30, -10), "navigate");
+  assert.equal(T.swipeIntent(13, 9), "ignore", "under 1.5× the vertical travel: a diagonal");
+  assert.equal(T.swipeIntent(3, 40), "ignore", "a vertical scroll");
+  assert.equal(T.swipeIntent(-20, 20), "ignore");
+});
+
+test("a released swipe moves one card at most, never past either end, and a small drag snaps back", () => {
+  assert.equal(T.swipeTarget(1, 5, -120, 390, 400), 2, "left = next");
+  assert.equal(T.swipeTarget(1, 5, 120, 390, 400), 0, "right = previous");
+  assert.equal(T.swipeTarget(1, 5, -380, 390, 900), 2, "one step however far");
+  assert.equal(T.swipeTarget(1, 5, -50, 390, 600), 1, "a slow short drag snaps back");
+  assert.equal(T.swipeTarget(1, 5, -50, 390, 120), 2, "a quick flick goes");
+  assert.equal(T.swipeTarget(4, 5, -200, 390, 200), 4, "the last card stays");
+  assert.equal(T.swipeTarget(0, 5, 200, 390, 200), 0, "the first card stays");
+});
+
+// The smallest DOM a gesture needs: closest() over a class/tag chain, a parent, and scroll sizes.
+function node(sel: string, parent: any = null, size: any = {}) {
+  const n: any = { sel: sel.split(","), parentElement: parent, scrollWidth: 300, clientWidth: 300, ...size };
+  n.classList = { contains: (c: string) => n.sel.includes("." + c) };
+  n.closest = (q: string) => { const want = q.split(",").map((x) => x.trim()); for (let x = n; x; x = x.parentElement) if (x.sel.some((s: string) => want.includes(s))) return x; return null; };
+  return n;
+}
+test("a swipe does not start on a button, a field, the before/after compare, a sideways-scrolling block, or outside a card", () => {
+  const card = node(".qcard"), scroll = node(".qc-scroll", card);
+  assert.equal(T.swipeStartOk(node("p", scroll)), true, "plain card text");
+  assert.equal(T.swipeStartOk(node("span", node("button", scroll))), true, "a row that is a button (a check, an option): the swipe may start there, its click is swallowed");
+  assert.equal(T.swipeStartOk(node("a", scroll)), false);
+  assert.equal(T.swipeStartOk(node("textarea", scroll)), false);
+  assert.equal(T.swipeStartOk(node("img", node(".ba", scroll))), false, "the compare slider keeps its own drag");
+  assert.equal(T.swipeStartOk(node("code", node("pre", scroll, { scrollWidth: 900, clientWidth: 300 }))), false, "wide code scrolls itself");
+  assert.equal(T.swipeStartOk(node("td", node("table", scroll, { scrollWidth: 640, clientWidth: 300 }))), false);
+  assert.equal(T.swipeStartOk(node(".dk-head")), false, "not on a card");
+  assert.equal(T.swipeStartOk(null), false);
+});
+
+test("a full swipe across the deck navigates and calls nothing: no decision, no answer, no terminal input", async () => {
+  T.mount([{ ...T.handoffItem(sess, outcome), key: "k1" }, T.questionItem({ kind: "ask", id: "a1", question: "Ship?", options: [], yn: true, at: 1 }), T.draftItem({ id: "d1", session_id: "s9", kind: "slack", channel: "#partners", text: "Hi.", at: "2026-11-09T10:00:00Z" })]);
+  const on: Record<string, (e: any) => void> = {};
+  const scrolled: any[] = [];
+  const track: any = { clientWidth: 390, scrollLeft: 0, style: {}, addEventListener: (t: string, f: any) => { on[t] = f; }, setPointerCapture() {}, scrollTo: (o: any) => { scrolled.push(o); track.scrollLeft = o.left; } };
+  T.wireSwipe(track);
+  const card = node(".qcard"), text = node("p", node(".qc-scroll", card));
+  const ev = (type: string, x: number, y: number, target: any = text) => ({ type, pointerId: 1, pointerType: "touch", isPrimary: true, clientX: x, clientY: y, target });
+  // Left: the card follows the finger, then the deck lands on the next one.
+  on.pointerdown(ev("pointerdown", 300, 400));
+  on.pointermove(ev("pointermove", 292, 401));
+  assert.equal(track.scrollLeft, 0, "nothing moves before the intent is clear");
+  on.pointermove(ev("pointermove", 180, 404));
+  assert.equal(track.scrollLeft, 120, "the card follows the finger");
+  assert.equal(track.style.scrollSnapType, "none");
+  on.pointerup(ev("pointerup", 150, 404));
+  assert.equal(scrolled.at(-1).left, 390, "next card");
+  // A vertical drag is the card scrolling: the deck does not move.
+  const before = scrolled.length;
+  on.pointerdown(ev("pointerdown", 200, 300)); on.pointermove(ev("pointermove", 204, 360)); on.pointermove(ev("pointermove", 60, 420)); on.pointerup(ev("pointerup", 60, 420));
+  // Starting on a link, at the screen's edge, or with a mouse: not a swipe. (Yes · Later · Change sit
+  // in the bar, outside the track: no swipe can start on them at all.)
+  on.pointerdown(ev("pointerdown", 300, 700, node("a", card))); on.pointermove(ev("pointermove", 100, 700)); on.pointerup(ev("pointerup", 100, 700));
+  on.pointerdown(ev("pointerdown", 8, 400)); on.pointermove(ev("pointermove", 200, 400)); on.pointerup(ev("pointerup", 200, 400));
+  on.pointerdown({ ...ev("pointerdown", 300, 400), pointerType: "mouse" }); on.pointermove(ev("pointermove", 100, 400)); on.pointerup(ev("pointerup", 100, 400));
+  assert.equal(scrolled.length, before, "none of those navigated");
+  // The browser took the gesture back mid-swipe: the deck returns to the card it was on.
+  on.pointerdown(ev("pointerdown", 300, 400)); on.pointermove(ev("pointermove", 150, 400)); on.pointercancel(ev("pointercancel", 150, 400));
+  assert.equal(scrolled.at(-1).left, 0, "back to where it started (the mounted deck is on card 0)");
+  await tick(5);
+  assert.deepEqual(calls, [], "a swipe reaches no endpoint and types into no terminal");
+  assert.deepEqual(toasts, [], "and starts no Undo window");
+});
+
+test("a double tap on Yes is one decision: the card that slides in under the finger does not answer for a moment", async () => {
+  const a = { ...T.handoffItem(sess, outcome), key: "k1" };
+  const b = T.draftItem({ id: "d1", session_id: "s9", kind: "slack", channel: "#partners", text: "Hi.", at: "2026-11-09T10:00:00Z" });
+  T.mount([a, b]);
+  assert.equal(T.settled(), true, "a deck at rest answers");
+  void T.act(a, "yes"); // the first tap: the card leaves, its Undo window opens
+  assert.equal(T.settled(), false, "the second tap of a double tap lands on a bar that is not armed yet");
+  await tick(750);
+  assert.equal(T.settled(), true, "and then it answers again");
+});
+
+test("a swipe that began on a row button swallows the click that follows it", () => {
+  const js = fs.readFileSync(new URL("../static/phone-deck.js", import.meta.url), "utf8");
+  assert.match(js, /track\.addEventListener\("click", function \(e\) \{\s*if \(Date\.now\(\) - swiped < 500\) \{ e\.preventDefault\(\); e\.stopPropagation\(\); \}\s*\}, true\);/);
+  assert.match(js, /g\.lock = true; clearTimeout\(snapT\); swiped = Date\.now\(\);/);
+});
