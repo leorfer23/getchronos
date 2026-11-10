@@ -48,7 +48,7 @@ export interface SettingDef {
 
 const REGISTRY = new Map<string, SettingDef>();
 /** Page order. */
-export const GROUPS = ["Workspace", "Robert", "Alerts", "Accounts", "Failover", "Autonomy", "Memory", "Limits", "Safety"];
+export const GROUPS = ["Workspace", "Robert", "Voice", "Alerts", "Accounts", "Failover", "Autonomy", "Memory", "Limits", "Safety"];
 
 export function defineSetting(d: SettingDef): SettingDef {
   REGISTRY.set(d.key, d);
@@ -362,6 +362,57 @@ defineSetting({
   label: "Robert's model", help: "The Desk chat and his automatic turns. Switching restarts his warm sessions.",
   options: () => ["opus", "sonnet", "fable", "haiku"],
   default: () => CONFIG.agent.voiceModel,
+});
+
+// Voice (src/talker.ts, src/voice-lang.ts, src/transcribe.ts): the one conversation he has with Robert.
+defineSetting({
+  key: "voice.talker", group: "Voice", level: "global", type: "bool", env: "CHRONOS_TALKER",
+  label: "Robert answers through the fast front",
+  help: "Every spoken or typed line to Robert is answered in about a second by a small fast model that reads the ledger and the queue of every project, and hands real work to that project's own Robert in the background. Off: today's per-project routing.",
+  default: () => process.env.CHRONOS_TALKER === "1",
+});
+defineSetting({
+  key: "voice.talker_engine", group: "Voice", level: "global", type: "enum", env: "CHRONOS_TALKER_ENGINE",
+  label: "Front engine",
+  help: "cli: its own warm claude process on your subscription (no key needed). api: the Messages API — faster to first word, needs ANTHROPIC_API_KEY or AI_GATEWAY_API_KEY in .secrets; without a key it stays on cli.",
+  options: () => ["cli", "api"],
+  default: () => (process.env.CHRONOS_TALKER_ENGINE === "api" ? "api" : "cli"),
+});
+defineSetting({
+  key: "voice.talker_cli_model", group: "Voice", level: "global", type: "enum", env: "CHRONOS_TALKER_CLI_MODEL",
+  label: "Front model (cli)", help: "A Claude Code model alias. haiku is the fastest.",
+  options: () => ["haiku", "sonnet", "opus"],
+  default: () => process.env.CHRONOS_TALKER_CLI_MODEL || "haiku",
+});
+defineSetting({
+  key: "voice.talker_api_model", group: "Voice", level: "global", type: "string", env: "CHRONOS_TALKER_API_MODEL",
+  label: "Front model (api)", help: "A Messages API model id, e.g. claude-haiku-5-5 (the gateway form is derived).",
+  default: () => process.env.CHRONOS_TALKER_API_MODEL || "claude-haiku-5-5",
+});
+defineSetting({
+  key: "voice.talker_provider", group: "Voice", level: "global", type: "enum", env: "CHRONOS_TALKER_PROVIDER",
+  label: "Front key (api)", help: "auto: an Anthropic key first, else the AI Gateway key.",
+  options: () => ["auto", "anthropic", "gateway"],
+  default: () => process.env.CHRONOS_TALKER_PROVIDER || "auto",
+});
+defineSetting({
+  key: "voice.lang_pick", group: "Voice", level: "global", type: "bool",
+  label: "Speak each sentence in its own language",
+  help: "An English sentence on a Spanish call is read in English, and the other way round. Off: the call's language for everything.",
+  default: () => true,
+});
+defineSetting({
+  key: "voice.islands", group: "Voice", level: "global", type: "bool",
+  label: "English words inside Spanish with English sounds (experimental)",
+  help: "\"Mergeá la feature branch\": the English words are read with English phonemes in the same voice. Measured: the English words improve, the Spanish right after them gets worse — off until that is fixed.",
+  default: () => false,
+});
+defineSetting({
+  key: "voice.listen", group: "Voice", level: "global", type: "enum",
+  label: "Listening language",
+  help: "bilingual: transcribed in the call's language unless whisper hears the other one (Spanish or English, never a third). page: always the call's language, as before.",
+  options: () => ["bilingual", "page"],
+  default: () => "bilingual",
 });
 
 // Failover

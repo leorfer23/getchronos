@@ -1,5 +1,5 @@
 import express from "express";
-import { GROUPS as SETTING_GROUPS, settingsView, writeSetting } from "./settings.js";
+import { GROUPS as SETTING_GROUPS, setting, settingOn, settingsView, writeSetting } from "./settings.js";
 import { claudeWall } from "./usage-meter.js";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -76,6 +76,10 @@ import { draftFields, recentDrafts, recordDraft } from "./draft-notify.js";
 import { openProactive } from "./robert-selfwake.js";
 import { notifyDraft } from "./draft-notify.js";
 import { markVoiceTurn, noteDraft, openWorkBlock } from "./ledger.js";
+import { startTalkerTurn, talkerOn, talkerStatus, warmTalker } from "./talker.js";
+import { plainFailure } from "./turn-failure.js";
+import { frontTakes } from "./agent-route.js";
+import { noteVoiceTrace, voiceTraces } from "./voice-trace.js";
 import { mountLedgerRoutes } from "./ledger-routes.js";
 import { robertMay } from "./robert-scope.js";
 import { isShipTerminal } from "./ship-guard.js";
@@ -135,7 +139,7 @@ import {
 } from "./agent-lifecycle.js";
 import { runCommandLine } from "./commands.js";
 import { flowData } from "./flow.js";
-import { transcribe, audioFilename, transcribeFailure } from "./transcribe.js";
+import { transcribe, transcribeBilingual, audioFilename, transcribeFailure } from "./transcribe.js";
 import { speak, voiceFor, listVoices, neuralHealth } from "./speak.js";
 import { activeWorkspaceIds, askFleetFanout, askManagerWeb, handFilesTo, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurn, oneRobert, resolveVoiceAsk, setSticky, fansOut } from "./thread-router.js";
@@ -219,6 +223,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BROADCAST_GAP_MS = 300;
 // When each terminal was last handed its stale-board context (GET /sessions/:id/board-nudge).
 const lastNudge = new Map<string, number>();
+
+/**
+ * Idle keep-alive longer than the tunnel's. cloudflared keeps an idle connection to us for 90 s
+ * (originRequest keepAliveTimeout, default 1m30s) and reuses it; Node closed idle sockets after 5 s,
+ * so a request that cloudflared sent down a socket Node was just closing died with "read: connection
+ * reset by peer" — seen on POST /api/transcribe and /api/voice/presence right after a call opened
+ * ("No pude transcribir"). The server must be the side that waits longer; headersTimeout must exceed it.
+ */
+export const KEEP_ALIVE_MS = 95_000;
+export function applyKeepAlive(server: http.Server): void {
+  server.keepAliveTimeout = KEEP_ALIVE_MS;
+  server.headersTimeout = KEEP_ALIVE_MS + 5_000;
+}
 
 /**
  * The Desk footer's quick actions as stored, or the shipped set when nothing is stored — and also
@@ -4852,6 +4869,7 @@ export function startServer() {
     );
   });
 
+  let transcribing = 0; // whisper requests in flight from this route — a partial skips when > 0
   // Voice: browser mic → transcript. Raw audio body (webm/ogg, mp4 on iOS) → local whisper → { text }.
   api.post("/transcribe", requireAdmin, express.raw({ type: () => true, limit: "25mb" }), async (req, res) => {
     try {
@@ -4860,9 +4878,22 @@ export function startServer() {
       const ct = req.get("content-type") || "audio/webm";
       const lang = String(req.query.lang || "").toLowerCase();
       const language = lang === "en" || lang === "es" ? lang : undefined;
+      const partial = req.query.partial === "1";
+      // Partials (the words drawn while he is still talking) never queue behind anything: whisper
+      // runs one request at a time, and a final transcript must not wait on a preview.
+      if (partial && transcribing > 0) return res.json({ text: null, busy: true });
       const t0 = Date.now();
-      const text = await transcribe(buf, { filename: audioFilename(ct), contentType: ct, language });
-      res.json({ text, ms: Date.now() - t0, bytes: buf.length });
+      transcribing++;
+      try {
+        if (language && !partial && setting("voice.listen") !== "page") {
+          const out = await transcribeBilingual(buf, { filename: audioFilename(ct), contentType: ct, hint: language });
+          return res.json({ text: out.text, lang: out.lang, passes: out.passes, ms: Date.now() - t0, bytes: buf.length });
+        }
+        const text = await transcribe(buf, { filename: audioFilename(ct), contentType: ct, language });
+        res.json({ text, ms: Date.now() - t0, bytes: buf.length, ...(partial ? { partial: true } : {}) });
+      } finally {
+        transcribing--;
+      }
     } catch (e: any) {
       const f = transcribeFailure(e, { mime: req.get("content-type") || "-", bytes: (req.body as Buffer)?.length ?? 0 });
       console.error(f.log);
@@ -4874,11 +4905,25 @@ export function startServer() {
   // best `say` voice; src/speak.ts) → audio the page plays. The engine rides a header for debugging.
   api.post("/speak", requireAdmin, validate(SpeakSchema), async (req, res) => {
     try {
-      const out = await speak(req.body.text, req.body.lang ?? "en");
-      res.set({ "content-type": out.mime, "cache-control": "no-store", "x-voice-engine": out.engine }).send(out.audio);
+      const out = await speak(req.body.text, req.body.lang ?? "en", { pick: settingOn("voice.lang_pick"), islands: settingOn("voice.islands") });
+      res.set({ "content-type": out.mime, "cache-control": "no-store", "x-voice-engine": out.engine, "x-voice-lang": out.lang }).send(out.audio);
     } catch (e: any) {
       res.status(500).json({ error: String(e?.message ?? e) });
     }
+  });
+  // What a call page needs to know at start: is the front on (and warm), how it listens.
+  api.get("/voice/config", requireAdmin, (_req, res) => {
+    res.json({ talker: talkerStatus(), listen: setting("voice.listen"), lang_pick: settingOn("voice.lang_pick") });
+  });
+  // A call's own trace (static/phone-voice.js): its moves and the mic levels it measured while Robert
+  // spoke — numbers from the real phone, never audio. The last few are kept in memory for `mc voice traces`.
+  api.post("/voice/trace", requireAdmin, express.json({ limit: "256kb" }), (req, res) => {
+    const r = noteVoiceTrace(req.body ?? {});
+    if (!r.ok) return res.status(400).json({ error: r.error });
+    res.json({ ok: true, id: r.id });
+  });
+  api.get("/voice/traces", requireAdmin, (req, res) => {
+    res.json({ traces: voiceTraces(Number(req.query.limit) || 5) });
   });
   api.get("/voices", requireAdmin, async (_req, res) => {
     res.json({ en: await voiceFor("en"), es: await voiceFor("es"), installed: (await listVoices()).filter((v) => v.premium), neural: await neuralHealth() });
@@ -4886,6 +4931,8 @@ export function startServer() {
 
   // Hub open → pre-boot the persistent voice manager so the first utterance skips CLI startup.
   api.post("/agent/warm", requireAdmin, validate(AgentWarmSchema), (req, res) => {
+    // A call opening: the front first (it answers his first sentence), then the Robert behind it.
+    warmTalker();
     warmWebManager(req.body.ws ?? null);
     res.json({ ok: true });
   });
@@ -5111,6 +5158,20 @@ export function startServer() {
     // #tag / text signal, above sticky). The quoted words themselves never re-route — only the
     // parent's workspace_id does.
     const quote = req.body.replyTo ? chat.quoteOf(req.body.replyTo.id, req.body.replyTo.side) : null;
+    // The voice front (src/talker.ts, setting voice.talker): one fast conversation across every
+    // project that hands work to each project's Robert. A turn with files stays on today's path (the
+    // front reads no files). A page that names a workspace (the Desk's client lock, a pick) scopes the
+    // front to that workspace. If the front cannot start, today's path below runs as if it were off.
+    if (frontTakes(req.body, talkerOn())) {
+      const scope = req.body.ws && workspaces.get(req.body.ws) ? (req.body.ws as string) : null;
+      const t = await startTalkerTurn({ text: req.body.text, voice, surface, client: req.body.client, scope, askedAt, quote: quote?.text ?? null });
+      if (t.ok) {
+        res.json({ accepted: true, turn: t.turn, ws: t.ws, how: "front" });
+        void t.go().catch((e) => console.warn("[talker] turn", e?.message ?? e));
+        return;
+      }
+      console.warn("[talker] fell back to the per-project path:", t.why);
+    }
     // An explicit workspace selection wins; otherwise the thread router reads the workspace out of the
     // message (a #tag, a ticket key, a project name, the terminal on screen, the bubble being
     // answered, or where the last one landed). Each workspace answers on its OWN warm Robert, so no
@@ -5215,7 +5276,9 @@ export function startServer() {
         });
         bus.publish({ topic: "agent.turn.done", ws });
       } catch (e: any) {
-        const err = "⚠️ " + String(e?.message ?? e);
+        // A dead login or an unreachable provider is said in one sentence he can act on (and spoken —
+        // no ⚠️); anything else stays the raw error, as before.
+        const err = plainFailure(e, text).reply;
         try {
           const row = chat.add(text, err, "web", ws, null, shown, quote, null, timing());
           bus.publish({
@@ -5340,6 +5403,7 @@ export function startServer() {
   }
 
   const server = http.createServer(app);
+  applyKeepAlive(server);
 
   // Heartbeat interval for both hubs: a half-open socket (laptop sleep, network drop) never fires
   // 'close', so it lingers in the client set forever. Ping every 30s; terminate any client that

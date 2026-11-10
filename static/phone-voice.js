@@ -20,13 +20,34 @@
  *     drawn) delays frames instead of dropping them; ScriptProcessor is the fallback.
  * The page owns everything else (what a transcript means, where a turn goes, what is drawn).
  *
+ * Since the first real calls (2026-11-09):
+ *   - his words show while he speaks: the open segment is re-transcribed every ~700 ms
+ *     (/api/transcribe?partial=1, skipped by the daemon while whisper is busy) — display only, never a
+ *     turn, never an answer to a card (onPartial);
+ *   - barge-in follows the level actually measured while Robert speaks (the phone's echo canceller
+ *     ducks his voice far below a fixed 0.075): the threshold is a little above what the speaker leaks
+ *     back (p90 of playback frames), never above the old 0.075, and the transcript still goes through
+ *     the echo guard — a false barge pauses Robert, the guard resumes him;
+ *   - a tap stops him at once (tapStop); the call keeps a trace of moves and playback levels that the
+ *     page uploads at hang-up (traceDump) — numbers, never audio;
+ *   - a transcription lost to a dropped connection is retried twice, silently, with the same audio;
+ *   - while a turn is out, a soft tick says "still working" and, past 3.5 s of silence, one spoken
+ *     "un segundo"; what he hears of a reply is capped (verdict first, then "¿te cuento más?").
+ *
  * ctx = { token(), lang(), speed(), label(id8) → name|null, onState(state, why), onHeard(text, meta),
- *         onLevel(0..1), onSubtitle(text), onError(msg), busy() → Robert is mid-turn, onStopTurn() }
+ *         onLevel(0..1), onSubtitle(text), onError(msg), busy() → Robert is mid-turn, onStopTurn(),
+ *         onPartial(text|null), onTrace(dump) }
  */
 (function (root) {
   // Tuned for a phone held in a hand or lying on a table: the Desk's numbers, with barge-in asking
   // for a little more (a loudspeaker 10cm from the mic leaks more of him back than a Mac does).
-  var VAD = { start: 0.025, hold: 0.012, speech: 0.04, endMs: 850, minSpeechMs: 220, maxMs: 45000, preMs: 350, barge: 0.075, bargeMs: 380 };
+  // barge: the CEILING of the barge-in threshold (and its value until the call has heard enough of
+  // its own playback); bargeMin: its floor; echoX: how far above the measured echo his voice must be.
+  var VAD = { start: 0.025, hold: 0.012, speech: 0.04, endMs: 750, minSpeechMs: 220, maxMs: 45000, preMs: 350, barge: 0.075, bargeMin: 0.015, echoX: 2.2, bargeMs: 380 };
+  // How much of the open segment a partial re-transcribes (the tail), and how often.
+  var PARTIAL = { everyMs: 700, minMs: 600, tailMs: 12000 };
+  // What is read aloud of one reply before "¿te cuento más?": sentences, characters.
+  var CAP = { sentences: 3, chars: 340 };
   // Whisper's stock phantoms on breath and room noise — never a command, never a turn.
   var HEARD_NOISE = /^(\[.*\]|\(.*\)|\*.*\*|thank you\.?|thanks for watching.*|you\.?|bye\.?|gracias( por ver.*)?\.?|subt[ií]tulos.*|amara\.org.*|[.…,!? ]+)$/i;
   var SENTENCE_CUT = /(?<=[.!?…:;])\s+|\n+/;
@@ -39,7 +60,7 @@
   // terminal id said as the terminal's name (label), no emoji.
   function speakable(text, lang, label) {
     var t = String(text == null ? "" : text).replace(/```[\s\S]*?```/g, " ");
-    t = t.split("\n").filter(function (l) { return !/^\s*(UI\b|\{.*\}\s*$|::(?:ask|artifact) [0-9a-f-]{8,36}::\s*$)/.test(l); }).join("\n");
+    t = t.split("\n").filter(function (l) { return !/^\s*(UI\b|\{.*\}\s*$|::(?:ask|artifact) [0-9a-f-]{8,36}::\s*$|#{1,6}\s)/.test(l); }).join("\n");
     t = t.replace(/\b([0-9a-f]{8})(?:-?[0-9a-f]{4}){0,3}(?:-?[0-9a-f]{12})?\b/g, function (m, id8) { var n = label && label(id8); return n || m; });
     t = t.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/https?:\/\/\S+/g, lang === "es" ? "un enlace" : "a link").replace(/`([^`]*)`/g, "$1");
     t = t.replace(/^\s*(?:[-•*]|\d+[.)])\s+/gm, "").replace(/\s+·\s+/g, ", ").replace(/[*_#>|~]+/g, " ").replace(/\p{Extended_Pictographic}️?/gu, "");
@@ -124,7 +145,20 @@
    * counts as you (barge). Returns the events this frame produced.
    */
   function makeEar() {
-    var E = { seg: null, pre: [], preMs: 0, noise: 0.01, bargeMs: 0, deafUntil: 0 };
+    var E = { seg: null, pre: [], preMs: 0, noise: 0.01, bargeMs: 0, deafUntil: 0, ring: [], echo: null, th: VAD.barge, nPlay: 0 };
+    // The barge threshold, from what the mic hears while the page plays and he is NOT talking over it:
+    // p90 of the last ~2.7 s of such frames, times echoX, between bargeMin and the old fixed ceiling.
+    // A frame already above the threshold is a candidate barge, not echo, and does not move it.
+    function learn(rms) {
+      E.nPlay++;
+      if (rms > E.th) return;
+      E.ring.push(rms); if (E.ring.length > 64) E.ring.shift();
+      if (E.ring.length < 8) return;
+      var sorted = E.ring.slice().sort(function (a, b) { return a - b; });
+      E.echo = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))];
+      E.th = Math.max(VAD.bargeMin, Math.min(VAD.barge, E.echo * VAD.echoX));
+    }
+    E.bargeTh = function () { return Math.max(E.th, E.noise * 2); };
     E.frame = function (f, rate, now, speaking) {
       var ev = [];
       var sum = 0;
@@ -133,10 +167,13 @@
       E.level = speaking ? 0 : Math.min(1, rms * 8);
       if (now < E.deafUntil) { if (E.seg) { E.seg = null; ev.push({ type: "drop" }); } E.pre = []; E.preMs = 0; E.bargeMs = 0; return ev; }
       var frame = new Float32Array(f);
+      E.rms = rms;
       if (!E.seg && speaking) {
         E.pre.push(frame); E.preMs += ms;
         while (E.preMs > VAD.preMs + VAD.bargeMs && E.pre.length > 1) E.preMs -= (E.pre.shift().length / rate) * 1000;
-        E.bargeMs = rms > Math.max(VAD.barge, E.noise * 6) ? E.bargeMs + ms : Math.max(0, E.bargeMs - ms / 2);
+        var th = E.bargeTh();
+        E.bargeMs = rms > th ? E.bargeMs + ms : Math.max(0, E.bargeMs - ms / 2);
+        if (rms <= th) learn(rms);
         if (E.bargeMs < VAD.bargeMs) return ev;
         E.seg = { frames: E.pre, ms: E.preMs, loudMs: E.bargeMs, last: now, barge: true, t0: now - E.bargeMs };
         E.pre = []; E.preMs = 0; E.bargeMs = 0;
@@ -155,7 +192,7 @@
       }
       var s = E.seg;
       s.frames.push(frame); s.ms += ms;
-      if (rms > Math.max(VAD.hold, E.noise * 2)) { s.last = now; if (rms > VAD.speech) s.loudMs += ms; }
+      if (rms > Math.max(VAD.hold, E.noise * 2)) { s.last = now; if (rms > (speaking ? Math.min(VAD.speech, E.bargeTh()) : VAD.speech)) s.loudMs += ms; }
       // You were already talking when he started: that is a barge too.
       if (!s.barge && speaking && s.loudMs >= VAD.bargeMs) { s.barge = true; ev.push({ type: "barge" }); }
       if (now - s.last > VAD.endMs || s.ms > VAD.maxMs) {
@@ -165,6 +202,8 @@
       return ev;
     };
     E.reset = function () { E.seg = null; E.pre = []; E.preMs = 0; E.bargeMs = 0; };
+    /** A new call: forget what the last one's playback sounded like. */
+    E.resetEcho = function () { E.ring = []; E.echo = null; E.th = VAD.barge; E.nPlay = 0; };
     return E;
   }
 
@@ -179,12 +218,13 @@
     on: false, state: "off", why: "", ctx: null, stream: null, src: null, node: null, sink: null, rate: 48000, ear: makeEar(),
     audio: null, speakQ: [], playing: null, paused: null, turn: null, buf: "", spoken: new Set(), muted: null, recent: [],
     chain: Promise.resolve(), sending: 0, lock: null, deaf: false, mute: false, gen: 0, reacquiring: false, bargeItem: null,
-    lastLevel: -1, trace: [],
+    lastLevel: -1, trace: [], levels: [], lvlN: 0, partial: null, partialAt: 0, more: [], moreTurn: null, said: 0, saidChars: 0, capped: false,
+    waitTurn: null, waitT: 0, waitAt: 0, acked: false, startedAt: 0,
     // The page's own playback clock: is audio coming out right now, and when did it last stop.
     audible: false, lastPlayEnd: -1e9,
   };
   // What the call did, last 60 moves — for the harness and for a bug report, never shown.
-  function tr(what) { V.trace.push([Math.round(performance.now()), what]); if (V.trace.length > 60) V.trace.shift(); }
+  function tr(what) { V.trace.push([Math.round(performance.now()), what]); if (V.trace.length > 300) V.trace.shift(); }
 
   // 0.1 s of silence: what primes the <audio> element inside the tap (iOS unlocks an element for
   // later plays only if it was played from a gesture). Made on the spot — nothing to fetch.
@@ -224,11 +264,11 @@
   function earcon(kind) {
     var c = V.ctx;
     if (!c || c.state !== "running") return;
-    var notes = { on: [523, 784], off: [660, 440], sent: [880], resume: [784] }[kind] || [];
+    var notes = { on: [523, 784], off: [660, 440], sent: [880], resume: [784], tick: [392] }[kind] || [];
     notes.forEach(function (hz, i) {
       var o = c.createOscillator(), g = c.createGain(), at = c.currentTime + i * 0.09;
       o.type = "sine"; o.frequency.value = hz;
-      g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(0.07, at + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
+      g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(kind === "tick" ? 0.03 : 0.07, at + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
       o.connect(g).connect(c.destination); o.start(at); o.stop(at + 0.18);
     });
     if (kind === "sent") V.ear.deafUntil = Math.max(V.ear.deafUntil, performance.now() + 220);
@@ -243,6 +283,12 @@
       if (seg.afterPlay == null) seg.afterPlay = V.audible ? 0 : now - V.lastPlayEnd;
       if (V.audible) seg.overlap = true;
     }
+    // The trace: what the mic measured while the page was speaking, and the threshold it held then.
+    if (speaking() && V.audible && (V.lvlN++ % 6 === 0)) {
+      V.levels.push([Math.round(now), Math.round((V.ear.rms || 0) * 10000) / 10000, Math.round((V.ear.echo || 0) * 10000) / 10000, Math.round(V.ear.bargeTh() * 10000) / 10000]);
+      if (V.levels.length > 1500) V.levels.shift();
+    }
+    if (seg && !V.partial && seg.ms >= PARTIAL.minMs && now - V.partialAt >= PARTIAL.everyMs) partialOf(seg, now);
     var lvl = Math.round(V.ear.level * 10) / 10;
     if (lvl !== V.lastLevel) { V.lastLevel = lvl; try { C.onLevel(lvl); } catch (e) {} }
     for (var i = 0; i < evs.length; i++) {
@@ -384,6 +430,7 @@
     if (V.on) return Promise.resolve(true);
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { err(t("Este navegador no da el micrófono", "No microphone in this browser")); return Promise.resolve(false); }
     V.on = true; V.paused = null; V.state = "off"; V.why = "";
+    V.trace = []; V.levels = []; V.lvlN = 0; V.startedAt = Date.now(); V.ear.resetEcho(); V.more = []; V.moreTurn = null;
     V.audio = V.audio || new Audio();
     try { V.audio.setAttribute("playsinline", ""); V.audio.src = silent(); var pp = V.audio.play(); if (pp && pp.catch) pp.catch(function () {}); } catch (e) {}
     try {
@@ -413,6 +460,10 @@
   }
   function stop(silent) {
     if (!V.on) return;
+    tr("hang-up");
+    var dump = traceDump("hang-up");
+    try { C.onTrace && C.onTrace(dump); } catch (e) {}
+    waitDone();
     skip(true);
     if (!silent) earcon("off");
     V.on = false; V.paused = null; V.bargeItem = null; V.muted = null; V.turn = null; V.buf = "";
@@ -429,6 +480,37 @@
   function err(msg) { try { C.onError(msg); } catch (e) {} }
 
   // ── the ear → words ─────────────────────────────────────────────────────────────────────────────
+  // A dropped connection between the tunnel and the daemon (seen right after a call opens) is not his
+  // problem: the same audio goes again, twice, before he hears "no pude transcribir".
+  var RETRY_STATUS = [502, 503, 504, 520, 521, 522, 523, 524];
+  async function transcribeBlob(blob, query, tries) {
+    var waits = [250, 700];
+    for (var i = 0; ; i++) {
+      try {
+        var r = await fetch("/api/transcribe?" + query, { method: "POST", headers: Object.assign({ "content-type": "audio/wav" }, auth()), body: blob });
+        if (r.ok) return await r.json();
+        if (i < (tries || 0) && RETRY_STATUS.indexOf(r.status) >= 0) { tr("retry:" + r.status); await new Promise(function (ok) { setTimeout(ok, waits[i] || 700); }); continue; }
+        throw new Error((await r.text()).slice(0, 120) || "HTTP " + r.status);
+      } catch (e) {
+        var net = e && (e.name === "TypeError" || /network|fetch|load failed/i.test(String(e.message || "")));
+        if (net && i < (tries || 0)) { tr("retry:net"); await new Promise(function (ok) { setTimeout(ok, waits[i] || 700); }); continue; }
+        throw e;
+      }
+    }
+  }
+  // His words while he is still talking: the open segment's tail, one request at a time, display only.
+  function partialOf(seg, now) {
+    V.partialAt = now;
+    var keep = [], ms = 0, rate = V.rate;
+    for (var i = seg.frames.length - 1; i >= 0 && ms < PARTIAL.tailMs; i--) { keep.unshift(seg.frames[i]); ms += (seg.frames[i].length / rate) * 1000; }
+    var p = V.partial = { seg: seg };
+    transcribeBlob(wav(keep, rate), "partial=1&lang=" + C.lang(), 0).then(function (j) {
+      if (V.partial !== p) return;
+      var text = j && typeof j.text === "string" ? j.text.replace(/\s+/g, " ").trim() : "";
+      // Shown only while that segment is still open (or its final has not come back yet).
+      if (text && !HEARD_NOISE.test(text) && V.on && (V.ear.seg === seg || V.sending)) { try { C.onPartial && C.onPartial(text); } catch (e) {} }
+    }).catch(function () {}).then(function () { if (V.partial === p) V.partial = null; });
+  }
   function send(frames, barge, meta) {
     meta = meta || {};
     var blob = wav(frames, V.rate);
@@ -437,11 +519,10 @@
     V.chain = V.chain.then(async function () {
       var text = "";
       try {
-        var r = await fetch("/api/transcribe?lang=" + C.lang(), { method: "POST", headers: Object.assign({ "content-type": "audio/wav" }, auth()), body: blob });
-        if (!r.ok) throw new Error((await r.text()).slice(0, 120) || "HTTP " + r.status);
-        text = String((await r.json()).text || "").replace(/\s+/g, " ").trim();
+        var j = await transcribeBlob(blob, "lang=" + C.lang(), 2);
+        text = String(j.text || "").replace(/\s+/g, " ").trim();
       } catch (e) { if (V.on) err(t("No pude transcribir: ", "Transcribe failed: ") + String((e && e.message) || e).slice(0, 100)); }
-      finally { V.sending--; }
+      finally { V.sending--; V.partial = null; try { C.onPartial && C.onPartial(null); } catch (e) {} }
       if (!V.on) return paint();
       var m = { barge: !!barge, t0: meta.t0, t1: meta.t1, overlap: !!meta.overlap, afterPlay: meta.afterPlay, echo: false };
       var echo = !!text && echoVerdict(text, m, V.recent);
@@ -491,6 +572,7 @@
   function turn(id) {
     if (id && V.turn === id) return;
     V.turn = id || null; V.buf = ""; V.spoken = new Set();
+    V.said = 0; V.saidChars = 0; V.capped = false; V.more = []; V.moreTurn = null;
   }
   function delta(e) {
     if (!V.on || (e.turn && e.turn === V.muted)) return;
@@ -511,6 +593,12 @@
     var k = norm(s);
     if (!(opts && opts.again) && V.spoken.has(k)) return null;
     V.spoken.add(k);
+    // Short by construction: the verdict and what waits for him are read; the rest is kept for "más".
+    if (!(opts && opts.again) && (V.capped || V.said >= CAP.sentences || (V.said > 0 && V.saidChars + s.length > CAP.chars))) {
+      V.capped = true; V.more.push(s); V.moreTurn = V.turn;
+      return null;
+    }
+    V.said++; V.saidChars += s.length;
     return enqueue(s, opts);
   }
   // The authoritative reply: whatever the stream did not already say. Something he raised on his own
@@ -523,6 +611,51 @@
     var parts = String(e.reply || "").split(SENTENCE_CUT);
     var list = fromHere ? parts : parts.slice(0, 4);
     for (var i = 0; i < list.length; i++) sentence(list[i]);
+    waitDone();
+    if (V.more.length) enqueue(t("¿Te cuento más?", "Want more?"), { tag: "more" });
+  }
+  /** What the cap kept back of the last reply, read now ("sí", "contame más"). False when there is none. */
+  function more() {
+    if (!V.on || !V.more.length) return false;
+    var rest = V.more; V.more = []; V.moreTurn = null;
+    for (var i = 0; i < rest.length; i++) enqueue(rest[i], { tag: "more-rest" });
+    paint();
+    return true;
+  }
+  // ── "still working": a soft tick, then once a spoken "un segundo" ───────────────────────────────
+  // From the moment a turn is out until the first sentence plays: never silence plus a spinner.
+  function waiting(turnId) {
+    waitDone();
+    if (!V.on) return;
+    V.waitTurn = turnId || "?"; V.waitAt = performance.now(); V.acked = false;
+    V.waitT = setInterval(function () {
+      if (!V.on || V.playing || V.speakQ.length) return waitDone();
+      var since = performance.now() - V.waitAt;
+      if (since > 30000) return waitDone();
+      if (since > 3500 && !V.acked) { V.acked = true; tr("ack"); enqueue(t("Un segundo.", "One moment."), { tag: "ack" }, false); return; }
+      if (since > 900 && !V.ear.seg) earcon("tick");
+    }, 1500);
+  }
+  function waitDone() { if (V.waitT) { clearInterval(V.waitT); V.waitT = 0; } V.waitTurn = null; }
+  /** A tap on the call screen: stop talking NOW and listen — the guaranteed barge-in. */
+  function tapStop() {
+    if (!V.on) return false;
+    var was = speaking();
+    tr("tap-stop" + (was ? "" : ":idle"));
+    if (was) { V.muted = V.turn; skip(true); }
+    if (V.paused) resume();
+    V.ear.reset(); V.ear.deafUntil = performance.now() + 150;
+    paint();
+    return was;
+  }
+  /** What the call did and what the mic heard while he spoke — no audio. The page posts it. */
+  function traceDump(why) {
+    var lv = V.levels.slice(-1500);
+    return {
+      why: why || "manual", ua: (typeof navigator !== "undefined" && navigator.userAgent) || "",
+      events: V.trace.slice(), levels: lv,
+      summary: { engine: V.engine || null, echo: V.ear.echo == null ? null : Math.round(V.ear.echo * 10000) / 10000, threshold: Math.round(V.ear.bargeTh() * 10000) / 10000, play_frames: V.ear.nPlay, end_ms: VAD.endMs, barge_ceiling: VAD.barge, call_s: V.startedAt ? Math.round((Date.now() - V.startedAt) / 1000) : 0 },
+    };
   }
   /**
    * Say page text (a card read out, a confirmation, an alert). Resolves when it has been PLAYED to the
@@ -572,6 +705,7 @@
     if (blob && V.on) {
       var url = URL.createObjectURL(blob), a = V.audio;
       try { C.onSubtitle(item.text); } catch (e) {}
+      if (item.tag !== "ack") waitDone();
       var rec = { k: norm(item.text), end: Infinity };
       V.recent.push(rec); if (V.recent.length > 8) V.recent.shift();
       V.audible = true;
@@ -625,6 +759,7 @@
   root.PhoneVoice = {
     init: init, start: start, stop: stop, resume: resume,
     say: say, skip: skip, turn: turn, delta: delta, final: final,
+    more: more, hasMore: function () { return V.on && V.more.length > 0; }, waiting: waiting, waitDone: waitDone, tapStop: tapStop, traceDump: traceDump,
     get on() { return V.on; },
     state: function () { return V.on ? computeState() : "off"; },
     speaking: function () { return V.on && speaking(); },
@@ -636,7 +771,7 @@
     // Pure helpers, for the tests (src/phone-voice.test.ts).
     // `heard` delivers a transcript as if whisper had returned it — the harness drives the dialogue
     // with it once the audio path itself has been exercised with a fake microphone.
-    _t: { norm: norm, speakable: speakable, wav: wav, isEcho: isEcho, makeEar: makeEar, VAD: VAD, HEARD_NOISE: HEARD_NOISE, SENTENCE_CUT: SENTENCE_CUT, heard: function (text, meta) {
+    _t: { norm: norm, speakable: speakable, wav: wav, isEcho: isEcho, makeEar: makeEar, VAD: VAD, HEARD_NOISE: HEARD_NOISE, SENTENCE_CUT: SENTENCE_CUT, CAP: CAP, PARTIAL: PARTIAL, transcribeBlob: transcribeBlob, V: V, sentence: sentence, heard: function (text, meta) {
         if (!V.on) return;
         var now = performance.now();
         var m = Object.assign({ barge: false, t0: now, t1: now, overlap: V.audible, afterPlay: V.audible ? 0 : now - V.lastPlayEnd, echo: false }, meta || {});

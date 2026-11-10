@@ -214,6 +214,33 @@ test("the ledger, when the daemon has it: a bound yes is recorded with its targe
   assert.deepEqual(plain(calls).map((c: Call) => c.kind + ":" + (c.path || c.id)), ["api:/ledger/r1/decision", "input:s1"], "recorded, and the words reach the terminal");
 });
 
+test("executed on the decision's answer: true → nothing typed into the terminal; false → today's line; absent → as today", async () => {
+  const led = (over: any = {}) => ({ ...T.handoffItem(sess, outcome), key: "ledger:i1", src: "ledger", ledger: { item: "i1", request: "r1", target_hash: "sha:abc", bound: true, action: "merge", ...over } });
+  // The executor merged it: say so, and never also type the approval line (that would be a second merge).
+  calls = []; apiImpl = () => ({ ok: true, executed: true });
+  const done = await T.decide(led(), "yes");
+  assert.deepEqual(plain(calls).map((c: Call) => c.kind + ":" + (c.path || c.id)), ["api:/ledger/r1/decision"], "recorded — and no input to the terminal");
+  assert.match(done, /Done|Listo/);
+  // The executor did not run it: the terminal is told the Desk's way, so the agent still carries it out.
+  calls = []; apiImpl = () => ({ ok: true, executed: false });
+  await T.decide(led(), "yes");
+  assert.deepEqual(plain(calls).map((c: Call) => c.kind + ":" + (c.path || c.id)), ["api:/ledger/r1/decision", "input:s1"]);
+  assert.equal(calls[1].body.text, T.OK_LINE.merge);
+  // No field (the daemon before the executor): recorded, nothing typed — exactly today's behaviour.
+  calls = []; apiImpl = () => ({ ok: true });
+  const rec = await T.decide(led(), "yes");
+  assert.deepEqual(plain(calls).map((c: Call) => c.kind + ":" + (c.path || c.id)), ["api:/ledger/r1/decision"]);
+  assert.match(rec, /Recorded|registrado/);
+  // A draft is never typed as an approval anywhere — executed or not.
+  const d = { ...T.draftItem({ id: "x", session_id: "s1", kind: "slack", channel: "#partners", text: "Hi team.", at: "2026-11-09T10:00:00Z" }), src: "ledger", ledger: { item: "i2", request: "r2", target_hash: "sha256:t", bound: true, action: "send" }, hashOk: true };
+  for (const executed of [true, false, undefined]) {
+    calls = []; apiImpl = () => ({ ok: true, executed });
+    await T.decide(d, "yes");
+    assert.deepEqual(plain(calls).map((c: Call) => c.kind), ["api"], `draft, executed=${executed}`);
+  }
+  calls = []; apiImpl = () => ({});
+});
+
 test("a draft yes on the ledger needs the exact words: the phone's hash must equal the item's target", async () => {
   const d = { kind: "slack", channel: "#Partners ", text: "Hi team — prices hold.\n", subject: null, to: null };
   const ours = await T.draftHash(d);

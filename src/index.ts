@@ -55,6 +55,8 @@ import { startInboxAutoDispatch } from "./inbox-autodispatch.js";
 import { startRobertSweep } from "./robert-sweep.js";
 import { startDraftNotify } from "./draft-notify.js";
 import { alertsOwnPush, startStuckAlerts } from "./stuck-alerts.js";
+import { resetTalker, warmTalker } from "./talker.js";
+import { onSettingChange } from "./settings.js";
 import { startTerminalFailover } from "./terminal-failover.js";
 import { startWorklog } from "./worklog.js";
 import { startCloudReconcile } from "./cloud-reconcile.js";
@@ -131,6 +133,9 @@ startRobertSweep();
 startDraftNotify();
 // Stuck work reaches the operator once, at once: his voice call → his phone → Telegram (stuck-alerts.ts).
 startStuckAlerts();
+// The voice front's warm process (src/talker.ts), when it is on: his first sentence must not pay for a boot.
+setTimeout(() => warmTalker(), 20_000).unref?.();
+for (const k of ["voice.talker", "voice.talker_engine", "voice.talker_cli_model"]) onSettingChange(k, () => { resetTalker(); warmTalker(); });
 startTerminalFailover();
 // Standing watches on single terminals + the deadlines that stop a question sitting with Robert forever.
 startDeskWatch();

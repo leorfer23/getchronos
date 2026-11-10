@@ -5,7 +5,9 @@ import { now } from "./util.js";
 // workspace_id NULL = the unscoped thread: Telegram, briefings, and "all workspaces" in Flow.
 // A "divider" row is the operator's "new conversation" marker: the UI draws a line at it and
 // contextBlock() stops there, so the agent starts fresh while the display history stays intact.
-export type ChatSource = "web" | "telegram" | "heartbeat" | "robert" | "divider";
+// "front" = the voice front's own thread (src/talker.ts): it reads every workspace's ledger, so its rows
+// never go into a project Robert's recap (contextBlock skips them) — only the front reads them back.
+export type ChatSource = "web" | "telegram" | "heartbeat" | "robert" | "divider" | "front";
 
 // A line sent as a reply to one bubble. A row holds a whole exchange, so the bubble is the row plus
 // which half of it: "you" (the operator's line) or "reply" (Robert's). `text` is whatever the caller
@@ -164,6 +166,23 @@ export const chat = {
       )
       .all();
   },
+  /**
+   * The front's own recent turns (src/talker.ts), oldest→newest, cut at the last divider of that thread.
+   * `workspaceId` null = the operator's whole-shop thread; an id = a page locked to that workspace.
+   */
+  frontTurns(workspaceId: string | null, limit = 6): Array<{ you: string; reply: string; created_at: string }> {
+    const lim = Math.min(Math.max(limit, 1), 40);
+    const rows = db
+      .prepare(
+        `SELECT * FROM (
+           SELECT id, you, reply, source, created_at FROM chat_messages
+           WHERE workspace_id IS ? AND source IN ('front','divider') ORDER BY id DESC LIMIT ${lim + 20}
+         ) ORDER BY id ASC`,
+      )
+      .all(workspaceId) as Array<{ you: string; reply: string; source: string; created_at: string }>;
+    const cut = rows.map((r) => r.source).lastIndexOf("divider");
+    return rows.slice(cut + 1).filter((r) => r.source === "front").slice(-lim).map((r) => ({ you: r.you, reply: r.reply, created_at: r.created_at }));
+  },
   // Operator hit "new conversation": mark the boundary. Everything before it stays visible in the UI
   // but drops out of the agent's context.
   divide(workspaceId: string | null = null): { id: number; created_at: string } {
@@ -200,7 +219,8 @@ export const chat = {
       workspace_id?: string | null;
     }>;
     const lastDivider = all.map((r) => (r.source === "divider" && (!opts.everywhere || !r.workspace_id) ? "divider" : "")).lastIndexOf("divider");
-    const rows = lastDivider === -1 ? all : all.slice(lastDivider + 1);
+    // The front's rows carry other workspaces' rows (it reads them all): never a project Robert's recap.
+    const rows = (lastDivider === -1 ? all : all.slice(lastDivider + 1)).filter((r) => r.source !== "front");
     if (!rows.length) return "";
     const lines: string[] = [
       opts.everywhere

@@ -337,6 +337,7 @@
     askedFor: function (w) { return t("Le pedí: ", "Asked for: ") + w; },
     done: function (kind) { return { merge: t("Hecho. Le dije que mergee.", "Done — told it to merge."), deploy: t("Hecho. Le dije que despliegue.", "Done — told it to deploy."), "merge+deploy": t("Hecho. Le dije que mergee y despliegue.", "Done — told it to merge and deploy.") }[kind]; },
     recorded: function () { return t("Quedó registrado.", "Recorded."); },
+    executed: function (kind) { return kind === "draft" ? t("Listo, se mandó.", "Done — it's sent.") : kind === "deploy" ? t("Listo, desplegado.", "Done — deployed.") : t("Listo, hecho.", "Done."); },
     draftToday: function (it) { var w = it.draft.kind === "email" ? "Gmail" : "Slack"; return t("Quedó tu aprobación. Sigue como borrador: lo mandás vos desde " + w + ".", "Your approval is recorded. It stays a draft — you send it from " + w + "."); },
     draftLedger: function () { return t("Quedó registrado. No se mandó nada: sigue en tus borradores.", "Recorded. Nothing was sent — it stays in your drafts."); },
     read: function () { return t("Marcado como leído.", "Marked read."); },
@@ -449,6 +450,18 @@
    * taken by voice carries the raw transcript (`words`) and how it was given (`by`: strong yes, or a
    * weak one confirmed after a re-ask).
    */
+  /**
+   * What follows a recorded yes, from the decision route's answer (the executor puts `executed` on it):
+   *   executed === true  → it already ran: say so, and type NOTHING into the terminal (no second merge);
+   *   executed === false → the executor did not run it: the terminal is told the Desk's way (OK_LINE),
+   *                        so the agent carries it out as before;
+   *   no field           → today's behaviour: recorded, nothing typed.
+   */
+  function yesFollowUp(resp) {
+    if (resp && resp.executed === true) return "executed";
+    if (resp && resp.executed === false) return "type";
+    return "recorded";
+  }
   async function decideLedger(it, d, words, opt, meta, typeInto) {
     var L = it.ledger;
     var by = meta.voice ? ("phone-voice:" + (meta.how || "strong")).slice(0, 40) : "phone";
@@ -486,13 +499,15 @@
         record(it.key, "yes", null, heardOf(meta));
         return SAY.done(it.kind);
       }
-      await post("yes", { target_hash: L.target_hash, words: meta.words || null });
+      var follow = yesFollowUp(await post("yes", { target_hash: L.target_hash, words: meta.words || null }));
+      if (follow === "executed") return SAY.executed(it.kind);
+      if (follow === "type") { await typeInto(OK_LINE[it.kind]); return SAY.done(it.kind); }
       return SAY.recorded();
     }
     if (it.kind === "draft") {
       if (!it.draft.text || !it.hashOk) throw new Error(SAY.noExact());
-      await post("yes", { target_hash: L.target_hash, words: meta.words || null });
-      return SAY.draftLedger();
+      // A draft is never typed anywhere as an approval line: executed or recorded, nothing else.
+      return yesFollowUp(await post("yes", { target_hash: L.target_hash, words: meta.words || null })) === "executed" ? SAY.executed("draft") : SAY.draftLedger();
     }
     await post("yes", { words: meta.words || null });
     return it.kind === "review" ? SAY.read() : SAY.recorded();
@@ -1341,6 +1356,7 @@
   }
 
   root.PhoneDeck = {
+    _yesFollowUp: yesFollowUp,
     init: init, load: load, loadSoon: loadSoon, open: open, close: close, onEvent: onEvent, TOPICS: TOPICS,
     items: function () { return Q.items.slice(); }, loaded: function () { return Q.loaded; },
     isOpen: function () { return D.open; }, current: current, readCurrent: function () { readCard(current()); },

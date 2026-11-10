@@ -59,9 +59,38 @@ export function isAuthError(err: unknown): boolean {
   // Cursor's headless CLI: "Authentication required. Please run 'agent login' first, or set
   // CURSOR_API_KEY environment variable." — without this, a missing key burned five Robert-wake
   // retries as a generic failure instead of walking the fallback chain / parking as auth.
-  return /not logged in|please run \/login|please run ['`]?agent login|authentication required|invalid api key|authentication_error|oauth (token|session) (expired|revoked)|\bunauthorized\b|\b401\b|set CURSOR_API_KEY/i.test(
+  // Claude's own wording for a dead login: "Failed to authenticate: this login reached its time limit
+  // and cannot be renewed. Run `claude auth login` …" — and the api_retry category authentication_failed.
+  return /not logged in|please run \/login|please run ['`]?agent login|authentication required|invalid api key|authentication_error|authentication_failed|failed to authenticate|claude auth login|login (has )?expired|reached its time limit|oauth_org_not_allowed|account_on_hold|oauth (token|session) (expired|revoked)|\bunauthorized\b|\b401\b|set CURSOR_API_KEY/i.test(
     s,
   );
+}
+
+/**
+ * True when the model provider could not be reached at all (no HTTP response): DNS, refused, reset,
+ * offline. Retrying for minutes behind a spinner is worse than saying so at once.
+ */
+export function isUnreachableError(err: unknown): boolean {
+  const s = String(err instanceof Error ? err.message : err ?? "");
+  return /provider unreachable|no response from the api|ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|getaddrinfo|network is unreachable|unable to connect to (the )?api/i.test(s);
+}
+
+/**
+ * A `system/api_retry` event from claude -p stream-json, judged on the FIRST retry: an error the
+ * CLI's own retries cannot fix — a dead login, an account on hold, no response at all — returns the
+ * message to fail the turn with now; anything else (overloaded, a 5xx, a rate limit) returns null and
+ * the CLI keeps retrying as usual.
+ */
+export function apiRetryFatal(ev: { error?: unknown; error_status?: unknown; no_response?: unknown } | null | undefined): string | null {
+  if (!ev) return null;
+  const cat = String(ev.error ?? "");
+  if (cat === "authentication_failed" || cat === "oauth_org_not_allowed" || cat === "account_on_hold") {
+    return `authentication_failed: the Claude login was refused (${cat}${ev.error_status ? `, HTTP ${ev.error_status}` : ""}) — run claude auth login on this profile`;
+  }
+  if (ev.error_status == null && (ev.no_response || cat === "unknown" || cat === "server_error")) {
+    return "provider unreachable: no response from the API on the first attempt";
+  }
+  return null;
 }
 
 /** Best-effort parse of a reset timestamp (ms since epoch). null → use default cooldown. */

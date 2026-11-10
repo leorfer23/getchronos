@@ -555,6 +555,8 @@ const HELP = `mc — Mission Control backlog CLI
   mc vpn down                        drop your hold; the daemon turns it off a minute after the last
                                      hold ends (and never one the operator turned on by hand)
   mc vpn [status] [--json]           state, whether Chronos turned it on, who holds it
+  mc voice traces [--limit N] [--json]   the last phone calls' traces: barge-ins, taps, and the mic
+                                     levels measured while Robert spoke (operator only; no audio)
   mc service [ls] [--workspace <slug>] [--json]
                                      always-on processes the daemon keeps running (SERVICES.md): state,
                                      uptime, restarts, CPU/RAM. A workspace token sees its own
@@ -3958,6 +3960,22 @@ function askCap(question) {
       die("mc hosts [list] | show <name> | drain <name> | resume <name> | update <name|all>");
     }
     // The workspace's VPN (src/vpn.ts): on while a terminal/run holds it, off after the last hold.
+    if (cmd === "voice") {
+      const sub = pos[1] || "traces";
+      if (sub !== "traces") die("usage: mc voice traces [--limit N] [--json]");
+      const r = await req("GET", `/voice/traces?limit=${Number(opt.limit) || 5}`, undefined, adminHeaders());
+      if (opt.json) return console.log(JSON.stringify(r.traces, null, 2));
+      if (!r.traces?.length) return console.log("no call traces yet — they arrive when a phone call hangs up, or from ⋯ → Send call trace");
+      for (const t of r.traces) {
+        const s = t.summary || {};
+        console.log(`${t.at}  ${t.surface} · ${t.why} · ${s.call_s ?? "?"}s call · ${t.ua.slice(0, 70)}`);
+        console.log(`  barge-ins ${s.barges ?? 0} (words ${s.barge_words ?? 0}, echo/noise ${s.barge_false ?? 0}) · tap-stops ${s.taps_stop ?? 0}`);
+        console.log(`  mic while Robert spoke: p50 ${s.play_rms_p50 ?? "-"} · p90 ${s.play_rms_p90 ?? "-"} · max ${s.play_rms_max ?? "-"} · echo est ${s.echo ?? "-"} · threshold ${s.threshold ?? s.threshold_last ?? "-"} (ceiling ${s.barge_ceiling ?? "-"})`);
+        const tail = t.events.slice(-12).map((e) => e[1]).join(" · ");
+        if (tail) console.log(`  last moves: ${tail}`);
+      }
+      return;
+    }
     if (cmd === "vpn") {
       const sub = pos[1] || "status";
       const ws = opt.workspace && opt.workspace !== "true" ? opt.workspace : undefined;

@@ -8,8 +8,12 @@ sh.chronos.tts (launchd/sh.chronos.tts.plist.template).
 Why not mlx-audio's own server (`mlx_audio.server`): it answers any web page (CORS "*"), loads any
 model a request names (`POST /v1/models`), and reads any file a request points `ref_audio` at. Every
 agent on this Mac can reach loopback, and so can every tab in the browser. This one does one thing:
-    POST /speak {"text": "...", "lang": "es"|"en", "speed": 1.0}  →  audio/wav (24 kHz mono)
-    GET  /health                                                  →  {"ok": true, "model", "voices"}
+    POST /speak {"text": "...", "lang": "es"|"en", "speed": 1.0, "segments"?: [...]}  →  audio/wav (24 kHz mono)
+    GET  /health                                                  →  {"ok": true, "model", "voices", "segments"}
+`segments` (optional, from src/voice-lang.ts islands()): the same sentence cut into runs, each with its
+own language — [{"text": "Mergeá la", "lang": "es"}, {"text": "feature branch", "lang": "en"}, ...].
+Every run is read in the SENTENCE's voice (`lang`), with the run's own phonemes, so an English word
+inside a Spanish sentence is not spelled out the Spanish way and the voice does not change mid-sentence.
 with a fixed model and fixed voices, bound to 127.0.0.1, refusing anything a browser sends (an
 Origin header, or a Host that is not this loopback address — DNS rebinding), one request at a time.
 
@@ -63,10 +67,35 @@ model.repo_id = MODEL
 RATE = int(model.sample_rate)
 
 
-def synth(text: str, lang: str, speed: float) -> bytes:
+MAX_SEGMENTS = 12
+# Silence Kokoro leaves around each run, trimmed at the joins so a sentence read in two phonemizers does
+# not get a pause in the middle of it. Amplitude below this is silence.
+EDGE = 0.01
+
+
+def trim(a, head: bool, tail: bool):
+    loud = np.flatnonzero(np.abs(a) > EDGE)
+    if not loud.size:
+        return a[:0]
+    pad = int(RATE * 0.03)
+    lo = max(0, loud[0] - pad) if head else 0
+    hi = min(a.size, loud[-1] + pad) if tail else a.size
+    return a[lo:hi]
+
+
+def synth(text: str, lang: str, speed: float, segments=None) -> bytes:
     v, code = VOICES[lang]
-    parts = [np.asarray(r.audio, dtype=np.float32).reshape(-1) for r in model.generate(text=text, voice=v, speed=speed, lang_code=code)]
-    audio = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
+    runs = segments or [{"text": text, "lang": lang}]
+    chunks = []
+    for i, seg in enumerate(runs):
+        # A run in a language whose phonemizer did not load is read with the sentence's own.
+        seg_code = VOICES.get(seg["lang"], (v, code))[1]
+        parts = [np.asarray(r.audio, dtype=np.float32).reshape(-1) for r in model.generate(text=seg["text"], voice=v, speed=speed, lang_code=seg_code)]
+        a = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
+        if len(runs) > 1:
+            a = trim(a, head=i > 0, tail=i < len(runs) - 1)
+        chunks.append(a)
+    audio = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
     pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2")
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
@@ -123,7 +152,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path != "/health":
             return self.error(404, "not found")
-        body = {"ok": True, "model": MODEL, "voices": {k: v[0] for k, v in VOICES.items()}, "sample_rate": RATE}
+        body = {"ok": True, "model": MODEL, "voices": {k: v[0] for k, v in VOICES.items()}, "sample_rate": RATE, "segments": True}
         self.reply(200, json.dumps(body).encode(), "application/json")
 
     def do_POST(self):
@@ -144,7 +173,15 @@ class Handler(BaseHTTPRequestHandler):
             text = str(req.get("text") or "").strip()[:MAX_CHARS]
             lang = req.get("lang") or "en"
             speed = float(req.get("speed") or 1.0)
-        except (ValueError, TypeError, AttributeError):
+            segments = req.get("segments")
+            if segments is not None:
+                if not isinstance(segments, list) or not 0 < len(segments) <= MAX_SEGMENTS:
+                    return self.error(400, f"segments: a list of 1-{MAX_SEGMENTS} runs")
+                segments = [{"text": str(x["text"]).strip()[:MAX_CHARS], "lang": x["lang"]} for x in segments]
+                if any(x["lang"] not in ("es", "en") for x in segments):
+                    return self.error(400, "segments: lang es or en")
+                segments = [x for x in segments if x["text"]] or None
+        except (ValueError, TypeError, AttributeError, KeyError):
             return self.error(400, "bad JSON")
         if not text:
             return self.error(400, "nothing to say")
@@ -153,12 +190,12 @@ class Handler(BaseHTTPRequestHandler):
         speed = min(2.0, max(0.5, speed))
         t = time.time()
         try:
-            wav = synth(text, lang, speed)
+            wav = synth(text, lang, speed, segments)
         except Exception as e:  # a bad sentence must not take the voice down
             log(f"synth failed: {e!r}")
             return self.error(500, "synthesis failed")
         secs = (len(wav) - 44) / 2 / RATE
-        log(f"{lang} {len(text)} chars → {secs:.1f}s audio in {time.time() - t:.2f}s")
+        log(f"{lang}{'+' + str(len(segments)) + ' runs' if segments else ''} {len(text)} chars → {secs:.1f}s audio in {time.time() - t:.2f}s")
         self.reply(200, wav, "audio/wav")
 
 

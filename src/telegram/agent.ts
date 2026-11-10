@@ -19,7 +19,8 @@ import { agentMemoryBlock, agentMemoryStamp } from "../agent-memory.js";
 import { briefsBlock, briefStamp } from "../briefs.js";
 import { fleetLine } from "../fleet-line.js";
 import { describeTool } from "../focus.js";
-import { isAuthError, isProviderLimitError, withProviderFallback } from "../manager-fallback.js";
+import { apiRetryFatal, isAuthError, isProviderLimitError, isUnreachableError, withProviderFallback } from "../manager-fallback.js";
+import { authNotice } from "../turn-failure.js";
 import { agentDef, agentPrompt } from "../agent-defs.js";
 import { widgetPromptBlock } from "../widgets/index.js";
 import { askLine, commitTurn, resolveTurnSmart, type Route } from "../thread-router.js";
@@ -1028,6 +1029,11 @@ type WarmOpts = {
   // a remote server's OAuth token is stored per config dir — a bundle in the repo could only carry
   // the spec, never the login, and several of these servers' specs carry a bearer token besides.
   inheritProfileMcp?: boolean;
+  /**
+   * Everything after the stream-json flags, instead of the persona wiring below (the voice front,
+   * src/talker.ts cliTalkerArgs: its own system prompt, no tools, no MCP). `--model` is still added.
+   */
+  customArgs?: string[];
 };
 
 export class WarmManager {
@@ -1085,7 +1091,11 @@ export class WarmManager {
 
   private spawn(): ChildProcess {
     const profileDir = this.opts.profileDir || DEFAULT_PROFILE_DIR;
-    const args = [
+    const args = this.opts.customArgs ? [
+      "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+      ...this.opts.customArgs,
+      "--model", this.opts.model,
+    ] : [
       "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
       "--include-partial-messages", // stream_event deltas → per-sentence voice streaming (web onDelta)
       "--append-system-prompt", this.opts.system,
@@ -1154,6 +1164,18 @@ export class WarmManager {
           else if (ev.delta?.type === "thinking_delta" && this.curBlock === "thinking")
             this.own(child)?.onDelta?.(ev.delta.thinking ?? "", "thinking");
         }
+        return;
+      }
+      // The CLI is about to retry a failed API call. A dead login or no response at all will not get
+      // better in its ten retries (minutes behind a spinner): fail the turn on the first one, so the
+      // caller can say so in one sentence (turn-failure.ts) or walk its fallback chain.
+      if (p.type === "system" && p.subtype === "api_retry") {
+        const fatal = apiRetryFatal(p);
+        if (!fatal) return;
+        const pend = this.takeOwn(child);
+        if (this.child === child) this.child = null;
+        child.kill("SIGKILL");
+        pend?.reject(new Error(fatal));
         return;
       }
       if (p.type !== "result") return;
@@ -1269,6 +1291,9 @@ export class WarmManager {
   }
 
   private async attempt(text: string, onDelta?: AgentDelta, label?: string): Promise<string> {
+    // A process spawned for this very turn already read the login fresh: if IT cannot authenticate,
+    // a second fresh one will not either. Only a warm process that outlived its token gets a respawn.
+    const fresh = !this.child;
     try {
       return await this.write(text, onDelta, label);
     } catch (e: any) {
@@ -1276,6 +1301,9 @@ export class WarmManager {
       // Session/rate/credit walls won't clear on a same-process retry — surface immediately so
       // withProviderFallback can switch backends instead of burning a second failed Claude call.
       if (isProviderLimitError(e)) throw e;
+      // Nothing answers at all: a respawn waits on the same dead network.
+      if (isUnreachableError(e)) { this.child?.kill("SIGKILL"); this.child = null; throw e; }
+      if (fresh && isAuthError(e)) { this.child?.kill("SIGKILL"); this.child = null; throw this.authHint(e); }
       this.child?.kill("SIGKILL");
       this.child = null;
       // Stale --resume id (profile switch, wiped config dir): CLI errors "No conversation found …".
@@ -1739,6 +1767,7 @@ export async function askManagerWeb(
   // model, and a credit-wall downgrade (fable → opus) would never come back.
   const model = opts?.model || getWebModel();
   let engine = engineLabel("claude", model);
+  let loginDead = false; // the primary's Claude login is dead: said first, ahead of the fallback's answer
   kv.set(lk.lastTurnAt, String(Date.now()));
   if (lk.turns) kv.set(lk.turns, String(Number(kv.get(lk.turns) ?? 0) + 1));
   const realWsId = key === "default" ? null : key;
@@ -1771,6 +1800,7 @@ export async function askManagerWeb(
     agent: { name: "Robert", tools: MANAGER_TOOLS },
     onFallback: (fb) => {
       engine = engineLabel(fb.backend, fb.model);
+      if (/sin login/.test(fb.why)) loginDead = true;
       // Still log for Telegram / activity surfaces that listen to tool deltas — Desk filters it out.
       onDelta?.(fallbackLine(fb), "tool");
     },
@@ -1789,7 +1819,9 @@ export async function askManagerWeb(
   // An `ask` directive is a question for the operator: filed as an asks row and swapped for its live
   // card in the reply (src/robert-asks.ts). Late import — the asks layer sits far below the manager.
   const { liftRobertAsks } = await import("../robert-asks.js");
-  const { reply: shown, actions } = liftRobertAsks(scanUiActions(reply || ""), realWsId ?? opts?.focus ?? null);
+  const { reply: lifted, actions } = liftRobertAsks(scanUiActions(reply || ""), realWsId ?? opts?.focus ?? null);
+  // He must hear why the answer came from another engine: the login needs renewing on the Mac.
+  const shown = loginDead ? `${authNotice(text)}\n\n${lifted}` : lifted;
   return { reply: shown, actions, steps, turn, engine };
 }
 

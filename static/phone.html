@@ -554,6 +554,7 @@
 <script src="/chat-reply.js"></script>
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
+<script src="/voice-alerts.js"></script>
 <script src="/phone-voice.js"></script>
 <script src="/phone-deck.js"></script>
 <script>
@@ -944,6 +945,7 @@ function moreMenu() {
     <button data-m="terms">${ico('<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/>')}Terminals<span class="n">${live || ""}</span></button>
     <button data-m="new">${ico('<path d="M12 5v14M5 12h14"/>')}New terminal</button>
     <button data-m="settings">${ico('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>')}Settings</button>
+    <button data-m="trace">${ico('<path d="M3 12h3l3-8 4 16 3-8h5"/>')}Send call trace</button>
   </div>`);
   qs(".menu", b).onclick = (e) => {
     const m = e.target.closest("[data-m]")?.dataset.m; if (!m) return;
@@ -956,6 +958,8 @@ function moreMenu() {
     }
     if (m === "new") return newTermSheet(null);
     if (m === "settings") return settingsSheet();
+    // The last call's moves and mic levels (no audio): what `mc voice traces` prints on the Mac.
+    if (m === "trace") { closeSheet(); return sendTrace(PhoneVoice.traceDump("manual")).then((ok) => toast(ok ? "Call trace sent" : "Nothing to send yet")); }
   };
 }
 qs("#btn-more").onclick = () => { fx.tap(); moreMenu(); };
@@ -1815,11 +1819,25 @@ function robRelease(turn) {
   clearTimeout(R.awaitT); R.awaitT = 0; R.awaitTurn = null;
   R.busy = false;
   if (!R.pending?.lost) setPending(null);
-  const next = navigator.onLine ? R.outbox.shift() : null;
+  const next = navigator.onLine ? takeNext() : null;
   robWork(!!next, next ? "sending next…" : "");
   reloadSoon();
   if (next) deliverRobert(next.text, next.el, next.ws, next.quote);
   else robWork(false);
+}
+// What he said while Robert was busy goes as ONE follow-up: consecutive queued lines for the same
+// place (no quote, same pick) are joined, each still its own bubble. One spoken thought broken by a
+// breath must not become three turns.
+function takeNext() {
+  const first = R.outbox.shift();
+  if (!first) return null;
+  const join = [first];
+  while (R.outbox.length && !first.quote && !R.outbox[0].quote && R.outbox[0].ws === first.ws) join.push(R.outbox.shift());
+  if (join.length === 1) return first;
+  for (const o of join.slice(1)) o.el.classList.remove("queued");
+  const el = join[join.length - 1].el;
+  el._voice = join.some((o) => o.el._voice);
+  return { text: join.map((o) => o.text).join("\n"), el, ws: first.ws, quote: null };
 }
 function robAwait(turn) {
   R.awaitTurn = turn;
@@ -1856,7 +1874,7 @@ async function deliverRobert(text, el, ws, quote) {
     if (r?.accepted && r?.turn) {
       const b = R.mine || R.pend.get("?");
       if (b) { R.pend.set(r.turn, b); R.mine = null; R.pend.delete("?"); }
-      if (el._voice && PhoneVoice.on) { R.voiceTurn = r.turn; PhoneVoice.turn(r.turn); }
+      if (el._voice && PhoneVoice.on) { R.voiceTurn = r.turn; PhoneVoice.turn(r.turn); PhoneVoice.waiting(r.turn); }
       robAwait(r.turn); hold = true; return;
     }
     RP.mark(el, r?.id, "you");
@@ -1980,7 +1998,7 @@ function callStart() {
 }
 const CALL_WORD = {
   connecting: ["Conectando…", "Connecting…"], listening: ["Te escucho", "Listening"], hearing: ["Te escucho…", "Hearing you…"],
-  transcribing: ["Entendido…", "Got it…"], thinking: ["Robert está en eso", "Robert is on it"], speaking: ["Robert", "Robert"], paused: ["En pausa", "Paused"],
+  transcribing: ["Entendido…", "Got it…"], thinking: ["Robert está en eso — podés seguir hablando", "Robert is on it — keep talking if you like"], speaking: ["Robert", "Robert"], paused: ["En pausa", "Paused"],
 };
 const PAUSE_WHY = {
   interrupted: ["Se cortó el audio (una llamada, Siri…). Tocá para seguir.", "Audio was interrupted (a call, Siri…). Tap to carry on."],
@@ -2009,29 +2027,41 @@ function paintCall(st = PhoneVoice.state(), why = "") {
   syncComposer();
 }
 qs("#call-mute").onclick = () => { fx.tap(); PhoneVoice.setMute(!PhoneVoice.muted); paintCall(); };
-qs("#orb").onclick = () => { if (PhoneVoice.state() === "paused") { fx.tap(); PhoneVoice.resume(); } };
+// A tap anywhere on the call screen (the orb, the words) stops Robert at once and listens: the
+// barge-in that works whatever the phone's echo canceller does to his voice. Paused → resume.
+qs("#call").addEventListener("click", (e) => {
+  if (e.target.closest("button")) return; // mute keeps its own job
+  if (PhoneVoice.state() === "paused") { fx.tap(); PhoneVoice.resume(); return; }
+  if (PhoneVoice.tapStop()) fx.tap();
+});
+// The call's trace (moves + mic levels while he spoke, no audio) — kept by the daemon for `mc voice traces`.
+function sendTrace(dump) {
+  if (!dump || (!dump.events?.length && !dump.levels?.length)) return Promise.resolve(false);
+  return api("/voice/trace", { method: "POST", body: JSON.stringify({ ...dump, client: CLIENT, surface: "phone" }) }).then(() => true, () => false);
+}
 // Stuck work said into the call (src/stuck-alerts.ts, on the alerts branch). While a call is up the
 // page tells the daemon so every 20 s (and once more on hang-up); an alert addressed to THIS call is
 // said ahead of anything queued, and the daemon hears "spoken" only once the audio has actually played
 // to its end — if it never plays (the call paused, hung up), the alert goes on to the phone instead.
+// The client contract lives in ONE place, static/voice-alerts.js (the Desk loads the same file):
+// presence every 20 s, "started" when its audio begins, "done" only when it played to the end,
+// nothing if it could not be rendered or was talked over.
+const VA = VoiceAlerts.create({
+  client: CLIENT, surface: "phone", lang: () => voiceLang(), lock: () => null,
+  post: (p, body) => api(String(p).replace(/^\/api/, ""), { method: "POST", body: JSON.stringify(body) }),
+});
 let presT = 0;
-function presence(live) {
-  clearInterval(presT); presT = 0;
-  const ping = (on) => api("/voice/presence", { method: "POST", body: JSON.stringify({ client: CLIENT, surface: "phone", live: on, lang: voiceLang(), lock: null }) }).catch(() => {});
-  ping(!!live);
-  if (live) presT = setInterval(() => ping(true), 20000);
-}
-// The client contract is the alerts branch's static/voice-alerts.js: "started" when its audio begins,
-// "done" only when it played to the end, nothing if it could not be rendered or was talked over.
+function presence(live) { presT = live ? 1 : 0; VA.presence(!!live); }
 function onAlert(e) {
-  if (!PhoneVoice.on || !e.say || !e.alert_id || (e.client && e.client !== CLIENT)) return;
   if (PhoneVoice.state() === "paused") return; // it cannot be heard now: unreported, it goes to the phone
-  const report = (stage) => api("/alerts/" + encodeURIComponent(e.alert_id) + "/spoken", { method: "POST", body: JSON.stringify({ client: CLIENT, stage }) }).catch(() => {});
-  PhoneVoice.say(e.say, { first: true, lang: e.lang === "es" || e.lang === "en" ? e.lang : undefined, onStart: () => report("started") }).then((played) => {
-    if (played) report("done");
+  const a = VA.take(e, PhoneVoice.on);
+  if (!a) return;
+  PhoneVoice.say(a.say, { first: true, lang: e.lang === "es" || e.lang === "en" ? e.lang : undefined, onStart: a.started }).then((played) => {
+    if (played) a.done();
   });
 }
 // Words the page answers itself on a call, before anything goes to Robert.
+const MORE_RE = /^ (si|dale|contame|contame mas|conta mas|mas|segui|seguí|decime|yes|yeah|go on|tell me more|more|sure) $/;
 const VIEW_RE = /^ (veamos|vamos|pendientes|que hay pendiente|que espera|que esta esperando|aprobaciones|revisemos|mostrame|show me|approvals|whats waiting|what s waiting|what is waiting|lets see|let s see|lets review|let s review) $/;
 const vnorm = (t) => " " + String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim() + " ";
 PhoneVoice.init({
@@ -2047,6 +2077,9 @@ PhoneVoice.init({
     if (!on) { callSub = ""; R.pick = null; PhoneDeck.cancelHold(true); } // hanging up stops a held approval
   },
   onLevel: (lvl) => qs("#orb").style.setProperty("--lvl", lvl),
+  // His words while he is still talking — display only; the final transcript is what counts.
+  onPartial: (t) => { if (t) { callSub = "“" + t + "…”"; qs("#call-sub").textContent = callSub; } },
+  onTrace: (dump) => { sendTrace(dump); },
   onSubtitle: (t) => { callSub = t; if (PhoneVoice.state() === "speaking") qs("#call-sub").textContent = t; },
   onError: (m) => { fx.fail(); toast(m); },
   // "Pará" stops Robert's turn and any approval being held; a barge-in stops a held approval too.
@@ -2064,12 +2097,15 @@ PhoneVoice.init({
       const c = R.pick.cands.find((c) => (c.slug === "all" ? / (todo|todos|everything|all) /.test(n) : [c.slug, c.name].some((x) => x && n.includes(vnorm(x)))));
       if (c) return R.pick.go(c.ws || null);
     }
-    // 3. "Let's see what's waiting" opens the deck and reads the first card.
+    // 3. "¿Te cuento más?" → "sí / contame / dale": the rest of the last reply, read by the page.
+    if (PhoneVoice.hasMore() && MORE_RE.test(n)) { PhoneVoice.more(); return; }
+    // 4. "Let's see what's waiting" opens the deck and reads the first card.
     if (VIEW_RE.test(n)) {
       if (PhoneDeck.items().length) return PhoneDeck.open();
       return PhoneVoice.say(tr("No hay nada esperando.", "Nothing is waiting."));
     }
-    // 4. Everything else is a turn for Robert, the same as a typed one.
+    // 5. Everything else is a turn for Robert, the same as a typed one — also while he is still on
+    // the last one: it shows as his bubble at once and goes the moment that turn ends (robRelease).
     rComposer.value = text;
     askRobert(true);
   },
@@ -2152,6 +2188,8 @@ function connectBus() {
       if (e.ws) R.sticky = e.ws;
       if (e.id) R.lastId = Math.max(R.lastId, e.id);
       if (PhoneVoice.on && e.reply && (mine || !e.you)) PhoneVoice.final(e, mine);
+      // A failed turn is said, never left as a spinner: the engine skips "⚠️" replies, so say it here.
+      if (PhoneVoice.on && mine && String(e.reply || "").startsWith("⚠️")) { PhoneVoice.waitDone(); PhoneVoice.say(tr("Robert no pudo responder; el error quedó en el chat.", "Robert couldn't answer; the error is in the chat.")); }
       // Promote the streaming bubble into the final reply — never remove+redraw (that was the
       // "thinking → answer → answer again" flash on the PWA).
       const streamed = R.pend.get(e.turn || "?");

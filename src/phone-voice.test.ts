@@ -46,12 +46,123 @@ test("a cough is dropped; a sound while he speaks has to be louder and longer to
   const close = r.events.find((e) => e.type === "close");
   assert.equal(close?.keep, false, "90 ms is not speech");
 
+  // A speaker that leaks him back at 0.05 from the first word (no echo canceller): the threshold
+  // learns that and stays at its ceiling, so the leak is not a barge…
   const ear2 = T.makeEar();
-  let s = feed(ear2, 0.002, 600, 0, true);
-  s = feed(ear2, 0.05, 800, s.t, true);
+  let s = feed(ear2, 0.05, 1400, 0, true);
   assert.ok(!s.events.some((e) => e.type === "barge"), "his own voice leaking back at a normal level is not a barge");
   s = feed(ear2, 0.3, 600, s.t, true);
   assert.ok(s.events.some((e) => e.type === "barge"), "a sustained loud voice over him is");
+});
+
+test("barge-in follows the level measured during playback: an echo canceller that ducks the operator to 0.03 still lets him in", () => {
+  // His phone's echo canceller: Robert comes back at ~0.004, and the operator's own voice is ducked to
+  // ~0.03 — under the old fixed 0.075 he could never cut in (the first real call).
+  const ear = T.makeEar();
+  let r = feed(ear, 0.004, 1500, 0, true);
+  assert.ok(ear.bargeTh() < 0.03, `threshold learned from the playback level (${ear.bargeTh().toFixed(3)})`);
+  assert.ok(ear.bargeTh() >= T.VAD.bargeMin, "never below its floor");
+  r = feed(ear, 0.03, 600, r.t, true);
+  assert.ok(r.events.some((e) => e.type === "barge"), "his ducked voice now barges");
+  // A short blip at that level (a cough) still is not a barge: it must be sustained.
+  const ear2 = T.makeEar();
+  let q = feed(ear2, 0.004, 1500, 0, true);
+  q = feed(ear2, 0.03, 120, q.t, true);
+  q = feed(ear2, 0.004, 600, q.t, true);
+  assert.ok(!q.events.some((e) => e.type === "barge"));
+  // The threshold never rises above the old fixed ceiling, and a new call forgets the last one's room.
+  const ear3 = T.makeEar();
+  feed(ear3, 0.06, 2000, 0, true);
+  assert.ok(ear3.bargeTh() <= T.VAD.barge + 1e-9);
+  ear3.resetEcho();
+  assert.equal(ear3.bargeTh(), T.VAD.barge);
+  // And whatever the level said, the transcript still goes through the echo guard (a false barge
+  // pauses him; bargeFalse resumes).
+  assert.match(src, /if \(bargeItem && bargeItem === V\.bargeItem\) \{ if \(real\) bargeTrue\(\); else bargeFalse\(\); \}/);
+});
+
+test("what is read aloud is capped (verdict first) and the rest waits for «¿te cuento más?»; headings are never read", () => {
+  assert.equal(T.speakable("## Acme\nTodo bien.", "es", null), "Todo bien.");
+  const V = T.V;
+  const queued: string[] = [];
+  PV.init({ lang: () => "es", label: () => null, token: () => "", speed: () => 1, onState() {}, onSubtitle() {}, onError() {} });
+  // Count what the cap lets through without playing anything: sentence() enqueues via enqueue().
+  V.on = true; V.paused = "test"; // paused: nothing plays, items just queue
+  const fetchWas = (globalThis as any).fetch;
+  (ctx as any).fetch = async () => ({ ok: true, blob: async () => null });
+  try {
+    PV.turn("t1");
+    for (const p of ["Dos cosas te esperan.", "El merge del login en Acme.", "Y el borrador de churn.", "Además Initech está trabado.", "Y el test flaky sigue."]) {
+      const it = T.sentence(p);
+      if (it) queued.push(it.text);
+    }
+    assert.equal(queued.length, T.CAP.sentences, "only the first sentences are read");
+    assert.equal(PV.hasMore(), true);
+    assert.ok(PV.more());
+    assert.equal(PV.hasMore(), false);
+  } finally {
+    V.speakQ.forEach((i: any) => i.resolve(false)); V.speakQ = []; V.on = false; V.paused = null;
+    (ctx as any).fetch = fetchWas;
+  }
+});
+
+test("a transcription lost to a dropped connection is sent again with the same audio, twice, silently", async () => {
+  let n = 0;
+  const bodies: any[] = [];
+  (ctx as any).fetch = async (_u: string, o: any) => {
+    bodies.push(o.body);
+    n++;
+    if (n === 1) throw new TypeError("Failed to fetch");
+    if (n === 2) return { ok: false, status: 502, text: async () => "bad gateway" };
+    return { ok: true, status: 200, json: async () => ({ text: "hola" }) };
+  };
+  PV.init({ lang: () => "es", token: () => "", label: () => null, speed: () => 1, onState() {}, onSubtitle() {}, onError() {} });
+  const blob = new Blob(["x"]);
+  const j = await T.transcribeBlob(blob, "lang=es", 2);
+  assert.equal(j.text, "hola");
+  assert.equal(n, 3);
+  assert.ok(bodies.every((b) => b === blob), "the same audio each time — nothing is lost");
+  n = 0;
+  (ctx as any).fetch = async () => { n++; throw new TypeError("Failed to fetch"); };
+  await assert.rejects(T.transcribeBlob(blob, "lang=es", 2));
+  assert.equal(n, 3, "after two retries it tells him");
+  // A partial is never retried and never blocks: tries = 0.
+  assert.match(src, /transcribeBlob\(wav\(keep, rate\), "partial=1&lang=" \+ C\.lang\(\), 0\)/);
+  assert.match(src, /var j = await transcribeBlob\(blob, "lang=" \+ C\.lang\(\), 2\);/);
+});
+
+test("a line he says while Robert is busy is still handed to the page (the mic never blocks on a turn)", () => {
+  const heard: string[] = [];
+  PV.init({ lang: () => "es", token: () => "", label: () => null, speed: () => 1, busy: () => true, onState() {}, onSubtitle() {}, onError() {}, onHeard: (t: string) => heard.push(t) });
+  T.V.on = true;
+  try {
+    T.heard("y además mirá lo del export", { afterPlay: 99_999 });
+    assert.deepEqual(heard, ["y además mirá lo del export"]);
+  } finally { T.V.on = false; }
+  // Nothing in the frame path looks at busy(): it only paints "thinking".
+  const onFrame = src.slice(src.indexOf("function onFrame(f)"), src.indexOf("// ── the mic"));
+  assert.ok(!/busy\(/.test(onFrame) && !/sending/.test(onFrame.replace("V.sending)", "")), "onFrame never waits on a turn or a transcription");
+});
+
+test("a tap stops him at once and the call keeps a trace of moves and playback levels (no audio)", () => {
+  PV.init({ lang: () => "es", token: () => "", label: () => null, speed: () => 1, onState() {}, onSubtitle() {}, onError() {} });
+  const V = T.V;
+  V.on = true;
+  const resolved: boolean[] = [];
+  V.playing = { text: "x", resolve: (ok: boolean) => resolved.push(ok) };
+  V.audio = { pause() {}, onended: null, onerror: null };
+  V.turn = "t9";
+  try {
+    assert.equal(PV.tapStop(), true);
+    assert.equal(V.playing, null, "speech stopped");
+    assert.equal(V.muted, "t9", "the rest of that turn is not spoken");
+    assert.deepEqual(resolved, [false]);
+    const dump = PV.traceDump("manual");
+    assert.ok(dump.events.some((e: any[]) => /^tap-stop/.test(e[1])));
+    assert.ok(Array.isArray(dump.levels));
+    assert.ok("threshold" in dump.summary && "echo" in dump.summary);
+    assert.ok(!JSON.stringify(dump).match(/RIFF|audio\/wav|base64/), "numbers and names only");
+  } finally { V.on = false; V.playing = null; V.muted = null; }
 });
 
 test("nothing is heard while the ear is deaf (the echo of his last word)", () => {
