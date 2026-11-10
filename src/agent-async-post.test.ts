@@ -38,7 +38,10 @@ test("POST /agent accepts immediately and runs the manager detached", () => {
   assert.match(route, /void \(async \(\) => \{/);
   // Reply + error both land on the bus; neither writes the HTTP body after accept.
   assert.match(route, /topic: "agent\.push"/);
-  assert.equal((route.match(/res\.json\(/g) || []).length, 2, "only ask + accept write the HTTP body");
+  // The voice front (src/talker.ts) accepts the same way: answer first, then run detached (t.go()).
+  const frontAccept = route.indexOf('res.json({ accepted: true, turn: t.turn, ws: t.ws, how: "front" })');
+  assert.ok(frontAccept >= 0 && route.indexOf("void t.go()") > frontAccept, "the front accepts before it streams");
+  assert.equal((route.match(/res\.json\(/g) || []).length, 3, "only ask + the two accepts write the HTTP body");
   assert.doesNotMatch(route, /res\.status\(500\)/);
 });
 
