@@ -64,6 +64,11 @@ test("heard in the call's language; transcribed again in the other one only when
   // A close call keeps the hint.
   r = await transcribeBilingual(Buffer.from("x"), { hint: "en" }, fake({ en: 0.4, es: 0.5 }));
   assert.equal(r.lang, "en");
+  // A one-word clip: the probabilities are noise there, so the call's language stands.
+  r = await transcribeBilingual(Buffer.from("x"), { hint: "es", audioMs: 1400 }, fake({ en: 0.53, es: 0.01 }));
+  assert.deepEqual([r.lang, r.passes], ["es", 1]);
+  r = await transcribeBilingual(Buffer.from("x"), { hint: "es", audioMs: 4000 }, fake({ en: 0.53, es: 0.01 }));
+  assert.deepEqual([r.lang, r.passes], ["en", 2]);
   // An engine with no probabilities (a cloud endpoint): one pass, as before.
   r = await transcribeBilingual(Buffer.from("x"), { hint: "es" }, async () => ({ text: "hola", probs: null }));
   assert.deepEqual([r.text, r.passes], ["hola", 1]);

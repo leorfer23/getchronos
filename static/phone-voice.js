@@ -253,6 +253,8 @@
   // later plays only if it was played from a gesture). Made on the spot — nothing to fetch.
   function silent() { if (!V.silent) V.silent = URL.createObjectURL(wav([new Float32Array(1600)], 16000)); return V.silent; }
   function t(es, en) { return C && C.lang() === "es" ? es : en; }
+  // fixed=1: he picked the language himself, so the daemon transcribes in it and guesses nothing.
+  function langQ() { return "lang=" + C.lang() + (C.fixed && C.fixed() ? "&fixed=1" : ""); }
   function auth() { var k = C && C.token(); return k ? { "x-mc-admin": k } : {}; }
   function speaking() { return !!V.playing || V.speakQ.length > 0; }
 
@@ -480,7 +482,7 @@
       V.state = "off"; paint();
       earcon("on");
       // A cold whisper model costs seconds on the first sentence; a blank clip loads it now.
-      fetch("/api/transcribe?lang=" + C.lang(), { method: "POST", headers: Object.assign({ "content-type": "audio/wav" }, auth()), body: wav([new Float32Array(Math.round(V.rate * 0.4))], V.rate) }).catch(function () {});
+      fetch("/api/transcribe?" + langQ(), { method: "POST", headers: Object.assign({ "content-type": "audio/wav" }, auth()), body: wav([new Float32Array(Math.round(V.rate * 0.4))], V.rate) }).catch(function () {});
       return true;
     }).catch(function (e) {
       var denied = e && (e.name === "NotAllowedError" || e.name === "SecurityError");
@@ -535,7 +537,7 @@
     var keep = [], ms = 0, rate = V.rate;
     for (var i = seg.frames.length - 1; i >= 0 && ms < PARTIAL.tailMs; i--) { keep.unshift(seg.frames[i]); ms += (seg.frames[i].length / rate) * 1000; }
     var p = V.partial = { seg: seg };
-    transcribeBlob(wav(keep, rate), "partial=1&lang=" + C.lang(), 0).then(function (j) {
+    transcribeBlob(wav(keep, rate), "partial=1&" + langQ(), 0).then(function (j) {
       if (V.partial !== p) return;
       var text = j && typeof j.text === "string" ? j.text.replace(/\s+/g, " ").trim() : "";
       // Shown only while that segment is still open (or its final has not come back yet).
@@ -578,7 +580,7 @@
       try {
         // A first half already replaced by the joined clip is not worth a transcription.
         if (!me.superseded) {
-          var j = await transcribeBlob(blob, "lang=" + C.lang(), 2);
+          var j = await transcribeBlob(blob, langQ(), 2);
           text = String(j.text || "").replace(/\s+/g, " ").trim();
         }
       } catch (e) { if (V.on) err(t("No pude transcribir: ", "Transcribe failed: ") + String((e && e.message) || e).slice(0, 100)); }

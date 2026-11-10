@@ -127,8 +127,8 @@ test("a transcription lost to a dropped connection is sent again with the same a
   await assert.rejects(T.transcribeBlob(blob, "lang=es", 2));
   assert.equal(n, 3, "after two retries it tells him");
   // A partial is never retried and never blocks: tries = 0.
-  assert.match(src, /transcribeBlob\(wav\(keep, rate\), "partial=1&lang=" \+ C\.lang\(\), 0\)/);
-  assert.match(src, /var j = await transcribeBlob\(blob, "lang=" \+ C\.lang\(\), 2\);/);
+  assert.match(src, /transcribeBlob\(wav\(keep, rate\), "partial=1&" \+ langQ\(\), 0\)/);
+  assert.match(src, /var j = await transcribeBlob\(blob, langQ\(\), 2\);/);
 });
 
 test("a line he says while Robert is busy is still handed to the page (the mic never blocks on a turn)", () => {
@@ -430,4 +430,13 @@ test("a short answer or a stop is never held or swallowed by a join, and a late 
 test("whisper's spellings of «colgá» hang up; a sentence that merely contains the word does not", () => {
   for (const w of ["Colgá.", "¡Colgar!", "¡Colgada!", "Cortá", "colgalo"]) assert.equal(T.isCommand(w), true, w);
   assert.equal(T.isCommand("la app quedó colgada en el splash"), false);
+});
+
+test("the language he picked on the call rides every transcription as fixed=1", () => {
+  const js = fs.readFileSync(new URL("../static/phone-voice.js", import.meta.url), "utf8");
+  const html = fs.readFileSync(new URL("../static/phone.html", import.meta.url), "utf8");
+  assert.equal((js.match(/\/api\/transcribe\?lang=/g) || []).length, 0, "every transcribe call goes through langQ()");
+  assert.match(js, /function langQ\(\) \{ return "lang=" \+ C\.lang\(\) \+ \(C\.fixed && C\.fixed\(\) \? "&fixed=1" : ""\); \}/);
+  assert.match(html, /id="call-lang"/);
+  assert.match(html, /fixed: \(\) => !!PREFS\.lang/);
 });

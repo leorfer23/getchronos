@@ -4887,7 +4887,9 @@ export function startServer() {
       const buf = req.body as Buffer;
       if (!buf?.length) return res.status(400).json({ error: "empty audio body" });
       const ct = req.get("content-type") || "audio/webm";
+      // fixed=1: he picked the language on the call screen — nothing is guessed, one pass in that language.
       const lang = String(req.query.lang || "").toLowerCase();
+      const fixed = req.query.fixed === "1" && (lang === "es" || lang === "en");
       const language = lang === "en" || lang === "es" ? lang : undefined;
       const partial = req.query.partial === "1";
       // Partials (the words drawn while he is still talking) never queue behind anything: whisper
@@ -4916,7 +4918,7 @@ export function startServer() {
       try {
         out = await hearFinal(buf, {
           filename: audioFilename(ct), contentType: ct, language,
-          bilingual: setting("voice.listen") !== "page", mode, vocab: setting("voice.vocab"),
+          bilingual: !fixed && setting("voice.listen") !== "page", mode, vocab: setting("voice.vocab"),
         });
       } finally {
         if (onFast) transcribing--;
