@@ -149,6 +149,8 @@ export function derivedWriteRefusal(req: express.Request): string | null {
     if (key.startsWith("executor.")) return operatorOnly(`${key} (the executor's switches)`);
     // Keeping recordings of the operator's voice is his decision alone (voice-clips.ts).
     if (key === "voice.keep_clips") return operatorOnly(`${key} (it records the operator's voice)`);
+    // Sending his voice to a cloud provider is his decision alone too (transcribe-cloud.ts).
+    if (key === "voice.final_engine" && String(body.value ?? "").trim().toLowerCase() === "cloud") return operatorOnly(`${key} = cloud (it sends the operator's voice off this machine)`);
     const col = SETTING_COLUMN[key];
     if (col) {
       const wsRef = typeof body.workspace === "string" ? body.workspace : typeof body.workspace_id === "string" ? body.workspace_id : "";
