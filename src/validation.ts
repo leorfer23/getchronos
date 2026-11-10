@@ -140,6 +140,15 @@ export const SessionHookSchema = z.object({
   // schema the tag was stripped here and the gate parked the card on "decide" until the turn ended.
   // "tool": claude's PermissionRequest — its menu is on screen until someone answers it.
   kind: z.enum(["permission", "tool"]).optional(),
+  // event "draft": the draft as its tool was given it — where it goes and the whole text — so the
+  // phone can read it out in full before the operator says yes (src/draft-notify.ts recordDraft).
+  draft: z.object({
+    kind: z.enum(["slack", "email"]).optional(),
+    to: z.string().max(400).nullable().optional(),
+    channel: z.string().max(200).nullable().optional(),
+    subject: z.string().max(400).nullable().optional(),
+    text: z.string().max(20000).nullable().optional(),
+  }).optional(),
   // The tool claude wants to use and what it would run (`tool`-kind asks only).
   tool: z.object({ name: z.string().max(200), input: z.string().max(2000).optional(), about: z.string().max(400).optional() }).optional(),
   // An AskUserQuestion's full questions (term-status.ts AskQuestion).
