@@ -24,11 +24,21 @@ const fs = require("fs");
 const w = (s) => process.stdout.write(s.replace(/\\n/g, "\\r\\n"));
 const chrome = () => w("\\n" + "─".repeat(60) + "\\n> \\n" + "─".repeat(60) + "\\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\\n");
 if (process.argv.includes("-p")) process.exit(0); // exit digest / title one-shots: answer nothing
+// Like the real TUIs: raw mode and bracketed paste on as the input box mounts — the two signals the
+// seed waits for (term-seed.ts). Without them every seed sits out SEED_MAX_MS (20 s) first.
+process.stdin.setRawMode(true);
+w("\\x1b[?2004h");
+let buf = "";
+const onLines = (fn) => process.stdin.on("data", (d) => {
+  buf += d.toString().replace(/\\x1b\\[20[01]~/g, "");
+  let i;
+  while ((i = buf.indexOf("\\r")) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); fn(l); }
+});
 `;
 const FAKE_CLAUDE = `${PRELUDE}
 w("fake claude ready\\n");
 let stage = 0;
-require("readline").createInterface({ input: process.stdin }).on("line", (l) => {
+onLines((l) => {
   fs.appendFileSync(${JSON.stringify(logs.claude)}, l + "\\n");
   if (stage === 0 && /Start now/.test(l)) {
     stage = 1;
@@ -41,21 +51,11 @@ require("readline").createInterface({ input: process.stdin }).on("line", (l) => 
   }
 });
 `;
-// Raw mode, like a real TUI: a canonical-mode tty drops input past MAX_CANON (1024 bytes on macOS),
-// and a stand-in's seed — goal, brief, replay — is always longer than that.
 const FAKE_GROK = `${PRELUDE}
 w("fake grok ready\\n> ");
-process.stdin.setRawMode(true);
-let buf = "";
-process.stdin.on("data", (d) => {
-  buf += d.toString();
-  let i;
-  while ((i = buf.indexOf("\\r")) >= 0) {
-    const l = buf.slice(0, i);
-    buf = buf.slice(i + 1);
-    fs.appendFileSync(${JSON.stringify(logs.grok)}, l + "\\n");
-    w("● On it.\\n> ");
-  }
+onLines((l) => {
+  fs.appendFileSync(${JSON.stringify(logs.grok)}, l + "\\n");
+  w("● On it.\\n> ");
 });
 `;
 for (const [name, body] of [["claude", FAKE_CLAUDE], ["grok", FAKE_GROK]] as const) {
