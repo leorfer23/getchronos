@@ -141,6 +141,7 @@ import {
 import { runCommandLine } from "./commands.js";
 import { flowData } from "./flow.js";
 import { transcribe, hearFinal, warmFinal, pickEngine, finalUrl, wavMs, audioFilename, transcribeFailure } from "./transcribe.js";
+import { cloudHealth } from "./transcribe-cloud.js";
 import { keepClip, listClips, clipsDir, wavStats } from "./voice-clips.js";
 import { speak, voiceFor, listVoices, neuralHealth } from "./speak.js";
 import { activeWorkspaceIds, askFleetFanout, askManagerWeb, handFilesTo, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
@@ -4906,13 +4907,15 @@ export function startServer() {
         }
       }
       // A finished sentence: the accurate engine on its own server when there is one (it never waits
-      // behind a partial there), the fast one otherwise — hearFinal falls back by itself.
+      // behind a partial there), the fast one otherwise — hearFinal falls back by itself. "cloud" puts
+      // ElevenLabs in front of that chain for sentences (src/transcribe-cloud.ts); off by default.
       const mode = String(setting("voice.final_engine"));
       // The blank clip a call opens with (pure digital silence) is there to load the model: load both.
       if (buf.length < 64_000 && wavStats(buf)?.peak === 0) warmFinal(buf, { mode, filename: audioFilename(ct), contentType: ct, language });
       // Only a final that goes to the fast engine holds partials off; one on the second server
-      // leaves the fast one free for the words of whatever he says next.
-      const onFast = pickEngine({ partial: false, mode, finalUrl: finalUrl(), audioMs: wavMs(buf) }) === "fast";
+      // leaves the fast one free for the words of whatever he says next. (cloud: false — where the
+      // clip lands locally if the cloud does not answer.)
+      const onFast = pickEngine({ partial: false, mode, finalUrl: finalUrl(), audioMs: wavMs(buf), cloud: false }) === "fast";
       let out;
       if (onFast) transcribing++;
       try {
@@ -4967,7 +4970,9 @@ export function startServer() {
     res.json({ on, dir: clipsDir(), clips: on ? listClips() : [] });
   });
   api.get("/voices", requireAdmin, async (_req, res) => {
-    res.json({ en: await voiceFor("en"), es: await voiceFor("es"), installed: (await listVoices()).filter((v) => v.premium), neural: await neuralHealth() });
+    res.json({ en: await voiceFor("en"), es: await voiceFor("es"), installed: (await listVoices()).filter((v) => v.premium), neural: await neuralHealth(),
+      // The ear: which engine finished sentences are set to, and whether the cloud one can be used (never its key).
+      hearing: { final_engine: String(setting("voice.final_engine")), cloud: cloudHealth(String(setting("voice.final_engine"))) } });
   });
 
   // Hub open → pre-boot the persistent voice manager so the first utterance skips CLI startup.

@@ -404,7 +404,11 @@ The voice front (`src/talker.ts`, VOICE.md) — every knob is also a Desk settin
 | `CHRONOS_TALKER_API_MODEL` | `claude-haiku-5-5` | model id for the `api` engine (the gateway form is derived) |
 | `CHRONOS_TALKER_PROVIDER` | `auto` | `api` engine key: `auto` (Anthropic first, else gateway), `anthropic`, `gateway` |
 | `CHRONOS_TALKER_API_KEY` | *(falls back to `ANTHROPIC_API_KEY`)* | Anthropic key for the `api` engine; `AI_GATEWAY_API_KEY` is used for `gateway`. Keys live in `.secrets`, never in a setting |
-| `CHRONOS_VOICE_FINAL_ENGINE` | `accurate` | setting `voice.final_engine`. `accurate` = a finished sentence goes to the second whisper (`sh.chronos.whisper-final`, a larger model on its own port) while the live words keep the fast one; one-word answers stay on the fast one; falls back to the fast one whenever the second is not running. `fast` = one engine for everything |
+| `CHRONOS_VOICE_FINAL_ENGINE` | `accurate` | setting `voice.final_engine`. `accurate` = a finished sentence goes to the second whisper (`sh.chronos.whisper-final`, a larger model on its own port) while the live words keep the fast one; one-word answers stay on the fast one; falls back to the fast one whenever the second is not running. `fast` = one engine for everything. `cloud` = the finished sentence goes to ElevenLabs Scribe first (**the audio of what you say on a call leaves the machine**; needs `ELEVENLABS_API_KEY`; see VOICE.md → Hearing in the cloud), then the same local chain on any failure |
+| `ELEVENLABS_API_KEY` | *(none)* | `.secrets` only. Used by `voice.final_engine = cloud` and nothing else; the daemon takes it out of its own environment at boot, so no spawned process inherits it. Missing with the setting on: sentences stay local, said once in the log and in `GET /api/voices` → `hearing.cloud` |
+| `CHRONOS_TRANSCRIBE_CLOUD_MODEL` | `scribe_v2` | the batch model the cloud engine asks for (`scribe_v3` exists; on the test clips it was no more accurate and had a slower tail) |
+| `CHRONOS_TRANSCRIBE_CLOUD_TIMEOUT_MS` | `2500` | how long a sentence waits on the cloud before the local engine takes it (500–15000) |
+| `CHRONOS_TRANSCRIBE_CLOUD_ZERO_RETENTION` | *(off)* | `1` adds `enable_logging=false` (the provider's zero-retention mode). **Enterprise accounts only** — any other plan answers 403 and every sentence falls back to local |
 | `CHRONOS_VOICE_VOCAB` | *(empty)* | setting `voice.vocab`: names and terms you say on calls, comma-separated. Given to whisper as a `prompt` with every finished sentence longer than a word or two. Instance data — set it in Settings or `.secrets`, never in code |
 | `CHRONOS_TRANSCRIBE_FINAL_URL` | `http://127.0.0.1:7781/inference` | where the second engine listens; `off` = none. Only used beside the local fast engine unless set explicitly |
 | `CHRONOS_TRANSCRIBE_FINAL_AUDIO_CTX` | `768` | whisper `audio_ctx` sent to the second engine for clips up to 8 s (15 s of context instead of 30 — about half the time per sentence on large-v3-turbo); `0` = always the full window |
@@ -857,6 +861,9 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_TRANSCRIBE_URL` | — | `src/telegram.test.ts` |
 | `CHRONOS_TRANSCRIBE_FINAL_URL` | `http://127.0.0.1:7781/inference`; `off` = no second engine | `src/transcribe.ts` |
 | `CHRONOS_TRANSCRIBE_FINAL_AUDIO_CTX` | `768`; `0` = full window | `src/transcribe.ts` |
+| `CHRONOS_TRANSCRIBE_CLOUD_MODEL` | `scribe_v2` | `src/transcribe-cloud.ts` |
+| `CHRONOS_TRANSCRIBE_CLOUD_TIMEOUT_MS` | `2500` | `src/transcribe-cloud.ts` |
+| `CHRONOS_TRANSCRIBE_CLOUD_ZERO_RETENTION` | — | `src/transcribe-cloud.ts` |
 | `CHRONOS_VOICE_FINAL_ENGINE` | `accurate` | `src/settings.ts` |
 | `CHRONOS_VOICE_VOCAB` | — | `src/settings.ts` |
 | `CHRONOS_VOICE_CLIPS` | `~/.mc/voice-clips` | `src/voice-clips.ts` |

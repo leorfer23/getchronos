@@ -3,6 +3,7 @@
 // endpoint (+ OPENAI_API_KEY) to use a cloud model instead. Both Telegram voice notes and the web
 // dashboard mic funnel through here.
 import { ffmpegProblem } from "../bin/ffmpeg-check.mjs";
+import { askCloud, cloudReady, cloudFailed, cloudKeyterms, CloudError, CLOUD_OTHER_LANG_MIN, type CloudAsk, type CloudHeard } from "./transcribe-cloud.js";
 
 const LOCAL_URL = "http://127.0.0.1:7778/inference";
 // The second local engine (sh.chronos.whisper-final): a larger model for finished sentences, on its
@@ -26,7 +27,7 @@ export function finalUrl(): string | null {
   return transcribeIsLocal() ? LOCAL_FINAL_URL : null;
 }
 
-export type EngineName = "fast" | "final";
+export type EngineName = "fast" | "final" | "cloud";
 /** How long a second engine that refused the connection is left alone before it is tried again. */
 export const FINAL_DOWN_MS = 30_000;
 let finalDownUntil = 0;
@@ -47,11 +48,19 @@ export const SHORT_CLIP_MS = 2000;
  * accurate one when the operator wants it ("accurate"), it exists, the clip is long enough to be a
  * sentence, and that engine has not just been found down — else the fast one, which is what every
  * clip used before.
+ *
+ * "cloud" (src/transcribe-cloud.ts) is "accurate" with one engine in front: a sentence goes to the
+ * cloud when that can be used right now (`cloud`: key present, not backing off), and otherwise
+ * exactly where "accurate" would have sent it. One-word clips never leave the machine: measured, the
+ * cloud heard them no better than the local engines («sí» → "Se hizo", "See you", once nothing).
  */
-export function pickEngine(o: { partial: boolean; mode: string; finalUrl: string | null; audioMs?: number | null; downUntil?: number; now?: number }): EngineName {
-  if (o.partial || o.mode !== "accurate" || !o.finalUrl) return "fast";
+export function pickEngine(o: { partial: boolean; mode: string; finalUrl: string | null; audioMs?: number | null; downUntil?: number; now?: number; cloud?: boolean }): EngineName {
+  if (o.partial || (o.mode !== "accurate" && o.mode !== "cloud")) return "fast";
   if (o.audioMs != null && o.audioMs < SHORT_CLIP_MS) return "fast";
-  return (o.now ?? Date.now()) < (o.downUntil ?? finalDownUntil) ? "fast" : "final";
+  const now = o.now ?? Date.now();
+  if (o.mode === "cloud" && (o.cloud ?? cloudReady(now))) return "cloud";
+  if (!o.finalUrl) return "fast";
+  return now < (o.downUntil ?? finalDownUntil) ? "fast" : "final";
 }
 
 // The engines pick a decoder by file extension, so the name must match the bytes: iOS Safari records
@@ -229,15 +238,41 @@ export function finalFields(audioMs: number | null, env: Record<string, string |
 export type FinalHeard = { text: string; lang?: Lang2; passes: number; engine: EngineName };
 
 /**
+ * One sentence on the cloud engine. The language: when the operator fixed it on the call screen (or
+ * listening is "page") it is sent as the hint; otherwise none is sent and the model says which it
+ * heard — measured, the text is the same either way (it writes English as English even when told
+ * Spanish), but only without the hint does the answer say which language it was. Detected as neither
+ * Spanish nor English: not believed, the local engines take the clip. The other language than the
+ * call's needs CLOUD_OTHER_LANG_MIN, or the call's language stands.
+ */
+export async function hearCloud(
+  buf: Buffer,
+  o: { filename?: string; contentType?: string; language?: Lang2; bilingual?: boolean; vocab?: unknown },
+  ask: (b: Buffer, a: CloudAsk) => Promise<CloudHeard> = askCloud,
+): Promise<FinalHeard> {
+  const detect = !!o.language && o.bilingual !== false;
+  const h = await ask(buf, { filename: o.filename, contentType: o.contentType, language: detect ? undefined : o.language, keyterms: cloudKeyterms(o.vocab) });
+  if (!detect) return { text: h.text, lang: o.language, passes: 1, engine: "cloud" };
+  if (!h.lang) throw new CloudError("language", "heard a language that is neither Spanish nor English");
+  const lang = h.lang !== o.language && (h.prob ?? 1) < CLOUD_OTHER_LANG_MIN ? o.language! : h.lang;
+  return { text: h.text, lang, passes: 1, engine: "cloud" };
+}
+
+/**
  * A finished sentence → text. The accurate engine when there is one (pickEngine), with the
  * operator's vocabulary as a prompt; any failure there — not installed, still loading its model,
  * crashed — and the same clip goes to the fast engine, so a call never loses a sentence to the
  * second server. An engine that refused the connection is left alone for FINAL_DOWN_MS.
+ *
+ * With mode "cloud" the chain is cloud → accurate → fast: a timeout, a network error, any non-200
+ * or an empty transcript there, and the same clip goes down the local chain (cloudFailed decides
+ * how long the cloud is left alone).
  */
 export async function hearFinal(
   buf: Buffer,
   o: { filename?: string; contentType?: string; language?: Lang2; bilingual?: boolean; mode: string; vocab?: unknown; now?: number },
   ask: (b: Buffer, a: AskOpts) => Promise<Heard> = transcribeDetailed,
+  cloud: (b: Buffer, a: CloudAsk) => Promise<CloudHeard> = askCloud,
 ): Promise<FinalHeard> {
   const ms = wavMs(buf);
   const run = async (engine: EngineName): Promise<FinalHeard> => {
@@ -251,7 +286,16 @@ export async function hearFinal(
     return { text: h.text, lang: o.language, passes: 1, engine };
   };
   const now = o.now ?? Date.now();
-  if (pickEngine({ partial: false, mode: o.mode, finalUrl: finalUrl(), audioMs: ms, now }) === "final") {
+  let first = pickEngine({ partial: false, mode: o.mode, finalUrl: finalUrl(), audioMs: ms, now });
+  if (first === "cloud") {
+    try {
+      return await hearCloud(buf, o, cloud);
+    } catch (e) {
+      cloudFailed(e, now);
+    }
+    first = pickEngine({ partial: false, mode: o.mode, finalUrl: finalUrl(), audioMs: ms, now, cloud: false });
+  }
+  if (first === "final") {
     try {
       return await run("final");
     } catch (e) {
@@ -275,7 +319,8 @@ export function warmFinal(
   ask: (b: Buffer, a: AskOpts) => Promise<Heard> = transcribeDetailed,
 ): boolean {
   const url = finalUrl();
-  if (pickEngine({ partial: false, mode: o.mode, finalUrl: url, now: o.now }) !== "final") return false;
+  // cloud: false — the blank clip is never sent out, and the local engine behind the cloud must be warm for the fallback.
+  if (pickEngine({ partial: false, mode: o.mode, finalUrl: url, now: o.now, cloud: false }) !== "final") return false;
   ask(buf, { url: url!, filename: o.filename, contentType: o.contentType, language: o.language }).catch(() => {});
   return true;
 }
