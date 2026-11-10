@@ -1798,8 +1798,10 @@
       <label style="flex:0 0 128px">Kind
         <select name="goal_kind" id="f-kind" title="What done looks like. The agent is told this in its first prompt.">
           <option value="pr">PR</option>
+          <option value="ui">UI PR</option>
           <option value="investigation">Investigation</option>
           <option value="qa">QA</option>
+          <option value="product">Product — ship it</option>
           <option value="chat">Chat — just talk</option>
         </select>
       </label>
@@ -1871,8 +1873,10 @@
       <label>Kind
         <select id="rj-kind" title="What done looks like. The agent is told this in its first prompt.">
           <option value="pr">PR</option>
+          <option value="ui">UI PR</option>
           <option value="investigation">Investigation</option>
           <option value="qa">QA</option>
+          <option value="product">Product — ship it</option>
         </select>
       </label>
     </div>
@@ -2268,6 +2272,8 @@ const KIND_TIP = {
   pr: "PR — done when a pull request is open with green tests",
   investigation: "Investigation — done when there's an answer with evidence, no code changes unless asked",
   qa: "QA — done when there's a verdict: what passed, what failed, how to reproduce",
+  ui: "UI PR — done when the PR is green with before/after shots of each screen it changes and a walkthrough of the flow",
+  product: "Product — done when it is merged, deployed and checked live; bugs reproduced before and shown fixed after",
   chat: "Chat — talking it through: no finish line, no hand-off unless you ask for one",
 };
 // Claude's permission menu, as the daemon reads it off the screen (status.permission). The terminal is

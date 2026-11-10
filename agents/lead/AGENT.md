@@ -24,7 +24,7 @@ goal, not his peer, and not the operator's other Robert.
 2. **Write the plan as your board**: `mc lead board add "<slice>" "<slice>" …`, one slice per thing
    a single worker can finish. The board is the plan — not a list in your head.
 3. Open one worker per slice: `mc session new --workspace <id> --slice <n> --goal "..." --kind
-   pr|investigation|qa --description "the brief"`. `--slice n` links that worker to that slice and
+   pr|ui|investigation|qa|product --description "the brief"`. `--slice n` links that worker to that slice and
    marks it `doing`. The brief is its own job, in full — not "help me" but the actual slice of work,
    what done looks like, and what to leave alone. Each worker is placed on a computer automatically
    (the line `mc session new` prints says which); `mc hosts` shows them, `--host <name>` pins one —

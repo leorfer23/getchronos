@@ -74,6 +74,8 @@ import { findMedia, mediaMime, sessionMedia } from "./session-media.js";
 import { recordSessionPrs } from "./terminal-automerge.js";
 import { openProactive } from "./robert-selfwake.js";
 import { notifyDraft } from "./draft-notify.js";
+import { markVoiceTurn, noteDraft } from "./ledger.js";
+import { mountLedgerRoutes } from "./ledger-routes.js";
 import { robertMay } from "./robert-scope.js";
 import { isShipTerminal } from "./ship-guard.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
@@ -982,6 +984,7 @@ export function startServer() {
     // An agent left a draft (it never sends): tell the operator, and touch nothing on the card.
     if (req.body.event === "draft") {
       void notifyDraft({ workspace_id: s.workspace_id, where: `terminal ${s.id.slice(0, 8)}${s.goal ? ` · ${String(s.goal).slice(0, 60)}` : ""}`, label: String(req.body.label ?? "draft") });
+      noteDraft(s.id, req.body); // the request ledger: a deliverable, and a `send` he decides (ledger.ts)
       return res.json({ ok: true });
     }
     const status = applyHook(s.id, req.body);
@@ -2359,6 +2362,8 @@ export function startServer() {
   mountServiceRoutes(api);
   // "Send to Chronos" — the Mac bar (desktop/app.swift → static/bar.html, src/capture.ts).
   mountCaptureRoutes(api, { openSession });
+  // The request ledger: what he asked → where it went → what came back → what he owes (LEDGER.md).
+  mountLedgerRoutes(api);
 
   api.get("/stats", requireAdmin, (_req, res) => {
     const days = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
@@ -5149,6 +5154,7 @@ export function startServer() {
     // Accepted: the tunnel may close this socket any time; the turn runs detached and the answer
     // rides agent.push (keyed by client+turn). Clients that miss the push re-read /agent/history.
     res.json({ accepted: true, turn: turnId, ws, how: turn.how });
+    if (voice) markVoiceTurn(turnId); // the request ledger: this request was spoken (ledger.ts)
     void (async () => {
       try {
         // Stream TEXT deltas so Desk/phone can speak sentence-by-sentence while the turn runs.

@@ -1,7 +1,7 @@
 /** Robert's tool calls → the steps the Desk shows under his reply. */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { humanizeStep, normalizeCommand } from "./robert-steps.js";
+import { humanizeStep, normalizeCommand, terminalMove } from "./robert-steps.js";
 
 const AT = "2026-09-15T21:00:00.000Z";
 const h = (d: string) => humanizeStep(d, AT)!;
@@ -47,4 +47,25 @@ test("nothing that looks like a credential reaches a step", () => {
   const s = h('run FOO_TOKEN=abc123secret python3 x.py -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9abcdefgh" sk-ant-api03-aaaaaaaaaaaaaaaaaaaa');
   assert.doesNotMatch(s.text, /abc123secret|eyJhbGci|sk-ant-api03-a/);
   assert.match(h('run mc session send b891d5f6 "use key ghp_abcdefghijklmnopqrstuvwxyz"').text, /•••/);
+});
+
+test("terminalMove reads an open or a keystroke back out of the step humanizeStep wrote", () => {
+  const mv = (d: string) => terminalMove(humanizeStep(d, AT));
+  assert.deepEqual(mv('run ~/.mc/bin/mc session new --workspace w1 --goal "fix the 3am DAG" --kind pr'), { move: "open", goal: "fix the 3am DAG" });
+  assert.deepEqual(mv("run mc session new --workspace w1"), { move: "open", goal: null });
+  assert.deepEqual(mv('run mc lead new "migrate the schema" --workspace w1'), { move: "open", goal: "migrate the schema" });
+  assert.deepEqual(mv('run curl -s -X POST -H "x-mc-admin: $CHRONOS_ADMIN" http://localhost:7777/api/sessions -d \'{"workspace_id":"w1"}\''), { move: "open", goal: null });
+  assert.deepEqual(mv('run mc session send b891d5f6 "rebase on main"'), { move: "type", sid: "b891d5f6", text: "rebase on main" });
+  assert.deepEqual(mv("run mc session key b891d5f6 down,enter"), { move: "type", sid: "b891d5f6", text: "<down><enter>" });
+  assert.deepEqual(mv("run mc session key b891d5f6 enter"), { move: "type", sid: "b891d5f6", text: "<enter>" });
+  assert.deepEqual(mv("run curl -s -X POST http://localhost:7777/api/sessions/b891d5f6-1234-4000-8000-000000000000/input -d '{\"text\":\"y\"}'"), { move: "type", sid: "b891d5f6", text: null });
+  // A long goal is said clipped, and read back as said.
+  const long = mv(`run mc session new --goal "${"fix the flaky export job ".repeat(10).trim()}"`);
+  assert.equal(long?.move, "open");
+  assert.ok((long as any).goal.endsWith("…") && (long as any).goal.length === 120);
+  for (const d of ["run mc session focus b891d5f6", "run mc desk digest", "run curl -s http://localhost:7777/api/sessions", "Read /tmp/x.md", "run mc session done b891d5f6"]) {
+    assert.equal(mv(d), null, d);
+  }
+  assert.equal(terminalMove(null), null);
+  assert.equal(terminalMove({ text: "anything", sid: null }), null);
 });
