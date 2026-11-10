@@ -48,7 +48,7 @@ export interface SettingDef {
 
 const REGISTRY = new Map<string, SettingDef>();
 /** Page order. */
-export const GROUPS = ["Workspace", "Robert", "Voice", "Alerts", "Accounts", "Failover", "Autonomy", "Memory", "Limits", "Safety"];
+export const GROUPS = ["Workspace", "Robert", "Voice", "Alerts", "Accounts", "Failover", "Autonomy", "Memory", "Limits", "Safety", "Executor"];
 
 export function defineSetting(d: SettingDef): SettingDef {
   REGISTRY.set(d.key, d);

@@ -2463,6 +2463,68 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       CREATE INDEX IF NOT EXISTS idx_request_verifications_request ON request_verifications(request_id, started_at);`),
   },
 
+  {
+    version: 159,
+    name: "executor — the operator's single-use approvals and the log of everything they carried out (src/executor.ts)",
+    // EXECUTOR section of LEDGER.md. `executor_approvals`: one row per yes he gave on one exact item —
+    // written only by POST /api/ledger/:id/decision from his own hand, bound to the target hash he was
+    // shown, single use (`used_at` is claimed in one UPDATE before anything runs), and expiring in
+    // minutes. The unique index on decision_id is the "one yes, one approval" rule in the schema.
+    // `executor_log`: one row per attempt — who approved, his exact words, the surface, what ran, the
+    // hashes compared, the result and any error. Nothing here is ever deleted by the daemon.
+    // 158 belongs to the verifier's branch; this one must land after it, or a DB already at 159 would
+    // skip 158 (migrate() only applies versions above user_version). IF NOT EXISTS keeps a re-run harmless.
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS executor_approvals (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL,
+        workspace_id TEXT,
+        action TEXT NOT NULL,
+        target_ref TEXT NOT NULL,
+        target_hash TEXT NOT NULL,
+        approved_at TEXT NOT NULL,
+        approved_by TEXT,
+        surface TEXT,
+        transcript TEXT,
+        how TEXT NOT NULL,
+        audio_ref TEXT,
+        override TEXT,
+        expires_at TEXT NOT NULL,
+        used_at TEXT,
+        result TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_executor_approvals_decision ON executor_approvals(decision_id);
+      CREATE INDEX IF NOT EXISTS idx_executor_approvals_request ON executor_approvals(request_id);
+      CREATE INDEX IF NOT EXISTS idx_executor_approvals_unused ON executor_approvals(expires_at) WHERE used_at IS NULL;
+
+      CREATE TABLE IF NOT EXISTS executor_log (
+        id TEXT PRIMARY KEY,
+        approval_id TEXT,
+        request_id TEXT,
+        decision_id TEXT,
+        workspace_id TEXT,
+        action TEXT NOT NULL,
+        approved_by TEXT,
+        surface TEXT,
+        how TEXT,
+        words TEXT,
+        target_ref TEXT,
+        approved_hash TEXT,
+        live_hash TEXT,
+        ran TEXT,
+        status TEXT NOT NULL,
+        code TEXT,
+        error TEXT,
+        override TEXT,
+        at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_executor_log_at ON executor_log(at);
+      CREATE INDEX IF NOT EXISTS idx_executor_log_request ON executor_log(request_id, at);
+      CREATE INDEX IF NOT EXISTS idx_executor_log_ws ON executor_log(workspace_id, at);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -366,6 +366,21 @@ function settle(d: Deliverable, state: DeliverableState, actions: Action[]): voi
 }
 
 /**
+ * The executor carried it out (merged, sent) — or GitHub says it already ended (merged or closed by
+ * someone else). Every twin in the workspace moves with it, any other open item asking the same
+ * thing stops being a question, and each request it touched is re-derived.
+ */
+export function settleDeliverable(deliverableId: string, state: DeliverableState, nowMs = Date.now()): void {
+  const d = requests.deliverable(deliverableId);
+  if (!d) return;
+  // As the sweep settles what GitHub reports: a merged PR may still owe its deploy; a closed one owes nothing.
+  const actions: Action[] = state === "merged" ? ["merge"] : state === "closed" ? ["merge", "deploy"] : state === "sent" ? ["send"] : state === "deployed" ? ["deploy"] : [];
+  settle(d, state, actions);
+  const touched = new Set([d.request_id, ...twinsOf(d, requests.get(d.request_id)?.workspace_id ?? null).map((x) => x.request_id)]);
+  for (const rid of touched) recompute(rid, nowMs);
+}
+
+/**
  * One hand-off into the request: its deliverables always; its questions only when it is the newest one
  * in the window. Live, every hand-off is the newest when it lands, so this changes nothing there; on a
  * backfill or replay it keeps hand-offs he already dealt with from coming back as open questions.

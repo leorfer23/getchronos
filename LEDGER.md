@@ -7,7 +7,8 @@
 >
 > Code: `src/ledger-model.ts` (pure: vocabulary, work types, roll-up, queue order, compact text) ·
 > `src/store/requests.ts` (rows, migration 156) · `src/ledger.ts` (writers, sweep, decisions, read views) ·
-> `src/ledger-routes.ts` (`/api/ledger`) · `mc ledger` (scripts/mc).
+> `src/ledger-routes.ts` (`/api/ledger`) · `mc ledger` (scripts/mc) · the executor: `src/executor.ts`,
+> `src/store/executor.ts` (migration 159), `src/executor-routes.ts`, `mc executor`.
 
 ## The model
 
@@ -153,18 +154,18 @@ A hand-off becomes deliverables and decision items, from its `ask`:
   prompt yet**.
 - `mc ledger [list|show <id>|queue|mine|text]`.
 
-**The wall.** The operator's token reads every workspace. A project Robert's token or a workspace token reads
+**The wall.** The operator's token reads every workspace, and so does the fleet-wide Robert's credential (reads
+only — he granted that; every write here is the operator's hand). A project Robert's token or a workspace token reads
 only its own workspace's rows; a foreign id is the same 404 as a missing one; a workspace-less row is never
 theirs. There is no tokenless read: the ledger holds what he said in every workspace.
 
 ## Deciding
 
-`POST /api/ledger/:id/decision {item?, decision: yes|no|later|change, words?, target_hash?, until?, by?, audio_ref?}`
-records his answer and **executes nothing** — the executor acts on a recorded yes, later. It takes the
-operator's hand: his token, no agent header (`x-mc-lead` / `x-mc-session` / `x-mc-agent`) and `x-mc-operator: 1`,
-the same three as closing a terminal. That keeps Robert and agents from recording a yes through `mc` or curl,
-but it is a convention the fleet-wide Robert (who holds the admin token) could imitate: the executor must still
-check where an approval came from.
+`POST /api/ledger/:id/decision {item?, decision: yes|no|later|change, words?, target_hash?, until?, by?, audio_ref?, surface?, how?, override?}`
+records his answer. With the executor on, a yes on a merge or a send is then carried out (see *Executing*);
+otherwise nothing runs. It takes the operator's hand: his token itself from this Mac (`isOperator` — no Robert
+process holds it: each carries a credential derived from it, which the server tells apart), no agent header
+(`x-mc-lead` / `x-mc-session` / `x-mc-agent` / `x-mc-workspace-token`) and `x-mc-operator: 1`.
 
 - A request owing more than one decision needs `item` (id or prefix); the 409 lists them.
 - `yes` on merge/deploy/send needs a bound item and `target_hash` equal to the item's and its deliverable's
@@ -173,6 +174,73 @@ check where an approval came from.
   sweep after its date; an undated one waits until he picks it up.
 - `POST /api/ledger/:id/close {words?}` — he closed it; whatever it owed stops being a question.
 - Every decision is published as `ledger.decided` (kept by the activity trail); every state move as `ledger.updated`.
+
+## Executing
+
+`src/executor.ts` — the execution owner. Daemon code, not a model: it carries out one thing he said yes to, that
+exact version, once. `executor.enabled` (⚙ Settings → Executor, default **off**): off, a yes is recorded exactly as
+before and the response says `executed: false, executor: "off"`.
+
+**The only door.** The decision route above, from his hand, after `recordDecision` checked the yes names the target
+he was shown. Then `approve()` writes ONE row in `executor_approvals` (migration 159; a unique index on the decision
+item): action, target ref, `target_hash`, when, `approved_by`, surface, his exact words, how (`tap` · `voice_strong` ·
+`voice_confirmed` — from the body, else from `by`; a weak spoken yes carries nothing out), `audio_ref`, an optional
+override, `expires_at` (`executor.ttl_minutes`, default 5). `executeApproval()` claims it in one conditional UPDATE
+(single use: a replay or a race gets `replay`; past its time it is `expired`, used up, and asked again). No route takes
+an approval id; `carryOutDecision` has one caller (a test reads the source to hold that). At boot an unused approval is
+voided, never run late.
+
+**Before anything runs**, read at that moment: the switches; the request still in the workspace the yes was given in;
+the item still `decided`/`yes` and still bound to the approved hash; the deliverable not already final; the workspace
+real (a workspace-less request has no identity of its own to act under).
+
+| action | re-reads the real thing | then | refuses when |
+|---|---|---|---|
+| `merge_pr` (`executor.merge_pr`, default on) | `gh pr view` — GitHub's live head, under the workspace's own env (`childEnv`: its `GH_TOKEN`/`GH_CONFIG_DIR`, else the login its agents use) | `gh pr merge <url> --<merge_method> --match-head-commit <approved sha>` — never `--admin`/`--auto`/`--delete-branch`, never deploys; confirms MERGED (else `queued`) | the PR is not this workspace's (`prBelongsTo`) · checks (below) · not open / a draft · head ≠ approved |
+| `send_draft` (`executor.send_draft`, default off) | the channel's `DraftSender.read` — the provider's live draft, never a kept copy (`GET /api/drafts` is display only) | `send` exactly what was read and hashed (`draftHash`) | no sender for the channel · draft gone · live hash ≠ approved |
+| `deploy` | — | never: a disabled seam, it will need its own yes each time | always (`executed: false`) |
+
+**Checks** (`request_checks`, read only — the verifier writes them): only a check naming THIS head counts; the newest run
+of each counts; any `fail` refuses; a required check of the work type (`WORK`) not `pass` refuses. No rows at all:
+`executor.no_checks` = `refuse` (default) or `allow`; or his one-off override (`override: "no_checks"` with the yes,
+operator-only like everything on this route) — either way the log says which.
+
+**After.** Every ending writes `executor_log`: who approved, his words, surface, how, the approved and the live hash,
+what ran, status (`done` · `refused` · `failed` · `queued` · `void`), a reason code, the error text, any override.
+Done → the deliverable moves (`merged` / `sent`, twins too) and the live terminal is told not to do it again. A failure
+a later yes could fix (checks, a GitHub refusal, expiry) retires the spent yes and raises a fresh item; when what he
+approved is gone (`moved`) the deliverable is unbound too, so no yes passes until the verifier binds the new version.
+No sender / deploy / switched off: nothing is re-asked — he does it himself, as today. Each result is published as
+`executor.result` with `say: {es, en}` ("Mergeado." / "No pude: …") for the voice layer, and returned in the response:
+`{ok, item, request, executed, executor?, execution?}`. `GET /api/executor/log` (operator only) · `GET
+/api/executor/status` · `mc executor log|status`.
+
+**Sending, per workspace (2026-11).** The daemon can send nothing yet, so no sender exists and `send_draft` refuses
+with the reason: Slack drafts are made through each workspace's official Slack MCP (OAuth token cached by the CLI in
+that workspace's profile dir; the daemon holds no Slack token), and Slack's public Web API has no method to read or
+send a person's draft — the executor could never re-read what he approved, so a Slack sender cannot be built on it.
+Gmail drafts are made through the claude.ai Gmail connector of each workspace's Claude profile (credentials held by
+claude.ai); the Gmail API can (`users.drafts.get` format=raw, then `users.drafts.send` with that same raw message, so
+what goes out is what was hashed) given, per workspace: a Google OAuth client + refresh token with `gmail.compose`
+for the account that workspace drafts from, the draft id captured by `mc hook` from the tool's response, and a
+measured canonical form between the connector's MIME and the hook's text. The agents' no-send deny list is unchanged.
+
+**The phone** (`static/phone-deck.js decideLedger`, owned elsewhere — not edited here) still answers a carried-out
+yes with "Recorded.". Its yes branch should speak the result:
+`var r = await post("yes", { target_hash: L.target_hash, words: meta.words || null });`
+`if (r && r.execution) return t(r.execution.say.es, r.execution.say.en);` — and, once `GET /api/executor/status`
+says `enabled` with `merge_pr.on`, never fall back to typing the approval line for an unbound merge: say it is not
+verified yet instead, so merges only go through the executor.
+
+**What this stops, and what it does not.** It stops a model — any Robert (project rw/ro, fleet-wide, either lane), a
+terminal, a Lead, a job — that follows a bad instruction or a prompt injection, or is simply confused, from recording or
+carrying out a yes: none of them holds a credential the decision route accepts, and their sandbox denies the token
+file. It stops a yes from covering anything but the version he was shown, from being used twice or late, from crossing
+workspaces, and from merging past failing or missing checks. It does not stop anything running as the operator's OS user
+outside the sandbox (malware, an unsandboxed terminal or a workspace whose sandbox he set to off, a daemon command
+that reads the token file for an agent): such a process can read the admin token and speak as him. Agents also keep
+their own `gh pr merge` (Leads have merge authority; the Desk's approval line asks a terminal to merge) — the executor
+adds a guarded road, it does not close that one.
 
 ## Restart, replay, backfill
 
@@ -224,12 +292,11 @@ code and evidence, never by the terminal's own claim.
 
 ## Not yet
 
-- **Executor**: act on `decided`/`yes` items whose `target_hash` still matches, then move the deliverable
-  (`merged` / `sent` / `deployed`), which closes the request.
+- **Executor senders**: no channel has one (see *Executing → Sending*); deploys are a disabled seam.
 - **Voice front**: built (VOICE.md, `src/talker.ts`, setting `voice.talker`, off by default) — it speaks from
   `ledgerText` + `queueView` and opens one request per delegation with `openRequest` (turn bound).
 - Telegram turns do not publish `agent.asked`, so a terminal Robert opens from Telegram is recorded as his own.
 - Dashboards and documents are read from links in the hand-off's text: the hand-off has no link field of its own
   yet, and nothing tells an agent to name its deliverable's link (KIND_CONTRACT for `investigation` is unchanged).
 - Migration 156 lands next to 155 and 157 from parallel work: deploy them in order — a database that reaches 156
-  before 155 exists would skip 155.
+  before 155 exists would skip 155. Likewise 159 (the executor) after 158 (the verifier).

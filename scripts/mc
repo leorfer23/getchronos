@@ -310,6 +310,9 @@ const HELP = `mc — Mission Control backlog CLI
   mc ledger queue                    what waits for the operator's word, in the order he should hear it
   mc ledger mine                     the request(s) THIS terminal serves
   mc ledger text                     the compact block a coordinator reads (one line per open request)
+  mc executor status [--workspace slug]   is the executor on (it carries out the operator's yes: merge a PR, send a draft), which actions
+  mc executor log [--request id8] [--workspace slug] [--status done|refused|failed] [--limit N] [--json]
+                                     what it carried out or refused: who approved, his words, the surface, what ran, the hashes (operator only)
   mc pad resolve <id> ["why"]        close the row, keeping the reason on it (a follow-up terminal's usual last step)
   mc pad due                         this client's scheduled follow-ups, soonest first
   mc pad append <id> "<text>"        ADD to a row's detail without replacing it — the usual one; any terminal
@@ -1909,6 +1912,38 @@ function askCap(question) {
       }
       if (r.children?.length) out.push("per project:", ...r.children.map((c) => `  ${row(c)}`));
       return console.log(out.join("\n"));
+    }
+    // The executor (src/executor.ts): it carries out the operator's recorded yes — nothing here makes
+    // or uses an approval (only his own device does, through POST /api/ledger/:id/decision).
+    if (cmd === "executor") {
+      const sub = pos[1] || "status";
+      if (sub === "status") {
+        const st = await req("GET", "/executor/status" + (opt.workspace ? `?workspace=${encodeURIComponent(opt.workspace)}` : ""));
+        if (opt.json) return console.log(JSON.stringify(st, null, 2));
+        const on = (b) => (b ? "on" : "off");
+        const senders = Object.entries(st.actions.send_draft.senders || {}).map(([ch, why]) => `${ch}: ${why}`).join(" · ");
+        return console.log([
+          `executor ${on(st.enabled)} · a yes expires after ${st.ttl_minutes} min`,
+          `  merge_pr   ${on(st.actions.merge_pr.on)} · ${st.actions.merge_pr.merge_method} · no checks → ${st.actions.merge_pr.no_checks}`,
+          `  send_draft ${on(st.actions.send_draft.on)}${senders ? ` · ${senders}` : ""}`,
+          `  deploy     off · ${st.actions.deploy.why}`,
+        ].join("\n"));
+      }
+      if (sub === "log") {
+        const q = new URLSearchParams();
+        for (const k of ["request", "workspace", "status", "limit"]) if (opt[k] && opt[k] !== true) q.set(k, String(opt[k]));
+        const rows = await req("GET", "/executor/log" + (q.toString() ? `?${q}` : ""), undefined, adminHeaders());
+        if (opt.json) return console.log(JSON.stringify(rows, null, 2));
+        if (!rows.length) return console.log("the executor has not carried anything out");
+        return console.log(rows.map((r) => [
+          `${r.at.slice(0, 16).replace("T", " ")}  ${r.status.padEnd(7)} ${r.action}${r.code ? ` (${r.code})` : ""} · ${r.target_ref || "?"}`,
+          `    yes by ${r.approved_by || "?"}${r.surface ? ` on ${r.surface}` : ""}${r.how ? ` · ${r.how}` : ""}${r.words ? ` · "${r.words}"` : ""}${r.override ? ` · override ${r.override}` : ""}`,
+          `    approved ${r.approved_hash || "—"}${r.live_hash ? ` · live ${r.live_hash}` : ""}`,
+          ...(r.ran ? [`    ran: ${r.ran}`] : []),
+          ...(r.error ? [`    ${r.error}`] : []),
+        ].join("\n")).join("\n"));
+      }
+      die("usage: mc executor status [--workspace slug] | mc executor log [--request id8] [--workspace slug] [--status s] [--limit N] [--json]");
     }
     if (cmd === "when") {
       const H = adminToken() && !process.env.MC_WORKSPACE_TOKEN ? { "x-mc-admin": adminToken() } : undefined;

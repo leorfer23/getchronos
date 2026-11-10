@@ -7,27 +7,30 @@
  *                              · ?limit · ?format=text (the compact lines a coordinator reads)
  *   GET  /ledger/queue         the approval queue, in the order he should hear it, and what he deferred
  *   GET  /ledger/:id           one request in full: terminals, result, deliverables, decisions, checks
- *   POST /ledger/:id/decision  {item?, decision: yes|no|later|change, words?, target_hash?, until?, by?, audio_ref?}
- *                              records his answer — and executes nothing (the executor is a later piece)
+ *   POST /ledger/:id/decision  {item?, decision: yes|no|later|change, words?, target_hash?, until?, by?, audio_ref?,
+ *                              surface?, how?, override?} records his answer. A yes on a merge or a send, with
+ *                              the executor on (src/executor.ts), is then carried out — that exact version,
+ *                              once — and the response says `executed: true|false` with what happened.
  *   POST /ledger/:id/close     {words?} — he closed it; whatever it still owed stops being a question
  *   POST /ledger/:id/verify    re-run the verifier on it now (src/request-verifier.ts) — the operator's token
  *                              only; answers 202 at once, the pass lands in GET /ledger/:id → verification.
  *                              Never merges, sends or posts: it only reads and writes checks.
  *
- * The wall (CLAUDE.md gotcha #4): the operator's token reads every workspace; a project Robert's token
- * or a workspace token reads ONLY its own workspace's rows, and a foreign id is the same 404 as a
- * missing one. A fleet-wide row (no workspace) is the operator's alone. No token, no ledger: it holds
- * what he said in every workspace, so the tokenless loopback pass older routes still allow (authz.ts
- * tokenlessMode) does not reach it. Writing is the operator's hand only — the same three conditions
- * as closing a terminal (authz.ts operatorMayCloseTerminal): his token, no agent header, and
- * `x-mc-operator: 1`, which only his surfaces send. That keeps a Robert or an agent from recording a
- * yes through `mc` or curl; it is a convention the fleet-wide Robert (who holds the admin token)
- * could imitate, so the executor must still check where an approval came from.
+ * The wall (CLAUDE.md gotcha #4): the operator's token reads every workspace, and so does the fleet-wide
+ * Robert's credential (he reads, the operator granted that; he never writes here). A project Robert's
+ * token or a workspace token reads ONLY its own workspace's rows, and a foreign id is the same 404 as a
+ * missing one. A fleet-wide row (no workspace) is the operator's and the fleet Robert's alone. No token,
+ * no ledger: it holds what he said in every workspace, so the tokenless loopback pass older routes still
+ * allow (authz.ts tokenlessMode) does not reach it.
+ *
+ * Writing is the operator's hand only: his token itself (authz.ts isOperator — no Robert holds it any
+ * more: every Robert process carries a credential derived from it, which the server tells apart), no
+ * agent header, and `x-mc-operator: 1`, which only his surfaces send. A yes recorded here is the only
+ * way an approval comes to exist (src/executor.ts), so this check is what the executor stands on.
  */
 import type express from "express";
 import { z } from "zod";
-import { CONFIG } from "./config.js";
-import { callerScope, tokenOk } from "./authz.js";
+import { callerScope, fleetScopeOf, isOperator, robertIdentity } from "./authz.js";
 import { forwardedHost } from "./hostlink/brain-link.js";
 import { validate } from "./validation.js";
 import { workspaces } from "./store.js";
@@ -35,12 +38,17 @@ import { requests } from "./store/requests.js";
 import { DECISIONS, OPEN_STATES, REQUEST_STATES, type RequestState } from "./ledger-model.js";
 import { closeRequest, detailOf, ledgerText, queueView, recordDecision, summaryOf } from "./ledger.js";
 import { verifyRequest } from "./request-verifier.js";
+import { carryOutDecision, OVERRIDES } from "./executor.js";
+import { APPROVAL_HOWS } from "./store/executor.js";
 
 type Scope = { ws: string | null; operator: boolean };
 
 /** Who is reading: the operator (every workspace) or one workspace. Null after answering the refusal. */
 export function ledgerScope(req: express.Request, res: express.Response): Scope | null {
-  if (forwardedHost(req) === null && tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return { ws: null, operator: true };
+  if (isOperator(req)) return { ws: null, operator: true };
+  // The fleet-wide Robert reads every workspace's rows, as the operator does — reads only: every write
+  // here is operatorHand's, which his credential never passes.
+  if (forwardedHost(req) === null && fleetScopeOf(req.get("x-mc-admin"))) return { ws: null, operator: true };
   const scope = callerScope(req);
   if (scope === null) {
     res.status(401).json({ error: "invalid token" });
@@ -53,13 +61,18 @@ export function ledgerScope(req: express.Request, res: express.Response): Scope 
   return { ws: scope.ws, operator: false };
 }
 
-/** The operator's own hand, as for closing a terminal. False after answering the refusal. */
+/**
+ * The operator's own hand: his token itself, from this Mac (never a Robert's derived credential, a
+ * workspace or Lead token, or a request a host replayed), no agent header, and `x-mc-operator: 1`.
+ * False after answering the refusal. The only door to an approval (src/executor.ts).
+ */
 export function operatorHand(req: express.Request, res: express.Response): boolean {
-  if (forwardedHost(req) !== null || !tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) {
-    res.status(403).json({ error: "only the operator records a decision (x-mc-admin)" });
+  if (!isOperator(req)) {
+    const robert = forwardedHost(req) === null && robertIdentity(req.get("x-mc-admin"));
+    res.status(403).json({ error: robert ? "a Robert credential never records or carries out a decision — the operator's own device does" : "only the operator records a decision (x-mc-admin)" });
     return false;
   }
-  if (req.get("x-mc-lead") || req.get("x-mc-session") || req.get("x-mc-agent")) {
+  if (req.get("x-mc-lead") || req.get("x-mc-session") || req.get("x-mc-agent") || req.get("x-mc-workspace-token")) {
     res.status(403).json({ error: "an agent may not answer for the operator" });
     return false;
   }
@@ -98,6 +111,12 @@ const DecisionSchema = z.object({
   until: z.string().max(40).nullish(),
   by: z.string().trim().max(40).nullish(),
   audio_ref: z.string().max(400).nullish(),
+  /** Where he said it, when the surface says so (else read from `by`). */
+  surface: z.enum(["desk", "phone", "bar", "voice", "web"]).nullish(),
+  /** How the yes was given (else read from `by`): a tap, a strong spoken yes, or a weak one he confirmed. */
+  how: z.enum(APPROVAL_HOWS).nullish(),
+  /** An operator-only override carried with the yes, logged as given: merge although nothing verified it. */
+  override: z.enum(OVERRIDES).nullish(),
 });
 const CloseSchema = z.object({ words: z.string().max(2000).nullish(), by: z.string().trim().max(40).nullish() });
 
@@ -153,7 +172,7 @@ export function mountLedgerRoutes(api: express.Router): void {
     res.json(detailOf(r, { operator: scope.operator }));
   });
 
-  api.post("/ledger/:id/decision", validate(DecisionSchema), (req, res) => {
+  api.post("/ledger/:id/decision", validate(DecisionSchema), async (req, res) => {
     if (!operatorHand(req, res)) return;
     const b = req.body as z.infer<typeof DecisionSchema>;
     const out = recordDecision({
@@ -164,7 +183,21 @@ export function mountLedgerRoutes(api: express.Router): void {
       const { ok: _ok, status, ...body } = out;
       return res.status(status).json(body);
     }
-    res.json({ ok: true, item: out.item, request: summaryOf(out.request) });
+    // His answer is recorded either way. A yes the executor carries out runs now, and the response says
+    // what happened: `executed` true only when the thing was done (merged, sent). The phone uses it to
+    // know it must NOT also type an approval line into the terminal (LEDGER.md → Executing).
+    let carried: Awaited<ReturnType<typeof carryOutDecision>> = { executed: false };
+    try {
+      carried = await carryOutDecision(out.item, out.request, {
+        words: b.words ?? null, by: b.by ?? "operator", surface: b.surface ?? null, how: b.how ?? null, override: b.override ?? null, audio_ref: b.audio_ref ?? null,
+      });
+    } catch (e: any) {
+      console.warn("[executor]", e?.message ?? e);
+      // Not "nothing ran": the error may have come after GitHub merged. The log says what did happen.
+      carried = { executed: false, executor: `the executor hit an error (${String(e?.message ?? e).slice(0, 200)}) — check \`mc executor log\` before saying yes again` };
+    }
+    const request = requests.get(out.request.id) ?? out.request;
+    res.json({ ok: true, item: requests.item(out.item.id) ?? out.item, request: summaryOf(request), ...carried });
   });
 
   // The operator's re-run. A workspace token (or a project Robert's) may read its own checks, never

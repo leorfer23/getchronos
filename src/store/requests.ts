@@ -381,6 +381,14 @@ export const requests = {
     return db.prepare("UPDATE request_decisions SET status = 'superseded', superseded_by = ?, updated_at = ? WHERE id = ? AND status IN ('open','held')")
       .run(by, now(), id).changes > 0;
   },
+  /**
+   * A yes the executor could not carry out: it was spent, and a fresh item now asks him again. His
+   * answer stays on the row (decision, words, who, when) — only its status says it is history now.
+   */
+  retire(id: string, by: string): boolean {
+    return db.prepare("UPDATE request_decisions SET status = 'superseded', superseded_by = ?, updated_at = ? WHERE id = ? AND status = 'decided'")
+      .run(by, now(), id).changes > 0;
+  },
   /** An item the ask path or a hold mirror puts back on the list (a dated "later" that came due). */
   reopen(id: string): boolean {
     return db.prepare("UPDATE request_decisions SET status = 'open', updated_at = ? WHERE id = ? AND status = 'held'").run(now(), id).changes > 0;
