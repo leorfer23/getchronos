@@ -35,7 +35,8 @@
  *
  * ctx = { api, token(), toast(msg, act), fx, sessions(), visible(s), wsColor(id), wsName(id),
  *         input(id, body) → Promise, openTerminal(id), lang(), voice, md(text) → safe html,
- *         compose({title, placeholder}) → Promise<string|null>, onChange(items), onOpen(open) }
+ *         compose({title, placeholder}) → Promise<string|null>, onChange(items), onOpen(open),
+ *         surface? — "phone" (default) or "desk": the label a decision is recorded under (`by`) }
  */
 (function (root) {
   var C = null;
@@ -464,7 +465,10 @@
   }
   async function decideLedger(it, d, words, opt, meta, typeInto) {
     var L = it.ledger;
-    var by = meta.voice ? ("phone-voice:" + (meta.how || "strong")).slice(0, 40) : "phone";
+    // The surface he decided on: "phone" / "desk" for a tap or a click, "<surface>-voice:<how>" for a
+    // spoken yes (src/executor.ts howOf / surfaceOf read exactly this shape).
+    var where = C.surface === "desk" ? "desk" : "phone";
+    var by = meta.voice ? (where + "-voice:" + (meta.how || "strong")).slice(0, 40) : where;
     var post = function (decision, extra) {
       return C.api("/ledger/" + L.request + "/decision", {
         method: "POST", headers: { "x-mc-operator": "1" },
@@ -519,6 +523,7 @@
   var ICON = {
     x: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
     ext: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+    back: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>',
     chev: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
     grip: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 7-5 5 5 5M15 7l5 5-5 5"/></svg>',
   };
@@ -556,7 +561,8 @@
         '<button type="button" class="ba-full" data-full="pair:' + i + '" aria-label="Full screen">⤢</button></div>';
     });
     if (it.singles.length) out += '<div class="qc-singles">' + it.singles.map(function (s, i) { return '<button type="button" class="sg" data-full="single:' + i + '"><img data-shot="' + esc(s.name) + '" alt="' + esc(s.label) + '"><span>' + esc(s.label) + "</span></button>"; }).join("") + "</div>";
-    return out + '<div class="qc-hint">' + (it.pairs.length ? "Drag to compare · ⤢ for full screen, pinch to zoom" : "Tap for full screen") + "</div></section>";
+    var mouse = C.surface === "desk";
+    return out + '<div class="qc-hint">' + (it.pairs.length ? (mouse ? "Drag to compare · ⤢ for full screen, scroll to zoom" : "Drag to compare · ⤢ for full screen, pinch to zoom") : (mouse ? "Click for full screen" : "Tap for full screen")) + "</div></section>";
   }
   function prHtml(it) {
     if (!it.prs.length) return it.size ? '<section class="qc-sec"><div class="qc-pr nolink"><span class="pr-m"><b class="add">+' + it.size.added + '</b> <b class="del">−' + it.size.removed + "</b> lines changed in this terminal</span></div></section>" : "";
@@ -586,11 +592,13 @@
     var head = '<div class="qc-top">' + (name ? '<span class="qc-ws" style="--c:' + esc(color) + '">' + esc(name) + "</span>" : "") +
       '<span class="qc-kind k-' + esc(it.kind.replace("+", "")) + '">' + esc(KIND_WORD[it.kind]) + '</span><span class="qc-age">' + ago(it.at) + "</span></div>";
     var asked = it.asked && it.kind !== "question" ? '<div class="qc-asked"><span>You asked</span>' + esc(it.asked) + "</div>" : it.kind === "question" && it.title ? '<div class="qc-asked"><span>From</span>' + esc(it.title) + "</div>" : "";
-    var body = "";
-    if (it.kind === "question") body += questionHtml(it);
-    if (it.kind === "draft") body += draftHtml(it);
-    if (it.kind === "blocked") body += '<div class="qc-sec qc-blocked">It stopped and is waiting for you. Say or type what it needs — it gets your words as they are.</div>';
-    if (it.pairs || it.singles) body += shotsHtml(it);
+    // Three blocks in reading order — what it is, the screenshots, the evidence. On a phone they
+    // stack as they always did; on a wide screen the screenshots sit beside the other two (.qc-cols).
+    var lead = "", shots = "", body = "";
+    if (it.kind === "question") lead += questionHtml(it);
+    if (it.kind === "draft") lead += draftHtml(it);
+    if (it.kind === "blocked") lead += '<div class="qc-sec qc-blocked">It stopped and is waiting for you. Say or type what it needs — it gets your words as they are.</div>';
+    if (it.pairs || it.singles) shots = shotsHtml(it);
     if (it.checks) body += checksHtml(it);
     if (it.prs) body += prHtml(it);
     if (it.summary && plain(it.summary).length > it.verdict.length + 8 || (it.changes && it.changes.length)) {
@@ -599,7 +607,7 @@
     }
     if (it.note) body += '<div class="qc-note">' + esc(it.note) + "</div>";
     if (it.sid) body += '<button type="button" class="qc-term" data-term="' + esc(it.sid) + '">Open the terminal ' + ICON.chev + "</button>";
-    return '<article class="qcard" data-key="' + esc(it.key) + '"><div class="qc-scroll">' + head + asked + '<h2 class="qc-verdict' + (it.verdict.length > 90 ? " long" : "") + '">' + esc(it.verdict) + "</h2>" + body + "</div></article>";
+    return '<article class="qcard" data-key="' + esc(it.key) + '"><div class="qc-scroll"><div class="qc-cols"><div class="qc-a">' + head + asked + '<h2 class="qc-verdict' + (it.verdict.length > 90 ? " long" : "") + '">' + esc(it.verdict) + "</h2>" + lead + "</div>" + shots + '<div class="qc-b">' + body + "</div></div></div></article>";
   }
 
   function barHtml(it) {
@@ -632,6 +640,7 @@
   function paintHead() {
     var it = current();
     D.el.querySelector(".dk-pos").textContent = Q.items.length ? (D.idx + 1) + " of " + Q.items.length : "";
+    D.el.querySelector(".dk-nav").hidden = Q.items.length < 2;
     D.el.querySelector(".dk-dots").innerHTML = Q.items.length > 1 ? Q.items.map(function (x, i) { return '<i class="' + (i === D.idx ? "on" : "") + '"></i>'; }).join("") : "";
     D.bar.innerHTML = barHtml(it);
     D.bar.hidden = !it;
@@ -648,7 +657,7 @@
         shotUrl(it.sid, img.dataset.shot).then(function (u) { img.src = u; }).catch(function () { img.alt = "screenshot unavailable"; img.classList.add("gone"); });
         if (img.classList.contains("ba-b")) img.addEventListener("load", function () {
           var ba = img.closest(".ba"), r = img.naturalWidth / img.naturalHeight;
-          if (ba && r > 0) { ba.style.aspectRatio = String(r); ba.style.maxWidth = "min(100%, calc(56vh * " + r.toFixed(4) + "))"; }
+          if (ba && r > 0) { ba.style.aspectRatio = String(r); ba.style.maxWidth = "min(100%, calc(var(--ba-h, 56vh) * " + r.toFixed(4) + "))"; }
         }, { once: true });
       });
       if (it.prs && it.prs.length) prFill(it, card);
@@ -733,7 +742,7 @@
       '<span class="pv-z"></span></div><div class="pv-stage" style="--x:50%">' +
       (pair ? '<div class="pv-lay b"><img alt="before"></div><div class="pv-lay a"><img alt="after"></div><div class="pv-div"><span>' + ICON.grip + "</span></div>" +
         '<span class="pv-tag l">Before</span><span class="pv-tag r">After</span>' : '<div class="pv-lay b"><img alt=""></div>') +
-      '</div><div class="pv-hint">' + (pair ? "Drag the line · pinch to zoom · double-tap" : "Pinch to zoom · double-tap") + "</div>";
+      '</div><div class="pv-hint">' + (C.surface === "desk" ? (pair ? "Drag the line · scroll to zoom · double-click · Esc" : "Scroll to zoom · double-click · Esc") : (pair ? "Drag the line · pinch to zoom · double-tap" : "Pinch to zoom · double-tap")) + "</div>";
     document.body.appendChild(el);
     var stage = el.querySelector(".pv-stage"), imgs = el.querySelectorAll(".pv-lay img");
     var st = { s: 1, x: 0, y: 0, mode: "slide", flip: false, w: 0, h: 0 };
@@ -816,6 +825,15 @@
     };
     stage.addEventListener("pointerup", up);
     stage.addEventListener("pointercancel", up);
+    // A mouse has no pinch: the wheel (and a trackpad's pinch, which arrives as ctrl+wheel) zooms
+    // around the pointer.
+    stage.addEventListener("wheel", function (e) {
+      e.preventDefault();
+      var r = stage.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+      var s = Math.max(1, Math.min(6, st.s * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0022))));
+      st.x = px - (px - st.x) * (s / st.s); st.y = py - (py - st.y) * (s / st.s); st.s = s;
+      clamp(); apply();
+    }, { passive: false });
     apply();
   }
 
@@ -824,6 +842,8 @@
     if (!D.el) return;
     if (!D.open) {
       D.open = true; D.el.hidden = false; D.el.classList.add("in");
+      // Whatever had the keyboard (the composer) lets go: a key pressed over the deck types nowhere.
+      try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) {}
       if (C.history) history.pushState(Object.assign({}, history.state || {}, { deck: true }), "");
       try { C.onOpen(true); } catch (e) {}
     }
@@ -852,6 +872,78 @@
     if (C.fx) C.fx.tick();
     paintHead(); hydrate();
     if (C.voice.on) readCard(current());
+  }
+
+  // ── swipe between cards (touch) ────────────────────────────────────────────────────────────────
+  // A finger moves the deck: left = next card, right = previous; the cards follow it and snap. A swipe
+  // only ever NAVIGATES — nothing in here can reach decide(): Yes · Later · Change stay taps.
+  // It does not start on a button or a field, on the before/after compare, on a block that scrolls
+  // sideways itself (code, a table, the row of screenshots), over selected text, or at the screen's
+  // edge (Android's back gesture). It only takes the gesture after a clear horizontal intent, so a
+  // long card still scrolls up and down (the cards are touch-action:pan-y: the browser keeps vertical).
+  var SWIPE = { lockPx: 12, ratio: 1.5, edgePx: 24, goFrac: 0.22, flickPx: 40, flickMs: 260 };
+  /** May a swipe start on this element? Pure: only closest / parentElement / scrollWidth / clientWidth. */
+  function swipeStartOk(target) {
+    if (!target || !target.closest) return false;
+    if (!target.closest(".qcard")) return false;
+    if (target.closest("button, a, input, textarea, select, summary, [contenteditable], .ba, .pv")) return false;
+    for (var n = target; n && !(n.classList && n.classList.contains("qcard")); n = n.parentElement) {
+      if ((n.scrollWidth || 0) > (n.clientWidth || 0) + 4) return false;
+    }
+    return true;
+  }
+  /** What a finger that moved (dx, dy) from where it landed means: "navigate", "ignore" (a scroll, a diagonal), or "wait". */
+  function swipeIntent(dx, dy) {
+    var ax = Math.abs(dx), ay = Math.abs(dy);
+    if (ax > SWIPE.lockPx && ax > SWIPE.ratio * ay) return "navigate";
+    if (ax > SWIPE.lockPx || ay > SWIPE.lockPx) return "ignore";
+    return "wait";
+  }
+  /** The card a released swipe lands on: one step at most, past a fifth of the width or on a quick flick. */
+  function swipeTarget(idx, count, dx, width, ms) {
+    var far = Math.abs(dx) > (width || 1) * SWIPE.goFrac, flick = Math.abs(dx) > SWIPE.flickPx && ms < SWIPE.flickMs;
+    var step = far || flick ? (dx < 0 ? 1 : -1) : 0;
+    return Math.max(0, Math.min(Math.max(0, count - 1), idx + step));
+  }
+  function wireSwipe(track) {
+    var g = null, snapT = 0;
+    var snapTo = function (n) {
+      var still = root.matchMedia && root.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      track.scrollTo({ left: n * track.clientWidth, behavior: still ? "auto" : "smooth" });
+      // The track's own snapping comes back once it has arrived (it would yank the card mid-glide).
+      clearTimeout(snapT); snapT = setTimeout(function () { track.style.scrollSnapType = ""; }, still ? 0 : 420);
+    };
+    track.addEventListener("pointerdown", function (e) {
+      g = null;
+      if (e.pointerType === "mouse" || e.isPrimary === false || PV || Q.items.length < 2) return;
+      var vw = root.innerWidth || track.clientWidth || 0;
+      if (e.clientX < SWIPE.edgePx || e.clientX > vw - SWIPE.edgePx) return;
+      if (!swipeStartOk(e.target)) return;
+      var sel = root.getSelection && root.getSelection();
+      if (sel && !sel.isCollapsed && String(sel).length) return;
+      g = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t0: Date.now(), lock: false, idx0: D.idx, left0: D.idx * track.clientWidth };
+    });
+    track.addEventListener("pointermove", function (e) {
+      if (!g || e.pointerId !== g.id) return;
+      var dx = e.clientX - g.x0, dy = e.clientY - g.y0;
+      if (!g.lock) {
+        var i = swipeIntent(dx, dy);
+        if (i === "ignore") { g = null; return; }
+        if (i !== "navigate") return;
+        g.lock = true; clearTimeout(snapT);
+        track.style.scrollSnapType = "none";
+        try { track.setPointerCapture(e.pointerId); } catch (x) {}
+      }
+      track.scrollLeft = g.left0 - dx;
+    });
+    var end = function (e) {
+      if (!g || e.pointerId !== g.id) return;
+      var was = g; g = null;
+      if (!was.lock) return;
+      snapTo(e.type === "pointerup" ? swipeTarget(was.idx0, Q.items.length, e.clientX - was.x0, track.clientWidth, Date.now() - was.t0) : was.idx0);
+    };
+    track.addEventListener("pointerup", end);
+    track.addEventListener("pointercancel", end);
   }
 
   // A decision from a button. Yes waits 2.5 s with Undo (a pocket tap must not merge a PR); the rest
@@ -900,8 +992,15 @@
   }
   function changed() { try { C.onChange(Q.items.slice()); } catch (e) {} }
 
+  // Is the card the bar belongs to the one on screen? Between a swipe (or ←/→) and the moment the
+  // track settles, the bar still names the previous card: a click in that gap decides nothing.
+  function settled() {
+    if (!D.track || !D.track.clientWidth) return true;
+    return Math.abs(D.track.scrollLeft - D.idx * D.track.clientWidth) < D.track.clientWidth * 0.25;
+  }
   async function onBar(d) {
     var it = current(); if (!it) return;
+    if (!settled()) return;
     if (C.fx) C.fx.tap();
     if (d === "later") return act(it, "later");
     if (d === "yes") return act(it, "yes");
@@ -1302,17 +1401,23 @@
     C = ctx;
     var el = ctx.el;
     D.el = el;
-    el.innerHTML = '<div class="dk-head"><button type="button" class="dk-x" aria-label="Close">' + ICON.x + '</button><span class="dk-pos"></span>' +
+    el.innerHTML = '<div class="dk-head"><button type="button" class="dk-x" aria-label="Close">' + ICON.x + '</button><span class="dk-pos"></span><span class="dk-nav"><button type="button" data-nav="-1" aria-label="Previous">' + ICON.back + '</button><button type="button" data-nav="1" aria-label="Next">' + ICON.chev + "</button></span>" +
       '<span class="dk-call" hidden><i></i><b></b><button type="button" class="dk-hang" aria-label="End the conversation"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="3"/></svg></button></span><span class="dk-dots"></span></div>' +
       '<div class="dk-track"></div><div class="dk-empty" hidden><b>All clear.</b><span>Nothing is waiting for you.</span></div><div class="dk-bar"></div>';
     D.track = el.querySelector(".dk-track"); D.bar = el.querySelector(".dk-bar");
     el.querySelector(".dk-x").onclick = function () { if (C.fx) C.fx.tap(); close(); };
     el.querySelector(".dk-hang").onclick = function () { if (C.fx) C.fx.tap(); C.voice.stop(); };
+    el.querySelector(".dk-nav").onclick = function (e) { var b = e.target.closest("[data-nav]"); if (b) move(Number(b.dataset.nav)); };
     var st = 0;
     D.track.addEventListener("scroll", function () { clearTimeout(st); st = setTimeout(onScroll, 60); }, { passive: true });
+    wireSwipe(D.track);
     D.bar.addEventListener("click", function (e) { var b = e.target.closest("[data-d]"); if (b && !b.disabled) onBar(b.dataset.d); });
     D.track.addEventListener("click", function (e) {
       var it = current(); if (!it) return;
+      // Only the card on screen answers. A button on a neighbour (reached with Tab, or clicked while
+      // the track is still sliding) must never decide the current card with its own option.
+      var card = e.target.closest(".qcard");
+      if (!card || card.dataset.key !== it.key || !settled()) return;
       var full = e.target.closest("[data-full]"); if (full) { if (C.fx) C.fx.tap(); return openViewer(it, full.dataset.full); }
       var opt = e.target.closest("[data-opt]"); if (opt) { if (C.fx) C.fx.tap(); return act(it, "yes", null, Number(opt.dataset.opt)); }
       var term = e.target.closest("[data-term]"); if (term) { close(); return C.openTerminal(term.dataset.term); }
@@ -1321,11 +1426,17 @@
       var sg = e.target.closest(".ba"); if (sg && !e.target.closest(".ba-full")) return;
     });
     addEventListener("resize", function () { if (D.open) D.track.scrollLeft = D.idx * D.track.clientWidth; });
+    // Keys: ←/→ move between cards, Esc closes the viewer, then the deck. NO key decides — not Enter,
+    // not Space, not a letter: a yes is a click on its button (with its Undo) or a spoken yes (with its
+    // hold). A key that something above already took (a sheet closing on Esc), a key typed into a
+    // field, and any chord (⌘←) are not ours.
     document.addEventListener("keydown", function (e) {
-      if (!D.open) return;
-      if (e.key === "Escape") { if (PV) PV.close(); else close(); }
-      if (e.key === "ArrowRight") move(1);
-      if (e.key === "ArrowLeft") move(-1);
+      if (!D.open || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+      var tg = e.target, typing = !!(tg && (/^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName || "") || tg.isContentEditable));
+      if (e.key === "Escape") { e.preventDefault(); if (PV) PV.close(); else close(); return; }
+      if (typing || PV) return;
+      if (e.key === "ArrowRight") { e.preventDefault(); move(1); }
+      if (e.key === "ArrowLeft") { e.preventDefault(); move(-1); }
     });
   }
   var loadT = 0, loading = null;
@@ -1367,6 +1478,7 @@
     // Pure helpers, for the tests (src/phone-deck.test.ts).
     _t: { intentOf: intentOf, groupProof: groupProof, lineFails: lineFails, pairShots: pairShots, firstSentence: firstSentence, handoffItem: handoffItem, questionItem: questionItem, draftItem: draftItem, blockedItem: blockedItem, readout: readout, decide: decide, setCtx: function (c) { C = c; }, OK_LINE: OK_LINE, hidden: hidden, record: record, draftHash: draftHash, draftCanon: draftCanon, ledgerItem: ledgerItem,
       SAY: SAY, STRONG_YES: STRONG_YES, WEAK_YES: WEAK_YES, STRONG_PHRASE: STRONG_PHRASE, IRREVERSIBLE: IRREVERSIBLE, pageWords: pageWords, deckLines: deckLines, reprompt: reprompt, voiceAnswer: voiceAnswer,
+      swipeStartOk: swipeStartOk, swipeIntent: swipeIntent, swipeTarget: swipeTarget, wireSwipe: wireSwipe, SWIPE: SWIPE,
       setHold: function (ms, wait) { HOLD_MS = ms; if (wait != null) HOLD_WAIT_MS = wait; }, va: function () { return VA; }, act: act,
       // Put items on the deck without a page (the vm tests): open, first card current.
       mount: function (items) { Q.items = items.slice(); Q.loaded = true; D.open = true; D.idx = 0; } },
