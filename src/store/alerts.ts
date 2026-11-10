@@ -18,8 +18,9 @@ import { db } from "./db.js";
  *   - `acked_at`     he opened it, answered the terminal, tapped "got it" or replied on the call
  *   - `resolved_at`  the episode ended (the terminal moved on, the host came back, the job passed)
  */
-export type AlertKind = "decide" | "blocked" | "stalled" | "wall" | "host" | "job_failed" | "summary";
-export type AlertRung = "voice" | "push" | "telegram";
+export type AlertKind = "decide" | "blocked" | "stalled" | "wall" | "waiting" | "host" | "job_failed" | "summary" | "unreachable";
+/** voice / push / telegram reach HIM; mac (the brain's own speakers + a notification) is the last resort and never counts as delivered. */
+export type AlertRung = "voice" | "push" | "telegram" | "mac";
 /** active = the ladder is running · done = it ran out of rungs · capped = folded into a summary. */
 export type AlertState = "active" | "done" | "acked" | "resolved" | "capped";
 export type AlertChannel = { rung: AlertRung; at: string; ok: boolean | null; detail?: string | null };
@@ -133,6 +134,13 @@ export const alerts = {
     return all(db.prepare(
       "SELECT * FROM alerts WHERE next_at IS NOT NULL AND next_at <= ? AND resolved_at IS NULL AND state = 'active' ORDER BY next_at",
     ).all(nowMs));
+  },
+
+  /** Open, unacknowledged, and never reached him (no call, phone or Telegram took it): what a new rung retries. */
+  unreached(): AlertRow[] {
+    return all(db.prepare(
+      "SELECT * FROM alerts WHERE resolved_at IS NULL AND acked_at IS NULL AND delivered_at IS NULL AND state = 'done' ORDER BY created_at",
+    ).all());
   },
 
   /** Told about a terminal, not acknowledged, episode still open: a keystroke in it would be his answer. */

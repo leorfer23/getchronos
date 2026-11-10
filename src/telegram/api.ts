@@ -42,6 +42,14 @@ function errCode(e: unknown): string {
 const BENIGN = new Set(["ECONNRESET", "UND_ERR_SOCKET", "ETIMEDOUT", "EPIPE", "ECONNABORTED"]);
 let consecutiveFails = 0;
 export const transportFailStreak = () => consecutiveFails;
+// The last call that got an answer, and the last that did not (with why) — so a surface can say
+// "Telegram is set up but unreachable" instead of discovering it when an alert needs it.
+let lastOkAt = 0;
+let lastErrAt = 0;
+let lastErr = "";
+export function telegramHealth(): { configured: boolean; lastOkAt: number | null; lastErrorAt: number | null; lastError: string | null; failStreak: number } {
+  return { configured: !!TOKEN && !!allowedChat, lastOkAt: lastOkAt || null, lastErrorAt: lastErrAt || null, lastError: lastErr || null, failStreak: consecutiveFails };
+}
 
 // Long-polls hold for ~30s server-side; anything past 45s is a wedged socket, not a slow answer.
 const REQ_TIMEOUT_MS = 45_000;
@@ -56,9 +64,14 @@ export async function tg(method: string, body: Record<string, unknown>): Promise
     });
     const j = await r.json();
     consecutiveFails = 0;
+    // An answer with ok:false (a revoked token, a chat that blocked the bot) is reachable but refusing.
+    if (j && j.ok === false) { lastErrAt = Date.now(); lastErr = String(j.description ?? `error ${j.error_code ?? "?"}`).slice(0, 160); }
+    else lastOkAt = Date.now();
     return j;
   } catch (e) {
     consecutiveFails++;
+    lastErrAt = Date.now();
+    lastErr = errCode(e).slice(0, 160);
     // Stay quiet through the first few benign drops; speak up once it looks like a real outage.
     const code = (e as { cause?: { code?: string } })?.cause?.code ?? "";
     if (!BENIGN.has(code) || consecutiveFails >= 3) logApiError(e);

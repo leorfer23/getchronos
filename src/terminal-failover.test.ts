@@ -16,6 +16,7 @@ import {
   CONTINUE_TEXT,
   classifyWall,
   decideFailover,
+  detectLoginWall,
   detectWall,
   failoverOwns,
   failoverUsable,
@@ -479,4 +480,29 @@ test("backendInstalled: registered AND on disk; end_reason survives the pty's ow
   assert.equal(sessions.get(s.id)!.end_reason, "out of credits → continued in grok terminal ab12cd34");
   sessions.revive(s.id);
   assert.equal(sessions.get(s.id)!.end_reason, null);
+});
+
+// ── the login wall (stuck-alerts tells the operator; failover never acts on it) ──
+test("detectLoginWall: a logged-out CLI at the bottom of the frame, by the same rules as a credit wall", () => {
+  for (const wall of [
+    "Invalid API key · Please run /login",
+    "Not logged in · Please run /login",
+    "OAuth token revoked · Please run /login",
+    "This login reached its time limit · Please run /login",
+    "  ⎿  API Error: 401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth token has expired. Please obtain a new token or refresh your existing token.\"}}",
+    "Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.",
+  ]) {
+    const hit = detectLoginWall([...WORK, wall, ...COMPOSER]);
+    assert.ok(hit, wall);
+    assert.equal(hit!.kind, "login");
+    assert.equal(detectWall([...WORK, wall, ...COMPOSER]), null, `failover must not treat a login as a credit wall: ${wall}`);
+  }
+});
+
+test("detectLoginWall: an agent talking about logins, or a login line with work under it, is not a wall", () => {
+  assert.equal(detectLoginWall([...WORK, "● If the deploy says Not logged in · Please run /login, re-authenticate the CLI first.", ...COMPOSER]), null, "the agent's own sentence");
+  assert.equal(detectLoginWall([...WORK, "  wrapped prose that mentions Please run /login in the middle", ...COMPOSER]), null, "an indented continuation");
+  assert.equal(detectLoginWall(["Not logged in · Please run /login", ...WORK, ...COMPOSER]), null, "work under it: it moved on");
+  assert.equal(detectLoginWall([...WORK, "Not logged in · Please run /login", "✻ Thinking… (esc to interrupt)", ...COMPOSER]), null, "a running turn");
+  assert.equal(detectLoginWall([...WORK, ...COMPOSER]), null);
 });

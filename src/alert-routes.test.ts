@@ -50,6 +50,7 @@ test("a workspace token can neither read nor touch any alert — not even its ow
   for (const [m, p, body] of [
     ["GET", "/alerts", undefined],
     ["GET", "/alerts?since=7d", undefined],
+    ["GET", "/alerts/readiness", undefined],
     ["POST", `/alerts/${rowB.id}/ack`, { via: "x" }],
     ["POST", `/alerts/${rowB.id}/spoken`, { client: "x" }],
     ["POST", "/voice/presence", { client: "evil", live: true }],
@@ -86,6 +87,12 @@ test("the operator reads the record and its numbers, acknowledges, and his call 
   assert.equal((await call("POST", "/voice/presence", admin, { client: "desk-1", live: false })).status, 200);
   assert.equal(voiceCalls().length, 0, "hanging up takes it off at once");
   assert.equal((await call("POST", "/voice/presence", admin, { live: true })).status, 400, "a call names itself");
+  const ready = await call("GET", "/alerts/readiness", admin);
+  assert.equal(ready.status, 200);
+  assert.deepEqual(ready.json.rungs.map((r: any) => r.rung), ["voice", "push", "telegram", "mac"]);
+  assert.ok(ready.json.rungs.every((r: any) => typeof r.line === "string" && r.line.length > 10), "one plain line per rung");
+  assert.equal(typeof ready.json.remote_usable, "boolean");
+  assert.equal((await call("POST", `/alerts/${rowB.id}/spoken`, admin, { client: "x", stage: "maybe" })).status, 400, "stage is started or done");
 });
 
 test("?since takes 90m / 24h / 7d or a date", () => {

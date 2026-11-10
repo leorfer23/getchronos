@@ -34,7 +34,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { awakeMark, noteBrainWake, resetBrainAwake } from "./brain-awake.js";
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
 import { hosts, leadEvents, leadSlices, repoCheckouts, repos, sessions, tickets, workspaces, LOCAL_HOST_ID } from "./store.js";
@@ -109,40 +109,22 @@ export function setHostFailoverOps(o: Partial<HostFailoverOps>): void { ops = { 
 // ──────────────────────────── when ────────────────────────────
 
 /**
- * Since when this brain has been continuously awake: its boot, or its last wake from sleep. A host is
- * never "offline for 5 minutes" before the brain has been awake that long. A closed lid on battery is
- * not one long sleep: the Mac dark-wakes for a few seconds every few seconds, and timers run in those
- * slivers (2026-09-30: the M3 lid shut at 12:01, a sweep ran in a dark wake at 12:07, m2 had not
- * finished a hello in any of them, and its four live terminals were moved here and killed on m2).
+ * A host is never "offline for 5 minutes" before the brain has been awake that long (src/brain-awake.ts).
+ * A closed lid on battery is not one long sleep: the Mac dark-wakes for a few seconds every few seconds,
+ * and timers run in those slivers (2026-09-30: the M3 lid shut at 12:01, a sweep ran in a dark wake at
+ * 12:07, m2 had not finished a hello in any of them, and its four live terminals were moved here and
+ * killed on m2).
  */
-let awakeSince = Date.now();
 /** Sessions being moved right now (host.offline timer and the periodic sweep can overlap). */
 const inFlight = new Set<string>();
 /** Sessions a move was tried for and could not happen — said once, not every sweep. Session → its host. */
 const gaveUp = new Map<string, string>();
 
 export function resetHostFailover(o: { bootAt?: number; lastWake?: () => number | null } = {}): void {
-  awakeSince = o.bootAt ?? Date.now();
-  lastWake = o.lastWake ?? macLastWake;
+  resetBrainAwake(o);
   inFlight.clear();
   gaveUp.clear();
 }
-
-/**
- * When macOS last woke, dark wakes included (`kern.waketime`), or null elsewhere. Node's clocks are no
- * help here: its monotonic clock keeps counting through sleep (checked: hrtime 30.5h vs
- * CLOCK_UPTIME_RAW 17.6h on the same boot), so a sleep looks like a slow timer.
- */
-function macLastWake(): number | null {
-  if (process.platform !== "darwin") return null;
-  try {
-    const m = /sec = (\d+), usec = (\d+)/.exec(execFileSync("sysctl", ["-n", "kern.waketime"], { encoding: "utf8", timeout: 2_000 }));
-    return m ? Number(m[1]) * 1000 + Math.floor(Number(m[2]) / 1000) : null;
-  } catch {
-    return null;
-  }
-}
-let lastWake: () => number | null = macLastWake;
 
 /**
  * A host is back: whatever could not be moved off it is its own again — and if it goes away again,
@@ -153,12 +135,7 @@ export function noteHostBack(hostId: string): void {
 }
 
 /** Move the awake mark up to the latest wake, so time the brain spent asleep is never a host's absence. */
-export function noteBrainWake(): void {
-  const w = lastWake();
-  if (w === null || w <= awakeSince) return;
-  if (w - awakeSince > 60_000) console.log(`[host-failover] brain woke at ${new Date(w).toISOString()} — offline hosts get a fresh grace`);
-  awakeSince = w;
-}
+export { noteBrainWake };
 
 /**
  * Since when this computer has been unreachable, or null when it is online (or is the brain, or was
@@ -171,7 +148,7 @@ export function hostOfflineSince(hostId: string | null | undefined): number | nu
   if (hostOnline(hostId)) return null;
   const row = hosts.get(hostId);
   if (row?.status === "disabled") return null;
-  const marks = [awakeSince];
+  const marks = [awakeMark()];
   const h = findHost(hostId);
   if (h instanceof RemoteHost && h.offlineSince) marks.push(h.offlineSince);
   const seen = Date.parse(row?.last_seen_at ?? "");

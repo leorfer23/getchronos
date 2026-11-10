@@ -4,8 +4,9 @@
  *   GET  /alerts                  the record: every alert, what it said, which rungs ran, when he was
  *                                 told and when he acknowledged it; p50/p90 stuck→told; the self-check's
  *                                 misses; live calls; what is waiting out its grace   (?since=24h&limit=&kind=)
+ *   GET  /alerts/readiness        which rungs could reach him right now, and why not — one line each
  *   POST /alerts/:id/ack          he has it — the ladder stops   {via?}   (the phone's tap, `mc alerts ack`)
- *   POST /alerts/:id/spoken       a live call said it            {client}
+ *   POST /alerts/:id/spoken       a live call is saying it       {client, stage: "started" | "done"}
  *   POST /voice/presence          a page has a call up / hung up {client, surface, live, lang, lock}
  *
  * All operator-only (requireAdmin). The alerts span every workspace and are written for the
@@ -14,11 +15,11 @@
 import type express from "express";
 import { z } from "zod";
 import { requireAdmin } from "./authz.js";
-import { ackAlert, alertView, alertsReport, checkAlertCoverage, confirmSpoken } from "./stuck-alerts.js";
+import { ackAlert, alertView, alertsReadiness, alertsReport, checkAlertCoverage, confirmSpoken } from "./stuck-alerts.js";
 import { notePresence } from "./voice-presence.js";
 
 const AckSchema = z.object({ via: z.string().trim().max(40).optional() }).passthrough();
-const SpokenSchema = z.object({ client: z.string().trim().max(80).optional() }).passthrough();
+const SpokenSchema = z.object({ client: z.string().trim().max(80).optional(), stage: z.enum(["started", "done"]).optional() }).passthrough();
 const PresenceSchema = z.object({
   client: z.string().trim().min(1).max(80),
   surface: z.string().trim().max(40).optional(),
@@ -49,6 +50,10 @@ export function mountAlertRoutes(api: express.Router): void {
     }));
   });
 
+  api.get("/alerts/readiness", requireAdmin, (_req, res) => {
+    res.json(alertsReadiness());
+  });
+
   api.post("/alerts/:id/ack", requireAdmin, (req, res) => {
     const p = AckSchema.safeParse(req.body ?? {});
     if (!p.success) return void res.status(400).json({ error: p.error.issues[0]?.message ?? "invalid" });
@@ -60,7 +65,7 @@ export function mountAlertRoutes(api: express.Router): void {
   api.post("/alerts/:id/spoken", requireAdmin, (req, res) => {
     const p = SpokenSchema.safeParse(req.body ?? {});
     if (!p.success) return void res.status(400).json({ error: p.error.issues[0]?.message ?? "invalid" });
-    const row = confirmSpoken(String(req.params.id), p.data.client ?? null);
+    const row = confirmSpoken(String(req.params.id), p.data.client ?? null, Date.now(), p.data.stage ?? "done");
     if (!row) return void res.status(404).json({ error: "no such alert" });
     res.json({ ok: true, delivered_via: row.delivered_via });
   });

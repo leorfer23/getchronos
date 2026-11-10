@@ -2168,6 +2168,7 @@
 <script src="/desk-companion.js"></script>
 <script src="/desk-quick-actions.js"></script>
 <script src="/desk-scope.js"></script>
+<script src="/voice-alerts.js"></script>
 <script src="/ask-card.js"></script>
 <script src="/artifact-view.js"></script>
 <script src="/desk-cockpit.js"></script>
@@ -8431,6 +8432,11 @@ const VAD = { start: 0.025, hold: 0.012, speech: 0.04, endMs: 800, minSpeechMs: 
 // Whisper's stock phantoms on breath and room noise — never a command.
 const HEARD_NOISE = /^(\[.*\]|\(.*\)|\*.*\*|thank you\.?|thanks for watching.*|you\.?|bye\.?|gracias( por ver.*)?\.?|subt[ií]tulos.*|amara\.org.*|[.…,!? ]+)$/i;
 const vcAuth = () => (TOKEN ? { "x-mc-admin": TOKEN } : {});
+// Stuck-work alerts on this call — the client contract lives in static/voice-alerts.js.
+const VA = VoiceAlerts.create({
+  client: CLIENT, surface: "desk", lang: () => VC.lang, lock: () => LOCK?.id ?? null,
+  post: (p, b) => fetch(p, { method: "POST", headers: { "content-type": "application/json", ...vcAuth() }, body: JSON.stringify(b) }),
+});
 const vcSpeaking = () => !!VC.playing || VC.speakQ.length > 0;
 const vcNorm = (t) => " " + String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim() + " ";
 
@@ -8666,14 +8672,14 @@ function vcFinal(e, fromHere) {
   const parts = String(e.reply).split(SENTENCE_CUT);
   for (const p of fromHere ? parts : parts.slice(0, 4)) vcSentence(p);
 }
-function vcEnqueue(text, first) {
+function vcEnqueue(text, alert) {
   if (!VC.on) return;
   const item = {
-    text,
+    text, alert: alert || null,
     blob: fetch("/api/speak", { method: "POST", headers: { "content-type": "application/json", ...vcAuth() }, body: JSON.stringify({ text, lang: VC.lang }) })
       .then((r) => (r.ok ? r.blob() : null)).catch(() => null),
   };
-  if (first) VC.speakQ.unshift(item); else VC.speakQ.push(item);
+  if (alert) VC.speakQ.unshift(item); else VC.speakQ.push(item);
   vcState();
   vcPlay();
 }
@@ -8689,9 +8695,11 @@ async function vcPlay() {
     qs("#v-sub").textContent = item.text;
     VC.recent.push(vcNorm(item.text)); if (VC.recent.length > 8) VC.recent.shift();
     a.preservesPitch = a.webkitPreservesPitch = true;
-    await new Promise((done) => { a.onended = a.onerror = done; a.src = url; a.defaultPlaybackRate = a.playbackRate = VC.speed; a.play().catch(done); });
+    // An alert says "started" when its audio begins, and "done" only when it played to its end.
+    const ended = await new Promise((done) => { a.onended = () => done(true); a.onerror = () => done(false); a.src = url; a.defaultPlaybackRate = a.playbackRate = VC.speed; a.play().then(() => item.alert?.started(), () => done(false)); });
     URL.revokeObjectURL(url);
     if (VC.playing !== item) return;
+    if (ended) item.alert?.done();
   }
   VC.playing = null;
   vcAfterSpeech();
@@ -8707,20 +8715,14 @@ function vcSkip(barged) {
   if (a) { a.pause(); a.onended = a.onerror = null; done?.(); }
   vcAfterSpeech(barged);
 }
-// Stuck work, said at once (src/stuck-alerts.ts). The daemon names ONE live call (its client) — this
-// page says it ahead of whatever is queued and tells the daemon it did; no answer and it goes to the
-// phone instead. While the call is up the page says so every 20s, and once more when it hangs up.
+// Stuck work, said at once (src/stuck-alerts.ts). The daemon names ONE live call (its client): this page
+// says it ahead of whatever is queued and reports it only once heard (vcPlay); nothing reported and it
+// goes to the phone instead. While the call is up the page says so every 20s, and once when it hangs up.
 function vcAlert(e) {
-  if (!VC.on || !e.say || (e.client && e.client !== CLIENT)) return;
-  vcEnqueue(speakable(e.say), true);
-  fetch("/api/alerts/" + encodeURIComponent(e.alert_id) + "/spoken", { method: "POST", headers: { "content-type": "application/json", ...vcAuth() }, body: JSON.stringify({ client: CLIENT }) }).catch(() => {});
+  const a = VA.take(e, VC.on);
+  if (a) vcEnqueue(speakable(a.say), a);
 }
-function vcPresence(on) {
-  clearInterval(VC.presT); VC.presT = 0;
-  const ping = (live) => fetch("/api/voice/presence", { method: "POST", headers: { "content-type": "application/json", ...vcAuth() }, body: JSON.stringify({ client: CLIENT, surface: "desk", live, lang: VC.lang, lock: LOCK?.id ?? null }) }).catch(() => {});
-  ping(!!on);
-  if (on) VC.presT = setInterval(() => ping(true), 20000);
-}
+function vcPresence(on) { VA.presence(on); }
 
 // ── Dictation into a terminal ────────────────────────────────────────────────────────────────
 // 🎤 in the stage header (⌘⇧D): tap, speak, tap again. The same local whisper transcribes it and

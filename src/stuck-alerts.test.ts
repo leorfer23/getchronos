@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { bus } from "./bus.js";
-import { db, jobs, kv, runs, sessions, workspaces } from "./store.js";
+import { asks, db, jobs, kv, runs, sessions, workspaces } from "./store.js";
 import { alerts } from "./store/alerts.js";
 import { _resetSettingsCache, writeSetting } from "./settings.js";
 import { declare, type TermStatus } from "./term-status.js";
@@ -20,10 +20,10 @@ import { notePresence, resetVoicePresence, voiceFor } from "./voice-presence.js"
 import type { PushPayload } from "./push.js";
 import { alertText, alertTitle, type TextInput } from "./alert-text.js";
 import {
-  _test, ackAlert, alertWindow, alertsOwnPush, alertsReport, checkAlertCoverage, classifyTerminal, closeHost,
+  _test, ackAlert, alertWindow, alertsOwnPush, alertsReadiness, alertsReport, checkAlertCoverage, classifyTerminal, closeHost,
   confirmSpoken, flushHostBatch, onTermStatus, raise, resetStuckAlerts, setAlertProbes, setAlertSenders,
   tickAlerts, willRetry, COVERAGE_SLACK_MS, FAILOVER_SAFETY_MS, HANDOFF_SETTLE_MS, OPERATOR_GRACE_MS, REOPEN_MS,
-  SUMMARY_DEBOUNCE_MS, WAKE_SETTLE_MS, type TermFacts,
+  SUMMARY_DEBOUNCE_MS, UNREACHABLE_AFTER_MS, VOICE_PLAY_MAX_MS, WAKE_SETTLE_MS, type TermFacts,
 } from "./stuck-alerts.js";
 
 const SEC = 1000;
@@ -35,12 +35,14 @@ const CHANCE = 120 * SEC;
 
 // ── fixtures ──────────────────────────────────────────────────────────────────────────────────
 const status = new Map<string, TermStatus>();
-const walls = new Map<string, { kind: "credit" | "limit"; line: string }>();
+const walls = new Map<string, { kind: "credit" | "limit" | "login"; line: string }>();
 const typed = new Map<string, number>();
 const offline = new Map<string, number>();
+const outs = new Map<string, number>();
 setAlertProbes({
   status: (id) => status.get(id) ?? null,
   wall: (id) => walls.get(id) ?? null,
+  lastOut: (id) => outs.get(id) ?? null,
   prompt: () => null,
   operatorLastIn: (id) => typed.get(id) ?? null,
   hostOfflineSince: (h) => offline.get(h) ?? null,
@@ -49,12 +51,19 @@ let pushes: PushPayload[] = [];
 let telegrams: { html: string; markup: any }[] = [];
 let subs = 1;
 let pushOk = true;
+let tgReady = true;
+let tgOk = true;
+let tgHealth = { configured: true, lastOkAt: NOW - 60_000 as number | null, lastErrorAt: null as number | null, lastError: null as string | null, failStreak: 0 };
+let macs: { title: string; text: string }[] = [];
 setAlertSenders({
   pushEnabled: () => true,
   subscriptions: () => subs,
   push: async (p) => { pushes.push(p); return { sent: pushOk ? 1 : 0, dropped: 0 }; },
-  telegramReady: () => true,
-  telegram: async (html, markup) => { telegrams.push({ html, markup }); return { ok: true, detail: "message 1" }; },
+  telegramReady: () => tgReady,
+  telegram: async (html, markup) => { telegrams.push({ html, markup }); return tgOk ? { ok: true, detail: "message 1" } : { ok: false, detail: "no answer from Telegram" }; },
+  telegramHealth: () => tgHealth,
+  macReady: () => true,
+  mac: async (title, text) => { macs.push({ title, text }); return { ok: true, detail: "said on this Mac's speakers (say) + a notification — not confirmed he heard it" }; },
 });
 let spoken: any[] = [];
 bus.on("event", (e: any) => { if (e.topic === "alert.raised") spoken.push(e); });
@@ -67,8 +76,9 @@ function reset() {
   resetVoicePresence();
   resetRobertDriveState();
   setFailoverOps({});
-  status.clear(); walls.clear(); typed.clear(); offline.clear();
-  pushes = []; telegrams = []; spoken = []; subs = 1; pushOk = true;
+  status.clear(); walls.clear(); typed.clear(); offline.clear(); outs.clear();
+  pushes = []; telegrams = []; spoken = []; macs = []; subs = 1; pushOk = true; tgReady = true; tgOk = true;
+  tgHealth = { configured: true, lastOkAt: NOW - 60_000, lastErrorAt: null, lastError: null, failStreak: 0 };
 }
 
 let n = 0;
@@ -698,4 +708,142 @@ test("raise() is idempotent per open episode even when two paths race for it", a
   assert.ok(!!x !== !!y, "exactly one of them raised it");
   assert.equal(rows().length, 1);
   assert.equal(pushes.length, 1);
+});
+
+// ── review round: spoken means heard, frozen terminals, logins, waits on Robert, no silent dead end ──
+test("voice: 'started' buys the call time to finish; only 'done' is a delivery; started but never finished → phone", async () => {
+  reset();
+  const s = term();
+  notePresence({ client: "desk-1", live: true, lang: "en" }, NOW);
+  show(s.id, st("decide", { asks: 1 }));
+  const t0 = NOW + OPERATOR_GRACE_MS;
+  await tickAlerts(t0);
+  const id = rows()[0].id;
+  confirmSpoken(id, "desk-1", t0 + 3 * SEC, "started");
+  let row = alerts.get(id)!;
+  assert.equal(row.delivered_at, null, "started is not heard");
+  assert.equal(row.next_at, t0 + 3 * SEC + VOICE_PLAY_MAX_MS);
+  await tickAlerts(t0 + 15 * SEC);
+  assert.equal(pushes.length, 0, "the 15s window no longer applies once it is playing");
+  await tickAlerts(t0 + 3 * SEC + VOICE_PLAY_MAX_MS);
+  assert.equal(pushes.length, 1, "it never finished → the phone");
+  row = alerts.get(id)!;
+  assert.match(String(row.channels[0].detail), /started playing but never finished/);
+  assert.equal(row.delivered_via, "push");
+
+  reset();
+  const b = term();
+  notePresence({ client: "desk-1", live: true, lang: "en" }, NOW);
+  show(b.id, st("decide", { asks: 1 }));
+  await tickAlerts(t0);
+  const id2 = rows()[0].id;
+  confirmSpoken(id2, "desk-1", t0 + 3 * SEC, "started");
+  confirmSpoken(id2, "desk-1", t0 + 14 * SEC, "done");
+  assert.equal(alerts.get(id2)!.delivered_via, "voice");
+  assert.equal(alerts.get(id2)!.delivered_at, new Date(t0 + 14 * SEC).toISOString(), "delivered when it finished playing");
+});
+
+test("a frozen terminal (term-status stalled) is told at once, with how long it has printed nothing", async () => {
+  reset();
+  const s = term();
+  outs.set(s.id, NOW - 4 * MIN);
+  show(s.id, st("stalled", { line: "no output for 4m in the middle of its turn" }));
+  await tickAlerts(NOW + OPERATOR_GRACE_MS);
+  assert.equal(rows().length, 1);
+  assert.equal(rows()[0].kind, "stalled");
+  assert.match(rows()[0].text, /stopped responding in the middle of its work 4 minutes ago\. Decide whether to restart it or leave it\.$/);
+});
+
+test("a login wall is his at once — failover never moves it — in plain words with the tool's name", async () => {
+  reset();
+  const s = term();
+  walls.set(s.id, { kind: "login", line: "Invalid API key · Please run /login" });
+  show(s.id, st("your_turn"));
+  await tickAlerts(NOW + OPERATOR_GRACE_MS);
+  assert.equal(rows().length, 1);
+  assert.equal(rows()[0].kind, "wall");
+  assert.equal(rows()[0].reason, "his_from_the_start");
+  assert.match(rows()[0].text, /^In Acme, the task “fix the login redirect” is logged out of Claude and cannot go on\. Log in to Claude again, or tell me which account to use\.$/);
+  assert.equal(rows()[0].title, "Acme · logged out");
+});
+
+test("waiting on Robert: off → his at 10s; on but never woken → his at grace + 15s; an open question → net under ask-robert's deadline", async () => {
+  reset();
+  const off = term();
+  writeSetting("robert.enabled", false, off.workspace_id);
+  declare(off.id, { state: "waiting", on: "robert", label: "the staging password" }, NOW);
+  show(off.id, st("waiting", { on: "robert", line: "the staging password" }));
+  await tickAlerts(NOW + OPERATOR_GRACE_MS);
+  assert.equal(rows().length, 1);
+  assert.equal(rows()[0].kind, "waiting");
+  assert.match(rows()[0].text, /is waiting for an answer nobody has given: the staging password\. Tell me what it should do\.$/);
+
+  reset();
+  const on = term();
+  declare(on.id, { state: "waiting", on: "robert", label: "which region to deploy" }, NOW);
+  show(on.id, st("waiting", { on: "robert", line: "which region to deploy" }));
+  await tickAlerts(NOW + 20 * SEC + WAKE_SETTLE_MS - 1);
+  assert.equal(rows().length, 0, "robert-drive's own 20s grace for a wait on him, then 15s for the wake row");
+  await tickAlerts(NOW + 20 * SEC + WAKE_SETTLE_MS);
+  assert.equal(rows().length, 1);
+  assert.equal(rows()[0].reason, "robert_not_woken");
+
+  reset();
+  const q = term();
+  asks.create({ session_id: q.id, workspace_id: q.workspace_id, question: "Use the EU or US bucket?", route: "robert" });
+  show(q.id, st("waiting", { on: "robert", line: "Robert is deciding: Use the EU or US bucket?" }));
+  await tickAlerts(NOW + 4 * MIN - 1);
+  assert.equal(rows().length, 0, "ask-robert escalates it itself at its 3-minute deadline");
+  await tickAlerts(NOW + 4 * MIN);
+  assert.equal(rows().length, 1);
+  assert.equal(rows()[0].reason, "robert_triage_overdue");
+  assert.match(rows()[0].text, /waiting for an answer nobody has given: Use the EU or US bucket/);
+});
+
+test("no rung that reaches him → said on the Mac (last resort), shown as NOT reached, and retried when a phone subscribes", async () => {
+  reset();
+  subs = 0; tgReady = false;
+  tgHealth = { configured: false, lastOkAt: null, lastErrorAt: null, lastError: null, failStreak: 0 };
+  const s = term();
+  show(s.id, st("decide", { asks: 1 }));
+  await tickAlerts(NOW + OPERATOR_GRACE_MS);
+  assert.equal(macs.length, 1, "the Mac said it");
+  let row = alerts.get(rows()[0].id)!;
+  assert.deepEqual(row.channels.map((c) => [c.rung, c.ok]), [["voice", false], ["push", false], ["telegram", false], ["mac", true]]);
+  assert.equal(row.delivered_at, null, "the Mac's speakers do not count as reaching him");
+  const view = alertsReport({ sinceMs: NOW - MIN }, NOW + MIN).alerts[0];
+  assert.equal(view.not_reached, true);
+  assert.equal(view.said_on_mac, true);
+  // A phone subscribes: the reach check retries it, without saying it on the Mac a second time.
+  subs = 1;
+  await _test.checkReach(NOW + 2 * MIN);
+  row = alerts.get(row.id)!;
+  assert.equal(pushes.length, 1);
+  assert.equal(row.delivered_via, "push");
+  assert.equal(macs.length, 1);
+  assert.equal(row.meta.retried, 1);
+});
+
+test("no phone and no Telegram for 5 minutes → ONE alert that says so; a phone subscribing ends it", async () => {
+  reset();
+  subs = 0;
+  tgOk = false; // what a send does while DNS for the Bot API fails
+  tgHealth = { configured: true, lastOkAt: NOW - 3 * 3_600_000, lastErrorAt: NOW - 10_000, lastError: "TypeError: fetch failed (ENOTFOUND)", failStreak: 12 };
+  const r = alertsReadiness(NOW);
+  assert.equal(r.remote_usable, false);
+  assert.match(r.rungs.find((x) => x.rung === "telegram")!.line, /set up but unreachable: the last 12 calls failed \(TypeError: fetch failed \(ENOTFOUND\)\); last success 3h ago/);
+  assert.match(r.rungs.find((x) => x.rung === "push")!.line, /No phone has notifications on/);
+  assert.match(r.rungs.find((x) => x.rung === "voice")!.line, /No voice call is live/);
+  await _test.checkReach(NOW);
+  await _test.checkReach(NOW + UNREACHABLE_AFTER_MS - 1);
+  assert.equal(rows().length, 0, "a blip is not an episode");
+  await _test.checkReach(NOW + UNREACHABLE_AFTER_MS);
+  await _test.checkReach(NOW + UNREACHABLE_AFTER_MS + MIN);
+  const reach = rows().filter((x) => x.kind === "unreachable");
+  assert.equal(reach.length, 1, "one episode, not one per check");
+  assert.equal(reach[0].text, "I have no way to reach you away from the Mac: no phone has notifications on and Telegram cannot be reached from this Mac. Turn on notifications in the phone app, or get Telegram working, so I can.");
+  assert.equal(macs.length, 1, "said on the Mac, since nothing remote can take it");
+  subs = 1;
+  await _test.checkReach(NOW + UNREACHABLE_AFTER_MS + 2 * MIN);
+  assert.ok(alerts.get(reach[0].id)!.resolved_at, "a phone can reach him again: over");
 });

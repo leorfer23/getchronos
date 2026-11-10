@@ -14,10 +14,13 @@ export type TextInput =
   | { kind: "decide"; ws: string | null; work: string; question: string; options: string[]; permission?: { tool: string; input: string | null } | null }
   | { kind: "blocked"; ws: string | null; work: string; why: string | null; reason: string | null }
   | { kind: "stalled"; ws: string | null; work: string; minutes: number | null; job?: boolean }
-  | { kind: "wall"; ws: string | null; work: string; wall: "credit" | "limit"; resets: string | null }
+  | { kind: "wall"; ws: string | null; work: string; wall: "credit" | "limit" | "login"; resets: string | null; tool?: string | null }
+  | { kind: "waiting"; ws: string | null; work: string; label: string | null }
   | { kind: "host"; host: string; works: string[]; minutes: number | null; moved: boolean }
   | { kind: "job_failed"; ws: string | null; job: string; why: string | null; auth: boolean; timeout?: boolean; backend: string | null }
-  | { kind: "summary"; items: string[] };
+  | { kind: "summary"; items: string[] }
+  /** Reasons are keys, so they are said in the alert's language: no_phone · push_off · telegram_unset · telegram_down. */
+  | { kind: "unreachable"; reasons: string[] };
 
 // An 8+ hex run (a session/run id or its prefix), a UUID, a URL, a PR/issue number with its repo.
 const ID_RE = /\b[0-9a-f]{8}(?:-?[0-9a-f]{4}){0,3}(?:-?[0-9a-f]{12})?\b/gi;
@@ -122,6 +125,12 @@ export function alertText(inp: TextInput, lang: AlertLang = "en"): string {
     }
     case "wall": {
       const w = `${where(inp.ws, lang)}${work(inp.work, lang)}`;
+      if (inp.wall === "login") {
+        const tool = toolName(inp.tool) || (es ? "su cuenta" : "its account");
+        return cap(es
+          ? `${w} perdió la sesión de ${tool} y no puede seguir. Volvé a iniciar sesión en ${tool} o decime qué cuenta usar.`
+          : `${w} is logged out of ${tool} and cannot go on. Log in to ${tool} again, or tell me which account to use.`);
+      }
       const resets = flat(inp.resets, 30);
       const what = inp.wall === "credit" ? (es ? "se quedó sin créditos" : "ran out of credits") : es ? "llegó a su límite de uso" : "hit its usage limit";
       return cap(es
@@ -155,6 +164,24 @@ export function alertText(inp: TextInput, lang: AlertLang = "en"): string {
         ? `${w}la tarea programada “${j}” falló${why ? `: ${why}` : ""}. Decidí si la corro de nuevo.`
         : `${w}the scheduled job “${j}” failed${why ? `: ${why}` : ""}. Decide whether to run it again.`);
     }
+    case "waiting": {
+      const label = flat(inp.label, 100);
+      return cap(es
+        ? `${where(inp.ws, lang)}${work(inp.work, lang)} espera una respuesta que nadie le dio${label ? `: ${label}` : ""}. Decime qué tiene que hacer.`
+        : `${where(inp.ws, lang)}${work(inp.work, lang)} is waiting for an answer nobody has given${label ? `: ${label}` : ""}. Tell me what it should do.`);
+    }
+    case "unreachable": {
+      const say: Record<string, [string, string]> = {
+        no_phone: ["no phone has notifications on", "ningún teléfono tiene las notificaciones activadas"],
+        push_off: ["phone notifications are switched off here", "las notificaciones al teléfono están apagadas acá"],
+        telegram_unset: ["Telegram is not set up", "Telegram no está configurado"],
+        telegram_down: ["Telegram cannot be reached from this Mac", "no se puede llegar a Telegram desde esta Mac"],
+      };
+      const why = inp.reasons.map((r) => say[r]?.[es ? 1 : 0]).filter(Boolean).join(es ? " y " : " and ");
+      return es
+        ? `No tengo cómo avisarte fuera de la Mac${why ? `: ${why}` : ""}. Activá las notificaciones en la app del teléfono o arreglá Telegram para que pueda.`
+        : `I have no way to reach you away from the Mac${why ? `: ${why}` : ""}. Turn on notifications in the phone app, or get Telegram working, so I can.`;
+    }
     case "summary": {
       const n = inp.items.length;
       return es
@@ -173,7 +200,9 @@ export function alertTitle(inp: TextInput, lang: AlertLang = "en"): string {
     case "decide": return pre + (es ? "espera tu respuesta" : "waiting on your answer");
     case "blocked": return pre + (inp.reason === "auth" ? (es ? "necesita una sesión" : "needs a login") : es ? "trabada" : "stuck");
     case "stalled": return pre + (es ? "dejó de responder" : "stopped responding");
-    case "wall": return pre + (inp.wall === "credit" ? (es ? "sin créditos" : "out of credits") : es ? "límite de uso" : "usage limit");
+    case "wall": return pre + (inp.wall === "login" ? (es ? "sin sesión" : "logged out") : inp.wall === "credit" ? (es ? "sin créditos" : "out of credits") : es ? "límite de uso" : "usage limit");
+    case "waiting": return pre + (es ? "espera una respuesta" : "waiting for an answer");
+    case "unreachable": return es ? "No puedo avisarte fuera de la Mac" : "I can't reach you away from the Mac";
     case "host": return `${flat(inp.host, 30) || (es ? "Una computadora" : "A computer")} ${es ? "desconectada" : "offline"}`;
     case "job_failed": return pre + (es ? "falló una tarea programada" : "a scheduled job failed");
     case "summary": return es ? `${inp.items.length} trabadas más` : `${inp.items.length} more stuck`;

@@ -28,6 +28,11 @@
  * them: his call, his phone, his Telegram. Nothing leaves for anybody else, and a Desk locked to one
  * client for a screen share is never handed another client's alert (voice-presence.ts, desk-scope.js).
  */
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { bus, type BusEvent } from "./bus.js";
 import { CONFIG } from "./config.js";
 import { asks, db, jobs, kv, runs, sessions, workspaces, LOCAL_HOST_ID } from "./store.js";
@@ -35,15 +40,18 @@ import { alerts, type AlertChannel, type AlertKind, type AlertRow, type AlertRun
 import type { Job, Run, Session } from "./types.js";
 import { signalsOf, statusOf, type Phase, type TermStatus } from "./term-status.js";
 import { driveEnabled, graceMs, leadGraceMs, operatorOwns, resolveLead, watched } from "./robert-drive.js";
-import { detectWall, failoverOwns, terminalFailoverEnabled, type Wall } from "./terminal-failover.js";
-import { sessionPrompt, sessionScreen } from "./terminal.js";
+import { detectLoginWall, detectWall, failoverOwns, terminalFailoverEnabled } from "./terminal-failover.js";
+import { sessionActivity, sessionPrompt, sessionScreen } from "./terminal.js";
 import type { DeskPrompt } from "./desk-prompt.js";
 import { isShipTerminal } from "./ship-guard.js";
 import { getAgent } from "./agent-lifecycle.js";
 import { holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { setting, settingOn } from "./settings.js";
 import { actionsFor, broadcast, pushSubs, type PushAction, type PushPayload } from "./push.js";
-import { esc, getAllowedChat, send as telegramSend, TOKEN as TELEGRAM_TOKEN } from "./telegram/api.js";
+import { esc, getAllowedChat, send as telegramSend, telegramHealth, TOKEN as TELEGRAM_TOKEN } from "./telegram/api.js";
+import { TRIAGE_DEADLINE_MIN } from "./ask-robert.js";
+import { desktop } from "./notify.js";
+import { speak } from "./speak.js";
 import { kb, type Btn } from "./telegram/keyboards.js";
 import { alertText, alertTitle, resetsOf, type AlertLang, type TextInput } from "./alert-text.js";
 import { lastVoiceLang, voiceCalls, voiceFor } from "./voice-presence.js";
@@ -120,9 +128,14 @@ export function alertLang(): AlertLang {
 
 // ─────────────────────────────── seams (tests drive these) ───────────────────────────────
 
+/** A wall at the bottom of a terminal: credit/limit (terminal-failover moves those) or logged out (nobody does). */
+export type AnyWall = { kind: "credit" | "limit" | "login"; line: string };
+
 type Probes = {
   status: (id: string) => TermStatus | null;
-  wall: (id: string) => Wall | null;
+  wall: (id: string) => AnyWall | null;
+  /** Its last byte of output (ms), for "stopped responding N minutes ago". */
+  lastOut: (id: string) => number | null;
   prompt: (id: string) => DeskPrompt | null;
   /** When the OPERATOR last typed into it (Desk pane keystrokes, his /input, a tap) — never Robert's or the daemon's hand. */
   operatorLastIn: (id: string) => number | null;
@@ -130,7 +143,13 @@ type Probes = {
 };
 const defaultProbes: Probes = {
   status: (id) => statusOf(id),
-  wall: (id) => { try { return detectWall(sessionScreen(id)?.lines ?? null); } catch { return null; } },
+  wall: (id) => {
+    try {
+      const lines = sessionScreen(id)?.lines ?? null;
+      return detectWall(lines) ?? detectLoginWall(lines);
+    } catch { return null; }
+  },
+  lastOut: (id) => sessionActivity(id).last_out,
   prompt: (id) => { try { return sessionPrompt(id); } catch { return null; } },
   // proactive-score.ts persists exactly his input (the first keystroke at once, the rest within 30s);
   // the pty's own last_in would count Robert answering it as the operator acknowledging the alert.
@@ -146,7 +165,35 @@ type Senders = {
   push: (p: PushPayload) => Promise<{ sent: number; dropped: number }>;
   telegramReady: () => boolean;
   telegram: (html: string, markup: object) => Promise<{ ok: boolean; detail?: string }>;
+  /** Did the last Telegram call (the poll loop's or a send) get through? (telegram/api.ts) */
+  telegramHealth: () => ReturnType<typeof telegramHealth>;
+  /** Can this machine speak out loud and show a notification (a Mac, not under test)? */
+  macReady: () => boolean;
+  mac: (title: string, text: string, lang: AlertLang) => Promise<{ ok: boolean; detail: string }>;
 };
+
+/** Say it through the brain Mac's own speakers (src/speak.ts → afplay) and post a macOS notification. */
+async function sayOnMac(title: string, text: string, lang: AlertLang): Promise<{ ok: boolean; detail: string }> {
+  let notified = false;
+  try { desktop(title, text.slice(0, 220)); notified = true; } catch {}
+  let spoken = "";
+  try {
+    const out = await speak(text, lang);
+    const file = path.join(os.tmpdir(), `chronos-alert-${randomUUID()}${out.mime === "audio/wav" ? ".wav" : ".m4a"}`);
+    await fs.promises.writeFile(file, out.audio);
+    await new Promise<void>((resolve) => {
+      const p = spawn("afplay", [file], { stdio: "ignore" });
+      const kill = setTimeout(() => p.kill("SIGKILL"), 60_000);
+      p.on("error", () => { clearTimeout(kill); resolve(); });
+      p.on("close", (code) => { clearTimeout(kill); if (code === 0) spoken = out.engine; resolve(); });
+    });
+    fs.promises.unlink(file).catch(() => {});
+  } catch {}
+  return {
+    ok: !!spoken || notified,
+    detail: `${spoken ? `said on this Mac's speakers (${spoken})` : "could not speak on this Mac"}${notified ? " + a notification" : ""} — not confirmed he heard it`,
+  };
+}
 const defaultSenders: Senders = {
   pushEnabled: () => CONFIG.push,
   subscriptions: () => pushSubs.list().length,
@@ -156,15 +203,22 @@ const defaultSenders: Senders = {
     const r = await telegramSend(getAllowedChat(), html, markup);
     return { ok: !!r?.ok, detail: r?.ok ? `message ${r.result?.message_id ?? "?"}` : String(r?.description ?? "no answer from Telegram").slice(0, 120) };
   },
+  telegramHealth: () => telegramHealth(),
+  // Never under test: a test run must not talk through the speakers or pop notifications.
+  macReady: () => process.platform === "darwin" && process.env.CHRONOS_TEST !== "1",
+  mac: sayOnMac,
 };
 let senders: Senders = defaultSenders;
 export function setAlertSenders(s: Partial<Senders> | null): void { senders = s ? { ...defaultSenders, ...s } : defaultSenders; }
 
 // ─────────────────────────────── what counts as stuck ───────────────────────────────
 
-/** Who gets the first go at a stuck terminal before the operator is told. */
-export type Owner = "operator" | "robert" | "lead" | "failover";
-export type TermKind = "decide" | "blocked" | "stalled" | "wall";
+/**
+ * Who gets the first go at a stuck terminal before the operator is told. `ask` = ask-robert's own
+ * triage deadline (an open question routed to Robert escalates by itself; this is the net under it).
+ */
+export type Owner = "operator" | "robert" | "lead" | "failover" | "ask";
+export type TermKind = "decide" | "blocked" | "stalled" | "wall" | "waiting";
 
 export interface TermFacts {
   phase: Phase;
@@ -186,6 +240,14 @@ export interface TermFacts {
   failoverActing: boolean;
   /** terminal-failover already moved the work to a stand-in; the walled one is left for him to close. */
   movedOn: boolean;
+  /**
+   * It is waiting on Robert (phase `waiting`, on: robert): `declared` = `mc state waiting --on robert`
+   * (robert-drive wakes him, kind "robert"); `ask` = an open question routed to him (ask-robert triages
+   * it, with its own deadline). Null otherwise.
+   */
+  waitOnRobert?: "declared" | "ask" | null;
+  /** Robert is switched on for this workspace (robert.enabled + robert.drive) — `watched` is not needed to wait on him. */
+  robertOn?: boolean;
 }
 
 /**
@@ -202,6 +264,13 @@ export function classifyTerminal(f: TermFacts): { kind: TermKind; owner: Owner }
     return { kind: "wall", owner: f.failoverActing ? "failover" : "operator" };
   }
   switch (f.phase) {
+    case "waiting":
+      // Waiting on Robert is a question nobody else will answer: if he is off, or never picks it up,
+      // it is the operator's. Every other wait (CI, subagents, a deploy, a person, its Lead) resumes
+      // by itself or has its own owner.
+      if (f.waitOnRobert === "ask") return { kind: "waiting", owner: "ask" };
+      if (f.waitOnRobert === "declared") return { kind: "waiting", owner: f.robertOn ? "robert" : "operator" };
+      return null;
     case "decide":
       return { kind: "decide", owner: f.ship || f.operatorAsk ? "operator" : agentOwner(f) };
     case "blocked":
@@ -217,30 +286,38 @@ const agentOwner = (f: TermFacts): Owner => (f.leadOwned ? "lead" : f.robertMayA
 /** When the alert for a stuck terminal may fire, relative to when it got stuck: earliest and latest. */
 export function alertWindow(
   st: { kind: TermKind; owner: Owner },
-  w: { robertGraceMs: number; leadGraceMs: number; chanceMs: number },
+  w: { robertGraceMs: number; leadGraceMs: number; chanceMs: number; askDeadlineMs?: number },
 ): { first: number; last: number } {
   switch (st.owner) {
     case "operator": return { first: OPERATOR_GRACE_MS, last: OPERATOR_GRACE_MS };
+    // ask-robert escalates an untriaged question at its deadline (then it is `decide`, his at 10s);
+    // a minute past that deadline and still waiting, its sweeper did not run.
+    case "ask": { const t = (w.askDeadlineMs ?? TRIAGE_DEADLINE_MIN * MIN) + MIN; return { first: t, last: t }; }
     case "failover": return { first: FAILOVER_SAFETY_MS, last: FAILOVER_SAFETY_MS };
     case "lead": return { first: w.leadGraceMs + w.chanceMs, last: w.leadGraceMs + w.chanceMs };
     case "robert": return { first: w.robertGraceMs + WAKE_SETTLE_MS, last: w.robertGraceMs + Math.max(w.chanceMs, WAKE_SETTLE_MS) };
   }
 }
 function windowFor(stuck: { kind: TermKind; owner: Owner }, s: Session) {
-  const drive = stuck.kind === "blocked" ? "blocked" : "decide";
+  // The grace robert-drive itself gives this kind of stop (its wake row is what we look for).
+  const drive = stuck.kind === "blocked" ? "blocked" : stuck.kind === "waiting" ? "robert" : "decide";
   return alertWindow(stuck, { robertGraceMs: graceMs(drive), leadGraceMs: leadGraceMs(drive, s), chanceMs: chanceMs(s.workspace_id) });
 }
 
 const movedKey = (id: string) => `alerts.moved:${id}`;
 
-function factsOf(s: Session, st: TermStatus): TermFacts & { wallInfo: Wall | null; daemonReason: string | null } {
+function factsOf(s: Session, st: TermStatus): TermFacts & { wallInfo: AnyWall | null; daemonReason: string | null } {
   const sig = signalsOf(s.id);
   const declaredBlocked = st.phase === "blocked" && sig.declared?.state === "blocked";
   let daemonReason: string | null = null;
   if (st.phase === "blocked" && !declaredBlocked) { try { daemonReason = getAgent(s.id)?.blocked_reason ?? null; } catch {} }
   const wallInfo = st.phase === "your_turn" || st.phase === "decide" ? probes.wall(s.id) : null;
   let failoverActing = false;
-  if (wallInfo && terminalFailoverEnabled(s.workspace_id)) { try { failoverActing = failoverOwns(s.id); } catch {} }
+  // Failover only ever moves credit/usage walls; a logged-out terminal is nobody's to move.
+  if (wallInfo && wallInfo.kind !== "login" && terminalFailoverEnabled(s.workspace_id)) { try { failoverActing = failoverOwns(s.id); } catch {} }
+  let waitOnRobert: TermFacts["waitOnRobert"] = null;
+  if (st.phase === "waiting" && st.on === "robert")
+    waitOnRobert = asks.openForSession(s.id).some((a) => a.route === "robert" && !a.escalated_at) ? "ask" : "declared";
   return {
     phase: st.phase,
     hasWorkspace: !!s.workspace_id,
@@ -253,6 +330,8 @@ function factsOf(s: Session, st: TermStatus): TermFacts & { wallInfo: Wall | nul
     wall: !!wallInfo,
     failoverActing,
     movedOn: !!kv.get(movedKey(s.id)),
+    waitOnRobert,
+    robertOn: driveEnabled(s.workspace_id),
     wallInfo,
     daemonReason,
   };
@@ -329,12 +408,22 @@ function termEpisode(s: Session, st: TermStatus, kind: TermKind, reason: string,
     case "blocked":
       input = { kind: "blocked", ws, work, why: st.line || null, reason: facts.daemonReason };
       break;
-    case "stalled":
-      input = { kind: "stalled", ws, work, minutes: Math.round((now - st.since) / MIN) || null };
+    case "stalled": {
+      // Since its last byte, not since the card flipped: the flip comes term.frozen_min after it froze.
+      const out = probes.lastOut(s.id);
+      input = { kind: "stalled", ws, work, minutes: Math.round((now - (out ?? st.since)) / MIN) || null };
       break;
+    }
     case "wall":
-      input = { kind: "wall", ws, work, wall: facts.wallInfo?.kind ?? "limit", resets: resetsOf(facts.wallInfo?.line) };
+      input = { kind: "wall", ws, work, wall: facts.wallInfo?.kind ?? "limit", resets: resetsOf(facts.wallInfo?.line), tool: s.backend ?? null };
       break;
+    case "waiting": {
+      const open = asks.openForSession(s.id).find((a) => a.route === "robert" && !a.escalated_at);
+      // The question itself, or what it declared it waits for — never the card's generic "waiting on robert".
+      const label = open?.question ?? (signalsOf(s.id).declared?.label || null);
+      input = { kind: "waiting", ws, work, label };
+      break;
+    }
   }
   // The phone does not list a live Lead's workers (push.ts underLiveLead): a tap lands on their Lead.
   const lead = resolveLead(s.lead_id);
@@ -350,6 +439,7 @@ const OWNER_REASON: Record<Owner, string> = {
   robert: "robert_chance_over",
   lead: "lead_chance_over",
   failover: "failover_not_acting",
+  ask: "robert_triage_overdue",
 };
 
 // ─────────────────────────────── terminals: candidates in their grace ───────────────────────────────
@@ -426,7 +516,14 @@ async function checkCandidate(c: Candidate, now: number): Promise<void> {
 
 // ─────────────────────────────── raising, and the ladder ───────────────────────────────
 
+/** The rungs that reach HIM, in order. The Mac rung comes after, only when none of these did. */
 const RUNGS: AlertRung[] = ["voice", "push", "telegram"];
+/**
+ * A call said it started playing the alert (stage "started"): it gets this long to finish before the
+ * ladder gives up on it. Two sentences at 1× are ~10–15s; this also covers a sentence of his reply
+ * already playing ahead of it.
+ */
+export const VOICE_PLAY_MAX_MS = 60 * SEC;
 
 /**
  * Tell him about this episode — or don't, when it is already open (the same stop), a flicker of one
@@ -474,10 +571,16 @@ async function step(row0: AlertRow, now: number): Promise<void> {
       row = composeSummary(row, now);
       if (!row) return;
     }
-    // A call picked to say it that never confirmed: that rung failed — on to the phone.
+    // A call picked to say it that never finished saying it: that rung failed — on to the phone.
     const pending = row.channels.find((c) => c.rung === "voice" && c.ok === null);
-    if (pending) alerts.setChannel(row.id, { ...pending, ok: false, detail: `${pending.detail ?? "call"} · never confirmed it spoke` }, now);
-    const tried = new Set((alerts.get(row.id)?.channels ?? []).map((c) => c.rung));
+    if (pending) {
+      const why = String(pending.detail ?? "").includes("· playing") ? "started playing but never finished" : "never confirmed it played";
+      alerts.setChannel(row.id, { ...pending, ok: false, detail: `${voiceTarget(pending)} · ${why}` }, now);
+    }
+    // A retry walks again from where it was re-armed (retryUnreached): what failed before may work now.
+    const from = Number(row.meta?.retry_from ?? 0);
+    const walk = (alerts.get(row.id)?.channels ?? []).slice(from);
+    const tried = new Set(walk.map((c) => c.rung));
     for (const rung of RUNGS) {
       if (tried.has(rung)) continue;
       const out = await tryRung(rung, alerts.get(row.id)!, now);
@@ -488,9 +591,13 @@ async function step(row0: AlertRow, now: number): Promise<void> {
         return;
       }
     }
+    // Nothing that reaches HIM took it. Last resort, once per alert: say it on this Mac. It never counts
+    // as delivered — the row stays "not reached" and is tried again when a call or a phone can take it.
+    const cur = alerts.get(row.id)!;
+    if (!cur.delivered_at && !cur.channels.some((c) => c.rung === "mac")) await tryRung("mac", cur, now);
     alerts.update(row.id, { next_at: null, state: "done" }, now);
     const end = alerts.get(row.id);
-    if (end && !end.delivered_at) console.warn(`[alerts] ${end.kind} ${end.subject} — NO channel could take it: ${end.channels.map((c) => `${c.rung}: ${c.detail ?? c.ok}`).join("; ")}`);
+    if (end && !end.delivered_at) console.warn(`[alerts] ${end.kind} ${end.subject} — NOT REACHED: ${end.channels.map((c) => `${c.rung}: ${c.detail ?? c.ok}`).join("; ")}`);
   } finally {
     stepping.delete(row0.id);
   }
@@ -531,6 +638,18 @@ async function tryRung(rung: AlertRung, row: AlertRow, now: number): Promise<Run
         const r = await senders.push(payload);
         alerts.setChannel(row.id, { rung, at: iso(now), ok: r.sent > 0, detail: `sent to ${r.sent} phone${r.sent === 1 ? "" : "s"}${r.dropped ? `, ${r.dropped} expired` : ""}` }, now);
         return r.sent > 0 ? "sent" : "failed";
+      } catch (e: any) {
+        alerts.setChannel(row.id, { rung, at: iso(now), ok: false, detail: String(e?.message ?? e).slice(0, 120) }, now);
+        return "failed";
+      }
+    }
+    case "mac": {
+      if (!settingOn("alerts.mac")) return skip("off in settings");
+      if (!senders.macReady()) return skip("not a Mac this daemon can speak on");
+      try {
+        const r = await senders.mac(row.title, row.text, (row.lang === "es" ? "es" : "en"));
+        alerts.setChannel(row.id, { rung, at: iso(now), ok: r.ok, detail: r.detail }, now);
+        return r.ok ? "sent" : "failed";
       } catch (e: any) {
         alerts.setChannel(row.id, { rung, at: iso(now), ok: false, detail: String(e?.message ?? e).slice(0, 120) }, now);
         return "failed";
@@ -578,10 +697,23 @@ export function ackAlertTap(ref: string, via = "telegram"): boolean {
   return !!ackAlert(ref, via);
 }
 
-/** A voice call confirms it said the alert (POST /api/alerts/:id/spoken). */
-export function confirmSpoken(ref: string, client: string | null, at = Date.now()): AlertRow | null {
+/**
+ * A voice call reports on the alert it was handed (POST /api/alerts/:id/spoken):
+ *   stage "started" — its audio began playing: the call gets VOICE_PLAY_MAX_MS to finish it;
+ *   stage "done"    — it played to the end: delivered by voice (the default, for an older page).
+ * A call whose speech failed (no audio rendered, a playback error, skipped) reports nothing, and the
+ * voice_confirm window sends the alert to his phone.
+ */
+export function confirmSpoken(ref: string, client: string | null, at = Date.now(), stage: "started" | "done" = "done"): AlertRow | null {
   const row = alerts.find(ref);
   if (!row) return null;
+  if (stage === "started") {
+    const live = row.channels.find((c) => c.rung === "voice" && c.ok === null && (!client || callOf(c) === client));
+    if (!live || row.state !== "active") return row;
+    alerts.setChannel(row.id, { ...live, detail: `${voiceTarget(live)} · playing` }, at, (c) => c.rung === "voice" && c.at === live.at);
+    alerts.update(row.id, { next_at: at + VOICE_PLAY_MAX_MS }, at);
+    return alerts.get(row.id) ?? row;
+  }
   // Only a call this alert was actually handed to (never a rung that was skipped for want of one).
   const voice = [...row.channels].reverse().find((c) =>
     c.rung === "voice" && c.ok !== true && !String(c.detail ?? "").startsWith("skipped:") && (!client || callOf(c) === client));
@@ -787,6 +919,93 @@ async function onRunState(e: Extract<BusEvent, { topic: "agent.state" }>, now = 
   }, now);
 }
 
+// ─────────────────────────────── can the alerts reach him at all? ───────────────────────────────
+
+export type RungReadiness = { rung: AlertRung; usable: boolean; line: string; reason?: string };
+export type Readiness = {
+  checked_at: string;
+  /** A phone or Telegram could take an alert right now — a way to reach him away from the Mac. */
+  remote_usable: boolean;
+  remote_down_since: string | null;
+  rungs: RungReadiness[];
+};
+/** No phone and no Telegram for this long → ONE alert saying so (said on a call or on the Mac). */
+export const UNREACHABLE_AFTER_MS = 5 * MIN;
+let remoteDownSince: number | null = null;
+let lastUsable: Record<string, boolean> | null = null;
+const ago = (t: number | null, now: number) => {
+  if (!t) return "never";
+  const m = Math.round((now - t) / MIN);
+  return m < 1 ? "just now" : m < 120 ? `${m}m ago` : `${Math.round(m / 60)}h ago`;
+};
+
+/** Which rungs could deliver right now, and why not — one plain line each (GET /api/alerts/readiness). */
+export function alertsReadiness(now = Date.now()): Readiness {
+  const off = (rung: AlertRung): RungReadiness => ({ rung, usable: false, line: "Off in ⚙ Settings → Alerts.", reason: "off" });
+  const calls = voiceCalls(now);
+  const voice: RungReadiness = !settingOn("alerts.voice") ? off("voice")
+    : calls.length ? { rung: "voice", usable: true, line: `${calls.length} voice call${calls.length === 1 ? " is" : "s are"} live (${[...new Set(calls.map((c) => c.surface))].join(", ")}) — alerts are said there first.` }
+    : { rung: "voice", usable: false, line: "No voice call is live — start one (Desk 🎙) and alerts are said there first.", reason: "no_call" };
+  let subs = 0;
+  try { subs = senders.subscriptions(); } catch {}
+  const push: RungReadiness = !settingOn("alerts.push") ? off("push")
+    : !senders.pushEnabled() ? { rung: "push", usable: false, line: "Phone push is switched off on this daemon (CHRONOS_PUSH=0).", reason: "push_off" }
+    : subs ? { rung: "push", usable: true, line: `${subs} phone${subs === 1 ? " has" : "s have"} notifications on.` }
+    : { rung: "push", usable: false, line: "No phone has notifications on — open the phone app and turn them on.", reason: "no_phone" };
+  const tg = senders.telegramHealth();
+  const tgDown = tg.failStreak > 0 || (!!tg.lastErrorAt && (!tg.lastOkAt || tg.lastErrorAt > tg.lastOkAt));
+  const telegram: RungReadiness = !settingOn("alerts.telegram") ? off("telegram")
+    : !tg.configured || !senders.telegramReady() ? { rung: "telegram", usable: false, line: "Telegram is not set up (no bot token, or no chat linked).", reason: "telegram_unset" }
+    : tgDown ? { rung: "telegram", usable: false, line: `Telegram is set up but unreachable: ${tg.failStreak ? `the last ${tg.failStreak} call${tg.failStreak === 1 ? "" : "s"} failed` : "the last call failed"} (${tg.lastError ?? "no answer"}); last success ${ago(tg.lastOkAt, now)}.`, reason: "telegram_down" }
+    : { rung: "telegram", usable: true, line: tg.lastOkAt ? `Telegram answered ${ago(tg.lastOkAt, now)}.` : "Telegram is set up (no call made yet)." };
+  const mac: RungReadiness = !settingOn("alerts.mac") ? off("mac")
+    : senders.macReady() ? { rung: "mac", usable: true, line: "This Mac can say it out loud and show a notification — the last resort, and it does not count as reaching you." }
+    : { rung: "mac", usable: false, line: "Not a Mac this daemon can speak on.", reason: "no_mac" };
+  return {
+    checked_at: iso(now),
+    remote_usable: push.usable || telegram.usable,
+    remote_down_since: remoteDownSince ? iso(remoteDownSince) : null,
+    rungs: [voice, push, telegram, mac],
+  };
+}
+
+/**
+ * The reach check, from the tick and the self-check: a rung that came back re-tries every alert that
+ * never reached him; no phone and no Telegram for UNREACHABLE_AFTER_MS is ONE episode of its own.
+ */
+async function checkReach(now: number): Promise<Readiness> {
+  const r = alertsReadiness(now);
+  const usable = Object.fromEntries(r.rungs.filter((x) => x.rung !== "mac").map((x) => [x.rung, x.usable]));
+  const back = Object.keys(usable).filter((k) => usable[k] && !(lastUsable?.[k] ?? false));
+  lastUsable = usable;
+  if (back.length) await retryUnreached(now, back);
+  if (r.remote_usable) {
+    remoteDownSince = null;
+    alerts.resolve(REACH_SUBJECT, "unreachable", now);
+  } else {
+    remoteDownSince ??= now;
+    if (now - remoteDownSince >= UNREACHABLE_AFTER_MS && alertsOn() && !alerts.openFor(REACH_SUBJECT, "unreachable")) {
+      const reasons = r.rungs.filter((x) => (x.rung === "push" || x.rung === "telegram") && x.reason && x.reason !== "off").map((x) => x.reason!);
+      await raise({
+        subject: REACH_SUBJECT, kind: "unreachable", workspace_id: null, since: remoteDownSince, reason: "no_remote_rung",
+        input: { kind: "unreachable", reasons }, url: "/phone", tag: "alert:reach",
+      }, now);
+    }
+  }
+  return alertsReadiness(now);
+}
+const REACH_SUBJECT = "readiness:remote";
+
+/** A call started, a phone subscribed, Telegram came back: walk the ladder again for every alert that never reached him. */
+async function retryUnreached(now: number, back: string[]): Promise<void> {
+  for (const r of alerts.unreached()) {
+    if (r.kind !== "summary" && !alertsOn(r.workspace_id)) continue;
+    alerts.update(r.id, { state: "active", next_at: now, meta: { ...r.meta, retry_from: r.channels.length, retried: Number(r.meta?.retried ?? 0) + 1 } }, now);
+    console.log(`[alerts] ${r.kind} ${r.subject.replace(/:(.{8}).*/, ":$1")} never reached him — ${back.join(", ")} can take it now, trying again`);
+    await step(alerts.get(r.id)!, now).catch((e) => console.warn("[alerts] retry", e?.message ?? e));
+  }
+}
+
 // ─────────────────────────────── the self-check ───────────────────────────────
 
 export type Miss = { what: string; subject: string; kind: string; stuck_for_s: number };
@@ -839,6 +1058,8 @@ export async function checkAlertCoverage(now = Date.now(), opts: { force?: boole
     misses.push({ what: "failed job with no alert", subject: `job:${job.id}`, kind: "job_failed", stuck_for_s: Math.round((now - Date.parse(run.ended_at ?? iso(now))) / SEC) });
     await raise(jobEpisode(job, run, now), now, { selfcheck: true });
   }
+  // Can it reach him at all? (no phone, no Telegram for minutes → one alert saying so; a rung back → retries)
+  try { await checkReach(now); } catch (e: any) { console.warn("[alerts] reach check", e?.message ?? e); }
   let total = 0;
   try { total = Number(JSON.parse(kv.get(COVERAGE_KEY) ?? "{}").misses_total ?? 0); } catch {}
   total += misses.length;
@@ -873,6 +1094,7 @@ export async function tickAlerts(now = Date.now()): Promise<void> {
     if (now - lastHostSweep >= MIN) {
       lastHostSweep = now;
       try { await sweepHosts(now); } catch (e: any) { console.warn("[alerts] hosts", e?.message ?? e); }
+      try { await checkReach(now); } catch (e: any) { console.warn("[alerts] reach", e?.message ?? e); }
     }
     if (now - lastPrune >= HOUR) {
       lastPrune = now;
@@ -915,6 +1137,10 @@ export function alertView(r: AlertRow) {
     /** Stuck → raised: the grace and Robert's chance. Stuck → told: what the operator actually waited. */
     raise_ms: Date.parse(r.raised_at) - Date.parse(r.stuck_since),
     told_ms: told,
+    /** It ran its ladder and no call, phone or Telegram took it (the Mac's speakers do not count). */
+    not_reached: !r.delivered_at && !r.acked_at && (r.state === "done" || r.state === "resolved") && r.channels.length > 0,
+    said_on_mac: r.channels.some((c) => c.rung === "mac" && c.ok === true),
+    retried: Number(r.meta?.retried ?? 0),
   };
 }
 
@@ -938,6 +1164,7 @@ export function alertsReport(opts: { sinceMs?: number; limit?: number; kind?: st
       acked: rows.filter((r) => r.acked_at).length,
       resolved_before_ack: rows.filter((r) => r.resolved_at && !r.acked_at).length,
       undelivered: rows.filter((r) => r.state === "done" && !r.delivered_at).length,
+      not_reached_open: rows.filter((r) => !r.resolved_at && !r.acked_at && !r.delivered_at && r.state === "done").length,
       capped: rows.filter((r) => r.state === "capped").length,
       summaries: rows.filter((r) => r.kind === "summary").length,
       selfcheck: rows.filter((r) => r.selfcheck).length,
@@ -945,6 +1172,7 @@ export function alertsReport(opts: { sinceMs?: number; limit?: number; kind?: st
       told_ms_p90: pct(told, 90),
     },
     coverage,
+    readiness: alertsReadiness(now),
     voice: voiceCalls(now).map((c) => ({ surface: c.surface, client: c.client, lang: c.lang, lock: c.lock, age_ms: now - c.at })),
     pending: [...candidates.values()].map((c) => ({ session_id: c.sessionId, kind: c.kind, owner: c.owner, since: iso(c.since), check_at: iso(c.checkAt) })),
   };
@@ -961,6 +1189,8 @@ export function resetStuckAlerts(): void {
   hostBatches.clear();
   stepping.clear();
   lastCoverage = null;
+  remoteDownSince = null;
+  lastUsable = null;
   lastHostSweep = 0;
   lastPrune = 0;
   ticking = false;
@@ -996,6 +1226,6 @@ export function startStuckAlerts(): void {
 
 /** Test seam: drive the bus handlers directly with a fake clock (startStuckAlerts would add a real-time tick). */
 export const _test = {
-  onFailover, onHostStuck, onRunEnded, onRunState, ackVoiceReply, candidates, step, sweepHosts,
+  onFailover, onHostStuck, onRunEnded, onRunState, ackVoiceReply, candidates, step, sweepHosts, checkReach,
   setStarted: (v: boolean) => { started = v; },
 };

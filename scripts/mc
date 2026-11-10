@@ -2836,20 +2836,27 @@ function askCap(question) {
       const q = await req("GET", `/alerts?since=${encodeURIComponent(opt.since || "24h")}`, undefined, adminHeaders());
       if (opt.json) return console.log(JSON.stringify(q, null, 2));
       const secs = (ms) => (ms == null ? "—" : ms < 90_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`);
-      const icon = (a) => (a.state === "capped" ? "⋯" : a.acked_at ? "✓" : a.resolved_at ? "○" : a.delivered_at ? "●" : "✕");
+      const icon = (a) => (a.state === "capped" ? "⋯" : a.acked_at ? "✓" : a.not_reached ? "✕" : a.resolved_at ? "○" : a.delivered_at ? "●" : "…");
       const lines = q.alerts.map((a) =>
         `${icon(a)} ${a.id.slice(0, 8)} ${a.raised_at.slice(11, 16)} ${a.kind}${a.workspace ? ` · ${a.workspace}` : ""}` +
         ` · told ${secs(a.told_ms)}${a.delivered_via ? ` via ${a.delivered_via}` : ""}` +
         (a.acked_at ? ` · acked (${a.acked_via})` : a.resolved_at ? " · over before acked" : "") +
+        (a.not_reached ? ` · NOT REACHED${a.said_on_mac ? " (said on the Mac only)" : ""}${a.resolved_at ? "" : " — retried when a call or phone can take it"}` : "") +
         (a.selfcheck ? " · SELF-CHECK" : "") +
         `\n    ${a.text}` +
         `\n    ${a.channels.map((c) => `${c.rung}:${c.ok === true ? "ok" : c.ok === false ? "no" : "…"}${c.detail ? ` (${c.detail})` : ""}`).join(" → ") || "(no channel tried)"}`,
       );
       const s = q.stats;
       const cov = q.coverage;
+      // First: whatever cannot reach him right now — before any incident needs it.
+      const down = (q.readiness?.rungs || []).filter((r) => !r.usable && r.reason !== "off" && r.rung !== "voice");
+      const head = q.readiness && !q.readiness.remote_usable
+        ? [`⚠ away from the Mac I cannot reach you right now:`, ...down.map((r) => `   ${r.rung}: ${r.line}`)]
+        : down.map((r) => `⚠ ${r.rung}: ${r.line}`);
       return console.log([
+        ...head,
         lines.length ? lines.join("\n") : "(no alerts in that window)",
-        `${s.total} alert(s) · ${s.delivered} delivered · ${s.acked} acked · ${s.undelivered} undelivered · ${s.capped} folded into ${s.summaries} summar${s.summaries === 1 ? "y" : "ies"} · stuck→told p50 ${secs(s.told_ms_p50)} p90 ${secs(s.told_ms_p90)}`,
+        `${s.total} alert(s) · ${s.delivered} delivered · ${s.acked} acked · ${s.undelivered} not reached (${s.not_reached_open ?? 0} still open) · ${s.capped} folded into ${s.summaries} summar${s.summaries === 1 ? "y" : "ies"} · stuck→told p50 ${secs(s.told_ms_p50)} p90 ${secs(s.told_ms_p90)}`,
         `self-check: ${cov ? `${cov.ok ? "ok" : `${cov.misses.length} miss(es) now`} · ${cov.misses_total ?? 0} total` : "not run yet"} · live calls: ${q.voice.length} · waiting out a grace: ${q.pending.length}`,
       ].join("\n"));
     }

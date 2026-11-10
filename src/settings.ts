@@ -409,6 +409,18 @@ defineSetting({
   default: () => true,
 });
 defineSetting({
+  key: "alerts.mac", group: "Alerts", level: "global", type: "bool",
+  label: "Last resort: say it on this Mac",
+  help: "When no call, phone or Telegram took it, the Mac says it out loud and shows a notification. It does not count as reaching you: the alert is tried again on your phone or a call as soon as one can take it.",
+  default: () => true,
+});
+defineSetting({
+  key: "term.frozen_min", group: "Alerts", level: "global", type: "int", min: 1, max: 60, env: "CHRONOS_TERM_FROZEN_MIN",
+  label: "A terminal frozen mid-turn is stuck after (minutes)",
+  help: "Its turn never ended, its \"esc to interrupt\" line is still on screen, and it printed nothing for this many minutes the Mac was awake. A working turn repaints every second, so even 1 minute is far past normal.",
+  default: () => Number(process.env.CHRONOS_TERM_FROZEN_MIN) || 3,
+});
+defineSetting({
   key: "alerts.ack_window_sec", group: "Alerts", level: "global", type: "int", min: 15, max: 1800,
   env: "CHRONOS_ALERTS_ACK_SEC",
   label: "Wait for an acknowledgement (seconds)", help: "Not opened, answered or acknowledged in this long → the next channel.",
