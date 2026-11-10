@@ -455,7 +455,7 @@ function executePrompt(
 async function askAgent(agent: FleetAgent, prompt: string, target?: WsTarget): Promise<string> {
   switch (agent) {
     case "robert":
-      return (await askManagerWeb(prompt, undefined, target?.id ?? null)).reply || "";
+      return (await askManagerWeb(prompt, undefined, target?.id ?? null, { lane: "wake" })).reply || "";
   }
 }
 

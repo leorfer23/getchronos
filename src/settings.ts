@@ -48,7 +48,7 @@ export interface SettingDef {
 
 const REGISTRY = new Map<string, SettingDef>();
 /** Page order. */
-export const GROUPS = ["Workspace", "Robert", "Accounts", "Failover", "Autonomy", "Memory", "Limits", "Safety"];
+export const GROUPS = ["Workspace", "Robert", "Alerts", "Accounts", "Failover", "Autonomy", "Memory", "Limits", "Safety"];
 
 export function defineSetting(d: SettingDef): SettingDef {
   REGISTRY.set(d.key, d);
@@ -382,6 +382,70 @@ defineSetting({
   key: "failover.max", group: "Failover", level: "both", type: "int", min: 1, max: 10, env: "CHRONOS_TERMINAL_FAILOVER_MAX",
   label: "Failover steps per terminal", help: "How many times one piece of work may move on.",
   default: () => CONFIG.terminalFailoverMax,
+});
+
+// Alerts (src/stuck-alerts.ts): work that is stuck reaches the operator once, on the first channel
+// that answers — his live voice call, then his phone, then Telegram. Event-driven; silent when
+// nothing is wrong.
+defineSetting({
+  key: "alerts.enabled", group: "Alerts", level: "both", type: "bool", env: "CHRONOS_ALERTS",
+  label: "Tell me when work is stuck",
+  help: "A terminal waiting on your answer or stuck, a wall nothing could move, a computer gone with work on it, a job that failed for good: one alert per episode. Robert gets a short chance first on what he may answer himself.",
+  default: () => process.env.CHRONOS_ALERTS !== "0",
+});
+defineSetting({
+  key: "alerts.voice", group: "Alerts", level: "global", type: "bool",
+  label: "Say it on a live voice call", help: "When you are on a call (Desk 🎙), the alert is spoken into it first.",
+  default: () => true,
+});
+defineSetting({
+  key: "alerts.push", group: "Alerts", level: "global", type: "bool",
+  label: "Phone notification", help: "Otherwise, or when the call does not answer, a push to the phone app — a tap opens the terminal.",
+  default: () => true,
+});
+defineSetting({
+  key: "alerts.telegram", group: "Alerts", level: "global", type: "bool",
+  label: "Telegram as the last resort", help: "When no phone is subscribed, or the alert is not acknowledged in time.",
+  default: () => true,
+});
+defineSetting({
+  key: "alerts.mac", group: "Alerts", level: "global", type: "bool",
+  label: "Last resort: say it on this Mac",
+  help: "When no call, phone or Telegram took it, the Mac says it out loud and shows a notification. It does not count as reaching you: the alert is tried again on your phone or a call as soon as one can take it.",
+  default: () => true,
+});
+defineSetting({
+  key: "term.frozen_min", group: "Alerts", level: "global", type: "int", min: 1, max: 60, env: "CHRONOS_TERM_FROZEN_MIN",
+  label: "A terminal frozen mid-turn is stuck after (minutes)",
+  help: "Its turn never ended, its \"esc to interrupt\" line is still on screen, and it printed nothing for this many minutes the Mac was awake. A working turn repaints every second, so even 1 minute is far past normal.",
+  default: () => Number(process.env.CHRONOS_TERM_FROZEN_MIN) || 3,
+});
+defineSetting({
+  key: "alerts.ack_window_sec", group: "Alerts", level: "global", type: "int", min: 15, max: 1800,
+  env: "CHRONOS_ALERTS_ACK_SEC",
+  label: "Wait for an acknowledgement (seconds)", help: "Not opened, answered or acknowledged in this long → the next channel.",
+  default: () => Number(process.env.CHRONOS_ALERTS_ACK_SEC) || 90,
+});
+defineSetting({
+  key: "alerts.voice_confirm_sec", group: "Alerts", level: "global", type: "int", min: 5, max: 120,
+  label: "A call must confirm it spoke within (seconds)", help: "No confirmation → the phone instead.",
+  default: () => 15,
+});
+defineSetting({
+  key: "alerts.robert_chance_sec", group: "Alerts", level: "both", type: "int", min: 0, max: 1800,
+  env: "CHRONOS_ALERTS_ROBERT_CHANCE_SEC",
+  label: "Robert's chance first (seconds)", help: "On a question or a block he may handle himself: the longest he gets after he is woken. Sooner when he was not woken or already looked.",
+  default: () => Number(process.env.CHRONOS_ALERTS_ROBERT_CHANCE_SEC ?? 120),
+});
+defineSetting({
+  key: "alerts.per_hour", group: "Alerts", level: "global", type: "int", min: 1, max: 60,
+  label: "Alerts per hour", help: "Past this, everything else that hour is one summary.",
+  default: () => 6,
+});
+defineSetting({
+  key: "alerts.lang", group: "Alerts", level: "global", type: "enum", options: () => ["auto", "en", "es"],
+  label: "Alert language", help: "auto: the language of your last voice call (English until there is one).",
+  default: () => "auto",
 });
 
 // Memory

@@ -6,7 +6,8 @@ import { baseJobName } from "./job-name.js";
 const DETAIL_CAP = 2000;
 // run.event is streamed per-message and already persisted in run_events — far too high-frequency
 // for a decision trail (would churn the retention cap in minutes). Everything else is recorded.
-const SKIP = new Set(["run.event", "agent.delta", "agent.asked", "agent.turn.done", "agent.state", "session.usage", "session.status"]);
+// alert.raised: the alerts table is that record already (src/store/alerts.ts), with what was said.
+const SKIP = new Set(["run.event", "agent.delta", "agent.asked", "agent.turn.done", "agent.state", "session.usage", "session.status", "alert.raised"]);
 
 // Derive who acted. Explicit e.actor wins (set by publishers that know — e.g. reviews). For run.*
 // we read the run's job-name/trigger_src (cheap PK lookups); trigger.fired resolves the trigger

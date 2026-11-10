@@ -89,7 +89,7 @@ test("the stored row carries the ROUTED workspace, so each recap stays that proj
 });
 
 test("POST /agent routes, refuses to guess, and answers with where it landed", () => {
-  assert.match(api, /const turn = await resolveTurnSmart\(req\.body\.text, \{/);
+  assert.match(api, /const routedTurn = await resolveTurnSmart\(req\.body\.text, \{/);
   assert.match(api, /selected: req\.body\.ws \?\? null/);
   assert.match(api, /stagedSessionId: req\.body\.session \?\? null/);
   // An ask returns candidates instead of running a manager.
@@ -98,8 +98,8 @@ test("POST /agent routes, refuses to guess, and answers with where it landed", (
   // routed workspace. `prompt` is `text` plus any attachment paths; the stored `you` stays clean.
   assert.match(api, /res\.json\(\{ accepted: true, turn: turnId, ws, how: turn\.how \}\)/);
   assert.match(api, /void \(async \(\) => \{/);
-  assert.match(api, /askManagerWeb\(\s*prompt,\s*\(t, kind\) => bus\.publish\(\{ topic: "agent\.delta", text: t, kind, ws, client, turn: turnId \}\),\s*runWs,\s*\{ voice, turn: turnId \}/);
-  assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote, engine\)/);
+  assert.match(api, /askManagerWeb\(\s*prompt,\s*\(t, kind\) => \{[\s\S]*?bus\.publish\(\{ topic: "agent\.delta", text: t, kind, ws, client, turn: turnId \}\);\s*\},\s*runWs,\s*\{ voice, turn: turnId \}/);
+  assert.match(api, /const row = chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote, engine, timing\(\)\)/);
   assert.match(api, /topic: "agent\.push"/);
   // The reply must NOT ride the HTTP response — that is what the tunnel used to cut.
   assert.doesNotMatch(api, /res\.json\(\{ reply, actions, ws, how: turn\.how/);

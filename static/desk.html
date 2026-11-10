@@ -1798,8 +1798,10 @@
       <label style="flex:0 0 128px">Kind
         <select name="goal_kind" id="f-kind" title="What done looks like. The agent is told this in its first prompt.">
           <option value="pr">PR</option>
+          <option value="ui">UI PR</option>
           <option value="investigation">Investigation</option>
           <option value="qa">QA</option>
+          <option value="product">Product — ship it</option>
           <option value="chat">Chat — just talk</option>
         </select>
       </label>
@@ -1871,8 +1873,10 @@
       <label>Kind
         <select id="rj-kind" title="What done looks like. The agent is told this in its first prompt.">
           <option value="pr">PR</option>
+          <option value="ui">UI PR</option>
           <option value="investigation">Investigation</option>
           <option value="qa">QA</option>
+          <option value="product">Product — ship it</option>
         </select>
       </label>
     </div>
@@ -2168,6 +2172,7 @@
 <script src="/desk-companion.js"></script>
 <script src="/desk-quick-actions.js"></script>
 <script src="/desk-scope.js"></script>
+<script src="/voice-alerts.js"></script>
 <script src="/ask-card.js"></script>
 <script src="/artifact-view.js"></script>
 <script src="/desk-cockpit.js"></script>
@@ -2268,6 +2273,8 @@ const KIND_TIP = {
   pr: "PR — done when a pull request is open with green tests",
   investigation: "Investigation — done when there's an answer with evidence, no code changes unless asked",
   qa: "QA — done when there's a verdict: what passed, what failed, how to reproduce",
+  ui: "UI PR — done when the PR is green with before/after shots of each screen it changes and a walkthrough of the flow",
+  product: "Product — done when it is merged, deployed and checked live; bugs reproduced before and shown fixed after",
   chat: "Chat — talking it through: no finish line, no hand-off unless you ask for one",
 };
 // Claude's permission menu, as the daemon reads it off the screen (status.permission). The terminal is
@@ -8431,6 +8438,11 @@ const VAD = { start: 0.025, hold: 0.012, speech: 0.04, endMs: 800, minSpeechMs: 
 // Whisper's stock phantoms on breath and room noise — never a command.
 const HEARD_NOISE = /^(\[.*\]|\(.*\)|\*.*\*|thank you\.?|thanks for watching.*|you\.?|bye\.?|gracias( por ver.*)?\.?|subt[ií]tulos.*|amara\.org.*|[.…,!? ]+)$/i;
 const vcAuth = () => (TOKEN ? { "x-mc-admin": TOKEN } : {});
+// Stuck-work alerts on this call — the client contract lives in static/voice-alerts.js.
+const VA = VoiceAlerts.create({
+  client: CLIENT, surface: "desk", lang: () => VC.lang, lock: () => LOCK?.id ?? null,
+  post: (p, b) => fetch(p, { method: "POST", headers: { "content-type": "application/json", ...vcAuth() }, body: JSON.stringify(b) }),
+});
 const vcSpeaking = () => !!VC.playing || VC.speakQ.length > 0;
 const vcNorm = (t) => " " + String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim() + " ";
 
@@ -8464,6 +8476,7 @@ async function vcStart() {
   VC.src.connect(VC.node); VC.node.connect(sink); sink.connect(VC.ctx.destination);
   Object.assign(VC, { seg: null, pre: [], preMs: 0, noise: 0.01, deafUntil: performance.now() + 250 });
   earcon("on");
+  vcPresence(true);
   vcState();
   // A cold whisper model costs seconds on the first sentence; a blank clip loads it now. And his
   // warm process for the thread you are on.
@@ -8474,6 +8487,7 @@ function vcStop(silent) {
   if (!VC.on) return;
   vcSkip();
   VC.on = false;
+  vcPresence(false);
   Object.assign(VC, { seg: null, pre: [], preMs: 0, pick: null, buf: "", turn: null });
   try { if (VC.node) { VC.node.onaudioprocess = null; VC.node.disconnect(); } VC.src?.disconnect(); } catch {}
   VC.node = VC.src = null;
@@ -8664,14 +8678,14 @@ function vcFinal(e, fromHere) {
   const parts = String(e.reply).split(SENTENCE_CUT);
   for (const p of fromHere ? parts : parts.slice(0, 4)) vcSentence(p);
 }
-function vcEnqueue(text) {
+function vcEnqueue(text, alert) {
   if (!VC.on) return;
   const item = {
-    text,
+    text, alert: alert || null,
     blob: fetch("/api/speak", { method: "POST", headers: { "content-type": "application/json", ...vcAuth() }, body: JSON.stringify({ text, lang: VC.lang }) })
       .then((r) => (r.ok ? r.blob() : null)).catch(() => null),
   };
-  VC.speakQ.push(item);
+  if (alert) VC.speakQ.unshift(item); else VC.speakQ.push(item);
   vcState();
   vcPlay();
 }
@@ -8687,9 +8701,11 @@ async function vcPlay() {
     qs("#v-sub").textContent = item.text;
     VC.recent.push(vcNorm(item.text)); if (VC.recent.length > 8) VC.recent.shift();
     a.preservesPitch = a.webkitPreservesPitch = true;
-    await new Promise((done) => { a.onended = a.onerror = done; a.src = url; a.defaultPlaybackRate = a.playbackRate = VC.speed; a.play().catch(done); });
+    // An alert says "started" when its audio begins, and "done" only when it played to its end.
+    const ended = await new Promise((done) => { a.onended = () => done(true); a.onerror = () => done(false); a.src = url; a.defaultPlaybackRate = a.playbackRate = VC.speed; a.play().then(() => item.alert?.started(), () => done(false)); });
     URL.revokeObjectURL(url);
     if (VC.playing !== item) return;
+    if (ended) item.alert?.done();
   }
   VC.playing = null;
   vcAfterSpeech();
@@ -8705,6 +8721,14 @@ function vcSkip(barged) {
   if (a) { a.pause(); a.onended = a.onerror = null; done?.(); }
   vcAfterSpeech(barged);
 }
+// Stuck work, said at once (src/stuck-alerts.ts). The daemon names ONE live call (its client): this page
+// says it ahead of whatever is queued and reports it only once heard (vcPlay); nothing reported and it
+// goes to the phone instead. While the call is up the page says so every 20s, and once when it hangs up.
+function vcAlert(e) {
+  const a = VA.take(e, VC.on);
+  if (a) vcEnqueue(speakable(a.say), a);
+}
+function vcPresence(on) { VA.presence(on); }
 
 // ── Dictation into a terminal ────────────────────────────────────────────────────────────────
 // 🎤 in the stage header (⌘⇧D): tap, speak, tap again. The same local whisper transcribes it and
@@ -8814,7 +8838,7 @@ const BUS_TOPICS = [
   "host.online", "host.offline", "host.updated", "host.inventory",
   "ask.created", "ask.answered",
   "artifact.created", "artifact.updated", "artifact.event",
-  "service.changed", "service.alarm",
+  "service.changed", "service.alarm", "alert.raised",
   "inbox.updated",
 ].join(",");
 function connectBus() {
@@ -8824,6 +8848,7 @@ function connectBus() {
   ws.onmessage = (ev) => {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     if (!DeskScope.passes(e, LOCK)) return;
+    if (e.topic === "alert.raised") return vcAlert(e);
     if (DW.topics.has(e.topic)) dwBus(e.topic);
     if (e.topic === "ask.created" || e.topic === "ask.answered") loopsSoon();
     AskCard.onEvent(e);

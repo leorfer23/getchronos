@@ -44,6 +44,7 @@ import { startDeskTitles } from "./desk-title.js";
 import { startUsageTicker } from "./session-usage.js";
 import { startCacheKeeper } from "./cache-keeper.js";
 import { startTermStatus, statusOf } from "./term-status.js";
+import { startLedger } from "./ledger.js";
 import { startBoardWatcher } from "./board.js";
 import { startRobertWake } from "./robert-wake.js";
 import { startWakeQueue } from "./wake-queue.js";
@@ -53,6 +54,7 @@ import { startRobertDrive } from "./robert-drive.js";
 import { startInboxAutoDispatch } from "./inbox-autodispatch.js";
 import { startRobertSweep } from "./robert-sweep.js";
 import { startDraftNotify } from "./draft-notify.js";
+import { alertsOwnPush, startStuckAlerts } from "./stuck-alerts.js";
 import { startTerminalFailover } from "./terminal-failover.js";
 import { startWorklog } from "./worklog.js";
 import { startCloudReconcile } from "./cloud-reconcile.js";
@@ -105,8 +107,10 @@ void startEgress();
 startTelegram();
 startRelay();
 startNotify();
-startPush({ activity: sessionActivity, prompt: sessionPrompt, phase: (id) => statusOf(id)?.phase ?? null });
+startPush({ activity: sessionActivity, prompt: sessionPrompt, phase: (id) => statusOf(id)?.phase ?? null, owned: alertsOwnPush });
 startTermStatus();
+// The request ledger follows the session/ask/turn events from here on (src/ledger.ts, LEDGER.md).
+startLedger();
 startMergeGate();
 startSelfDeploy();
 startAgentLifecycleBridge();
@@ -125,6 +129,8 @@ startRobertDrive();
 startRobertSweep();
 // Every draft an agent leaves (it never sends) is announced on the operator's Telegram (draft-notify.ts).
 startDraftNotify();
+// Stuck work reaches the operator once, at once: his voice call → his phone → Telegram (stuck-alerts.ts).
+startStuckAlerts();
 startTerminalFailover();
 // Standing watches on single terminals + the deadlines that stop a question sitting with Robert forever.
 startDeskWatch();

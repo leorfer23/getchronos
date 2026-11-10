@@ -206,3 +206,22 @@ test("a live Lead's worker never pushes — the Lead is woken instead, and the p
     sessions.end(lead.id, "test");
   }
 });
+
+test("a question or block the stuck-work alerts own is not pushed here too (one buzz, after Robert's chance)", async () => {
+  const t2 = sessions.create({ workspace_id: ws.id, cwd: tmp, backend: "claude-code", goal: "rename the export columns" });
+  const sent: PushPayload[] = [];
+  const owned: Array<[string, string | null]> = [];
+  const stop = startPush({
+    enabled: true, send: async (_s, p) => { sent.push(p); },
+    activity: () => ({ live: true, quiet: true }), prompt: () => null,
+    phase: () => "decide",
+    owned: (id, phase) => { owned.push([id, phase]); return true; },
+  });
+  try {
+    bus.publish({ topic: "session.activity", session_id: t2.id, state: "working" }); await tick();
+    bus.publish({ topic: "session.activity", session_id: t2.id, state: "waiting", prompt: { kind: "yn", question: "Drop the old column?" } }); await tick();
+    bus.publish({ topic: "agent.state", kind: "session", id: t2.id, name: null, state: "blocked", state_label: "x", blocked_reason: "hitl", workspace_id: ws.id }); await tick();
+    assert.equal(sent.length, 0);
+    assert.deepEqual(owned, [[t2.id, "decide"], [t2.id, "decide"]], "asked for both the flip and the blocked report");
+  } finally { stop(); }
+});

@@ -31,6 +31,8 @@ const LEAD_HEADERS = process.env.MC_LEAD_TOKEN ? { "x-mc-lead": process.env.MC_L
 // host (HOSTS.md) the brain checks it: the session must run on the host the request came through and
 // belong to the token's workspace, so one agent cannot speak for another machine's terminal.
 const SESSION_HEADERS = process.env.MC_SESSION ? { "x-mc-session": process.env.MC_SESSION } : {};
+// A terminal's shape of work — and a request's work type (src/validation.ts GOAL_KINDS, LEDGER.md).
+const GOAL_KINDS = ["pr", "ui", "investigation", "qa", "product", "chat"];
 
 function parse(argv) {
   const pos = [], opt = {}, multi = {};
@@ -302,6 +304,12 @@ const HELP = `mc — Mission Control backlog CLI
   mc when show <id8>                 one continuation: condition, last look, evidence
   mc when fire <id8> ["evidence"]    it happened — continue that work now (any terminal of the workspace)
   mc when cancel <id8> ["why"]       stop waiting
+  mc ledger [list] [--state open|active|all|needs_operator,stuck,…] [--needs] [--ambiguous] [--since 2h] [--workspace slug] [--json]
+                                     the request ledger: what was asked, where it went, its state, what it owes (LEDGER.md)
+  mc ledger show <id8>               one request: its words, terminals, result, deliverables, decisions, checks
+  mc ledger queue                    what waits for the operator's word, in the order he should hear it
+  mc ledger mine                     the request(s) THIS terminal serves
+  mc ledger text                     the compact block a coordinator reads (one line per open request)
   mc pad resolve <id> ["why"]        close the row, keeping the reason on it (a follow-up terminal's usual last step)
   mc pad due                         this client's scheduled follow-ups, soonest first
   mc pad append <id> "<text>"        ADD to a row's detail without replacing it — the usual one; any terminal
@@ -332,7 +340,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc repo patch <id> [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr]   edit a repo (admin-gated)
   mc repo remove <id>                unregister a repo (admin-gated)
   mc desk                    open the Desk wall — every terminal as a card, grouped by client
-  mc goal set "<what this terminal is for>" [--kind pr|investigation|qa|chat] [--done-when "<check>"]…
+  mc goal set "<what this terminal is for>" [--kind pr|ui|investigation|qa|product|chat] [--done-when "<check>"]…
                              set THIS terminal's objective (the title on its Desk card) and its finish
                              line — the checks the operator verifies it by. Yours from then on.
   mc goal                    the goal, its Done-when checks, what you may ship (ask|merge|deploy), hand-off filed?
@@ -364,7 +372,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc whoami [--json]                 where THIS terminal runs: computer (MC_HOST_NAME), workspace, repo,
                                      session, cwd, api — on another computer, localhost and files are its own
   mc session new [--ticket KEY] [--backend b] [--model m] [--workspace ID] [--cwd p] [--title t] [--host id|name]
-                 [--goal "what it's for"] [--kind pr|investigation|qa|chat] [--description "the brief"]
+                 [--goal "what it's for"] [--kind pr|ui|investigation|qa|product|chat] [--description "the brief"]
                  (--goal repeats: --goal "open the PR" --goal "update the runbook" = one terminal,
                   two finish lines, worked in order)
                  [--slice N]
@@ -415,10 +423,13 @@ const HELP = `mc — Mission Control backlog CLI
   mc desk watches                    every standing watch + when the next report is due
   mc robert wakes [--ack <id>]       the durable wake queue: what Robert still owes a turn, what is
                                      parked after too many failures, and whether anything is armed
+  mc alerts [--since 24h] [--json]   (operator) stuck-work alerts: what he was told, on which channel,
+                                     how long after it got stuck, whether he acknowledged it, misses
+  mc alerts ack <id>                 (operator) acknowledge one — it stops climbing to Telegram
   mc desk log [--since today|24h|7d] the day's ledger — every terminal worked on, what it cost,
                              what it left behind, and how to reopen it
   mc session reopen <ID>             reopen an ended terminal on its own transcript (context intact)
-  mc session goal <ID> "title" [--kind pr|investigation|qa|chat]   retitle SOMEONE ELSE'S card
+  mc session goal <ID> "title" [--kind pr|ui|investigation|qa|product|chat]   retitle SOMEONE ELSE'S card
   mc session done <ID>               tick that terminal's goal off — closes its row in the day's log
   mc session kill <ID>
   mc agents [--ws ID] [--all]        one line per agent: state icon, name, progress, blocked reason, ticket
@@ -687,6 +698,16 @@ async function hook(backend, mode) {
       ? `Slack draft → ${one(input.channel_name || input.channel || input.channel_id || input.user_id || "Slack", 60)}${input.message || input.text ? ": " + one(input.message || input.text, 90) : ""}`
       : `Email draft${input.to ? " → " + one(Array.isArray(input.to) ? input.to.join(", ") : input.to, 60) : ""}${input.subject ? " · " + one(input.subject, 80) : ""}`;
     ev = { event: "draft", label, tool: { name: tool.slice(0, 200) } };
+    // Who it goes to, and a hash of exactly what it says, so the request ledger can bind a yes to these
+    // words (src/ledger-model.ts draftHash — keep the two in step). The text itself never leaves here.
+    const slack = /slack_send_message_draft$/.test(tool);
+    const to = String(slack ? input.channel_name || input.channel || input.channel_id || input.user_id || "" : Array.isArray(input.to) ? input.to.join(", ") : input.to || input.recipients || "");
+    const text = String((slack ? input.message ?? input.text : input.body ?? input.text ?? input.message) ?? "");
+    const channel = slack ? "slack" : "email";
+    if (to.trim()) ev.target = {
+      channel, to: to.trim().slice(0, 400),
+      hash: "sha256:" + crypto.createHash("sha256").update(JSON.stringify([channel, to.trim().toLowerCase(), slack ? "" : String(input.subject ?? "").trim(), text])).digest("hex"),
+    };
   }
   // Claude's fires only when it opens its "Do you want to proceed?" menu, and that menu stays until
   // someone answers it. Its pending tool's ⏺ blinks the whole time, so the pty never goes quiet and
@@ -1046,7 +1067,7 @@ function askCap(question) {
     if (cmd === "goal" && ["add", "list", "drop", "reopen"].includes(pos[1])) {
       const sid = process.env.MC_SESSION || die(`no MC_SESSION — \`mc goal ${pos[1]}\` only works inside a terminal session`);
       const kind = opt.kind ? String(opt.kind).toLowerCase() : null;
-      if (kind && !["pr", "investigation", "qa", "chat"].includes(kind)) die("--kind must be pr, investigation, qa or chat");
+      if (kind && !GOAL_KINDS.includes(kind)) die(`--kind must be ${GOAL_KINDS.join(", ")}`);
       const show = (goals) => {
         if (!goals.length) return console.log("(no goal list — this terminal has one goal, see `mc goal set`)");
         const done = goals.filter((g) => g.done_at).length;
@@ -1057,7 +1078,7 @@ function askCap(question) {
       };
       if (pos[1] === "list") return show((await req("GET", "/sessions/" + sid + "/goals")).goals);
       if (pos[1] === "add") {
-        const text = pos.slice(2).join(" ") || die('mc goal add "<the next thing this terminal must finish>" [--kind pr|investigation|qa|chat]');
+        const text = pos.slice(2).join(" ") || die('mc goal add "<the next thing this terminal must finish>" [--kind pr|ui|investigation|qa|product|chat]');
         const out = await req("POST", "/sessions/" + sid + "/goals", {
           goals: [{ text, ...(kind ? { kind } : {}) }],
           source: "agent",
@@ -1089,14 +1110,14 @@ function askCap(question) {
       // stops the automatic title deriver (desk-title.ts) from renaming it from your next
       // "Understanding:" line. Your words win from here on.
       const kind = opt.kind ? String(opt.kind).toLowerCase() : null;
-      if (kind && !["pr", "investigation", "qa", "chat"].includes(kind)) die("--kind must be pr, investigation, qa or chat");
+      if (kind && !GOAL_KINDS.includes(kind)) die(`--kind must be ${GOAL_KINDS.join(", ")}`);
       // `--done-when` (repeatable): the finish line — the checks that will say the goal is met. The
       // operator reads them under the goal and approves against them, so write what he can verify.
       const doneWhen = (multi["done-when"] || []).map((x) => String(x).trim()).filter((x) => x && x !== "true");
       const body =
         pos[1] === "set"
           ? {
-              goal: pos.slice(2).join(" ") || die('mc goal set "<what this terminal is for>" [--kind pr|investigation|qa|chat] [--done-when "<check>" …]'),
+              goal: pos.slice(2).join(" ") || die('mc goal set "<what this terminal is for>" [--kind pr|ui|investigation|qa|product|chat] [--done-when "<check>" …]'),
               goal_source: "agent",
               ...(kind ? { goal_kind: kind } : {}),
               ...(doneWhen.length ? { done_when: doneWhen } : {}),
@@ -1795,6 +1816,68 @@ function askCap(question) {
     // and a sandboxed worker does not — a worker may add to the operator's list, never rewrite it.
     // Continuations (src/continuations.ts): park this terminal's work on a condition; the daemon
     // continues it when the condition is met.
+    // The request ledger (LEDGER.md): what the operator asked for → where it went → what state it is in
+    // → what came back → what he owes. Read-only. A terminal's token reads its own workspace's rows, a
+    // project Robert's his workspace's, the operator's shell every workspace.
+    if (cmd === "ledger") {
+      const SUBS = ["list", "show", "queue", "mine", "text"];
+      const sub = SUBS.includes(pos[1]) ? pos[1] : pos[1] ? "show" : "list";
+      const WORD = { needs_operator: "needs you", stuck: "stuck", working: "working", done: "done", closed: "closed" };
+      const since = (iso) => {
+        const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+        return m >= 2880 ? `${Math.round(m / 1440)}d` : m >= 120 ? `${Math.round(m / 60)}h` : `${m}m`;
+      };
+      const row = (r) => `${r.id.slice(0, 8)}  ${(WORD[r.state] || r.state).padEnd(9)}  ${r.kind ? `[${r.kind}] ` : ""}${r.title}` +
+        `${r.state_line ? ` — ${r.state_line}` : ""}${r.workspace ? ` · ${r.workspace.slug}` : ""} · ${since(r.state_at)}`;
+      if (sub === "list" || sub === "mine") {
+        const q = new URLSearchParams();
+        if (opt.state) q.set("state", opt.state);
+        if (opt.needs) q.set("needs", "decision");
+        if (opt.ambiguous) q.set("ambiguous", "1");
+        if (opt.since) q.set("since", opt.since);
+        if (opt.workspace) q.set("workspace", opt.workspace);
+        if (opt.limit) q.set("limit", opt.limit);
+        if (sub === "mine") {
+          q.set("session", process.env.MC_SESSION || die("`mc ledger mine` only works inside a terminal session (no MC_SESSION)"));
+          if (!opt.state) q.set("state", "all");
+        }
+        const rows = await req("GET", "/ledger" + (q.toString() ? `?${q}` : ""));
+        if (opt.json) return console.log(JSON.stringify(rows, null, 2));
+        if (!rows.length) return console.log(sub === "mine" ? "this terminal serves no request yet" : "nothing in the ledger matches");
+        return console.log(rows.map(row).join("\n"));
+      }
+      if (sub === "text") {
+        const q = new URLSearchParams({ format: "text" });
+        if (opt.workspace) q.set("workspace", opt.workspace);
+        return console.log((await req("GET", `/ledger?${q}`)).text);
+      }
+      if (sub === "queue") {
+        const qq = await req("GET", "/ledger/queue" + (opt.workspace ? `?workspace=${encodeURIComponent(opt.workspace)}` : ""));
+        if (opt.json) return console.log(JSON.stringify(qq, null, 2));
+        if (!qq.items.length && !qq.held.length) return console.log("nothing waits for the operator's word");
+        const lines = qq.items.map((i, n) => `${n + 1}. [${i.item_id.slice(0, 8)}] ${i.line}`);
+        if (qq.held.length) lines.push("held for later:", ...qq.held.map((i) => `- [${i.item_id.slice(0, 8)}] ${i.line}${i.hold_until ? ` · back ${i.hold_until.slice(0, 16).replace("T", " ")}` : " · undated"}`));
+        return console.log(lines.join("\n"));
+      }
+      const id = (sub === "show" && SUBS.includes(pos[1]) ? pos[2] : pos[1]) || die("mc ledger show <id8>");
+      const r = await req("GET", `/ledger/${encodeURIComponent(id)}`);
+      if (opt.json) return console.log(JSON.stringify(r, null, 2));
+      const out = [
+        `${r.id.slice(0, 8)} · ${WORD[r.state] || r.state}${r.state_line ? ` — ${r.state_line}` : ""}`,
+        `asked ${since(r.asked_at)} ago · ${r.via}${r.surface ? ` on ${r.surface}` : ""}${r.workspace ? ` · ${r.workspace.name}` : " · fleet-wide"}${r.work ? ` · ${r.work.label}` : ""}`,
+        `words: ${r.words}`,
+      ];
+      if (r.work) out.push(`done means: ${r.work.done}`);
+      if (r.prereqs?.length) out.push(`needs first: ${r.prereqs.map((p) => p.kind + (p.why ? ` (${p.why})` : "")).join(", ")}`);
+      if (r.terminals.length) out.push("terminals:", ...r.terminals.map((t) => `  ${t.session_id.slice(0, 8)} ${t.role}${t.primary ? "" : " (steer)"}${t.until ? " · handed over" : ""} · ${t.phase || "?"} · ${t.goal || "(no goal)"}` +
+        (t.attribution ? ` · turn by ${t.attribution}${t.ambiguous ? " (AMBIGUOUS — a guess)" : ""}` : "")));
+      if (r.result.length) out.push("result:", ...r.result.map((x) => `  ${x.outcome.at.slice(0, 16).replace("T", " ")} ${x.outcome.summary}${x.outcome.prs.length ? ` · ${x.outcome.prs.join(" ")}` : ""}${x.outcome.shipped.length ? ` · shipped: ${x.outcome.shipped.join(", ")}` : ""}`));
+      if (r.deliverables.length) out.push("deliverables:", ...r.deliverables.map((d) => `  ${d.kind} · ${d.label || d.ref} · ${d.state}${d.target_hash ? ` · target ${d.target_hash.slice(0, 19)}` : ""}`));
+      if (r.decisions.length) out.push("decisions:", ...r.decisions.map((d) => `  [${d.id.slice(0, 8)}] ${d.action} · ${d.label} · ${d.status}${d.decision ? ` · ${d.decision}${d.words ? ` "${d.words}"` : ""}` : ""}${d.target_hash ? ` · target ${d.target_hash.slice(0, 19)}` : ""}`));
+      if (r.expected_checks.length) out.push(`checks: ${r.expected_checks.map((c) => `${c.name} ${c.status}`).join(" · ")}`);
+      if (r.children?.length) out.push("per project:", ...r.children.map((c) => `  ${row(c)}`));
+      return console.log(out.join("\n"));
+    }
     if (cmd === "when") {
       const H = adminToken() && !process.env.MC_WORKSPACE_TOKEN ? { "x-mc-admin": adminToken() } : undefined;
       const ago = (iso) => {
@@ -2319,7 +2402,7 @@ function askCap(question) {
     if (cmd === "lead" && pos[1] === "new") {
       if (process.env.MC_LEAD) die("a lead may not open a lead");
       const goal = pos.slice(2).join(" ");
-      if (!goal) die('mc lead new "<goal>" [--workspace ID] [--description "..."] [--backend b] [--model m] [--kind pr|investigation|qa|chat]');
+      if (!goal) die('mc lead new "<goal>" [--workspace ID] [--description "..."] [--backend b] [--model m] [--kind pr|ui|investigation|qa|product|chat]');
       let ws = opt.workspace || process.env.MC_WORKSPACE;
       const own = process.env.MC_WORKSPACE;
       if (own) {
@@ -2719,14 +2802,14 @@ function askCap(question) {
       const s = all.find((x) => x.id === ref || x.id.startsWith(ref));
       if (!s) die(`no session matching ${ref}`);
       const kind = opt.kind ? String(opt.kind).toLowerCase() : null;
-      if (kind && !["pr", "investigation", "qa", "chat"].includes(kind)) die("--kind must be pr, investigation, qa or chat");
+      if (kind && !GOAL_KINDS.includes(kind)) die(`--kind must be ${GOAL_KINDS.join(", ")}`);
       const body =
         pos[1] === "done"
           // The operator (or Robert) calling a terminal done means the TERMINAL is done — with a
           // queue behind the card that is every open goal, not only the one showing (§5d).
           ? { goal_done: true, goal_done_all: true }
           : {
-              goal: pos.slice(3).join(" ") || die('mc session goal <ID> "<title>" [--kind pr|investigation|qa|chat]'),
+              goal: pos.slice(3).join(" ") || die('mc session goal <ID> "<title>" [--kind pr|ui|investigation|qa|product|chat]'),
               goal_source: process.env.MC_AGENT_NAME ? "agent" : "human",
               ...(kind ? { goal_kind: kind } : {}),
             };
@@ -2831,6 +2914,41 @@ function askCap(question) {
       ];
       if (q.recent.length) out.push(`last handled: ${q.recent.slice(0, 3).map((w) => w.key).join(", ")}`);
       return console.log(out.join("\n"));
+    }
+    // Stuck-work alerts (src/stuck-alerts.ts), from the outside: what the operator was told, how long
+    // after it got stuck, on which rung, and what the self-check caught that nothing else did.
+    if (cmd === "alerts") {
+      if (pos[1] === "ack") {
+        const id = pos[2] || die("mc alerts ack <id>");
+        const { alert } = await req("POST", `/alerts/${encodeURIComponent(id)}/ack`, { via: "mc" }, adminHeaders());
+        return console.log(`acknowledged ${alert.id.slice(0, 8)} · ${alert.title}`);
+      }
+      const q = await req("GET", `/alerts?since=${encodeURIComponent(opt.since || "24h")}`, undefined, adminHeaders());
+      if (opt.json) return console.log(JSON.stringify(q, null, 2));
+      const secs = (ms) => (ms == null ? "—" : ms < 90_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`);
+      const icon = (a) => (a.state === "capped" ? "⋯" : a.acked_at ? "✓" : a.not_reached ? "✕" : a.resolved_at ? "○" : a.delivered_at ? "●" : "…");
+      const lines = q.alerts.map((a) =>
+        `${icon(a)} ${a.id.slice(0, 8)} ${a.raised_at.slice(11, 16)} ${a.kind}${a.workspace ? ` · ${a.workspace}` : ""}` +
+        ` · told ${secs(a.told_ms)}${a.delivered_via ? ` via ${a.delivered_via}` : ""}` +
+        (a.acked_at ? ` · acked (${a.acked_via})` : a.resolved_at ? " · over before acked" : "") +
+        (a.not_reached ? ` · NOT REACHED${a.said_on_mac ? " (said on the Mac only)" : ""}${a.resolved_at ? "" : " — retried when a call or phone can take it"}` : "") +
+        (a.selfcheck ? " · SELF-CHECK" : "") +
+        `\n    ${a.text}` +
+        `\n    ${a.channels.map((c) => `${c.rung}:${c.ok === true ? "ok" : c.ok === false ? "no" : "…"}${c.detail ? ` (${c.detail})` : ""}`).join(" → ") || "(no channel tried)"}`,
+      );
+      const s = q.stats;
+      const cov = q.coverage;
+      // First: whatever cannot reach him right now — before any incident needs it.
+      const down = (q.readiness?.rungs || []).filter((r) => !r.usable && r.reason !== "off" && r.rung !== "voice");
+      const head = q.readiness && !q.readiness.remote_usable
+        ? [`⚠ away from the Mac I cannot reach you right now:`, ...down.map((r) => `   ${r.rung}: ${r.line}`)]
+        : down.map((r) => `⚠ ${r.rung}: ${r.line}`);
+      return console.log([
+        ...head,
+        lines.length ? lines.join("\n") : "(no alerts in that window)",
+        `${s.total} alert(s) · ${s.delivered} delivered · ${s.acked} acked · ${s.undelivered} not reached (${s.not_reached_open ?? 0} still open) · ${s.capped} folded into ${s.summaries} summar${s.summaries === 1 ? "y" : "ies"} · stuck→told p50 ${secs(s.told_ms_p50)} p90 ${secs(s.told_ms_p90)}`,
+        `self-check: ${cov ? `${cov.ok ? "ok" : `${cov.misses.length} miss(es) now`} · ${cov.misses_total ?? 0} total` : "not run yet"} · live calls: ${q.voice.length} · waiting out a grace: ${q.pending.length}`,
+      ].join("\n"));
     }
     // Claim an isolated checkout for THIS terminal, once you know which repo you need. Two agents in
     // one working tree is a silent data-loss race: a branch switch by one discards the other's

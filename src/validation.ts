@@ -7,7 +7,7 @@ import { MAX_LABEL, MAX_QUICK_ACTIONS, MAX_TEXT, QA_KINDS, QA_PHASES } from "./q
 // Express body-validation middleware: parses req.body against `schema`, replies 400 with a readable
 // message on mismatch, else replaces req.body with the parsed (typed, defaulted) value and continues.
 /** The shape of a terminal's work. "chat" = talking it through: no finish line, no hand-off asked for. */
-export const GOAL_KINDS = ["pr", "investigation", "qa", "chat"] as const;
+export const GOAL_KINDS = ["pr", "ui", "investigation", "qa", "product", "chat"] as const;
 
 export function validate(schema: z.ZodType) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -160,6 +160,10 @@ export const SessionHookSchema = z.object({
   })).max(4).optional(),
   error: z.string().max(400).nullable().optional(),
   tasks: z.array(z.object({ key: z.string().max(200), label: z.string().max(400) })).max(50).optional(),
+  // A draft's recipient and a hash of what it says, computed by `mc hook` where the text is
+  // (ledger-model.ts draftHash): the request ledger binds a yes to it. The text never comes here.
+  // A malformed one is dropped, never a reason to refuse the hook — the draft notice must still go out.
+  target: z.object({ channel: z.enum(["slack", "email"]), to: z.string().max(400), hash: z.string().regex(/^sha256:[0-9a-f]{64}$/) }).optional().catch(undefined),
 });
 
 const UsageWindowSchema = z.object({ used_percentage: z.number().min(0).max(10000), resets_at: z.number().nullable().optional() }).passthrough();

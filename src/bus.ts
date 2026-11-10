@@ -76,6 +76,11 @@ export type BusEvent = (
   // The resolved card of a terminal (term-status.ts): phase, one-liner, subagents, progress. Every
   // surface reads this instead of re-deriving it from activity + agent.state + focus events.
   | { topic: "session.status"; session_id: string; status: unknown }
+  // Stuck work, to be SPOKEN now (src/stuck-alerts.ts): the first rung of the alert ladder. `client`
+  // is the one live voice call picked to say it — every other page ignores it — and that page answers
+  // POST /api/alerts/:id/spoken, or the alert moves on to the phone. Carries workspace_id so a Desk
+  // locked to one client for a screen share drops another client's alert (static/desk-scope.js).
+  | { topic: "alert.raised"; alert_id: string; workspace_id: string | null; session_id: string | null; kind: string; say: string; lang: string; client: string | null }
   // Someone read or wrote the operator's Mac clipboard through the daemon (`mc clip`). The CONTENT is
   // deliberately absent — only who, and a shape description — because the clipboard is exactly where
   // a password passes through, and an activity trail that quoted it would be the leak itself.
@@ -217,8 +222,13 @@ export type BusEvent = (
   | { topic: "agent.push"; you: string; reply: string; at: string; source?: string; ws?: string | null; client?: string; turn?: string; steps?: unknown[]; attachments?: unknown[]; id?: number; quote?: { id: number; side: string; text: string }; engine?: string | null }
   /** One move Robert made mid-turn (robert-steps.ts), live, so the Desk draws the trail as it happens. */
   | { topic: "agent.step"; ws: string | null; turn: string; step: unknown; label?: string | null }
-  /** A turn started: what was said and by which page — other surfaces draw the line right away, not when he answers. */
-  | { topic: "agent.asked"; you: string; at: string; source?: string; ws?: string | null; client?: string; turn: string; attachments?: unknown[]; quote?: { id: number; side: string; text: string } }
+  /** A turn started: what was said and by which page — other surfaces draw the line right away, not when he answers.
+   *  `voice` = he spoke it (the request ledger records how each request arrived). */
+  | { topic: "agent.asked"; you: string; at: string; source?: string; ws?: string | null; client?: string; turn: string; voice?: boolean; attachments?: unknown[]; quote?: { id: number; side: string; text: string } }
+  // The request ledger (src/ledger.ts, LEDGER.md): a request's derived state moved, or the operator
+  // recorded his answer to one of its decision items. Recording is all a decision does — the executor acts.
+  | { topic: "ledger.updated"; request_id: string; workspace_id: string | null; state: string }
+  | { topic: "ledger.decided"; request_id: string; item_id: string; workspace_id: string | null; action: string; decision: string; by: string | null; target_hash: string | null }
 ) & { actor?: string };
 
 class Bus extends EventEmitter {

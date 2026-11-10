@@ -21,8 +21,12 @@ import { bus } from "./bus.js";
 import { db, asks, sessions } from "./store.js";
 import { heldBy, holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { clearAgentOverlay, getAgent, reportAgentState } from "./agent-lifecycle.js";
-import { focusEvents, isLive, sessionActivity, sessionMenu, sessionPrompt } from "./terminal.js";
+import { focusEvents, isLive, sessionActivity, sessionMenu, sessionPrompt, sessionScreen } from "./terminal.js";
 import type { DeskPrompt, PromptOption } from "./desk-prompt.js";
+import { brainAwakeSince } from "./brain-awake.js";
+import { hostOnline } from "./hosts/index.js";
+import { LOCAL_HOST_ID } from "./store/hosts.js";
+import { setting } from "./settings.js";
 
 export const PHASES = ["blocked", "decide", "review", "your_turn", "waiting", "working", "stalled"] as const;
 export type Phase = (typeof PHASES)[number] | "ended";
@@ -127,6 +131,14 @@ export function sessionGoalReached(
 }
 /** Hooks said "working" but the pty has been silent this long: whatever it is doing, it is not working. */
 export const HOOK_WORKING_SILENCE_MS = 45_000;
+/**
+ * Claude's footer while a turn runs ("✻ Thinking… (34s · esc to interrupt)" — terminal-failover reads
+ * the same line). Its spinner and timer repaint every second, so this hint sitting on a frame that has
+ * printed nothing for minutes means the turn is not running: the CLI is frozen mid-turn.
+ */
+export const TURN_RUNNING_RE = /\besc to interrupt\b/i;
+/** ⚙ Settings → Alerts `term.frozen_min`: awake minutes of that before the card reads stalled. */
+export const frozenAfterMs = (): number => Math.max(1, Number(setting<number>("term.frozen_min")) || 3) * 60_000;
 /** A subagent that never reported back stops counting after this. */
 export const SUBAGENT_TTL_MS = 3 * 60 * 60 * 1000;
 const REASON: Record<string, string> = {
@@ -149,6 +161,11 @@ export type ResolveInput = {
   /** A block the daemon itself set (stall supervisor, auth wall) — not the agent's declaration. */
   daemonBlock: { label: string | null; reason: string | null } | null;
   demandInspection: boolean;
+  /**
+   * Hooks say a turn is running, yet the frame still shows the turn's interrupt hint and has printed
+   * nothing for this long in AWAKE time (frozenFor): the CLI is frozen mid-turn. Null = not frozen.
+   */
+  frozenMs?: number | null;
   narration: string | null;
   result: string | null;
   now: number;
@@ -250,6 +267,8 @@ export function resolve(inp: ResolveInput): Omit<TermStatus, "since"> {
     return out("working", label);
   }
   if (inp.demandInspection) return out("stalled", `silent ${inp.lastOut ? mins(silentFor) : ""} with no sign of life`.replace(/\s+/g, " "));
+  // After the subagents check above: a turn waiting on its own background work is not frozen.
+  if (inp.frozenMs != null) return out("stalled", `no output for ${mins(inp.frozenMs)} in the middle of its turn`);
   if (sig.turn?.error) return out("your_turn", "turn failed: " + sig.turn.error);
   // Not the prompt's "question": for a finished turn that is the TUI's last line — its status bar.
   return out("your_turn", inp.narration || "finished its turn");
@@ -333,6 +352,44 @@ function take(n: { say: string | null; result: string | null }, e: { kind?: stri
   return false;
 }
 
+// ── frozen mid-turn ─────────────────────────────────────────────────────────────────────────────
+/** What frozenFor reads outside the signals: the frame, the brain's awake mark, the host link. Tests swap it. */
+type FrozenProbe = { screen: (id: string) => string[] | null; awakeSince: (now: number) => number; hostOnline: (hostId: string) => boolean };
+const realFrozenProbe: FrozenProbe = {
+  screen: (id) => sessionScreen(id)?.lines ?? null,
+  awakeSince: (now) => brainAwakeSince(now),
+  hostOnline: (h) => hostOnline(h),
+};
+let frozenProbe: FrozenProbe = realFrozenProbe;
+export function setFrozenProbe(p: Partial<FrozenProbe> | null): void { frozenProbe = p ? { ...realFrozenProbe, ...p } : realFrozenProbe; }
+
+/**
+ * How long this terminal has been frozen mid-turn, or null when it is not. All four must hold:
+ *   - hooks say a turn is running (a Stop never came);
+ *   - no output for term.frozen_min of AWAKE time — counted from the later of its last byte and the
+ *     brain's last wake (brain-awake.ts), so a Mac that slept is never a terminal that froze;
+ *   - the turn's interrupt hint is still on the bottom rows of the frame (a missed Stop over an idle
+ *     composer has no hint, and stays "your turn");
+ *   - it is not on a computer that is offline (its pty keeps running there; host failover owns that).
+ * A turn waiting on its own subagents never gets here as stalled: resolve() answers "waiting" first.
+ */
+export function frozenFor(
+  s: { id: string; host_id?: string | null },
+  sig: Signals,
+  lastOut: number | null,
+  now: number,
+): number | null {
+  if (sig.turn?.state !== "working" || !lastOut) return null;
+  const n = frozenAfterMs();
+  if (now - lastOut < n) return null; // cheap gate before any probe
+  const silent = now - Math.max(lastOut, frozenProbe.awakeSince(now));
+  if (silent < n) return null;
+  if (s.host_id && s.host_id !== LOCAL_HOST_ID && !frozenProbe.hostOnline(s.host_id)) return null;
+  const rows = (frozenProbe.screen(s.id) ?? []).map((l) => l.replace(/\s+$/, "")).filter((l) => l.trim());
+  if (!rows.slice(-8).some((l) => TURN_RUNNING_RE.test(l))) return null;
+  return silent;
+}
+
 export function statusOf(id: string, now = Date.now()): TermStatus | null {
   const s = sessions.get(id);
   if (!s) return null;
@@ -374,6 +431,7 @@ export function statusOf(id: string, now = Date.now()): TermStatus | null {
       : null,
     daemonBlock: agent?.state === "blocked" ? { label: agent.state_label, reason: agent.blocked_reason } : null,
     demandInspection: !!agent?.demand_inspection,
+    frozenMs: frozenFor(s, sig, act.last_out, now),
     narration: n.say,
     result: n.result,
     now,

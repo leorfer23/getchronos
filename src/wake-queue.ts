@@ -66,8 +66,11 @@ type WakeAsker = (prompt: string, wsId: string | null, model: string) => Promise
 type WakePoster = (p: { body: string; ticket_id: string | null; workspace_id: string | null; steps?: RobertStep[]; turn?: string; engine?: string }) => void;
 type WakeNotifier = (text: string) => Promise<unknown>;
 
+// The wake lane: its own warm process and --resume session per workspace (telegram/agent.ts), so a
+// wake never holds up the operator's turn and its prompt never lands in his conversation.
+export const WAKE_LANE = "wake" as const;
 let asker: WakeAsker = async (prompt, wsId, model) => {
-  const out = await askManagerWeb(prompt, undefined, wsId, { model, label: "woken" });
+  const out = await askManagerWeb(prompt, undefined, wsId, { model, label: "woken", lane: WAKE_LANE });
   return { reply: out.reply, steps: out.steps, turn: out.turn, engine: out.engine };
 };
 let poster: WakePoster = (p) => {

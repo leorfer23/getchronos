@@ -32,7 +32,8 @@ export type PushSubscription = { endpoint: string; keys: { p256dh: string; auth:
 /** A button on the notification: what the SW types when it is tapped (same body as POST /sessions/:id/input). */
 export type PushAction = { action: string; title: string; input: Record<string, unknown> };
 export type PushPayload = {
-  kind: "needs" | "blocked" | "robert";
+  /** alert = stuck work (src/stuck-alerts.ts): a tap acknowledges it, so it stops climbing to Telegram. */
+  kind: "needs" | "blocked" | "robert" | "alert";
   title: string;
   body: string;
   /** Collapses repeats for the same terminal / thread in the tray. */
@@ -41,8 +42,10 @@ export type PushPayload = {
   url: string;
   session_id?: string;
   actions?: PushAction[];
-  /** Live terminals waiting on the operator right now — the app-icon badge. */
-  needs: number;
+  /** Live terminals waiting on the operator right now — the app-icon badge. Absent = leave it as it is. */
+  needs?: number;
+  /** The alert row a tap acknowledges (POST /api/alerts/:id/ack from static/sw.js). */
+  alert_id?: string;
   at: string;
 };
 
@@ -137,6 +140,12 @@ type Deps = {
   prompt: (id: string) => DeskPrompt | null;
   /** The resolved phase (term-status.ts). A terminal waiting on its own subagents went quiet, but it is not your turn. */
   phase?: (id: string) => string | null;
+  /**
+   * The stuck-work alerts own this terminal's push (src/stuck-alerts.ts alertsOwnPush): it waits on
+   * his answer or is stuck, and that layer tells him once — after Robert's chance, on the first channel
+   * that answers. Pushing here as well would buzz him twice, and before Robert had a look.
+   */
+  owned?: (id: string, phase: string | null) => boolean;
   now?: () => number;
   /** Tests force it on; the daemon reads CONFIG.push (off under CHRONOS_TEST). */
   enabled?: boolean;
@@ -177,6 +186,7 @@ export function startPush(deps: Deps): () => void {
       if (blocked.has(e.session_id)) return; // the blocked push already went out
       const ph = deps.phase?.(e.session_id);
       if (ph === "waiting" || ph === "working") return;
+      if (deps.owned?.(e.session_id, ph ?? null)) return;
       const s = sessions.get(e.session_id);
       if (!s || underLiveLead(s.id) || !cooled("s:" + s.id) || !allowed(s.id)) return;
       const p = e.prompt ?? deps.prompt(s.id);
@@ -195,6 +205,7 @@ export function startPush(deps: Deps): () => void {
       const was = blocked.has(e.id);
       if (e.state === "blocked") blocked.add(e.id); else blocked.delete(e.id);
       if (e.state !== "blocked" || was) return;
+      if (deps.owned?.(e.id, deps.phase?.(e.id) ?? "blocked")) return;
       const s = sessions.get(e.id);
       if (!s || underLiveLead(s.id) || !cooled("b:" + s.id) || !allowed(s.id)) return;
       await broadcast({

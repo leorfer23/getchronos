@@ -31,7 +31,7 @@ import { backendInstalled, getBackend, hasBackend } from "./backends/index.js";
 import { childEnv } from "./child-env.js";
 import { placementCandidates } from "./hosts/candidates.js";
 import { cliFor } from "./hosts/placement.js";
-import { isCreditWallError, isProviderLimitError } from "./manager-fallback.js";
+import { isAuthError, isCreditWallError, isProviderLimitError } from "./manager-fallback.js";
 import { renderLinesReplay } from "./replay.js";
 import {
   focusEvents, killSession, openSession, sendInput, sessionActivity, sessionPrompt, sessionScreen,
@@ -101,27 +101,75 @@ export function classifyWall(text: string): WallKind {
 }
 
 /**
- * The wall a settled frame is sitting on, or null. Pure over the frame's rows (ScreenMirror keeps no
- * scrollback, so these ARE the visible rows): the bottom-most wall row wins, and it only counts when
- * everything under it is chrome — a composer, a footer, a dialog's options — never more work.
+ * The bottom-most row of a settled frame that `pick` says is the CLI speaking, provided everything
+ * under it is chrome — a composer, a footer, a dialog's options — never more work. Shared by the
+ * credit wall and the login wall so the two read a frame by exactly the same rules.
  */
-export function detectWall(frame: string[] | null | undefined): Wall | null {
+function bottomCliLine(frame: string[] | null | undefined, pick: (row: string) => string | null): { line: string; next: string } | null {
   const rows = (frame ?? []).map((l) => l.replace(/\s+$/, "")).filter((l) => l.trim());
   if (!rows.length) return null;
   const tail = rows.slice(-TAIL_ROWS);
   if (tail.some((l) => WORKING_RE.test(l))) return null;
   for (let i = tail.length - 1; i >= 0; i--) {
-    const line = wallLine(tail[i]);
+    const line = pick(tail[i]);
     if (!line) continue;
     const under = tail.slice(i + 1);
     if (under.length > MAX_ROWS_UNDER) return null;
     // The row right under a wall is often its own second sentence ("/upgrade to increase your usage
     // limit."), so only bullets and prompts disqualify — and a numbered option is a dialog, not work.
     if (under.some((l) => CONTENT_RE.test(l) && !OPTION_RE.test(l))) return null;
-    const ctx = [line, under[0] ? under[0].replace(/^[\s⎿│┃]+/, "").trim() : ""].join(" ");
-    return { kind: classifyWall(ctx), line: line.slice(0, 300) };
+    return { line, next: under[0] ? under[0].replace(/^[\s⎿│┃]+/, "").trim() : "" };
   }
   return null;
+}
+
+/**
+ * The wall a settled frame is sitting on, or null. Pure over the frame's rows (ScreenMirror keeps no
+ * scrollback, so these ARE the visible rows): the bottom-most wall row wins, and it only counts when
+ * everything under it is chrome.
+ */
+export function detectWall(frame: string[] | null | undefined): Wall | null {
+  const hit = bottomCliLine(frame, wallLine);
+  if (!hit) return null;
+  return { kind: classifyWall([hit.line, hit.next].join(" ")), line: hit.line.slice(0, 300) };
+}
+
+// ──────────────────────────── the login wall ────────────────────────────
+
+// Logged out: the CLI will not do anything until someone logs that account in again. Claude Code says
+// "Invalid API key · Please run /login", "Not logged in · Please run /login", "OAuth token revoked ·
+// Please run /login", or an API Error 401 with authentication_error / "OAuth token has expired";
+// cursor-agent says "Authentication required. Please run 'agent login'". Case-sensitive on the leading
+// word, like VOICE_RES: the CLI capitalises it, and prose quoting it mid-sentence never sits flush left.
+const LOGIN_RES = [
+  /^(?:Invalid API key|Not logged in|OAuth token (?:has )?(?:expired|revoked)|Authentication required)\b/,
+  /^(?:This|Your) (?:login|session) (?:has )?(?:reached its time limit|expired)\b/,
+  // Anything else the CLI says flush left that ends in its login instruction — anchored on a capital, so
+  // an agent's own "● …Please run /login…" (behind its bullet) never matches.
+  /^[A-Z][^●⏺]*?\bPlease run (?:\/login|['`]?agent login)\b/,
+];
+
+/** The login wall a single row states, as it would be quoted — or null. Same row rules as wallLine. */
+export function loginLine(row: string): string | null {
+  const lead = LEAD_RE.exec(row)!;
+  if (!lead[2] && lead[1].length > 0) return null;
+  const s = row.slice(lead[0].length).replace(/\s*[│┃]\s*$/, "").trim();
+  if (!s) return null;
+  if (LOGIN_RES.some((re) => re.test(s))) return s;
+  const pre = ERROR_PREFIX_RE.exec(s);
+  if (pre && pre[0].trim() && isAuthError(s.slice(pre[0].length))) return s;
+  return null;
+}
+
+/**
+ * A settled frame stopped on a login wall, or null. NOT a wall failover moves: neither another model
+ * nor waiting fixes a logged-out account, and putting the work on another account is the operator's
+ * call — so onTerminalQuiet never sees it (detectWall stays credit/limit only), and stuck-alerts tells
+ * him instead.
+ */
+export function detectLoginWall(frame: string[] | null | undefined): { kind: "login"; line: string } | null {
+  const hit = bottomCliLine(frame, loginLine);
+  return hit ? { kind: "login", line: hit.line.slice(0, 300) } : null;
 }
 
 // ──────────────────────────── what to do about it ────────────────────────────

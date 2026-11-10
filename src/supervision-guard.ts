@@ -90,6 +90,10 @@ export function supervisionVerdict(nowMs = Date.now()): SupervisionVerdict {
  * clears the episode quietly, on the board rather than on his phone, so the next gap is loud again.
  */
 export async function checkSupervision(nowMs = Date.now()): Promise<SupervisionVerdict> {
+  // The same question for the operator's alerts: is anything stuck past its window with nobody told?
+  // On this clock (the monitor tick, every Robert turn), not the alerts' own, so it can't die with it.
+  // Late import: stuck-alerts reaches robert-drive → wake-queue, which imports this module.
+  await import("./stuck-alerts.js").then((m) => m.checkAlertCoverage(nowMs)).catch((e) => console.warn("[alerts] self-check failed", e?.message ?? e));
   const v = supervisionVerdict(nowMs);
   const open = kv.get(EPISODE_KEY);
   if (!v.ok) {
