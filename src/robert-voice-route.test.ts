@@ -119,13 +119,13 @@ test("voice: a deleted parent workspace is skipped, a turn with no ask is untouc
   assert.equal(resolveVoiceAsk(routed, { surface: "t" }), routed);
 });
 
-test("POST /agent: a voice turn goes through resolveVoiceAsk; a typed one keeps the ask", async () => {
+test("POST /agent: every turn goes through resolveVoiceAsk: spoken or typed, he is never asked which project", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
   const api = fs.readFileSync(path.join(process.cwd(), "src/api.ts"), "utf8");
   const route = api.slice(api.indexOf('api.post("/agent", requireAdmin'), api.indexOf('api.post("/agent/exec/:id"'));
-  assert.match(route, /const turn = voice && named\.length < 2 \? resolveVoiceAsk\(routedTurn, \{ replyWorkspace: quote\?\.workspace_id \?\? null, surface \}\) : routedTurn;/);
-  assert.match(route, /const fanout = named\.length >= 2 \? named : wantsFanout\(turn\) \? activeWorkspaceIds\(\) : null;/);
+  assert.match(route, /const turn = named\.length < 2 \? resolveVoiceAsk\(routedTurn, \{ replyWorkspace: quote\?\.workspace_id \?\? null, surface \}\) : routedTurn;/);
+  assert.match(route, /const fanout = named\.length >= 2 \? named : fansOut\(turn, voice, process\.env\.CHRONOS_ROBERT_FANOUT === \"1\"\) \? activeWorkspaceIds\(\) : null;/);
   // F: the latency stamps ride both the reply row and the error row.
   assert.match(route, /const askedAt = new Date\(\)\.toISOString\(\);/);
   assert.match(route, /if \(kind === "text" && t && !firstDeltaAt\) firstDeltaAt = new Date\(\)\.toISOString\(\);/);

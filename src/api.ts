@@ -5133,8 +5133,9 @@ export function startServer() {
     const named = routedTurn.ask && /two tags|more than one project/.test(routedTurn.ask.why)
       ? routedTurn.ask.candidates.map((c) => c.ws).filter((x): x is string => !!x)
       : [];
-    // Spoken: never "which project?" — the bubble answered, then the sticky, then the unscoped Robert.
-    const turn = voice && named.length < 2 ? resolveVoiceAsk(routedTurn, { replyWorkspace: quote?.workspace_id ?? null, surface }) : routedTurn;
+    // Never "which project?", spoken or typed — he talks to one Robert, who does not ask him to sort
+    // his own words: the bubble answered, then the sticky, then the unscoped Robert.
+    const turn = named.length < 2 ? resolveVoiceAsk(routedTurn, { replyWorkspace: quote?.workspace_id ?? null, surface }) : routedTurn;
     if (turn.ask && named.length < 2) {
       return res.json({ reply: askLine(turn.ask), ask: { why: turn.ask.why, candidates: turn.ask.candidates }, actions: [], ws: null, how: "ask" });
     }
