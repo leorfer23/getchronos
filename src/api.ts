@@ -137,7 +137,7 @@ import { flowData } from "./flow.js";
 import { transcribe, audioFilename, transcribeFailure } from "./transcribe.js";
 import { speak, voiceFor, listVoices, neuralHealth } from "./speak.js";
 import { activeWorkspaceIds, askFleetFanout, askManagerWeb, handFilesTo, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
-import { askLine, commitTurn, explainRoute, getSticky, resolveTurnSmart, setSticky } from "./thread-router.js";
+import { askLine, commitTurn, explainRoute, getSticky, resolveTurnSmart, resolveVoiceAsk, setSticky, wantsFanout } from "./thread-router.js";
 import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type LeadEvent } from "./store.js";
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
 import { leadEventPayload, waitForLeadEvents } from "./robert-drive.js";
@@ -5085,6 +5085,9 @@ export function startServer() {
   // HTTP response open for the whole turn used to die on the Cloudflare tunnel (~100s) and show
   // "connection dropped" on phone/Desk even though Robert kept working server-side.
   api.post("/agent", requireAdmin, validate(AgentTextSchema), async (req, res) => {
+    // Latency is measured from here: the moment the daemon accepted the line (chat_messages.asked_at).
+    const askedAt = new Date().toISOString();
+    const voice = !!req.body.voice;
     const surface = req.body.surface || "web";
     // A reply to one bubble: read the parent first so its project can steer the router (below a
     // #tag / text signal, above sticky). The quoted words themselves never re-route — only the
@@ -5094,7 +5097,7 @@ export function startServer() {
     // message (a #tag, a ticket key, a project name, the terminal on screen, the bubble being
     // answered, or where the last one landed). Each workspace answers on its OWN warm Robert, so no
     // context can cross between them.
-    const turn = await resolveTurnSmart(req.body.text, {
+    const routedTurn = await resolveTurnSmart(req.body.text, {
       selected: req.body.ws ?? null,
       route: req.body.route,
       surface,
@@ -5109,9 +5112,11 @@ export function startServer() {
     // id, nothing to wait for on the bus.
     // Two projects named in one line (two #tags, or two project signals): each project's own Robert
     // does its part — no single model reads both clients (workspaces never mix).
-    const named = turn.ask && /two tags|more than one project/.test(turn.ask.why)
-      ? turn.ask.candidates.map((c) => c.ws).filter((x): x is string => !!x)
+    const named = routedTurn.ask && /two tags|more than one project/.test(routedTurn.ask.why)
+      ? routedTurn.ask.candidates.map((c) => c.ws).filter((x): x is string => !!x)
       : [];
+    // Spoken: never "which project?" — the bubble answered, then the sticky, then the unscoped Robert.
+    const turn = voice && named.length < 2 ? resolveVoiceAsk(routedTurn, { replyWorkspace: quote?.workspace_id ?? null, surface }) : routedTurn;
     if (turn.ask && named.length < 2) {
       return res.json({ reply: askLine(turn.ask), ask: { why: turn.ask.why, candidates: turn.ask.candidates }, actions: [], ws: null, how: "ask" });
     }
@@ -5122,7 +5127,8 @@ export function startServer() {
     // fans out to each project's Robert and is stitched in code; small talk with no project goes to
     // the fleet-wide Robert, whose prompt carries no client's content at all.
     const runWs = ws;
-    const fanout = named.length >= 2 ? named : ws === null && !turn.routed?.social ? activeWorkspaceIds() : null;
+    // Fan-out only for a real shop-wide question or two named projects — never for "hola".
+    const fanout = named.length >= 2 ? named : wantsFanout(turn) ? activeWorkspaceIds() : null;
     const text = turn.text; // the #tag never reaches the model
     const client = req.body.client;
     const turnId = randomUUID();
@@ -5141,7 +5147,9 @@ export function startServer() {
     // files are copied into his own dir and he gets those paths.
     const prompt = quotePrompt(quote) + text + chatAttachmentsBlock(fanout?.length ? files : handFilesTo(runWs, files));
     const shown = files.map((a) => ({ id: a.id, url: a.url, mime: a.mime, name: a.name }));
-    const voice = !!req.body.voice;
+    // First streamed TEXT delta of the reply (chat_messages.first_delta_at): when speech can start.
+    let firstDeltaAt: string | null = null;
+    const timing = () => ({ voice, asked_at: askedAt, first_delta_at: firstDeltaAt });
     bus.publish({ topic: "agent.asked", you: text, at: new Date().toISOString(), source: surface, ws, client, turn: turnId, ...(shown.length ? { attachments: shown } : {}), ...(quoted ? { quote: quoted } : {}) });
     // Accepted: the tunnel may close this socket any time; the turn runs detached and the answer
     // rides agent.push (keyed by client+turn). Clients that miss the push re-read /agent/history.
@@ -5155,11 +5163,14 @@ export function startServer() {
           ? await askFleetFanout(prompt, fanout, { turn: turnId })
           : await askManagerWeb(
               prompt,
-              (t, kind) => bus.publish({ topic: "agent.delta", text: t, kind, ws, client, turn: turnId }),
+              (t, kind) => {
+                if (kind === "text" && t && !firstDeltaAt) firstDeltaAt = new Date().toISOString();
+                bus.publish({ topic: "agent.delta", text: t, kind, ws, client, turn: turnId });
+              },
               runWs,
               { voice, turn: turnId },
             );
-        const row = chat.add(text, reply || "", "web", ws, steps, shown, quote, engine);
+        const row = chat.add(text, reply || "", "web", ws, steps, shown, quote, engine, timing());
         chat.prune(2000);
         bus.publish({
           topic: "agent.push",
@@ -5180,7 +5191,7 @@ export function startServer() {
       } catch (e: any) {
         const err = "⚠️ " + String(e?.message ?? e);
         try {
-          const row = chat.add(text, err, "web", ws, null, shown, quote);
+          const row = chat.add(text, err, "web", ws, null, shown, quote, null, timing());
           bus.publish({
             topic: "agent.push",
             you: text,
