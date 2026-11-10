@@ -37,6 +37,12 @@ tokens, terminal output) — is sealed: denied after every re-grant, including a
 `sandbox_allow`, because agents run as the same user and file modes do not stop them
 ([HOSTS.md → Security](./HOSTS.md#security)).
 
+**What the sandbox does not decide** is how you set the machine up around it: a profile whose
+`skills` dir is a link to another profile's, a client's plugin marketplace installed in a second
+profile, a key exported in `~/.zshrc`, one `~/.aws/credentials` for two projects.
+`GET /api/isolation/audit` (admin) lists those — names and paths, never values — with what to change
+(`src/profile-audit.ts`). It reports; it does not fix.
+
 **Project scoping** is a security boundary, not a UI filter. An endpoint that takes a run or ticket
 by id verifies it belongs to the caller's project. A missed check once let one project drain
 another's mailbox, which is why `checkScope` exists and why new endpoints are expected to use it.

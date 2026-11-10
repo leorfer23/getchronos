@@ -157,6 +157,7 @@ import { redactConnectorConfig, publicTrigger } from "./redact.js";
 import { sharedRepoViews } from "./shared-repos.js";
 import { checkToken, operatorOrRobertOf, robertScopeOf, setRobertGate, requireAdmin, tokenlessGate, tokenlessMode, tokenlessReport, tokenOk, callerScope, checkScope, checkRepoScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
 import { wsByIdOrSlug, wsRefs } from "./ws-ref.js";
+import { auditProfiles } from "./profile-audit.js";
 import { findHost, hostOnline } from "./hosts/index.js";
 import { RemoteHost } from "./hosts/remote.js";
 import { resolveHostRef, sessionHostOffline } from "./remote-terminals.js";
@@ -576,6 +577,13 @@ export function startServer() {
   // Who is still calling with no token — the list to empty before flipping CHRONOS_TOKENLESS=deny.
   api.get("/authz/tokenless", requireAdmin, (_req, res) => {
     res.json({ mode: tokenlessMode(), callers: tokenlessReport() });
+  });
+
+  // What this machine shares between projects outside any sandbox rule (linked profile dirs, a
+  // client's plugin marketplace in a second profile, secrets exported to every shell, one credential
+  // file for two projects). Names and paths only — src/profile-audit.ts.
+  api.get("/isolation/audit", requireAdmin, (_req, res) => {
+    res.json({ findings: auditProfiles({ profileDirs: Object.values(CONFIG.profiles), workspaces: workspaces.list() }) });
   });
 
   api.get("/backends", (_req, res) => {
