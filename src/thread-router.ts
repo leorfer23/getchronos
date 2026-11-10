@@ -525,6 +525,16 @@ export function wantsFanout(t: ResolvedTurn): boolean {
   return !t.routed.social && !!t.routed.fleet;
 }
 
+/**
+ * He talks to ONE Robert. A turn on no single project is answered once, by the unscoped Robert —
+ * never by every project's Robert in turn (six of them answering "no, eso no me importa", each read
+ * aloud, is not a conversation). The old shop-wide fan-out survives only behind `enabled`
+ * (CHRONOS_ROBERT_FANOUT=1), and never for a spoken turn. Pure.
+ */
+export function fansOut(t: ResolvedTurn, voice: boolean, enabled = false): boolean {
+  return enabled && !voice && wantsFanout(t);
+}
+
 /** Remember where the turn landed, so the next bare message follows it. An ask lands nowhere. */
 export function commitTurn(surface: string, t: ResolvedTurn): void {
   if (t.ask) return;

@@ -957,6 +957,18 @@ export function ledgerText(ws: string | undefined, opts: { max?: number; width?:
     });
   return ledgerLines(lines, { ...opts, withWorkspace: ws === undefined });
 }
+/**
+ * The block put above the operator's words when the unscoped Robert takes a turn: what is open across
+ * every project, from the ledger. "" when nothing is open or the ledger cannot be read — the turn
+ * never fails on it.
+ */
+export function openWorkBlock(): string {
+  try {
+    const t = ledgerText(undefined, { max: 25 }).trim();
+    if (!t) return "";
+    return `[Open work right now, from the request ledger. Answer from this when he asks how things are or what waits for him: one voice, a few short sentences, the things that need him first. Do not re-scan the Desk for it, and do not answer project by project.]\n${t}\n\n`;
+  } catch { return ""; }
+}
 let statusOfSafe: (id: string) => { progress?: { n: number; of: number } | null } | null = (id) => statusOf(id);
 /** Tests: no live resolver for the progress fraction. */
 export function setLedgerProgressProvider(fn: ((id: string) => { progress?: { n: number; of: number } | null } | null) | null): void {
