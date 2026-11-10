@@ -52,12 +52,17 @@ test("a turn that read workspace A's rows cannot put A's text into the message t
   assert.ok(!d.payload.includes("ALPHA-ONLY"), "no field of the model's reaches the payload");
   assert.ok(d.payload.includes(st.words), "his own words are what B's Robert gets");
   assert.ok(d.payload.includes(rowB.id.slice(0, 8)) && d.payload.includes("fix the export button"), "plus B's own row");
-  // An id of A's named for B is refused whole — nothing is handed over.
+  // An id of A's named for B is dropped: the work still goes to B with his words, and nothing of A's rides along.
   const bad = T.buildDelegation({ project: B.slug, ids: [rowA.id.slice(0, 8)] }, st);
-  assert.equal(bad.ok, false);
+  assert.ok(bad.ok);
+  if (bad.ok) { assert.deepEqual(bad.requestIds, []); assert.ok(!bad.payload.includes(rowA.id.slice(0, 8)) && !bad.payload.includes(rowA.words)); }
   // The fleet-wide (workspace-less) row is nobody's to hand over either.
   const fleet = requests.create({ workspace_id: null, words: "the operator's own note", via: "typed", opened_by: "operator" } as any);
-  assert.equal(T.buildDelegation({ project: B.slug, ids: [fleet.id] }, st).ok, false);
+  const fl = T.buildDelegation({ project: B.slug, ids: [fleet.id] }, st);
+  assert.ok(fl.ok && !fl.payload.includes("the operator's own note"));
+  assert.equal(T.buildDelegation({ project: "no-such-project" }, st).ok, false, "a project that does not exist is still refused");
+  for (const said of ["Dale, lo miro en Chronos.", "On it.", "Dale, me pongo con eso."]) assert.ok(T.PROMISE_RE.test(said), said);
+  for (const said of ["Hola, buenas noches.", "Dos cosas te esperan."]) assert.ok(!T.PROMISE_RE.test(said), said);
 });
 
 test("his earlier words ride along only when asked (back=1..2), and only his — never the replies", () => {
