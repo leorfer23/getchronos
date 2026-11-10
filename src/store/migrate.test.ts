@@ -282,3 +282,22 @@ test("migration 154: engagement columns default to untouched; counting starts no
   assert.ok(since(old), "older rows never recorded his typing: they are not judged");
   old.close();
 });
+
+test("migration 155: chat rows gain voice/asked_at/first_delta_at, NULL on existing rows (not measured, never 0)", () => {
+  const db = new Database(":memory:");
+  applyUpTo(db, 154);
+  db.prepare(`INSERT INTO chat_messages (you,reply,created_at,source,workspace_id) VALUES ('hola','hey','2026-11-01T00:00:00.000Z','web',NULL)`).run();
+  applyUpTo(db, 155);
+  const old = db.prepare("SELECT voice, asked_at, first_delta_at FROM chat_messages").get() as any;
+  assert.deepEqual({ ...old }, { voice: null, asked_at: null, first_delta_at: null });
+  db.prepare(
+    `INSERT INTO chat_messages (you,reply,created_at,source,voice,asked_at,first_delta_at) VALUES ('q','a','2026-11-01T00:00:09.000Z','web',1,'2026-11-01T00:00:00.000Z','2026-11-01T00:00:02.500Z')`,
+  ).run();
+  // The point of the columns: time-to-first-word is one query.
+  const ms = db
+    .prepare("SELECT (julianday(first_delta_at) - julianday(asked_at)) * 86400000 AS ms FROM chat_messages WHERE voice = 1")
+    .get() as any;
+  assert.equal(Math.round(ms.ms), 2500);
+  assert.throws(() => db.prepare(`INSERT INTO chat_messages (you,reply,created_at,source,voice) VALUES ('x','y','z','web',2)`).run(), /CHECK/);
+  db.close();
+});

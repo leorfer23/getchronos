@@ -2260,6 +2260,136 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
   },
 
   {
+    version: 155,
+    name: "chat_messages.voice + asked_at + first_delta_at — was a Robert turn spoken, and how long it took",
+    // created_at is when the reply was STORED, so a turn's latency was not queryable at all. asked_at
+    // is when POST /agent accepted the line, first_delta_at the first streamed text of the reply
+    // (when speech can start), voice 1 for a line said on the voice call. All NULL on older rows and
+    // on rows other paths write (Telegram, wakes, dividers) — NULL means "not measured", never 0.
+    up: (db) => db.exec(`
+      ALTER TABLE chat_messages ADD COLUMN voice INTEGER CHECK (voice IN (0, 1));
+      ALTER TABLE chat_messages ADD COLUMN asked_at TEXT;
+      ALTER TABLE chat_messages ADD COLUMN first_delta_at TEXT;`),
+  },
+
+  {
+    version: 156,
+    name: "requests — the ledger: what the operator asked for, where it went, what came back, what he owes",
+    // LEDGER.md. One row per thing he asked for (or a terminal opened on its own), written by code at
+    // every entry point. `request_terminals` links it to the terminals serving it — a request can fan
+    // to several terminals, a terminal can serve a later request too — each link with the window
+    // [linked_at, until) its hand-offs count in, and one primary link per terminal at a time. A link a
+    // Robert turn made says how that turn was told from the others running in the workspace
+    // (`attribution`) and whether the evidence could not separate them (`ambiguous`), for audit.
+    // `request_deliverables` is what came back (a PR, a draft, a page, a deploy, an answer) with the
+    // hash of what it is now; `request_decisions` is what he owes, one item per deliverable that needs
+    // his word, bound to that hash, and his answer. `request_checks` is the verifier's slot (empty until
+    // it exists). `state` is derived (src/ledger-model.ts rollUp), never written by a model.
+    // No FK to sessions: like session_goals, a link outlives whatever happens to the session row.
+    up: (db) => db.exec(`
+      CREATE TABLE requests (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+        parent_id TEXT REFERENCES requests(id) ON DELETE CASCADE,
+        words TEXT NOT NULL,
+        via TEXT NOT NULL,
+        surface TEXT,
+        opened_by TEXT,
+        turn_id TEXT,
+        kind TEXT,
+        kind_source TEXT,
+        prereqs TEXT,
+        state TEXT NOT NULL DEFAULT 'working',
+        state_line TEXT,
+        state_at TEXT NOT NULL,
+        result_at TEXT,
+        closed_at TEXT,
+        closed_reason TEXT,
+        asked_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_requests_ws_state ON requests(workspace_id, state, state_at);
+      CREATE INDEX idx_requests_state ON requests(state, state_at);
+      CREATE INDEX idx_requests_asked ON requests(asked_at);
+      CREATE INDEX idx_requests_parent ON requests(parent_id) WHERE parent_id IS NOT NULL;
+      CREATE UNIQUE INDEX idx_requests_turn ON requests(turn_id, COALESCE(workspace_id, '')) WHERE turn_id IS NOT NULL;
+
+      CREATE TABLE request_terminals (
+        request_id TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        is_primary INTEGER NOT NULL DEFAULT 1,
+        linked_at TEXT NOT NULL,
+        until TEXT,
+        linked_by TEXT,
+        attribution TEXT,
+        ambiguous INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (request_id, session_id)
+      );
+      CREATE INDEX idx_request_terminals_session ON request_terminals(session_id, until);
+      CREATE INDEX idx_request_terminals_ambiguous ON request_terminals(request_id) WHERE ambiguous = 1;
+
+      CREATE TABLE request_deliverables (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+        session_id TEXT,
+        kind TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        label TEXT,
+        target_hash TEXT,
+        state TEXT NOT NULL DEFAULT 'open',
+        source_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (request_id, kind, ref)
+      );
+      CREATE INDEX idx_request_deliverables_ref ON request_deliverables(kind, ref);
+
+      CREATE TABLE request_decisions (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+        deliverable_id TEXT REFERENCES request_deliverables(id) ON DELETE SET NULL,
+        ask_id TEXT,
+        action TEXT NOT NULL,
+        label TEXT NOT NULL,
+        target_hash TEXT,
+        item_key TEXT NOT NULL,
+        source_at TEXT,
+        status TEXT NOT NULL DEFAULT 'open',
+        decision TEXT,
+        words TEXT,
+        decided_by TEXT,
+        decided_at TEXT,
+        hold_until TEXT,
+        audio_ref TEXT,
+        superseded_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (request_id, item_key)
+      );
+      CREATE INDEX idx_request_decisions_status ON request_decisions(status, created_at);
+      CREATE INDEX idx_request_decisions_request ON request_decisions(request_id, status);
+      CREATE INDEX idx_request_decisions_ask ON request_decisions(ask_id) WHERE ask_id IS NOT NULL;
+      CREATE INDEX idx_request_decisions_deliverable ON request_decisions(deliverable_id);
+
+      CREATE TABLE request_checks (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+        deliverable_id TEXT REFERENCES request_deliverables(id) ON DELETE SET NULL,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        evidence TEXT,
+        note TEXT,
+        target_hash TEXT,
+        ran_by TEXT NOT NULL,
+        ran_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_request_checks_request ON request_checks(request_id, name);`),
+  },
+
+  {
     version: 157,
     name: "alerts — one row per stuck episode the operator was told about (src/stuck-alerts.ts)",
     // A terminal stuck on his answer, a wall nothing could move, a computer gone with work on it, a job

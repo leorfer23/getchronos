@@ -47,6 +47,12 @@ export function normalizeCommand(cmd: string): string {
 
 const ID = "([0-9a-f]{6,36})";
 
+// The sentences a terminal move is said in. terminalMove (below) reads them back, so they live once.
+const OPENED = "Opened a terminal";
+const OPENED_BLANK = "Opened a new terminal";
+const TOLD = "Told it";
+const PICKED = "Picked an option";
+
 /** One `describeTool` line (or a fallback notice) → a step. Null for noise that is not a move. */
 export function humanizeStep(desc: string, at: string = new Date().toISOString()): RobertStep | null {
   const raw = (desc ?? "").trim();
@@ -72,9 +78,9 @@ export function humanizeStep(desc: string, at: string = new Date().toISOString()
   const cmd = normalizeCommand(run[1]);
   let m: RegExpExecArray | null;
   if ((m = new RegExp(`^mc session send\\s+${ID}\\s+([\\s\\S]+)$`).exec(cmd)))
-    return step("⌨️", `Told it: “${clip(unquote(m[2]), 140)}”`, "act", m[1]);
+    return step("⌨️", `${TOLD}: “${clip(unquote(m[2]), 140)}”`, "act", m[1]);
   if ((m = new RegExp(`^mc session key\\s+${ID}\\s+(\\S+)`).exec(cmd)))
-    return step("🎯", `Picked an option (${m[2].replace(/,/g, " ")})`, "act", m[1]);
+    return step("🎯", `${PICKED} (${m[2].replace(/,/g, " ")})`, "act", m[1]);
   if ((m = new RegExp(`^mc session done\\s+${ID}`).exec(cmd))) return step("✅", "Ticked its goal done", "act", m[1]);
   if ((m = new RegExp(`^mc session goal\\s+${ID}\\s+([\\s\\S]+)$`).exec(cmd)))
     return step("✏️", `Retitled it “${clip(unquote(m[2]), 100)}”`, "act", m[1]);
@@ -83,7 +89,7 @@ export function humanizeStep(desc: string, at: string = new Date().toISOString()
   if ((m = new RegExp(`^mc session (?:focus|attach)\\s+${ID}`).exec(cmd))) return step("👀", "Looked at the terminal", "read", m[1]);
   if (/^mc session new\b/.test(cmd)) {
     const goal = /--goal\s+(["'])([\s\S]*?)\1/.exec(cmd)?.[2] ?? /\s(["'])([\s\S]*?)\1\s*$/.exec(cmd)?.[2];
-    return step("＋", goal ? `Opened a terminal: “${clip(goal, 120)}”` : "Opened a new terminal", "act");
+    return step("＋", goal ? `${OPENED}: “${clip(goal, 120)}”` : OPENED_BLANK, "act");
   }
   if (/^mc (?:desk digest|session list|agents|fleet)\b/.test(cmd)) return step("👀", "Scanned the Desk", "read");
   if (/^mc (?:ask|asks)\b.*\banswer\b/.test(cmd)) return step("💬", "Answered an ask", "act");
@@ -107,4 +113,30 @@ export function humanizeStep(desc: string, at: string = new Date().toISOString()
   if (/^gh pr (merge|create|close)\b/.test(cmd)) return step("🔀", clip(cmd, 100), "act");
   if (/^(git|gh)\s/.test(cmd)) return step("🔎", clip(cmd, 100), "read");
   return step("▸", `Ran ${clip(cmd, 100)}`, "read");
+}
+
+/** What one step did to a terminal: opened one (with the goal it was given), or typed into one (which, and what). */
+export type TerminalMove = { move: "open"; goal: string | null } | { move: "type"; sid: string | null; text: string | null };
+
+/**
+ * A step read back as a terminal move, from humanizeStep's own sentences — so code that sees a terminal
+ * opened, or a line typed, can tell which of Robert's turns announced it (the request ledger,
+ * src/ledger.ts). The goal is what `mc session new --goal` / `mc lead new` was given (clipped, as the
+ * step says it); the typed text is what `mc session send` sent. Null for every other step.
+ */
+export function terminalMove(step: Pick<RobertStep, "text" | "sid"> | null | undefined): TerminalMove | null {
+  const t = String(step?.text ?? "");
+  const sid = step?.sid ?? null;
+  let m: RegExpExecArray | null;
+  if ((m = new RegExp(`^${OPENED}: “([\\s\\S]*)”$`).exec(t))) return { move: "open", goal: m[1] };
+  if (t === OPENED_BLANK) return { move: "open", goal: null };
+  // `mc lead new "<goal>"` reads as the plain command (the generic mc branch above).
+  if ((m = /^mc lead new\s+(?:(["'])([\s\S]*?)\1)?/.exec(t))) return { move: "open", goal: m[2] ?? null };
+  if ((m = new RegExp(`^${TOLD}: “([\\s\\S]*)”$`).exec(t))) return { move: "type", sid, text: m[1] };
+  // Keys read back the way the daemon publishes them on session.input: "<down><enter>".
+  if ((m = new RegExp(`^${PICKED} \\(([^)]*)\\)$`).exec(t))) return { move: "type", sid, text: m[1].split(/\s+/).filter(Boolean).map((k) => `<${k}>`).join("") || null };
+  // Straight to the API: POST /sessions opens one; POST /sessions/<id>/input types into one.
+  if (/^POST \/sessions$/.test(t)) return { move: "open", goal: null };
+  if (/^POST \/sessions\/[0-9a-f-]{6,36}\/input$/.test(t)) return { move: "type", sid, text: null };
+  return null;
 }

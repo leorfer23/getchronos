@@ -35,9 +35,9 @@ test("the turn: quote read back from the row, above the words; routing and `you`
   // Quote is loaded BEFORE resolveTurnSmart so the parent's project can steer the router.
   assert.match(api, /replyWorkspace: quote\?\.workspace_id \?\? null/);
   // The router reads req.body.text — a #tag inside the quoted parent never re-routes the reply.
-  assert.match(api, /const turn = await resolveTurnSmart\(req\.body\.text,/);
-  assert.match(api, /chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote, engine\)/);
-  assert.match(api, /chat\.add\(text, err, "web", ws, null, shown, quote\)/);
+  assert.match(api, /const routedTurn = await resolveTurnSmart\(req\.body\.text,/);
+  assert.match(api, /chat\.add\(text, reply \|\| "", "web", ws, steps, shown, quote, engine, timing\(\)\)/);
+  assert.match(api, /chat\.add\(text, err, "web", ws, null, shown, quote, null, timing\(\)\)/);
   // Every surface can draw the quote and mark the new row's bubbles.
   assert.match(api, /topic: "agent\.asked",[^\n]*\.\.\.\(quoted \? \{ quote: quoted \} : \{\}\)/);
   assert.equal((api.match(/id: row\.id,\n\s+\.\.\.\(shown\.length \? \{ attachments: shown \} : \{\}\),\n\s+\.\.\.\(quoted \? \{ quote: quoted \} : \{\}\),/g) || []).length, 2);

@@ -721,8 +721,12 @@ export interface NewJob {
 export type SessionRole = "human" | "worker" | "reviewer" | "lead";
 export type SessionStatus = "live" | "ended";
 /** What a terminal is FOR, coarsely — the operator picks it in the spawn dialog and it sets the
- *  agent's finish line: a PR to open, a question to answer, a build to verify — or none: a chat. */
-export type GoalKind = "pr" | "investigation" | "qa" | "chat";
+ *  agent's finish line: a PR to open, a question to answer, a build to verify — or none: a chat.
+ *  It is also a request's WORK TYPE (src/ledger-model.ts WORK): what "done" means and what evidence
+ *  proves it. pr = a backend change (prove nothing else broke) · ui = a change people see (shots per
+ *  screen and width, a walkthrough) · investigation = an analysis answered in the form he asked for ·
+ *  product = a change to a product he owns and runs (merged, deployed, checked live). */
+export type GoalKind = "pr" | "ui" | "investigation" | "qa" | "product" | "chat";
 /** What a terminal may do once its work is green: stop and ask, merge, or merge and deploy. */
 export type Ship = "ask" | "merge" | "deploy";
 /** A terminal's hand-off (`mc outcome`): everything the operator needs to approve, in one place. */

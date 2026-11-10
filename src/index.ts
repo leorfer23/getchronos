@@ -44,6 +44,7 @@ import { startDeskTitles } from "./desk-title.js";
 import { startUsageTicker } from "./session-usage.js";
 import { startCacheKeeper } from "./cache-keeper.js";
 import { startTermStatus, statusOf } from "./term-status.js";
+import { startLedger } from "./ledger.js";
 import { startBoardWatcher } from "./board.js";
 import { startRobertWake } from "./robert-wake.js";
 import { startWakeQueue } from "./wake-queue.js";
@@ -108,6 +109,8 @@ startRelay();
 startNotify();
 startPush({ activity: sessionActivity, prompt: sessionPrompt, phase: (id) => statusOf(id)?.phase ?? null, owned: alertsOwnPush });
 startTermStatus();
+// The request ledger follows the session/ask/turn events from here on (src/ledger.ts, LEDGER.md).
+startLedger();
 startMergeGate();
 startSelfDeploy();
 startAgentLifecycleBridge();

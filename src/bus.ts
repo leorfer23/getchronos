@@ -218,8 +218,13 @@ export type BusEvent = (
   | { topic: "agent.push"; you: string; reply: string; at: string; source?: string; ws?: string | null; client?: string; turn?: string; steps?: unknown[]; attachments?: unknown[]; id?: number; quote?: { id: number; side: string; text: string }; engine?: string | null }
   /** One move Robert made mid-turn (robert-steps.ts), live, so the Desk draws the trail as it happens. */
   | { topic: "agent.step"; ws: string | null; turn: string; step: unknown; label?: string | null }
-  /** A turn started: what was said and by which page — other surfaces draw the line right away, not when he answers. */
-  | { topic: "agent.asked"; you: string; at: string; source?: string; ws?: string | null; client?: string; turn: string; attachments?: unknown[]; quote?: { id: number; side: string; text: string } }
+  /** A turn started: what was said and by which page — other surfaces draw the line right away, not when he answers.
+   *  `voice` = he spoke it (the request ledger records how each request arrived). */
+  | { topic: "agent.asked"; you: string; at: string; source?: string; ws?: string | null; client?: string; turn: string; voice?: boolean; attachments?: unknown[]; quote?: { id: number; side: string; text: string } }
+  // The request ledger (src/ledger.ts, LEDGER.md): a request's derived state moved, or the operator
+  // recorded his answer to one of its decision items. Recording is all a decision does — the executor acts.
+  | { topic: "ledger.updated"; request_id: string; workspace_id: string | null; state: string }
+  | { topic: "ledger.decided"; request_id: string; item_id: string; workspace_id: string | null; action: string; decision: string; by: string | null; target_hash: string | null }
 ) & { actor?: string };
 
 class Bus extends EventEmitter {

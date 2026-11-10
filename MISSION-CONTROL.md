@@ -775,6 +775,10 @@ POST /tickets/:id/note   /tickets/:id/dispatch   /tickets/:id/dispatch-plan   /t
 GET  /agent/history?ws=all|<ws>|agent:<id>   POST /agent {text, ws?, route?, surface?, session?}
 GET  /thread/route?text=&surface=&session=   POST /thread/sticky {ws|null}
 
+# the request ledger (LEDGER.md) — what he asked → where it went → what came back → what he owes
+GET  /ledger?state=&needs=decision&workspace=&since=&session=&format=text   GET /ledger/queue   GET /ledger/:id
+POST /ledger/:id/decision {item?, decision, words?, target_hash?, until?}   POST /ledger/:id/close   (operator's hand only)
+
 # worker visibility & HITL (§5b) — mc steps / mc ask / mc tell
 GET/POST /runs/:id/steps   POST /runs/:id/steps/:idx
 GET/POST /asks   GET /asks/:id/wait?timeout_ms=   POST /asks/:id/answer

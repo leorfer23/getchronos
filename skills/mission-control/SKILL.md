@@ -640,7 +640,7 @@ mc lead list                        # live Leads + how many workers each has ope
 ```
 
 - **If `MC_LEAD=1` you ARE a Lead** — the one kind of terminal that opens workers:
-  `mc session new --goal "…" [--kind pr|investigation|qa] [--description "the brief"] [--cwd p]`
+  `mc session new --goal "…" [--kind pr|ui|investigation|qa|product] [--description "the brief"] [--cwd p]`
   (`--goal` repeats: two or three finish lines, worked in order). They are signed as yours; when
   one stops, the daemon types a "a terminal FINISHED ITS TURN…" message into you — look
   (`mc session focus <ID>`), then `mc session send <ID> "…"` / `mc session key <ID> …` / `mc session done <ID>`

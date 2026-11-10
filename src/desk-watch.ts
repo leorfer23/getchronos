@@ -244,6 +244,7 @@ export async function runWatch(s: Session, final = false): Promise<void> {
     // Model is the Desk pick (getWebModel inside askManagerWeb) — same as a typed chat turn.
     const { reply, steps: st, turn: t, engine: eng } = await askManagerWeb(watchPrompt(d, final), undefined, s.workspace_id ?? null, {
       label: "watch",
+      lane: "wake", // a timer firing, not the operator talking: off his conversation
     });
     body = (reply || "").trim();
     steps = st;
