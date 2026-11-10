@@ -417,14 +417,14 @@ defineSetting({
 defineSetting({
   key: "voice.final_engine", group: "Voice", level: "global", type: "enum", env: "CHRONOS_VOICE_FINAL_ENGINE",
   label: "Engine for what you said",
-  help: "accurate: the finished sentence goes to the second, larger whisper (sh.chronos.whisper-final) while the live words keep the fast one — so a sentence never waits behind a preview. Falls back to the fast engine whenever the second one is not running. fast: one engine for everything, as before.",
-  options: () => ["accurate", "fast"],
-  default: () => (process.env.CHRONOS_VOICE_FINAL_ENGINE === "fast" ? "fast" : "accurate"),
+  help: "accurate: the finished sentence goes to the second, larger whisper (sh.chronos.whisper-final) while the live words keep the fast one — so a sentence never waits behind a preview. Falls back to the fast engine whenever the second one is not running. fast: one engine for everything, as before. cloud: the finished sentence is sent to ElevenLabs (Scribe) — THE AUDIO OF WHAT YOU SAY ON A CALL LEAVES THIS MAC for that provider, which keeps it under its own retention terms (zero retention is for enterprise accounts only); with \"Words it should know\" filled in, those words are sent too (and billed as keyterms). Needs ELEVENLABS_API_KEY in .secrets and costs per hour of audio. Live words and one-word answers stay local; no key, no network, a slow or empty answer → the same sentence goes to the local engines.",
+  options: () => ["accurate", "fast", "cloud"],
+  default: () => (["fast", "cloud"].includes(process.env.CHRONOS_VOICE_FINAL_ENGINE ?? "") ? process.env.CHRONOS_VOICE_FINAL_ENGINE! : "accurate"),
 });
 defineSetting({
   key: "voice.vocab", group: "Voice", level: "global", type: "string", env: "CHRONOS_VOICE_VOCAB",
   label: "Words it should know",
-  help: "Names and terms you say on calls, comma-separated (products, people, English tech words). Given to whisper as a hint with every finished sentence; never sent anywhere else. Empty: no hint.",
+  help: "Names and terms you say on calls, comma-separated (products, people, English tech words). Given to whisper as a hint with every finished sentence; it stays on this Mac unless the engine above is cloud (then it goes to that provider with the sentence). Empty: no hint.",
   default: () => process.env.CHRONOS_VOICE_VOCAB || "",
 });
 defineSetting({

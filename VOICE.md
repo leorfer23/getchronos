@@ -95,6 +95,58 @@ real voice was used — `voice.keep_clips` below is how the next round gets real
   thrown away, with the first syllable of whatever he said next). Neutral on the synthetic set
   (8.3% vs 8.8% on 18 second-halves); kept because frames are no longer lost.
 
+## Hearing in the cloud (optional, off)
+
+`voice.final_engine = cloud` puts ElevenLabs Scribe (`scribe_v2`, batch) in front of the chain for a
+finished sentence: **cloud → local accurate → local fast**. **With it on, the audio of what he says
+on a call leaves the Mac for api.elevenlabs.io** — and nothing else does: live words, one-word answers
+(< 2 s), the blank warm-up clip and every fallback stay on the local engines; the vocabulary travels
+only as keyterms of that same request. The default stays `accurate` (all local). Code:
+`src/transcribe-cloud.ts`; the chain is `hearFinal` in `src/transcribe.ts`.
+
+- **Never a lost or stalled sentence.** A 2.5 s timeout over the whole exchange, a network error, any
+  non-200 or an **empty** transcript → the same clip goes to the local engines. After a timeout, a
+  network error, a 429 or a 5xx the cloud is left alone for 30 s; after a 401/403 for 10 min; an empty
+  or refused clip costs only itself. No key in `.secrets` with the setting on → local, said once in the
+  log and in `GET /api/voices` → `hearing.cloud` (`on`, `key`, `ready`, `why`, `retry_in_s`).
+- **The key** (`ELEVENLABS_API_KEY`, `.secrets`) rides the `xi-api-key` header, never a URL or a log
+  line, and is taken out of the daemon's environment at boot so no spawned CLI inherits it. No Robert
+  credential can set the engine to `cloud` — operator only, like `voice.keep_clips`.
+- **Measured** (9 synthetic Spanish clips with English tech words at phone level, 87 words; one Mac,
+  one afternoon — a small set, read it as a direction):
+
+  | engine | word errors | median | slowest |
+  |---|---|---|---|
+  | local accurate (large-v3-turbo, `audio_ctx=768`), no vocabulary | 32–45% over two runs (17–18% without one clip it wrote two or three times over) | 0.66 s | 0.85 s |
+  | local accurate + vocabulary | 16.1% | 0.67 s | 0.73 s |
+  | cloud, language hint | 13.8% | 0.72 s | 0.93 s |
+  | cloud, no hint (language detected) | 13.8% | 0.66 s | 1.17 s |
+  | cloud + keyterms | 4.6% | 0.67 s | 0.86 s |
+  | cloud as headerless PCM (`file_format=pcm_s16le_16`) | 13.8% (same text) | 0.53 s | 0.72 s |
+  | `scribe_v3`, language hint | 13.8% | 0.66 s | 1.75 s |
+
+- **Language.** Picked on the call screen (`fixed=1`) or `voice.listen = page`: sent as
+  `language_code`, one request. Otherwise no hint: the model writes the same text either way (told
+  Spanish, it still wrote two English sentences in English) but only without the hint does it say
+  which language it heard, which is what the reply follows. Neither Spanish nor English → not
+  believed, the local engines take the clip; the other language than the call's needs probability ≥ 0.7.
+  Always one request — the local second pass does not exist here.
+- **One-word answers stay local.** On "Sí." the cloud answered "Se hizo", "See you" (detected as
+  English), "Sei", "Serio" and once nothing; on "Dale." it was right with the hint and "Darling" without.
+  No better than the local engines, slower, and it would send every cough out.
+- **Vocabulary → keyterms** (`voice.vocab`): up to 100 terms (past 100 the provider bills each request
+  as at least 20 s), each within the API's limits (50 characters, 5 words). Billed extra by the provider.
+- **The phone's WAV is sent as headerless PCM** (`file_format=pcm_s16le_16`, which the API reference
+  calls the lower-latency input); any other container goes as the file it is.
+- **Cost and retention** (provider docs, read 2026-11-10 — check them again before relying on this):
+  billed per hour of audio, silence included; keyterms are a surcharge. Requests are logged by the
+  provider by default. Its zero-retention mode (`enable_logging=false`) is for enterprise accounts
+  only — a normal paid plan answers 403 — so it is not sent unless
+  `CHRONOS_TRANSCRIBE_CLOUD_ZERO_RETENTION=1`.
+- **Compare on your own clips:**
+  `node scripts/stt-bench.mjs --dir "$(mc voice clips --dir)" --engine "final=http://127.0.0.1:7781/inference;audio_ctx=768" --engine cloud=elevenlabs --engine "cloud+terms=elevenlabs;keyterms=@" --prompt "your, terms"`
+  (this sends those clips to the provider; the key is read from the environment or `--secrets .secrets`).
+
 ### The Desk's call hears the same way
 
 The Desk's call is its own copy of the ear (`static/desk.html`, "Voice call"; tests in
