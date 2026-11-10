@@ -147,6 +147,16 @@ export function attributeTurn(ws: string | null, act: TerminalAct, nowMs = Date.
 }
 
 /**
+ * He spoke this turn (POST /agent's `voice`). Called right after agent.asked, before the turn runs, so
+ * the request it may open is written as spoken; one already written is corrected.
+ */
+export function markVoiceTurn(turn: string): void {
+  const t = turns.get(turn);
+  if (t) t.voice = true;
+  requests.markVoice(turn);
+}
+
+/**
  * The front (piece 4 of the plan) opens the request first and then hands a project's Robert the turn:
  * bind the turn so what that Robert opens or steers lands on this row instead of a new one.
  */

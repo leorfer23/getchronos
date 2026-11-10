@@ -74,7 +74,7 @@ import { findMedia, mediaMime, sessionMedia } from "./session-media.js";
 import { recordSessionPrs } from "./terminal-automerge.js";
 import { openProactive } from "./robert-selfwake.js";
 import { notifyDraft } from "./draft-notify.js";
-import { noteDraft } from "./ledger.js";
+import { markVoiceTurn, noteDraft } from "./ledger.js";
 import { mountLedgerRoutes } from "./ledger-routes.js";
 import { robertMay } from "./robert-scope.js";
 import { isShipTerminal } from "./ship-guard.js";
@@ -5142,10 +5142,11 @@ export function startServer() {
     const prompt = quotePrompt(quote) + text + chatAttachmentsBlock(fanout?.length ? files : handFilesTo(runWs, files));
     const shown = files.map((a) => ({ id: a.id, url: a.url, mime: a.mime, name: a.name }));
     const voice = !!req.body.voice;
-    bus.publish({ topic: "agent.asked", you: text, at: new Date().toISOString(), source: surface, ws, client, turn: turnId, ...(voice ? { voice: true } : {}), ...(shown.length ? { attachments: shown } : {}), ...(quoted ? { quote: quoted } : {}) });
+    bus.publish({ topic: "agent.asked", you: text, at: new Date().toISOString(), source: surface, ws, client, turn: turnId, ...(shown.length ? { attachments: shown } : {}), ...(quoted ? { quote: quoted } : {}) });
     // Accepted: the tunnel may close this socket any time; the turn runs detached and the answer
     // rides agent.push (keyed by client+turn). Clients that miss the push re-read /agent/history.
     res.json({ accepted: true, turn: turnId, ws, how: turn.how });
+    if (voice) markVoiceTurn(turnId); // the request ledger: this request was spoken (ledger.ts)
     void (async () => {
       try {
         // Stream TEXT deltas so Desk/phone can speak sentence-by-sentence while the turn runs.

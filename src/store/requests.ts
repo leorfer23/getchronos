@@ -224,6 +224,10 @@ export const requests = {
     db.prepare("UPDATE requests SET kind = ?, kind_source = ?, updated_at = ?" + (prereqs ? ", prereqs = ?" : "") + " WHERE id = ?")
       .run(...[kind, kind ? source : null, now(), ...(prereqs ? [prereqs.length ? JSON.stringify(prereqs) : null] : []), id]);
   },
+  /** The turn's request(s) were spoken, not typed (POST /agent's voice flag, recorded after the fact). */
+  markVoice(turnId: string): void {
+    db.prepare("UPDATE requests SET via = 'voice', updated_at = ? WHERE turn_id = ? AND via = 'typed'").run(now(), turnId);
+  },
   setPrereqs(id: string, prereqs: Prereq[]): void {
     db.prepare("UPDATE requests SET prereqs = ?, updated_at = ? WHERE id = ?").run(prereqs.length ? JSON.stringify(prereqs) : null, now(), id);
   },

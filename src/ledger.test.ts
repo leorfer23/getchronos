@@ -91,6 +91,22 @@ test("an operator turn that opens terminals: one request in his words, how he sa
   assert.equal(requests.byTurn("t2", atlas.id)?.via, "typed");
 });
 
+test("spoken: POST /agent marks the turn after agent.asked; a request already written for it is corrected", () => {
+  const atlas = mkWs("atlas");
+  asked("v1", "abrí una terminal para el export", atlas);
+  L.markVoiceTurn("v1");
+  step("v1", atlas);
+  const s = open(atlas, { created_by: "robert", goal: "the export" });
+  assert.equal(reqOf(s.id).via, "voice");
+  ended("v1");
+  asked("v2", "otra", atlas);
+  step("v2", atlas);
+  const t = open(atlas, { created_by: "robert", goal: "another" });
+  assert.equal(reqOf(t.id).via, "typed");
+  L.markVoiceTurn("v2");
+  assert.equal(reqOf(t.id).via, "voice");
+});
+
 test("a turn of Robert's own (a wake) that opens terminals: one robert-initiated request per turn, in his words", () => {
   const atlas = mkWs("atlas");
   step("wake-1", atlas);
