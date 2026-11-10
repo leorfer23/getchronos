@@ -134,6 +134,7 @@
   .call-sub { margin-top:4px; min-height:42px; max-width:100%; text-align:center; color:var(--muted); font-size:15.5px; line-height:1.35; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
   .call-mute { position:absolute; right:14px; top:14px; width:48px; height:48px; border-radius:50%; background:var(--surface); color:var(--muted); display:flex; align-items:center; justify-content:center; }
   .call-mute.on { background:var(--warn-soft); color:var(--warn); }
+  .call-lang { position:absolute; left:14px; top:14px; width:48px; height:48px; border-radius:50%; background:var(--surface); color:var(--ink); font-weight:700; font-size:15px; letter-spacing:.02em; display:flex; align-items:center; justify-content:center; }
   .call[data-state="paused"] .orb { cursor:pointer; }
 
   .composer { display:flex; gap:10px; align-items:flex-end; padding:8px 12px 0; position:relative; }
@@ -492,6 +493,7 @@
     <div class="chat" id="chat"></div>
     <div class="dock" id="dock">
       <div class="call" id="call" hidden data-state="off">
+        <button class="call-lang" id="call-lang" aria-label="Language"></button>
         <button class="call-mute" id="call-mute" aria-label="Mute"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
         <div class="orb" id="orb" role="img" aria-label="call state"></div>
         <div class="call-st" id="call-st"></div>
@@ -2022,11 +2024,14 @@ function paintCall(st = PhoneVoice.state(), why = "") {
     : st === "thinking" ? "" : callSub;
   qs("#call-sub").textContent = sub;
   qs("#call-mute").classList.toggle("on", PhoneVoice.muted);
+  qs("#call-lang").textContent = voiceLang().toUpperCase();
   const dc = qs("#v-deck .dk-call");
   if (dc) { dc.hidden = false; dc.dataset.state = st; qs("b", dc).textContent = (CALL_WORD[st] || CALL_WORD.listening)[li]; }
   syncComposer();
 }
 qs("#call-mute").onclick = () => { fx.tap(); PhoneVoice.setMute(!PhoneVoice.muted); paintCall(); };
+// The language he is speaking: one tap, on the call itself. Chosen here, it is never guessed (fixed=1).
+qs("#call-lang").onclick = () => { fx.tap(); PREFS.lang = voiceLang() === "es" ? "en" : "es"; paintCall(); };
 // A tap anywhere on the call screen (the orb, the words) stops Robert at once and listens: the
 // barge-in that works whatever the phone's echo canceller does to his voice. Paused → resume.
 qs("#call").addEventListener("click", (e) => {
@@ -2047,7 +2052,7 @@ function sendTrace(dump) {
 // presence every 20 s, "started" when its audio begins, "done" only when it played to the end,
 // nothing if it could not be rendered or was talked over.
 const VA = VoiceAlerts.create({
-  client: CLIENT, surface: "phone", lang: () => voiceLang(), lock: () => null,
+  client: CLIENT, surface: "phone", lang: () => voiceLang(), fixed: () => !!PREFS.lang, lock: () => null,
   post: (p, body) => api(String(p).replace(/^\/api/, ""), { method: "POST", body: JSON.stringify(body) }),
 });
 let presT = 0;

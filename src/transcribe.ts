@@ -152,12 +152,16 @@ export type Lang2 = "es" | "en";
  */
 export async function transcribeBilingual(
   buf: Buffer,
-  opts: { filename?: string; contentType?: string; hint: Lang2 },
+  opts: { filename?: string; contentType?: string; hint: Lang2; audioMs?: number | null },
   ask: (b: Buffer, o: AskOpts) => Promise<Heard> = transcribeDetailed,
 ): Promise<{ text: string; lang: Lang2; passes: number }> {
   const first = await ask(buf, { filename: opts.filename, contentType: opts.contentType, language: opts.hint });
   const p = first.probs;
   if (!p) return { text: first.text, lang: opts.hint, passes: 1 };
+  // A one-word answer gives whisper too little to tell the language: measured on the local small
+  // model, a Spanish "dale" scored es 0.01 / en 0.53 and the second pass turned it into "Darling".
+  // A short clip stays in the call's language.
+  if (opts.audioMs != null && opts.audioMs < SHORT_CLIP_MS) return { text: first.text, lang: opts.hint, passes: 1 };
   const other: Lang2 = opts.hint === "es" ? "en" : "es";
   const ph = Number(p[opts.hint] ?? 0), po = Number(p[other] ?? 0);
   if (po >= 0.3 && po >= 1.5 * ph) {
@@ -240,7 +244,7 @@ export async function hearFinal(
     const extra: AskOpts = engine === "final" ? { url: finalUrl()!, fields: finalFields(ms) } : {};
     const one = (b: Buffer, a: AskOpts) => ask(b, { ...a, ...extra, prompt: vocabPrompt(o.vocab, a.language, ms) });
     if (o.language && o.bilingual !== false) {
-      const out = await transcribeBilingual(buf, { filename: o.filename, contentType: o.contentType, hint: o.language }, one);
+      const out = await transcribeBilingual(buf, { filename: o.filename, contentType: o.contentType, hint: o.language, audioMs: ms }, one);
       return { ...out, engine };
     }
     const h = await one(buf, { filename: o.filename, contentType: o.contentType, language: o.language });
