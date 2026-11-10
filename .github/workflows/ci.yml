@@ -11,14 +11,18 @@ concurrency:
 
 jobs:
   daemon:
-    # macOS is the platform the sandbox actually exists on (Seatbelt), so it is the one that must
-    # stay green. Linux runs too because it is what most contributors have and the daemon is
-    # expected to boot there unsandboxed — a Linux-only break should be a red check, not a surprise.
-    runs-on: ${{ matrix.os }}
+    # macOS only: it is where the sandbox (Seatbelt), swiftc and say(1) exist, so it is the only
+    # runner that can run every test. Ubuntu ran beside it until 2026-11: across the 96 failed runs
+    # before that, it never failed on a product bug macOS missed — only on a macOS-only assertion.
+    #
+    # The whole suite (npm run test:all: unit tests, evals, ptys, multi-host links, swiftc, a real
+    # browser) split over three runners; the file list is sorted slow-first, and node shards it
+    # round-robin, so each runner gets a third of the slow files.
+    runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -27,6 +31,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Typecheck
+        if: matrix.shard == 1
         run: npx tsc -p tsconfig.json --noEmit
-      - name: Test
-        run: npm test
+      - name: Test (shard ${{ matrix.shard }}/3)
+        run: node scripts/test.mjs --all --test-shard=${{ matrix.shard }}/3
