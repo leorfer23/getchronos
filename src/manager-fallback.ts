@@ -16,6 +16,7 @@ import { sandboxWrap, type SandboxMode } from "./sandbox.js";
 import { ensureCursorNoSend } from "./no-send.js";
 import { workspaces } from "./store.js";
 import { resultText } from "./summarize.js";
+import { withoutOperatorToken } from "./authz.js";
 
 /** Default wait before retrying the primary after a limit with no parseable reset time. */
 export const DEFAULT_LIMIT_COOLDOWN_MS = 90 * 60 * 1000;
@@ -290,7 +291,8 @@ export function fallbackLaunch(
   const fromWs = !opts.baseEnv ? wsEnv?.CURSOR_API_KEY : undefined;
   // cursor has no deny flag: its deny rules and send hook live in its config dir (no-send.ts).
   if (backendName === "cursor-agent") ensureCursorNoSend((wsEnv ?? process.env).CURSOR_CONFIG_DIR);
-  const env = { ...(opts.baseEnv ?? process.env), ...(fromWs ? { CURSOR_API_KEY: fromWs } : {}), ...(spec.env ?? {}), ...(opts.extraEnv ?? {}) };
+  // Never the operator's token, whatever the daemon's own env carries (authz.ts withoutOperatorToken).
+  const env = withoutOperatorToken({ ...(opts.baseEnv ?? process.env), ...(fromWs ? { CURSOR_API_KEY: fromWs } : {}), ...(spec.env ?? {}), ...(opts.extraEnv ?? {}) });
   return { cmd, cmdArgs, env };
 }
 

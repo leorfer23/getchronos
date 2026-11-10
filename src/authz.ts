@@ -21,64 +21,142 @@ export function tokenOk(got: string | undefined | null, expected: string): boole
 /** The admin-token gate for every admin-only route (api.ts mounts it; hostRoutes/barRoutes take it). */
 export function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return next();
-  // A project's Robert (robertToken): admin inside his own workspace, on the routes he uses, and
-  // nothing outside it — robertGate (robert-scope.ts) checks the route and who owns what it touches.
-  const rb = robertScopeOf(req.get("x-mc-admin"));
-  if (rb && forwardedHost(req) === null && robertGate(req, rb)) return next();
+  // A Robert (robertToken) is never the operator. A project's Robert: admin inside his own workspace,
+  // on the routes he uses. The fleet-wide Robert: reads every workspace, writes only what
+  // robert-scope.ts lists. Either way robertGate decides, and says why when it refuses.
+  const scope = forwardedHost(req) === null ? robertIdentity(req.get("x-mc-admin")) : null;
+  if (scope) {
+    const why = robertGate(req, scope);
+    if (why === null) return next();
+    res.status(403).json({ error: why });
+    return;
+  }
   res.status(403).json({ error: ADMIN_REQUIRED });
 }
 
-// ───────────────────── a project's Robert: admin of ONE workspace ─────────────────────
-// Every workspace has its own Robert (its own profile, brief, thread). He used to carry the global
-// admin token, so nothing but his prompt kept him inside his project. His credential is now derived
-// per workspace — HMAC(admin token, "robert:<role>:<workspace>") — so it needs no storage, rotates
-// with the admin token, and names exactly one workspace. `rw` acts (web/Desk); `ro` only reads
-// (Telegram's propose-and-confirm Robert). Sent in the same x-mc-admin header, so his prompts, `mc`
-// and curl habits work unchanged.
+// ───────────────────── Robert's credentials: derived, lane-tagged, never the operator's ─────────────────────
+// Every workspace has its own Robert (its own profile, brief, thread), and one Robert spans the fleet.
+// None of them carries the operator's admin token: each process gets a credential derived from it —
+// HMAC(admin token, "robert:<role>:<lane>:<workspace | @fleet>") — so it needs no storage, rotates with
+// the admin token, names exactly one workspace (or the fleet), and the server can always tell it from
+// the operator's own devices, which hold the token itself. That difference is what the executor's
+// approvals stand on (executor.ts): no Robert credential can record or carry out a yes.
+//   role  `rw` acts (Desk/web); `ro` only reads (Telegram's propose-and-confirm Robert).
+//   lane  which of his processes holds it: `operator` (the conversation with the operator) or `wake`
+//         (the daemon's wakes, ask triage, desk watches) — they share a profile, never a credential.
+// Sent in the same x-mc-admin header, so his prompts, `mc` and curl habits work unchanged.
 export type RobertRole = "rw" | "ro";
-export type RobertScope = { ws: string; role: RobertRole };
-export function robertToken(wsId: string, role: RobertRole = "rw"): string {
-  return crypto.createHmac("sha256", CONFIG.adminToken).update(`robert:${role}:${wsId}`).digest("hex");
+export type RobertLane = "operator" | "wake";
+export type RobertScope = { ws: string; role: RobertRole; lane: RobertLane };
+/** The fleet-wide Robert's credential: every workspace to READ (the operator granted that), robert-scope.ts FLEET_ROBERT_WRITES to write. */
+export type FleetScope = { ws: null; role: RobertRole; lane: RobertLane; fleet: true };
+export type AnyRobertScope = RobertScope | FleetScope;
+/** Never a workspace id (those are UUIDs) — what the fleet-wide Robert's credential names instead of one. */
+const FLEET = "@fleet";
+const ROLES = ["rw", "ro"] as const;
+const LANES = ["operator", "wake"] as const;
+export function robertToken(wsId: string | null, role: RobertRole = "rw", lane: RobertLane = "operator"): string {
+  return crypto.createHmac("sha256", CONFIG.adminToken).update(`robert:${role}:${lane}:${wsId ?? FLEET}`).digest("hex");
 }
+const looksDerived = (tok: string | undefined | null): tok is string => !!tok && tok.length === 64 && /^[0-9a-f]+$/.test(tok);
 const robertCache = new Map<string, RobertScope>();
-/** The workspace a Robert token belongs to, or null. Constant-time against every workspace's tokens. */
+/** The workspace a project Robert's token belongs to, or null. Constant-time against every workspace's tokens. */
 export function robertScopeOf(tok: string | undefined | null): RobertScope | null {
-  if (!tok || tok.length !== 64 || !/^[0-9a-f]+$/.test(tok)) return null;
+  if (!looksDerived(tok)) return null;
   const hit = robertCache.get(tok);
   if (hit && workspaces.get(hit.ws)) return hit;
   for (const w of workspaces.list(true)) {
-    for (const role of ["rw", "ro"] as const) {
-      if (tokenOk(tok, robertToken(w.id, role))) {
-        const s = { ws: w.id, role };
-        robertCache.set(tok, s);
-        return s;
+    for (const role of ROLES) {
+      for (const lane of LANES) {
+        if (tokenOk(tok, robertToken(w.id, role, lane))) {
+          const s: RobertScope = { ws: w.id, role, lane };
+          robertCache.set(tok, s);
+          return s;
+        }
       }
     }
   }
   return null;
 }
-type RobertGate = (req: express.Request, rb: RobertScope) => boolean;
-let robertGate: RobertGate = () => false; // fail closed until api.ts installs the real one
+/** The fleet-wide Robert's token → its role and lane, or null. */
+export function fleetScopeOf(tok: string | undefined | null): FleetScope | null {
+  if (!looksDerived(tok)) return null;
+  for (const role of ROLES) {
+    for (const lane of LANES) if (tokenOk(tok, robertToken(null, role, lane))) return { ws: null, role, lane, fleet: true };
+  }
+  return null;
+}
+/** Any Robert's credential (a project's or the fleet's), or null. */
+export function robertIdentity(tok: string | undefined | null): AnyRobertScope | null {
+  return robertScopeOf(tok) ?? fleetScopeOf(tok);
+}
+/** null = allowed; otherwise the refusal, said to the caller. */
+type RobertGate = (req: express.Request, scope: AnyRobertScope) => string | null;
+let robertGate: RobertGate = () => ADMIN_REQUIRED; // fail closed until api.ts installs the real one
 export function setRobertGate(fn: RobertGate): void {
   robertGate = fn;
 }
-/** The operator, or the rw Robert of `wsId` — for handlers that check a privilege inline. */
-export function operatorOrRobertOf(req: express.Request, wsId: string | null | undefined): boolean {
+/**
+ * The operator's own credential, on this Mac: the admin token itself, not replayed by a host. The
+ * only identity that may record or carry out an approval (ledger-routes.ts operatorHand).
+ */
+export function isOperator(req: express.Request): boolean {
+  return forwardedHost(req) === null && tokenOk(req.get("x-mc-admin"), CONFIG.adminToken);
+}
+/**
+ * The operator, or the rw Robert of `wsId` — for handlers that check a privilege inline. `fleet`: the
+ * fleet-wide Robert passes too, for the few inline privileges he keeps (typing into a terminal).
+ */
+export function operatorOrRobertOf(req: express.Request, wsId: string | null | undefined, opts: { fleet?: boolean } = {}): boolean {
   if (tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return true;
+  if (forwardedHost(req) !== null) return false;
   const rb = robertScopeOf(req.get("x-mc-admin"));
-  return !!rb && rb.role === "rw" && !!wsId && rb.ws === wsId && forwardedHost(req) === null;
+  if (rb) return rb.role === "rw" && !!wsId && rb.ws === wsId;
+  const fl = opts.fleet ? fleetScopeOf(req.get("x-mc-admin")) : null;
+  return !!fl && fl.role === "rw";
+}
+/**
+ * The operator, or the fleet-wide Robert where he kept the operator's old reach when his raw admin
+ * token was taken away (reads; and, with `write`, the rw fleet credential). Never for approvals,
+ * secrets or anything that loosens a wall — those stay `isOperator`.
+ */
+export function operatorOrFleet(req: express.Request, opts: { write?: boolean } = {}): boolean {
+  if (isOperator(req)) return true;
+  if (forwardedHost(req) !== null) return false;
+  const fl = fleetScopeOf(req.get("x-mc-admin"));
+  return !!fl && (!opts.write || fl.role === "rw");
+}
+/**
+ * An environment for an agent process, minus the operator's token in any variable that carries it.
+ * Robert's fleet-wide process used to be handed the daemon's own env and the raw token; neither may
+ * reach a model now — whatever .secrets or launchd puts in the daemon's env.
+ */
+export function withoutOperatorToken<E extends Record<string, string | undefined>>(env: E): E {
+  const out = { ...env } as Record<string, string | undefined>;
+  delete out.CHRONOS_ADMIN_TOKEN;
+  for (const [k, v] of Object.entries(out)) if (v && CONFIG.adminToken && v.trim() === CONFIG.adminToken) delete out[k];
+  return out as E;
 }
 
 /**
- * Closing a Desk terminal is the operator's hand only — Desk ✕, phone Kill, or a Telegram ✅ on a
- * proposed kill. Robert, Leads and workers may PROPOSE; they never execute. The positive signal is
- * `x-mc-operator: 1`, which only those three surfaces set (never `mc`, never a Lead credential).
- * Daemon-internal `killSession` (host failover, etc.) does not go through HTTP and is unchanged.
+ * Closing a Desk terminal: the operator's own hand — Desk ✕, phone Kill, or a Telegram ✅ on a
+ * proposed kill (the token itself from this Mac, no agent header, `x-mc-operator: 1`, which only those
+ * surfaces set) — OR the fleet-wide rw Robert, who is the operator's main work surface and closes
+ * terminals across the fleet as part of driving them (the coordinator's requirement; his credential is
+ * derived from the admin token and lane-tagged, so a model cannot forge it). A project Robert, a Lead,
+ * a worker and the read-only Robert still only PROPOSE. Daemon-internal `killSession` (host failover)
+ * does not go through HTTP and is unchanged.
  */
 export function operatorMayCloseTerminal(req: express.Request, res: express.Response): boolean {
+  // The fleet-wide rw Robert closes terminals directly; nothing else derived or agent-held does.
+  if (forwardedHost(req) === null) {
+    const fl = fleetScopeOf(req.get("x-mc-admin"));
+    if (fl && fl.role === "rw" && !req.get("x-mc-lead") && !req.get("x-mc-session") && !req.get("x-mc-agent") && !req.get("x-mc-workspace-token")) return true;
+  }
   if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) {
+    const robert = forwardedHost(req) === null && robertIdentity(req.get("x-mc-admin"));
     res.status(403).json({
-      error: "closing a terminal is operator-only (Desk ✕, phone, or Telegram confirm)",
+      error: robert ? "only the fleet-wide Robert or the operator closes terminals — a project Robert proposes it" : "closing a terminal is operator-only (Desk ✕, phone, or Telegram confirm)",
     });
     return false;
   }
@@ -104,7 +182,7 @@ export function operatorMayCloseTerminal(req: express.Request, res: express.Resp
 // closing the loopback-reachable gap where an agent sandboxed for workspace A could otherwise
 // reach workspace B's tickets/jobs/sessions/runs/attachments/reviews. The admin token (dashboard)
 // and requests presenting neither header stay unrestricted, same as before this ticket.
-export type CallerScope = { ws: string | null; robert?: RobertRole } | null; // { ws: null } = admin/unrestricted; null = invalid token
+export type CallerScope = { ws: string | null; robert?: RobertRole; fleet?: true } | null; // { ws: null } = admin/unrestricted (or the fleet-wide Robert, who reads every workspace); null = invalid token
 
 // ───────────────────── tokenless requests: the hole in the wall, being closed ─────────────────────
 // "No token from this Mac = the operator" let ANY local process — every sandboxed agent included —
@@ -142,7 +220,7 @@ function noteTokenless(req: express.Request): void {
 /** True when the request names no identity the daemon can check (a WRONG admin token counts as none). */
 function isTokenless(req: express.Request): boolean {
   if (tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return false;
-  if (robertScopeOf(req.get("x-mc-admin"))) return false;
+  if (robertIdentity(req.get("x-mc-admin"))) return false;
   return !req.get("x-mc-workspace-token") && !req.get("x-mc-lead");
 }
 /**
@@ -154,7 +232,7 @@ export function tokenlessGate(req: express.Request, res: express.Response, next:
   // A header is a claim, not an identity: a workspace or Lead token nobody issued is refused outright
   // (any mode) — otherwise `x-mc-lead: x` walked past this gate onto every unscoped route.
   // A read-only Robert (Telegram's) reads, and only reads — his writes are proposals the operator taps.
-  const rbo = robertScopeOf(req.get("x-mc-admin"));
+  const rbo = robertIdentity(req.get("x-mc-admin"));
   if (rbo?.role === "ro" && req.method !== "GET" && req.method !== "HEAD") {
     res.status(403).json({ error: "read-only Robert: propose it, the operator confirms" });
     return;
@@ -184,6 +262,10 @@ export function callerScope(req: express.Request): CallerScope {
   if (!forwarded) {
     const rb = robertScopeOf(req.get("x-mc-admin"));
     if (rb) return { ws: rb.ws, robert: rb.role };
+    // The fleet-wide Robert reads every workspace, as he did with the operator's token; what he may
+    // write is still decided route by route (requireAdmin → robert-scope.ts, and inline checks).
+    const fl = fleetScopeOf(req.get("x-mc-admin"));
+    if (fl) return { ws: null, robert: fl.role, fleet: true };
   }
   const tok = req.get("x-mc-workspace-token");
   // `Origin: null` is a sandboxed iframe (an artifact page, src/artifacts.ts) or a file:// page — a

@@ -43,8 +43,9 @@ async function call(method: string, p: string, headers: Record<string, string>, 
 }
 
 test("a Robert token names exactly one workspace and role; it is not the admin token", () => {
-  assert.deepEqual(robertScopeOf(robertToken(A.id, "rw")), { ws: A.id, role: "rw" });
-  assert.deepEqual(robertScopeOf(robertToken(B.id, "ro")), { ws: B.id, role: "ro" });
+  assert.deepEqual(robertScopeOf(robertToken(A.id, "rw")), { ws: A.id, role: "rw", lane: "operator" });
+  assert.deepEqual(robertScopeOf(robertToken(B.id, "ro")), { ws: B.id, role: "ro", lane: "operator" });
+  assert.deepEqual(robertScopeOf(robertToken(A.id, "rw", "wake")), { ws: A.id, role: "rw", lane: "wake" });
   assert.equal(robertScopeOf(CONFIG.adminToken), null);
   assert.equal(robertScopeOf("f".repeat(64)), null);
   assert.notEqual(robertToken(A.id), robertToken(B.id));
