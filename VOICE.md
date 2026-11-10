@@ -95,6 +95,23 @@ real voice was used — `voice.keep_clips` below is how the next round gets real
   thrown away, with the first syllable of whatever he said next). Neutral on the synthetic set
   (8.3% vs 8.8% on 18 second-halves); kept because frames are no longer lost.
 
+### The Desk's call hears the same way
+
+The Desk's call is its own copy of the ear (`static/desk.html`, "Voice call"; tests in
+`src/desk-voice.test.ts`), with its own numbers for a Mac mic: 800 ms of quiet ends a clip, barge-in is a
+fixed 0.06 for 300 ms. It had the same four gaps and has the same four rules: the one-word rule
+(`minWordMs` 130 — on synthetic frames a 200 ms word at any level and a 350 ms word under the `speech`
+level never reached whisper), the join of a sentence cut by a breath, the "sent" beep that holds the ear
+without throwing the pre-roll away, and whisper's spellings of «colgá». Not measured on a real Mac
+microphone, and not with someone typing during a call: the one-word rule sends more short noises to
+whisper there too, and relies on the same phantom filter.
+
+- **Language**: the `EN`/`ES` button on the call strip. Until it is pressed the call uses the browser's
+  language and the daemon may still guess; once pressed, the choice is kept and every transcription of the
+  call carries `fixed=1`. Dictation into a terminal (🎤) does not: it has no language button of its own.
+- **No call trace** from the Desk: `POST /api/voice/trace` is only posted by the phone, so `seg:` /
+  `reopen:` / `join:` counts exist for phone calls only.
+
 ## A call that can be cut into
 
 - Barge-in threshold = p90 of what the mic hears while Robert plays and he is silent × 2.2, between
