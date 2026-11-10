@@ -2435,6 +2435,34 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       CREATE INDEX IF NOT EXISTS idx_alerts_session ON alerts(session_id);`),
   },
 
+  {
+    version: 158,
+    name: "request_verifications — one row per verifier pass over a request (src/request-verifier.ts)",
+    // The checks themselves are request_checks (156). A pass is what ran them: why (a hand-off, a draft,
+    // a PR head that moved, the operator's re-run), against which targets (`target_key` — a pass with the
+    // key of the last finished one is not run again), what it concluded, and whether its reason was told
+    // back to the terminal. `told` rows are the rounds: two at most, then the request surfaces as not
+    // ready with `reason`. 157 and 159 belong to other branches; deploy in order.
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS request_verifications (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+        workspace_id TEXT,
+        trigger TEXT NOT NULL,
+        target_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        ready INTEGER,
+        reason TEXT,
+        told INTEGER NOT NULL DEFAULT 0,
+        round INTEGER,
+        session_id TEXT,
+        by TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_request_verifications_request ON request_verifications(request_id, started_at);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -1820,7 +1820,7 @@ function askCap(question) {
     // → what came back → what he owes. Read-only. A terminal's token reads its own workspace's rows, a
     // project Robert's his workspace's, the operator's shell every workspace.
     if (cmd === "ledger") {
-      const SUBS = ["list", "show", "queue", "mine", "text"];
+      const SUBS = ["list", "show", "queue", "mine", "text", "verify"];
       const sub = SUBS.includes(pos[1]) ? pos[1] : pos[1] ? "show" : "list";
       const WORD = { needs_operator: "needs you", stuck: "stuck", working: "working", done: "done", closed: "closed" };
       const since = (iso) => {
@@ -1859,6 +1859,27 @@ function askCap(question) {
         if (qq.held.length) lines.push("held for later:", ...qq.held.map((i) => `- [${i.item_id.slice(0, 8)}] ${i.line}${i.hold_until ? ` · back ${i.hold_until.slice(0, 16).replace("T", " ")}` : " · undated"}`));
         return console.log(lines.join("\n"));
       }
+      // The operator's re-run of the verifier (src/request-verifier.ts). Admin only: it spends a heavy
+      // slot and a reviewer run. Waits for the pass (up to --wait minutes, default 20) and prints it.
+      if (sub === "verify") {
+        const vid = pos[2] || die("mc ledger verify <id8> [--wait <min>]");
+        const H = adminHeaders();
+        const before = (await req("GET", `/ledger/${encodeURIComponent(vid)}`, undefined, H)).verification?.last?.id || null;
+        const started = await req("POST", `/ledger/${encodeURIComponent(vid)}/verify`, {}, H);
+        console.log(started.started ? "verifying… (the repo's checks may take a while)" : "verified");
+        const until = Date.now() + Math.max(0, Number(opt.wait ?? 20)) * 60_000;
+        let r;
+        for (;;) {
+          r = await req("GET", `/ledger/${encodeURIComponent(vid)}`, undefined, H);
+          const last = r.verification?.last;
+          if (last && last.id !== before && last.status !== "running") break;
+          if (Date.now() > until) { console.log("still running — read it later with: mc ledger show " + vid); break; }
+          await new Promise((ok) => setTimeout(ok, 3000));
+        }
+        const last = r.verification?.last;
+        if (last && last.id !== before) console.log(`${last.ready ? "✅ ready for his yes" : "⛔ not ready"}${last.reason ? ` — ${last.reason}` : ""}${last.told ? ` · told its terminal (round ${last.round} of 2)` : ""}`);
+        pos[1] = vid;
+      }
       const id = (sub === "show" && SUBS.includes(pos[1]) ? pos[2] : pos[1]) || die("mc ledger show <id8>");
       const r = await req("GET", `/ledger/${encodeURIComponent(id)}`);
       if (opt.json) return console.log(JSON.stringify(r, null, 2));
@@ -1875,6 +1896,15 @@ function askCap(question) {
       if (r.deliverables.length) out.push("deliverables:", ...r.deliverables.map((d) => `  ${d.kind} · ${d.label || d.ref} · ${d.state}${d.target_hash ? ` · target ${d.target_hash.slice(0, 19)}` : ""}`));
       if (r.decisions.length) out.push("decisions:", ...r.decisions.map((d) => `  [${d.id.slice(0, 8)}] ${d.action} · ${d.label} · ${d.status}${d.decision ? ` · ${d.decision}${d.words ? ` "${d.words}"` : ""}` : ""}${d.target_hash ? ` · target ${d.target_hash.slice(0, 19)}` : ""}`));
       if (r.expected_checks.length) out.push(`checks: ${r.expected_checks.map((c) => `${c.name} ${c.status}`).join(" · ")}`);
+      // Every check the verifier wrote, newest last; a stale one ran against an older PR head or older words.
+      const ICON = { pass: "✓", fail: "✗", skip: "–" };
+      if (r.checks?.length) out.push("check runs:", ...r.checks.slice(-30).map((c) => `  ${ICON[c.status] || "?"} ${c.name} ${c.status}${c.stale ? " (STALE — ran on an older target)" : ""}${c.target_hash ? ` @${c.target_hash.replace(/^sha256:/, "").slice(0, 7)}` : ""} · ${c.ran_at.slice(0, 16).replace("T", " ")}${c.note ? ` — ${c.note}` : ""}` +
+        (c.evidence || []).filter((e) => e.meta && (e.meta.screen || e.meta.output)).slice(0, 6).map((e) => `\n      ${e.meta.screen ? `${e.meta.side} · ${e.meta.screen} · ${e.meta.viewport}: ${e.ref}` : `${e.label}: ${String(e.meta.output).split("\n").slice(-3).join(" / ").slice(0, 200)}`}`).join("")));
+      for (const x of r.readiness || []) out.push(`  → ${x.action} ${x.label}: ${x.ready ? "READY for his yes" : `not ready — ${x.line}`}${x.gaps?.length ? ` · not checked: ${x.gaps.map((g) => g.name).join(", ")}` : ""}`);
+      if (r.verification?.last) {
+        const v = r.verification.last;
+        out.push(`verifier: last pass ${v.status} (${v.trigger}) ${since(v.started_at)} ago${v.ready === true ? " · ready" : v.ready === false ? " · not ready" : ""}${v.reason ? ` — ${v.reason}` : ""} · rounds told ${r.verification.rounds_told}/2`);
+      }
       if (r.children?.length) out.push("per project:", ...r.children.map((c) => `  ${row(c)}`));
       return console.log(out.join("\n"));
     }
@@ -3394,7 +3424,7 @@ function askCap(question) {
     if (cmd === "outcome") {
       const sid = process.env.MC_SESSION || die("no MC_SESSION — `mc outcome` only works inside a terminal session");
       const USAGE =
-        'mc outcome "<summary: one or two plain sentences>" [--change "…"]… [--proof "…"]… [--shot before=a.png --shot after=b.png]… ' +
+        'mc outcome "<summary: one or two plain sentences>" [--change "…"]… [--proof "…"]… [--shot before-<screen>-phone=a.png --shot after-<screen>-phone=b.png]… ' +
         "[--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped \"merged #12\"]… | mc outcome --shipped \"deployed\" | mc outcome show | mc outcome clear";
       if (pos[1] === "show") {
         const d = await req("GET", `/sessions/${sid}/decisions`);

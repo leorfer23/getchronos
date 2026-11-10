@@ -118,6 +118,28 @@ export interface DecisionItem {
   updated_at: string;
 }
 
+/** One verifier pass over a request (migration 158): why it ran, against what, what it concluded. */
+export interface VerificationRow {
+  id: string;
+  request_id: string;
+  workspace_id: string | null;
+  /** outcome · draft · head_moved · manual · sweep */
+  trigger: string;
+  /** The targets it judged (items + their hashes). The last finished pass with this key is not repeated. */
+  target_key: string;
+  status: "running" | "done" | "skipped" | "error";
+  ready: boolean | null;
+  /** Why it is not ready (the fails, or what could not be checked). */
+  reason: string | null;
+  /** Its reason was typed back into the terminal — one round of the two. */
+  told: boolean;
+  round: number | null;
+  session_id: string | null;
+  by: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
 export interface CheckRow {
   id: string;
   request_id: string;
@@ -141,6 +163,7 @@ const json = <T>(raw: unknown, fallback: T): T => {
 const reqRow = (r: any): RequestRow | undefined => (r ? { ...r, prereqs: json<Prereq[]>(r.prereqs, []) } : undefined);
 const linkRow = ({ is_primary, ambiguous, ...r }: any): RequestLink => ({ ...r, primary: !!is_primary, ambiguous: !!ambiguous });
 const checkRow = (r: any): CheckRow => ({ ...r, evidence: json<Evidence[]>(r.evidence, []) });
+const verRow = (r: any): VerificationRow => ({ ...r, ready: r.ready === null || r.ready === undefined ? null : !!r.ready, told: !!r.told });
 const clip = (s: string | null | undefined, n: number) => (s == null ? null : String(s).slice(0, n));
 
 export type RequestFilter = {
@@ -380,6 +403,37 @@ export const requests = {
     return checkRow(db.prepare("SELECT * FROM request_checks WHERE id = ?").get(id));
   },
   checks(requestId: string): CheckRow[] {
-    return (db.prepare("SELECT * FROM request_checks WHERE request_id = ? ORDER BY ran_at ASC").all(requestId) as any[]).map(checkRow);
+    // rowid breaks ties: a pass writes several checks in the same millisecond, and a re-run's must sort after.
+    return (db.prepare("SELECT * FROM request_checks WHERE request_id = ? ORDER BY ran_at ASC, rowid ASC").all(requestId) as any[]).map(checkRow);
+  },
+
+  // ── verifier passes (migration 158) ──────────────────────────────────────────────────────────
+  startVerification(v: { request_id: string; workspace_id: string | null; trigger: string; target_key: string; by?: string | null }): VerificationRow {
+    const id = randomUUID();
+    db.prepare(
+      "INSERT INTO request_verifications (id,request_id,workspace_id,trigger,target_key,status,told,by,started_at) VALUES (?,?,?,?,?,'running',0,?,?)",
+    ).run(id, v.request_id, v.workspace_id, clip(v.trigger, 40), String(v.target_key).slice(0, 4000), clip(v.by ?? null, 60), now());
+    return verRow(db.prepare("SELECT * FROM request_verifications WHERE id = ?").get(id));
+  },
+  /** `target_key` = the targets as the pass left them (it may have bound a PR head while it ran). */
+  finishVerification(id: string, f: { status: VerificationRow["status"]; ready: boolean | null; reason?: string | null; told?: boolean; round?: number | null; session_id?: string | null; target_key?: string | null }): VerificationRow | undefined {
+    db.prepare("UPDATE request_verifications SET status = ?, ready = ?, reason = ?, told = ?, round = ?, session_id = ?, target_key = COALESCE(?, target_key), finished_at = ? WHERE id = ?")
+      .run(f.status, f.ready === null ? null : f.ready ? 1 : 0, clip(f.reason ?? null, 2000), f.told ? 1 : 0, f.round ?? null, f.session_id ?? null, f.target_key ? String(f.target_key).slice(0, 4000) : null, now(), id);
+    const r = db.prepare("SELECT * FROM request_verifications WHERE id = ?").get(id);
+    return r ? verRow(r) : undefined;
+  },
+  verifications(requestId: string, limit = 20): VerificationRow[] {
+    return (db.prepare("SELECT * FROM request_verifications WHERE request_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?").all(requestId, limit) as any[]).map(verRow);
+  },
+  lastVerification(requestId: string): VerificationRow | undefined {
+    return requests.verifications(requestId, 1)[0];
+  },
+  /** Rounds spent: passes whose reason went back to the terminal. */
+  roundsTold(requestId: string): number {
+    return (db.prepare("SELECT COUNT(*) c FROM request_verifications WHERE request_id = ? AND told = 1").get(requestId) as { c: number }).c;
+  },
+  /** A pass left `running` by a restart is over: nothing is running it any more. */
+  abandonRunning(): number {
+    return db.prepare("UPDATE request_verifications SET status = 'error', reason = COALESCE(reason, 'the daemon restarted mid-pass'), finished_at = ? WHERE status = 'running'").run(now()).changes;
   },
 };

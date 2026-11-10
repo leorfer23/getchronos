@@ -29,13 +29,13 @@
  */
 import { bus } from "./bus.js";
 import { asks, continuations, kv, sessionPrs, sessions, workspaces } from "./store.js";
-import { requests, type DecisionItem, type Deliverable, type RequestLink, type RequestRow } from "./store/requests.js";
+import { requests, type CheckRow, type DecisionItem, type Deliverable, type RequestLink, type RequestRow } from "./store/requests.js";
 import { heldBy, holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { statusOf } from "./term-status.js";
 import {
   DEFERRED_OPENERS, EXECUTABLE, FINAL_DELIVERABLE, OPEN_STATES, WORK, deliveredLinks, derivePrereqs, expectedChecks, ledgerLines, pickTurn, queueOrder,
-  rollUp, viaOf, wordsOfSession,
-  type Action, type AttributionHow, type DeliverableKind, type DeliverableState, type ItemView, type LineRow, type LinkRole, type LiveStepView,
+  readiness, rollUp, slotsFor, viaOf, wordsOfSession,
+  type Action, type Readiness, type AttributionHow, type DeliverableKind, type DeliverableState, type ItemView, type LineRow, type LinkRole, type LiveStepView,
   type LiveTurnView, type Prereq, type TerminalAct, type TerminalView, type TurnLane, type Via,
 } from "./ledger-model.js";
 import { terminalMove } from "./robert-steps.js";
@@ -344,6 +344,7 @@ function raiseItem(r: RequestRow, action: Action, d: Deliverable, sourceAt: stri
     request_id: r.id, action, label: d.label || d.ref, item_key: `${action}|${d.id}|${version}`, deliverable_id: d.id, target_hash: d.target_hash, source_at: sourceAt,
   });
   if (!created) return;
+  bus.publish({ topic: "ledger.item_raised", request_id: r.id, item_id: item.id, workspace_id: r.workspace_id, action, deliverable_id: d.id });
   for (const twin of twinsOf(d, r.workspace_id)) {
     for (const other of requests.itemsForDeliverable(twin.id)) {
       if (other.id === item.id || other.action !== action) continue;
@@ -888,11 +889,61 @@ export function detailOf(r: RequestRow, opts: { operator: boolean }) {
     result,
     deliverables: requests.deliverables(r.id),
     decisions: requests.items(r.id),
-    checks,
+    // Every check ever run, each marked stale when it ran against something its deliverable no longer is.
+    checks: checks.map((c) => {
+      const d = c.deliverable_id ? requests.deliverable(c.deliverable_id) : undefined;
+      return { ...c, stale: !!d && (c.target_hash ?? null) !== (d.target_hash ?? null) };
+    }),
     expected_checks: expectedChecks(r.kind, checks),
+    // Per open question: ready for his yes on its CURRENT target, or why not.
+    readiness: requests.items(r.id).filter((i) => (i.status === "open" || i.status === "held") && i.action !== "answer").map((i) => {
+      const rd = itemReadiness(r, i, checks);
+      return { item_id: i.id, action: i.action, label: i.label, target_hash: i.target_hash, ...rd, line: rd.ready ? "ready" : notReadyLine(rd) || "not verified yet" };
+    }),
+    // The verifier's passes, newest first: why each ran, what it concluded, and the rounds told back.
+    verification: (() => {
+      const passes = requests.verifications(r.id, 10);
+      return { rounds_told: requests.roundsTold(r.id), last: passes[0] ?? null, passes };
+    })(),
     // A fleet-wide row's per-project children are the operator's view only.
     children: opts.operator && r.workspace_id === null ? requests.list({ parent_id: r.id, limit: 100 }).map(summaryOf) : [],
   };
+}
+
+/**
+ * Is this item ready for his yes? Judged ONLY on checks run against its deliverable's current target:
+ * a pass on an older PR head (or older words) is stale and counts for nothing (`stale` says how many).
+ * The slots are its work type's, narrowed to what its deliverable can carry (ledger-model.ts slotsFor).
+ */
+export function itemReadiness(r: RequestRow, item: DecisionItem, checks: CheckRow[] = requests.checks(r.id)): Readiness & { stale: number } {
+  const d = item.deliverable_id ? requests.deliverable(item.deliverable_id) : undefined;
+  const target = d ? d.target_hash : item.target_hash;
+  const onItem = checks.filter((c) => !c.deliverable_id || c.deliverable_id === item.deliverable_id);
+  const current = onItem.filter((c) => (c.target_hash ?? null) === (target ?? null) || (!c.target_hash && !c.deliverable_id));
+  return { ...readiness(expectedChecks(r.kind, current, slotsFor(r.kind, d?.kind ?? null))), stale: onItem.length - current.length };
+}
+
+/** The checks that count for an item now: on its current target, the newest run of each. */
+function currentChecks(r: RequestRow, item: DecisionItem): CheckRow[] {
+  const d = item.deliverable_id ? requests.deliverable(item.deliverable_id) : undefined;
+  const target = d ? d.target_hash : item.target_hash;
+  const newest = new Map<string, CheckRow>();
+  for (const c of requests.checks(r.id)) {
+    if (c.deliverable_id && c.deliverable_id !== item.deliverable_id) continue;
+    if ((c.target_hash ?? null) !== (target ?? null) && !(!c.target_hash && !c.deliverable_id)) continue;
+    newest.set(c.name, c); // checks() is oldest first: the last one wins
+  }
+  return [...newest.values()];
+}
+
+/** What it is not ready for, said in a line: what failed, which gate was only skipped, what is missing. */
+function notReadyLine(rd: Readiness): string {
+  const parts = [
+    ...rd.failed.map((f) => `${f.name} failed${f.note ? ` (${clip(f.note, 90)})` : ""}`),
+    ...rd.gate_unmet.map((f) => `${f.name} not checked${f.note ? ` (${clip(f.note, 70)})` : ""}`),
+    ...(rd.missing.length ? [`not checked yet: ${rd.missing.join(", ")}`] : []),
+  ];
+  return parts.join("; ");
 }
 
 export type QueueItem = ReturnType<typeof queueView>["items"][number];
@@ -907,16 +958,17 @@ export function queueView(ws: string | undefined) {
     const r = requests.get(i.request_id)!;
     const d = i.deliverable_id ? requests.deliverable(i.deliverable_id) : undefined;
     // Only checks on this target count: a pass for an older PR head is not a pass for this one.
-    const mine = requests.checks(r.id).filter((c) => (!c.deliverable_id || c.deliverable_id === i.deliverable_id) && (!c.target_hash || c.target_hash === i.target_hash));
-    const exp = expectedChecks(r.kind, mine);
+    const rd = itemReadiness(r, i);
     const checks = {
-      pass: exp.filter((c) => c.status === "pass").length,
-      fail: exp.filter((c) => c.status === "fail").length,
-      missing_required: exp.filter((c) => c.required && c.status === "missing").length,
+      pass: rd.passed,
+      fail: rd.failed.length,
+      missing_required: rd.missing.length,
+      gate_unmet: rd.gate_unmet.length,
     };
     const title = titleOf(r, requests.linksFor(r.id));
     const where = ws === undefined && r.workspace_id ? ` in ${wsInfo(r.workspace_id)?.name}` : "";
-    const verified = checks.fail ? `${checks.fail} check${checks.fail > 1 ? "s" : ""} failed` : checks.pass && !checks.missing_required ? "checks pass" : "not verified yet";
+    const gaps = rd.gaps.length ? ` (not checked: ${rd.gaps.map((g) => g.name).join(", ")})` : "";
+    const verified = rd.ready ? `checks pass${gaps}` : rd.status === "none" ? "nothing to check" : rd.failed.length || rd.gate_unmet.length || rd.stale || requests.lastVerification(r.id) ? `not ready: ${notReadyLine(rd)}` : "not verified yet";
     const line = i.action === "answer"
       ? `Answer: ${clip(i.label, 160)}${where}`
       : `${ITEM_VERB[i.action][0].toUpperCase()}${ITEM_VERB[i.action].slice(1)} ${clip(i.label, 100)} for “${clip(title, 80)}”${where} — ${EXECUTABLE.has(i.action) && !i.target_hash ? "not bound yet" : verified}`;
@@ -925,6 +977,12 @@ export function queueView(ws: string | undefined) {
       action: i.action, label: i.label, status: i.status, hold_until: i.hold_until,
       deliverable: d ? { id: d.id, kind: d.kind, ref: d.ref, label: d.label, state: d.state } : null,
       ask_id: i.ask_id, target_hash: i.target_hash, bound: !!i.target_hash, checks, created_at: i.created_at, line,
+      // What the phone's approval card shows: ready or why not, the gaps said with the yes, and the
+      // evidence of the current checks (shots carry screen · viewport · side in their meta).
+      verification: {
+        ready: rd.ready, status: rd.status, failed: rd.failed, gaps: rd.gaps, gate_unmet: rd.gate_unmet, missing: rd.missing, stale: rd.stale,
+        evidence: currentChecks(r, i).map((c) => ({ name: c.name, status: c.status, note: c.note, evidence: c.evidence, ran_at: c.ran_at })),
+      },
     };
   };
   const shaped = pending.map(shape);
