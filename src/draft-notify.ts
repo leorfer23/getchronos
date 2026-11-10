@@ -9,6 +9,7 @@
  * ends. The message goes only to the operator — never to the draft's recipients, never to another
  * workspace's channel.
  */
+import { randomUUID } from "node:crypto";
 import { bus } from "./bus.js";
 import { desktop } from "./notify.js";
 import { events, jobs, runs, workspaces } from "./store.js";
@@ -53,6 +54,58 @@ export async function notifyDraft(d: { workspace_id: string | null; where: strin
   await send(`📝 <b>Draft listo</b> · ${esc(ws)} · ${esc(d.where)}\n${esc(d.label)}\n<i>No se envió: revisalo y mandalo vos.</i>`).catch(() => {});
   ping(`📝 Draft listo · ${ws}`, d.label);
   return true;
+}
+
+/**
+ * The drafts the phone puts in front of the operator for his yes (static/phone-deck.js): who wrote it,
+ * to whom, and — when the terminal's hook carried it — the full text exactly as it would go out.
+ * Memory only, last 50 for 24 hours: a stopgap so announced drafts are readable at all, until the
+ * request ledger records deliverables. Nothing here sends anything (no-send.ts).
+ */
+export type RecentDraft = {
+  id: string;
+  session_id: string | null;
+  workspace_id: string | null;
+  /** What the terminal is for, in its own words — never an id. */
+  where: string;
+  label: string;
+  kind: "slack" | "email";
+  to: string | null;
+  channel: string | null;
+  subject: string | null;
+  text: string | null;
+  at: string;
+};
+const DRAFT_KEEP = 50, DRAFT_TTL_MS = 24 * 3600_000;
+const recentList: RecentDraft[] = [];
+export function recordDraft(d: Omit<RecentDraft, "id" | "at">, nowMs = Date.now()): RecentDraft {
+  // The same draft saved again (update_draft, a second pass at the wording) is one card, with the
+  // newest words — under a NEW id, so a yes given on the phone to the old words never covers these.
+  const dest = (x: { to: string | null; channel: string | null }) => (x.to ?? x.channel ?? "").toLowerCase();
+  for (let i = recentList.length - 1; i >= 0; i--) {
+    const x = recentList[i];
+    if (x.session_id && x.session_id === d.session_id && x.kind === d.kind && dest(x) === dest(d)) recentList.splice(i, 1);
+  }
+  const row: RecentDraft = { ...d, id: randomUUID().replace(/-/g, "").slice(0, 16), at: new Date(nowMs).toISOString() };
+  recentList.push(row);
+  while (recentList.length > DRAFT_KEEP) recentList.shift();
+  return row;
+}
+export function recentDrafts(nowMs = Date.now()): RecentDraft[] {
+  return recentList.filter((d) => nowMs - Date.parse(d.at) < DRAFT_TTL_MS).slice().reverse();
+}
+/** Tests only. */
+export function clearRecentDrafts(): void { recentList.length = 0; }
+/** The hook's `draft` body, cut to size and typed. Untrusted: it is what an agent passed its tool. */
+export function draftFields(raw: any): Pick<RecentDraft, "kind" | "to" | "channel" | "subject" | "text"> {
+  const str = (v: unknown, n: number) => { const t = typeof v === "string" ? v.trim() : ""; return t ? t.slice(0, n) : null; };
+  // The text verbatim — not even trimmed: the phone hashes exactly these words to match the ledger's
+  // target (src/ledger-model.ts draftHash), and a yes is bound to the words he heard.
+  const text = typeof raw?.text === "string" && raw.text.length ? raw.text.slice(0, 20000) : null;
+  return {
+    kind: raw?.kind === "email" ? "email" : "slack",
+    to: str(raw?.to, 400), channel: str(raw?.channel, 200), subject: str(raw?.subject, 400), text,
+  };
 }
 
 /** Every draft tool call in a finished run's event stream (stream-json assistant tool_use items). */

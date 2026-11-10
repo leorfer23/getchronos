@@ -48,6 +48,10 @@ export type BusEvent = (
   // overseeing agent answering a card on the operator's behalf. Recorded like every other event, so
   // "who told the acme terminal to use the staging schema" has an answer.
   | { topic: "session.input"; session_id: string; by: string; text: string; workspace_id: string | null }
+  // An agent left a Slack/Gmail draft (draft-notify.ts). Ids only: every bus event is written to the
+  // activity table, and a draft's words are the operator's outgoing mail — the phone reads them from
+  // GET /api/drafts instead.
+  | { topic: "draft.ready"; session_id: string | null; workspace_id: string | null; draft_id: string }
   // A live terminal stopped on a credit/usage wall and the daemon moved it (terminal-failover.ts):
   // "model" = same terminal on another model, "backend" = a new terminal (to_session_id) took over,
   // "give_up" = nothing left to try — it waits for a human.

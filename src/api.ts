@@ -72,6 +72,7 @@ import { focusEfficiencySnapshot } from "./focus.js";
 import { sessionArtifacts } from "./session-artifacts.js";
 import { findMedia, mediaMime, sessionMedia } from "./session-media.js";
 import { recordSessionPrs } from "./terminal-automerge.js";
+import { draftFields, recentDrafts, recordDraft } from "./draft-notify.js";
 import { openProactive } from "./robert-selfwake.js";
 import { notifyDraft } from "./draft-notify.js";
 import { markVoiceTurn, noteDraft } from "./ledger.js";
@@ -984,6 +985,9 @@ export function startServer() {
     if (!checkScope(req, res, s.workspace_id)) return;
     // An agent left a draft (it never sends): tell the operator, and touch nothing on the card.
     if (req.body.event === "draft") {
+      // Kept whole for the phone's approval card (memory only), announced by id.
+      const d = recordDraft({ session_id: s.id, workspace_id: s.workspace_id, where: String(s.goal || s.title || "").slice(0, 120), label: String(req.body.label ?? "draft"), ...draftFields(req.body.draft) });
+      bus.publish({ topic: "draft.ready", session_id: s.id, workspace_id: s.workspace_id, draft_id: d.id });
       void notifyDraft({ workspace_id: s.workspace_id, where: `terminal ${s.id.slice(0, 8)}${s.goal ? ` · ${String(s.goal).slice(0, 60)}` : ""}`, label: String(req.body.label ?? "draft") });
       noteDraft(s.id, req.body); // the request ledger: a deliverable, and a `send` he decides (ledger.ts)
       return res.json({ ok: true });
@@ -1606,6 +1610,9 @@ export function startServer() {
     res.status(204).end();
   });
 
+  // The drafts agents left, for the phone's approval cards — every workspace's, so admin only. Read
+  // only: nothing here sends (there is no executor yet, and agents never send).
+  api.get("/drafts", requireAdmin, (_req, res) => res.json({ drafts: recentDrafts() }));
   // The whole wall in one read, in words: what each terminal is for, whether it needs a human, and
   // the last things it said about itself. This is how an agent "looks at the screen" — without it,
   // overseeing twelve terminals is twelve round trips and a guess about which ones matter.

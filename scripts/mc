@@ -724,6 +724,16 @@ async function hook(backend, mode) {
     ev = { event: "ask", question: String(j.message || "needs your input").slice(0, 300), options: [] };
   else if (name === "sessionend") ev = { event: "session_end" };
   if (ev) {
+    // A draft rides whole — where it goes and every word, verbatim — so the phone can read it out in
+    // full before the operator's yes (src/draft-notify.ts recordDraft; kept in the daemon's memory only).
+    // Same fields, same order of fallbacks, as the request ledger's draft hash, so the two agree.
+    if (ev.event === "draft") {
+      const slack = /slack_send_message_draft$/.test(tool);
+      const str = (v) => (v == null ? "" : Array.isArray(v) ? v.join(", ") : String(v));
+      ev.draft = slack
+        ? { kind: "slack", channel: str(input.channel_name || input.channel || input.channel_id || input.user_id).trim().slice(0, 200) || null, text: str(input.message ?? input.text).slice(0, 20000) || null }
+        : { kind: "email", to: str(input.to || input.recipients).trim().slice(0, 400) || null, subject: str(input.subject).trim().slice(0, 400) || null, text: str(input.body ?? input.text ?? input.message).slice(0, 20000) || null };
+    }
     for (const k of Object.keys(ev)) if (ev[k] == null || ev[k] === "") delete ev[k];
     let t;
     let res = null;

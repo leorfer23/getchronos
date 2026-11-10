@@ -272,9 +272,15 @@ test("the card escapes model and agent text, and collapses once answered", () =>
   assert.doesNotMatch(done, /ak-f|data-akopt/, "an answered card has nothing left to press");
 });
 
-test("both chat surfaces load the widget, embed cards and relay its topics; only the phone keeps a ? button", () => {
+test("both chat surfaces load the widget, embed cards and relay its topics; the phone's questions are approval cards", () => {
   assert.doesNotMatch(read("static/desk.html"), /id="chat-asks"/, "on the Desk a question lives in its terminal");
-  for (const [file, btn] of [["static/desk.html", null], ["static/phone.html", "r-asks"]] as const) {
+  // The phone no longer has a "? N" button: every open question is a card in its approval deck, built
+  // from the same list (AskCard.collect) and answered through the same doors (AskCard.termBody / asks).
+  const deck = read("static/phone-deck.js");
+  assert.match(deck, /root\.AskCard\.collect\(/);
+  assert.match(deck, /root\.AskCard\.termBody\(/);
+  assert.doesNotMatch(read("static/phone.html"), /id="r-asks"/);
+  for (const [file, btn] of [["static/desk.html", null], ["static/phone.html", null]] as const) {
     const html = read(file);
     assert.match(html, /<script src="\/ask-card\.js"><\/script>/, file);
     assert.match(html, /AskCard\.embed\(d\)/, `${file}: every Robert row goes through embed`);

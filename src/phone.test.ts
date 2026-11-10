@@ -1,31 +1,183 @@
 /**
  * The phone surface (static/phone.html) is plain HTML with no build step, so the regressions this
  * guards are attributes and strings in the shipped file: the PWA hooks a phone needs to install it,
- * Focus (no raw PTY), Robert (model picker + warm), and the new-terminal sheet matching the Desk.
+ * the conversation with Robert as the home screen (talk first, type as an option), the approval deck
+ * behind one entry, everything else behind one ⋯, push-to-talk as the fallback, deep links that do
+ * not navigate, and the stale-build check. The call engine and the deck have their own tests
+ * (src/phone-voice.test.ts, src/phone-deck.test.ts).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-const html = fs.readFileSync(path.join(process.cwd(), "static/phone.html"), "utf8");
+const read = (p: string) => fs.readFileSync(path.join(process.cwd(), p), "utf8");
+const html = read("static/phone.html");
+const sw = read("static/sw.js");
 
-test("installs as a PWA: manifest, icon, standalone hints, keyboard-aware viewport", () => {
+test("installs as a PWA: manifest with an id and 192/512 icons (one maskable), standalone, keyboard-aware viewport", () => {
   assert.match(html, /<link rel="manifest" href="\/phone\.webmanifest">/);
-  assert.match(html, /<link rel="apple-touch-icon" href="\/phone-icon\.png">/);
+  assert.match(html, /<link rel="apple-touch-icon" href="\/phone-icon-512\.png">/);
   assert.match(html, /name="mobile-web-app-capable" content="yes"/);
   assert.match(html, /interactive-widget=resizes-content/);
-  const manifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), "static/phone.webmanifest"), "utf8"));
+  assert.match(html, /viewport-fit=cover/);
+  const manifest = JSON.parse(read("static/phone.webmanifest"));
   assert.equal(manifest.start_url, "/phone");
+  assert.equal(manifest.id, "/phone");
   assert.equal(manifest.display, "standalone");
-  assert.ok(fs.existsSync(path.join(process.cwd(), "static/phone-icon.png")));
+  assert.ok(manifest.icons.some((i: any) => i.sizes === "192x192"));
+  assert.ok(manifest.icons.some((i: any) => i.sizes === "512x512" && i.purpose === "maskable"));
+  for (const i of manifest.icons) assert.ok(fs.existsSync(path.join(process.cwd(), "static", i.src)), i.src);
 });
 
-test("bus socket follows the page scheme and the token rides the same localStorage key as the Desk", () => {
+test("home is the conversation: one dominant talk button, text one tap away, nothing else in front", () => {
+  // The first view is Robert's thread; the composer is the text field + the talk button.
+  assert.match(html, /<div id="v-home" class="view">[\s\S]*?<div class="chat" id="chat"><\/div>[\s\S]*?<button class="talk" id="talk"/);
+  assert.match(html, /<textarea id="r-composer" rows="1" placeholder="Message Robert"/);
+  // One ⋯ in the header, and what is waiting for him as ONE entry above the thread.
+  assert.match(html, /<button class="ic" id="btn-more" aria-label="More">/);
+  assert.match(html, /<button class="qentry" id="qentry" hidden>/);
+  assert.match(html, /n === 1 \? "1 waiting for you" : n \+ " waiting for you"/);
+  // The old front is gone from the front: no three lists on home, no New/Robert bar, no ? button,
+  // no project picker in the composer.
+  assert.doesNotMatch(html, /<div class="hbar">|id="btn-robert"|id="r-asks"|id="v-robert"/);
+  assert.doesNotMatch(html, /tag-complete\.js|TagComplete\(/, "he never names a project");
+  assert.doesNotMatch(html, /#atlas to pin a project|one chat · # to name a project/);
+});
+
+test("everything else is behind one ⋯: terminals (the old triage lists), new terminal, settings", () => {
+  assert.match(html, /function moreMenu\(\)/);
+  assert.match(html, /data-m="terms"[\s\S]*?data-m="new"[\s\S]*?data-m="settings"/);
+  assert.match(html, /<div id="v-terms" class="view" hidden>/);
+  for (const g of ["g-needs", "g-finished", "g-working"]) assert.match(html, new RegExp(`id="${g}"`));
+  assert.match(html, /const PH_RANK = \{ blocked: 0, decide: 1, review: 2, your_turn: 3, stalled: 4, waiting: 5, working: 6 \};/);
+  assert.match(html, /data-ans="continue"/);
+  assert.match(html, /data-ans="close" class="go"/);
+  assert.match(html, /async function closeSession\(id\)/);
+  assert.match(html, /toast\("closed", \{ label: "Undo", fn: \(\) => reopen\(id\) \}\)/);
+  assert.match(html, /<div class="\$\{cls\}" role="button" tabindex="0" data-open/);
+  // Settings carries what used to sit on the front: Robert's model, a new conversation, voice.
+  assert.match(html, /<select id="r-model" aria-label="Robert model"><\/select>/);
+  assert.match(html, /api\("\/agent\/model", \{ method: "POST", body: JSON\.stringify\(\{ model \}\) \}\)/);
+  assert.match(html, /data-reset/);
+  assert.match(html, /data-speed=/);
+});
+
+test("new terminal sheet still matches the Desk: CLI, model, where, kind, blank, lead", () => {
+  assert.match(html, /function newTermSheet\(wsId\) \{[\s\S]*?const b = sheet\(/);
+  for (const id of ["f-backend", "f-model", "f-cwd", "f-kind", "f-lead", "f-blank"]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /store\.set\("desk-backend:"/);
+  assert.match(html, /store\.set\("desk-model:"/);
+  assert.match(html, /\.\.\.\(opts\.lead \? \{ role: "lead" \} : \{\}\)/);
+});
+
+test("the talk button: a tap opens the hands-free call inside the gesture, a hold is push-to-talk", () => {
+  assert.match(html, /<script src="\/phone-voice\.js"><\/script>/);
+  assert.match(html, /talk\.addEventListener\("click", \(\) => \{[\s\S]*?callStart\(\);/);
+  assert.match(html, /function callStart\(\) \{[\s\S]*?PhoneVoice\.start\(\)/);
+  assert.match(html, /holdT = setTimeout\(\(\) => \{ held = true; fx\.tick\(\); voiceStart\(talk, dictateInto\(rComposer, \(\) => askRobert\(\)\), true\); \}, 380\);/);
+  // A turn said on the call is a voice turn (Robert answers short) and its sentences are spoken.
+  assert.match(html, /if \(el\._voice\) body\.voice = true;/);
+  assert.match(html, /if \(e\.topic === "agent\.delta" && PhoneVoice\.on && e\.client === CLIENT\) PhoneVoice\.delta\(e\);/);
+  assert.match(html, /if \(PhoneVoice\.on && e\.reply && \(mine \|\| !e\.you\)\) PhoneVoice\.final\(e, mine\);/);
+  // A card on screen gets the words first — with the call's clock (when the words started, whether
+  // the page was playing) so a yes over its own audio is not a yes; "let's see" opens the deck.
+  assert.match(html, /onHeard: \(text, meta\) => \{/);
+  assert.match(html, /if \(PhoneDeck\.voiceAnswer\(text, meta\)\) return;/);
+  // A held spoken approval stops on "stop", on any barge-in, and on hanging up.
+  assert.match(html, /onStopTurn: \(\) => \{ PhoneDeck\.cancelHold\(\);/);
+  assert.match(html, /onBarge: \(\) => PhoneDeck\.onBarge\(\),/);
+  assert.match(html, /if \(!on\) \{ callSub = ""; R\.pick = null; PhoneDeck\.cancelHold\(true\); \}/);
+  // Its on-screen Cancel can outlast a plain 5 s toast (the deck asks for the whole window).
+  assert.match(html, /act\?\.ms \|\| \(act \? 5000 : 2400\)/);
+  // What the call says to open the deck carries no yes-word (it could come back through the mic).
+  assert.match(html, /Decí «veamos» para verla\./);
+  assert.match(html, /const VIEW_RE = /);
+});
+
+test("stuck work reaches a live call: presence every 20 s, the alert said first, 'spoken' only after it played", () => {
+  assert.match(html, /api\("\/voice\/presence", \{ method: "POST", body: JSON\.stringify\(\{ client: CLIENT, surface: "phone", live: on, lang: voiceLang\(\), lock: null \}\) \}\)/);
+  assert.match(html, /presT = setInterval\(\(\) => ping\(true\), 20000\)/);
+  assert.match(html, /"alert\.raised"/);
+  assert.match(html, /if \(!PhoneVoice\.on \|\| !e\.say \|\| !e\.alert_id \|\| \(e\.client && e\.client !== CLIENT\)\) return;/);
+  assert.match(html, /api\("\/alerts\/" \+ encodeURIComponent\(e\.alert_id\) \+ "\/spoken", \{ method: "POST", body: JSON\.stringify\(\{ client: CLIENT, stage \}\) \}\)/);
+  assert.match(html, /onStart: \(\) => report\("started"\) \}\)\.then\(\(played\) => \{\s*if \(played\) report\("done"\);/);
+});
+
+test("voice goes to the Mac: push-to-talk posts raw audio to /api/transcribe with the admin token", () => {
+  assert.match(html, /fetch\("\/api\/transcribe" \+ \(PREFS\.lang \? "\?lang=" \+ PREFS\.lang : ""\), \{ method: "POST"/);
+  assert.match(html, /"x-mc-admin": TOKEN/);
+  assert.match(html, /new MediaRecorder\(stream/);
+  assert.match(html, /async function micReady\(\)/);
+  assert.match(html, /audioBitsPerSecond: 32000/);
+  assert.match(html, /if \(total > 1800\) toast/);
+  assert.doesNotMatch(html, /webkitSpeechRecognition|SpeechRecognition\(/, "no cloud speech API");
+});
+
+test("push-to-talk: ✕ cancels, a failed transcribe keeps the audio, the screen stays awake", () => {
+  assert.match(html, /function talkMic\(mic, onText, sends = \(\) => false\)/);
+  assert.match(html, /finishing = V\.state === "rec" && V\.mic === mic;/);
+  assert.doesNotMatch(html, /addEventListener\("pointerleave"/, "drifting off the button must not end a recording");
+  assert.match(html, /navigator\.wakeLock\.request\("screen"\)/);
+  assert.match(html, /id="rb-cancel"/);
+  assert.match(html, /if \(!V\.keep\) \{ voiceReset\(\); return toast\("cancelled"\); \}/);
+  assert.match(html, /if \(V\.state === "busy"\) return V\.ctl\?\.abort\(\);/);
+  assert.match(html, /if \(V\.state === "failed"\) transcribe\(\);/);
+  assert.match(html, /if \(PhoneVoice\.on\) PhoneVoice\.deaf\(true\);/, "on a call the ear is deaf while you dictate");
+});
+
+test("Robert: one routed thread, the answer comes off the bus, an outbox for lines typed mid-turn", () => {
+  assert.match(html, /const body = \{ text, client: CLIENT, surface: "phone" \};/);
+  assert.match(html, /api\("\/agent", \{ method: "POST", body: JSON\.stringify\(body\) \}\)/);
+  assert.match(html, /api\("\/agent\/history\?limit=40&ws=all"\)/);
+  assert.match(html, /DOMPurify\.sanitize\(marked\.parse/);
+  assert.match(html, /if \(ws !== undefined\) \{ body\.ws = ws; body\.route = false; \}/);
+  assert.match(html, /if \(r\?\.how === "ask"\) \{ dropMine\(\); setPending\(null\); robWork\(false\); askWhere\(r, text, quote, el\._voice\); return; \}/);
+  assert.match(html, /const ourThread = \(ws\) => !String\(ws \|\| ""\)\.startsWith\("agent:"\);/);
+  assert.match(html, /if \(!e\.text \|\| \(e\.kind && e\.kind !== "text"\) \|\| !\(mine \|\| ourThread\(e\.ws\)\)\) return;/);
+  assert.match(html, /let b = R\.pend\.get\(key\);/);
+  assert.match(html, /R\.pend\.set\(r\.turn, b\); R\.mine = null; R\.pend\.delete\("\?"\)/);
+  assert.match(html, /robAwait\(r\.turn\); hold = true; return;/);
+  assert.match(html, /R\.outbox\.push\(\{ text, el, quote, ws: picked \}\)/);
+  assert.match(html, /if \(next\) deliverRobert\(next\.text, next\.el, next\.ws, next\.quote\);/);
+  assert.match(html, /const streamed = R\.pend\.get\(e\.turn \|\| "\?"\);/);
+  assert.match(html, /streamed\.className = "bub rob";/);
+  assert.doesNotMatch(html, /qs\("#r-send"\)\.disabled = true/, "the send button is never disabled while he answers");
+  assert.match(html, /\.bub\.you\.queued \{ opacity:\.55; \}/);
+  assert.match(html, /function mdRob\(text\)/);
+  assert.match(html, /a\[href\^="#sel="\]/);
+  assert.doesNotMatch(html, /a\.op === "select"|a\.op === "focus_terminal"/, "nothing he says moves the operator's screen");
+});
+
+test("the thread survives a reload and a dropped link: cache first, a line in flight is kept, never resent on its own", () => {
+  assert.match(html, /store\.set\("phone-thread", JSON\.stringify\(rows\.slice\(-40\)/);
+  assert.match(html, /const cached = loadThread\(\);/);
+  assert.match(html, /function setPending\(p\) \{ R\.pending = p; if \(p\) store\.set\("phone-pending"/);
+  assert.match(html, /const row = rows\.find\(\(m\) => m\.id > \(p\.after \|\| 0\) && norm\(m\.you\) === want\);/);
+  assert.match(html, /function unsentCheck\(el, text\)/);
+  assert.match(html, /tr\("¿No le llegó\? Reenviar", "Didn't reach him\? Resend"\)/);
+  // With the socket down but HTTP up, a turn's answer still arrives.
+  assert.match(html, /if \(!S\.busOpen && navigator\.onLine && TOKEN && \(R\.awaitTurn \|\| R\.pending\)\) robertHistory\(\);/);
+  // Offline: lines wait in the outbox and go when the link is back.
+  assert.match(html, /if \(R\.busy \|\| !navigator\.onLine\) \{ el\.classList\.add\("queued"\); R\.outbox\.push\(\{ text, el, quote \}\);/);
+  assert.match(html, /store\.set\("phone-draft", rComposer\.value\)/);
+});
+
+test("the approval deck is one module, opened from the entry, a deep link, or by voice", () => {
+  assert.match(html, /<script src="\/phone-deck\.js"><\/script>/);
+  assert.match(html, /<div id="v-deck" class="deck" hidden><\/div>/);
+  assert.match(html, /PhoneDeck\.init\(\{/);
+  assert.match(html, /qs\("#qentry"\)\.onclick = \(\) => \{ fx\.tap\(\); PhoneDeck\.open\(\); \};/);
+  assert.match(html, /compose: composeSheet,/);
+  // The Ask widget still embeds Robert's question cards in the thread.
+  assert.match(html, /<script src="\/ask-card\.js"><\/script>/);
+  assert.match(html, /AskCard\.init\(\{ api, toast, sessions: \(\) => S\.sessions, askOf, who: \(s\) => sTitle\(s\)\.slice\(0, 40\), log: chatEl \}\);/);
+});
+
+test("bus socket follows the page scheme; the token rides the same localStorage key as the Desk", () => {
   assert.match(html, /const WS_SCHEME = location\.protocol === "https:" \? "wss:" : "ws:"/);
   assert.match(html, /\$\{WS_SCHEME\}\/\/\$\{location\.host\}\/ws\?token=/);
-  assert.match(html, /localStorage\.getItem\("mc-token"\)/);
-  // No raw PTY on the phone — no /term websocket.
+  assert.match(html, /store\.get\("mc-token"\)/);
   assert.doesNotMatch(html, /\/term\?id=/);
   assert.doesNotMatch(html, /xterm\.css|new Terminal\(|disableStdin/);
 });
@@ -35,263 +187,108 @@ test("api() rides out a tunnel blip: one retry on a failed GET, never on a write
   assert.match(html, /method === "GET" && err instanceof TypeError \? new Promise\(\(r\) => setTimeout\(r, 1200\)\)\.then\(send\) : Promise\.reject\(err\)/);
 });
 
-test("Focus composer posts through /sessions/:id/input with enter:true", () => {
-  assert.match(html, /input\(id, \{ text: v, enter: true \}\)/);
-  assert.doesNotMatch(html, /sendRaw\(v \+ "\\r"\)/);
-});
-
-test("voice goes to the Mac: the mic posts raw audio to /api/transcribe with the admin token", () => {
-  assert.match(html, /fetch\("\/api\/transcribe" \+ \(PREFS\.lang \? "\?lang=" \+ PREFS\.lang : ""\), \{ method: "POST"/);
-  assert.match(html, /"x-mc-admin": TOKEN/);
-  assert.match(html, /new MediaRecorder\(stream/);
-  assert.doesNotMatch(html, /webkitSpeechRecognition|SpeechRecognition\(/, "no cloud speech API");
-});
-
-test("Robert: the desk-wide manager is one tap from home, with the same thread as the Desk", () => {
-  assert.match(html, /id="btn-robert"/);
-  assert.match(html, /const body = \{ text, client: CLIENT, surface: "phone" \};/);
-  assert.match(html, /api\("\/agent", \{ method: "POST", body: JSON\.stringify\(body\) \}\)/);
-  assert.match(html, /api\("\/agent\/history\?limit=40&ws=all"\)/);
-  assert.match(html, /talkMic\(qs\("#r-mic"\)/);
-  assert.match(html, /DOMPurify\.sanitize\(marked\.parse/);
-});
-
-test("Robert has a model picker wired to GET/POST /agent/model", () => {
-  assert.match(html, /id="r-model"/);
-  assert.match(html, /async function loadRobertModel\(\)/);
-  assert.match(html, /api\("\/agent\/model"\)/);
-  assert.match(html, /api\("\/agent\/model", \{ method: "POST", body: JSON\.stringify\(\{ model \}\) \}\)/);
-  assert.match(html, /qs\("#r-model"\)\.onchange/);
-});
-
-test("Robert warms aggressively on app open, resume, and opening his chat", () => {
-  assert.match(html, /function warmRobert\(force = false\)/);
-  assert.match(html, /api\("\/agent\/warm", \{ method: "POST", body: JSON\.stringify\(\{ ws: null \}\) \}\)/);
-  assert.match(html, /warmRobert\(true\);/);
-  assert.match(html, /robertHistory\(\); \/\/ cache his thread so opening Robert is instant/);
-  assert.match(html, /function resume\(\) \{[\s\S]*?warmRobert\(\);/);
-});
-
-test("the Desk reasserts its pane sizes when the window comes back (the phone resized the shared pty)", () => {
-  const desk = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
-  assert.match(desk, /pane\.forceSize = \(\) => \{ sentCols = sentRows = 0; sendSize\(\); \}/);
-  assert.match(desk, /window\.addEventListener\("focus", \(\) => \{ for \(const \[, p\] of S\.panes\)/);
-});
-
 test("feedback is synthesized, gated behind a gesture, and mutable", () => {
   assert.match(html, /new \(window\.AudioContext \|\| window\.webkitAudioContext\)/);
   assert.doesNotMatch(html, /<audio|\.mp3|\.wav|\.ogg"/, "no audio files to fetch through the tunnel");
   assert.match(html, /document\.addEventListener\("pointerdown", unlock/);
-  assert.match(html, /localStorage\.setItem\("phone-fx"/);
+  assert.match(html, /store\.set\("phone-fx"/);
   assert.match(html, /row\("fx", "Sounds & haptics"/);
-  assert.match(html, /if \(was === "working" && s\.state === "waiting" && !s\.status\) fx\.needsYou\(\)/);
-  assert.match(html, /if \(was !== e\.status\.phase && \["blocked", "decide", "your_turn"\]\.includes\(e\.status\.phase\)\) fx\.needsYou\(\);/);
 });
 
 test("every sheet can be dragged down to dismiss, and has an ✕", () => {
   assert.match(html, /<button class="x" data-x aria-label="Close">/);
   assert.match(html, /sh\.addEventListener\("touchmove"/);
   assert.match(html, /if \(dy > 110 \|\| flick\) \{ fx\.tap\(\); closeSheet\(true, sh, bg\); \}/);
-  assert.match(html, /function newTermSheet\(wsId\) \{[\s\S]*?const b = sheet\(/);
 });
 
-test("answer chips on the card go through the input door; a select's extra options open Focus", () => {
-  assert.match(html, /data-ans="yn:y"/);
-  assert.match(html, /data-ans="continue"/);
-  assert.match(html, /if \(a\.startsWith\("opt:"\)\) \{ const o = s\?\.prompt\?\.options\?\.\[Number\(a\.slice\(4\)\)\]; return o \? input\(id, optionBody\(o\)\) : openFocus\(id\); \}/);
-  assert.doesNotMatch(html, /<button class="\$\{cls\}" data-open/);
-  assert.match(html, /<div class="\$\{cls\}" role="button" tabindex="0" data-open/);
-});
-
-test("Robert on the phone is one routed chat: no strip filter, answer comes off the bus", () => {
-  assert.match(html, /if \(ws !== undefined\) \{ body\.ws = ws; body\.route = false; \}/);
-  assert.match(html, /if \(r\?\.how === "ask"\) \{ dropMine\(\); robWork\(false\); askWhere\(r, text, quote\); return; \}/);
-  assert.match(html, /const ourThread = \(ws\) => !String\(ws \|\| ""\)\.startsWith\("agent:"\);/);
-  assert.match(html, /if \(!e\.text \|\| \(e\.kind && e\.kind !== "text"\) \|\| !\(mine \|\| ourThread\(e\.ws\)\)\) return;/);
-  assert.doesNotMatch(html, /id="rstrip"/);
-  assert.doesNotMatch(html, /phone-robert-ws/);
-  assert.match(html, /let b = R\.pend\.get\(key\);/);
-  assert.match(html, /R\.pend\.set\(r\.turn, b\); R\.mine = null; R\.pend\.delete\("\?"\)/);
-  assert.match(html, /robAwait\(r\.turn\); hold = true; return;/);
-  assert.match(html, /if \(R\.awaitTurn && \(R\.awaitTurn === e\.turn \|\| R\.awaitTurn === "lost"\)\) robRelease/);
-  assert.match(html, /robertHistory\(\)\.finally\(\(\) => \{ if \(waiting\) robRelease\(null\); \}\)/);
-  assert.match(html, /TagComplete\(rComposer, \(\) => S\.workspaces\);/);
-  assert.match(html, /R\.outbox\.push\(\{ text, el, quote, ws: picked \}\)/);
-  assert.match(html, /if \(next\) deliverRobert\(next\.text, next\.el, next\.ws, next\.quote\);/);
-  assert.match(html, /const streamed = R\.pend\.get\(e\.turn \|\| "\?"\);/);
-  assert.match(html, /streamed\.className = "bub rob";/);
-});
-
-test("push: the page registers the worker at root scope, hands it the token, and reads deep links", () => {
-  assert.match(html, /navigator\.serviceWorker\.register\("\/sw\.js", \{ scope: "\/" \}\)/);
-  assert.match(html, /postMessage\(\{ type: "token", token: TOKEN \}\)/);
-  assert.match(html, /applicationServerKey: b64\(publicKey\)/);
-  assert.match(html, /api\("\/push\/subscribe", \{ method: "POST", body: JSON\.stringify\(\{ subscription: sub\.toJSON\(\) \}\)/);
-  assert.match(html, /if \(h\.startsWith\("s="\)\)/);
-  assert.match(html, /navigator\.setAppBadge\?\.\(n\)/);
-  const sw = fs.readFileSync(path.join(process.cwd(), "static/sw.js"), "utf8");
-  assert.match(sw, /fetch\("\/api\/sessions\/" \+ d\.session_id \+ "\/input"/);
-  assert.match(sw, /\(p\.actions \|\| \[\]\)\.slice\(0, 2\)/, "Android shows two buttons");
-  assert.match(sw, /res\.ok && res\.type === "basic" && !res\.redirected/);
-  assert.match(sw, /url\.pathname\.startsWith\("\/api"\)/);
-  assert.match(sw, /const VERSION = "v15"/);
-});
-
-test("Plan tomorrow lives on the Desk — not on the phone", () => {
-  assert.doesNotMatch(html, /btn-tomorrow|tomorrowSheet|nextWorkday|\/nextday/);
-  assert.doesNotMatch(html, /plan-row|mc-plan-ws/);
-});
-
-test("no raw PTY on the phone: Focus only, stubs for the old terminal path", () => {
+test("no raw PTY on the phone: one terminal's story (Focus) behind ⋯ → Terminals", () => {
   assert.doesNotMatch(html, /id="v-term"/);
   assert.doesNotMatch(html, /vendor\/xterm/);
   assert.match(html, /function detach\(\) \{\}/);
   assert.match(html, /function openTerm\(id\) \{ if \(id\) openFocus\(id\); \}/);
-  assert.match(html, /window\.addEventListener\("pageshow", \(e\) => \{ if \(e\.persisted\) resume\(\); \}\)/);
-  assert.match(html, /window\.addEventListener\("online", resume\)/);
-});
-
-test("back gesture: screens and sheets are history entries; back lands on home, not outside the app", () => {
-  assert.match(html, /history\.pushState\(\{ view, depth: 1 \}, "", location\.pathname\)/);
-  assert.match(html, /window\.addEventListener\("popstate"/);
-  assert.match(html, /history\.pushState\(\{ \.\.\.\(history\.state \|\| \{\}\), sheet: true \}/);
-  assert.match(html, /if \(had && history\.state\?\.sheet\) history\.back\(\);/);
-  assert.match(html, /<meta name="chronos-build" content="[0-9a-z-]+">/);
-  assert.match(html, /data-reload/);
-});
-
-test("voice: one warm mic stream, 32 kbps opus, timings surfaced when slow", () => {
-  assert.match(html, /async function micReady\(\)/);
-  assert.match(html, /audioBitsPerSecond: 32000/);
-  assert.match(html, /if \(total > 1800\) toast/);
-  assert.doesNotMatch(html, /stream\?\.getTracks\(\)\.forEach\(\(t\) => t\.stop\(\)\); stream = null;/, "the shared stream is not torn down per hold");
-});
-
-test("voice: tap once and it keeps listening — screen awake, ✕ cancels, a failed transcribe keeps the audio", () => {
-  assert.match(html, /function talkMic\(mic, onText, sends = \(\) => false\)/);
-  assert.match(html, /finishing = V\.state === "rec" && V\.mic === mic;/);
-  assert.match(html, /Date\.now\(\) - downAt >= HOLD_MS\) voiceFinish\(\)/);
-  assert.doesNotMatch(html, /addEventListener\("pointerleave"/, "drifting off the button must not end a recording");
-  assert.match(html, /navigator\.wakeLock\.request\("screen"\)/);
-  assert.match(html, /if \(document\.hidden\) \{ if \(!V\.state\) micRelease\(\); \}/);
-  assert.match(html, /id="rb-cancel"/);
-  assert.match(html, /if \(!V\.keep\) \{ voiceReset\(\); return toast\("cancelled"\); \}/);
-  assert.match(html, /if \(V\.state === "busy"\) return V\.ctl\?\.abort\(\);/);
-  assert.match(html, /signal: V\.ctl\.signal/);
-  assert.match(html, /if \(V\.state === "failed"\) transcribe\(\);/);
-});
-
-test("the Desk nags at most three times per terminal until you answer, open it, or focus the window", () => {
-  const desk = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
-  assert.match(desk, /const NOTIFY_MAX = 3;/);
-  assert.match(desk, /if \(n >= NOTIFY_MAX\) return;/);
-  assert.match(desk, /S\.answered\.set\(id, Date\.now\(\)\); S\.notifyCount\.delete\(id\);/);
-  assert.match(desk, /function select\(id, opts = \{\}\) \{\n  S\.notifyCount\.delete\(id\);/);
-  assert.match(desk, /S\.notified\.clear\(\); S\.notifyCount\.clear\(\);/);
-});
-
-test("focus screen: the story is the only way into a terminal on the phone", () => {
-  assert.match(html, /if \(t\.dataset\.open\) \{ fx\.tap\(\); return openFocus\(t\.dataset\.open\); \}/);
-  assert.match(html, /if \(byId\(id\)\) openFocus\(id\); else toast\("that terminal is gone"\)/);
-  assert.match(html, /if \(id\) openFocus\(id\);/);
-  assert.doesNotMatch(html, /id="f-raw"/);
   assert.match(html, /api\("\/sessions\/" \+ id \+ "\/focus"\)/);
   assert.match(html, /"focus\.event"\]\.join\(","\)/);
-  assert.match(html, /function openFocus\(id, dir\) \{\n  const s = byId\(id\); if \(!s\) return toast\("not found"\);\n  const fromScreen = !!S\.current;\n  detach\(\);/);
   assert.match(html, /const after = \(e\) => !!e && \(!lastUser \|\| e\.seq > lastUser\.seq\);/);
-  assert.match(html, /const freshRes = after\(res\) \? res : null;/);
-  assert.match(html, /lbl: "Latest"/);
   assert.match(html, /lbl: "Previous result"/);
-  assert.match(html, /lbl: "Summary", text: s\.summary/);
-  assert.match(html, /: res \? \{ key: "res", cls: "prev", lbl: "Previous result"/);
-  assert.match(html, /const goalTitle = \(s\) => s\.goal \|\| sTitle\(s\);/);
-  assert.match(html, /started as: \$\{esc\(clip\(started, 160\)\)\}/);
-  assert.match(html, /return !p \|\| p\.kind === "turn" \? "Turn finished" : "Waiting for you";/);
-  assert.match(html, /if \(!p \|\| p\.kind === "turn"\) return null;/);
-  assert.match(html, /md\(open \? text : headTail\(text\)\)/);
-  assert.match(html, /a\.target = "_blank"; a\.rel = "noopener";/);
-  assert.match(html, /const cleanUser = \(t\) => t\.replace\(\/\[─═\]\{3,\}\\s\*❯\?\/g, " "\)/);
-  assert.match(html, /const SYS_LINE = \/\^\\s\*<\(task-notification\|system-reminder\|command-\)\//);
-  assert.match(html, /function foldActs\(acts\)/);
-  assert.match(html, /id="f-goal"/);
-  assert.match(html, /Activity · newest first/);
-});
-
-test("focus screen triage: queue = needs-you + finished, Close = goal done + kill with Undo, decisions advance", () => {
   assert.match(html, /const QUEUE = new Set\(\["blocked", "waiting", "done"\]\);/);
-  assert.match(html, /const ORDER = \{ blocked: 0, waiting: 1, done: 2, working: 3, ended: 4 \};/);
-  assert.match(html, /if \(a === "stop"\) \{ fx\.warn\(\); return input\(s\.id, \{ key: "esc" \}\); \}/);
-  assert.match(html, /if \(a === "continue"\) \{ fx\.send\(\); input\(s\.id, \{ text: "continue", enter: true \}\); return advance\(s\.id, "continued"\); \}/);
-  assert.match(html, /if \(s\.state === "done"\) bar\.push\(close\);/);
-  assert.match(html, /else if \(s\.state === "blocked"\) bar\.push\(`<button class="fa primary" data-fa="reply">Reply<\/button>`, close\);/);
-  assert.match(html, /else \{ if \(!menuPrompt\) bar\.push\(`<button class="fa primary" data-fa="continue">▶ Continue<\/button>`\); bar\.push\(close\); \}/);
-  assert.match(html, /if \(s\.goal && !s\.goal_done_at\) await api\("\/sessions\/" \+ s\.id, \{ method: "PATCH", body: JSON\.stringify\(\{ goal_done: true \}\) \}\);\n      await api\("\/sessions\/" \+ s\.id \+ "\/kill", \{ method: "POST" \}\);/);
+  assert.match(html, /input\(id, \{ text: v, enter: true \}\)/);
   assert.match(html, /advance\(s\.id, "closed", \{ label: "Undo", fn: \(\) => reopen\(s\.id\) \}\)/);
-  assert.match(html, /if \(s\.state === "working" && Date\.now\(\) - F\.arm > 2500\)/);
-  assert.match(html, /#toast \{ position:fixed; left:50%; bottom:calc\(var\(--sab\) \+ 150px\)/);
-  assert.match(html, /advance\(s\.id, "answered"\)/);
-  assert.match(html, /advance\(id, "sent"\)/);
-  assert.match(html, /const next = order\[i\] \|\| null;/);
-  assert.match(html, /"caught up" \+ \(working \? ` · \$\{working\} working` : ""\)/);
-  assert.match(html, /row\("advance", "Next terminal after an action"/);
-});
-
-test("home is the triage list: needs you → finished → working, one bar, answers on the card", () => {
-  assert.match(html, /const PH_RANK = \{ blocked: 0, decide: 1, review: 2, your_turn: 3, stalled: 4, waiting: 5, working: 6 \};/);
-  assert.match(html, /function rank\(s\) \{ return PH_RANK\[phaseOf\(s\)\] \?\? 9; \}/);
-  for (const g of ["g-needs", "g-finished", "g-working"]) assert.match(html, new RegExp(`id="${g}"`));
-  assert.doesNotMatch(html, /id="g-recent"|toggle-ended|S\.ended|showEnded/, "no Recent / ended list — live triage only");
-  assert.doesNotMatch(html, /id="g-notes"|id="pills"|id="strip"|id="btn-note"|id="h-mic"/, "no notes, no client strip, no home mic — the phone is for triage");
-  assert.doesNotMatch(html, /data-fclient|clientSheet|phone-ws|S\.filter/, "no client filter on Focus");
-  assert.match(html, /<div class="hbar">[\s\S]*id="btn-new"[\s\S]*id="btn-robert"/);
-  assert.match(html, /data-ans="continue"/);
-  assert.match(html, /data-ans="close" class="go"/);
-  assert.match(html, /async function closeSession\(id\)/);
-  assert.match(html, /toast\("closed", \{ label: "Undo", fn: \(\) => reopen\(id\) \}\)/);
-  assert.match(html, /const WS_COLORS = \["#56B693"/);
-  assert.match(html, /style="--ws:\$\{wsColor\(s\.workspace_id\)\}"/);
-});
-
-test("new terminal sheet matches Desk options: CLI, model, where, kind, blank, lead", () => {
-  assert.match(html, /function newTermSheet\(wsId\) \{[\s\S]*?const b = sheet\(/);
-  assert.match(html, /id="f-backend"/);
-  assert.match(html, /id="f-model"/);
-  assert.match(html, /id="f-cwd"/);
-  assert.match(html, /id="f-kind"/);
-  assert.match(html, /id="f-lead"/);
-  assert.match(html, /id="f-blank"/);
-  assert.match(html, /function fillBackendSelect/);
-  assert.match(html, /function fillModelSelect/);
-  assert.match(html, /localStorage\.setItem\("desk-backend:"/);
-  assert.match(html, /localStorage\.setItem\("desk-model:"/);
-  assert.match(html, /\.\.\.\(opts\.lead \? \{ role: "lead" \} : \{\}\)/);
-  assert.match(html, /row\("autosend", "Auto-send voice"/);
-  assert.match(html, /if \(PREFS\.autoSend\) send\(\); else ta\.focus\(\);/);
-  assert.doesNotMatch(html, /btn-tomorrow/);
-});
-
-test("Robert on the phone: an 8-char id becomes a chip that opens the story; he never moves the screen", () => {
-  assert.match(html, /function mdRob\(text\)/);
-  assert.match(html, /a\[href\^="#sel="\]/);
-  assert.doesNotMatch(html, /a\.op === "select"|a\.op === "focus_terminal"/, "nothing he says moves the operator's screen");
-});
-
-test("Robert on the phone: a message typed mid-turn parks in an outbox and goes out when the turn lands", () => {
-  assert.match(html, /if \(R\.busy\) \{ el\.classList\.add\("queued"\); R\.outbox\.push\(\{ text, el, quote \}\); robWork\(true, "queued…"\); return; \}/);
-  assert.match(html, /const next = R\.outbox\.shift\(\);/);
-  assert.match(html, /if \(next\) deliverRobert\(next\.text, next\.el, next\.ws, next\.quote\);/);
-  assert.doesNotMatch(html, /qs\("#r-send"\)\.disabled = true/, "the send button is never disabled while he answers");
-  assert.match(html, /\.bub\.you\.queued \{ opacity:\.55; \}/);
-  assert.match(html, /id="r-work"/);
-});
-
-test("the phone shows Leads, not their workers — a Lead's terminals are a count on its card", () => {
   assert.match(html, /const leadLive = \(id\) => !!id && S\.sessions\.some\(\(x\) => x\.id === id && x\.live\);/);
   assert.match(html, /const isWorker = \(s\) => leadLive\(s\.lead_id\);/);
   assert.match(html, /const live = S\.sessions\.filter\(\(s\) => s\.live && !isWorker\(s\)\)\.sort\(byRank\);/);
-  assert.doesNotMatch(html, /S\.ended/);
-  assert.match(html, /const needsCount = \(\) => S\.sessions\.filter\(\(x\) => x\.live && !isWorker\(x\) &&/);
-  assert.match(html, /const kids = workersOf\(s\);/);
-  assert.match(html, /const needy = kids\.filter\(\(w\) => rank\(w\) <= 1\)\.length;/);
-  assert.match(html, /◆ \$\{kids\.length\}\$\{needy \? ` · \$\{needy\} asking` : ""\}/);
+  // A hand-off waiting for his yes shows in the story with a way to the card.
+  assert.match(html, /Waiting for your yes/);
+  assert.match(html, /window\.addEventListener\("pageshow", \(e\) => \{ if \(e\.persisted\) resume\(\); \}\)/);
+  assert.match(html, /window\.addEventListener\("online", /);
+});
+
+test("history only where it is safe: iOS home-screen apps lose the mic on navigation, so iOS gets none", () => {
+  assert.match(html, /const USE_HISTORY = !IOS;/);
+  assert.match(html, /if \(!USE_HISTORY\) return;/);
+  assert.match(html, /window\.addEventListener\("popstate"/);
+  assert.match(html, /if \(USE_HISTORY && !history\.state\?\.sheet\) history\.pushState/);
+});
+
+test("deep links: read once at launch, then the worker POSTS the link to an open app instead of navigating", () => {
+  assert.match(html, /if \(h\.startsWith\("a="\)\)/);
+  assert.match(html, /if \(h\.startsWith\("s="\)\)/);
+  assert.match(html, /const key = PhoneDeck\.forSession\(id\);/);
+  assert.match(html, /navigator\.serviceWorker\?\.addEventListener\("message"/);
+  assert.match(html, /e\.ports\?\.\[0\]\?\.postMessage\(\{ ok: true \}\)/);
+  assert.match(sw, /c\.postMessage\(\{ type: "open", url \}, \[ch\.port2\]\)/);
+  assert.match(sw, /if \(!heard\) \{ try \{ await c\.navigate\(url\); \} catch \{\} \}/);
+});
+
+test("push: registered at root scope, the token handed to the worker, and turning it on is one clear step every launch", () => {
+  assert.match(html, /navigator\.serviceWorker\.register\("\/sw\.js", \{ scope: "\/" \}\)/);
+  assert.match(html, /postMessage\(\{ type: "token", token: TOKEN \}\)/);
+  assert.match(html, /applicationServerKey: b64\(publicKey\)/);
+  assert.match(html, /api\("\/push\/subscribe", \{ method: "POST", body: JSON\.stringify\(\{ subscription: sub\.toJSON\(\) \}\)/);
+  assert.match(html, /navigator\.setAppBadge\?\.\(n\)/);
+  assert.match(html, /<div class="nrow" id="nrow" hidden>/);
+  assert.match(html, /PUSH\.ready\(\)\.then\(checkPush\);/);
+  assert.match(html, /checkBuild\(\);\n  checkPush\(\);/, "re-checked when the app comes back");
+  assert.match(html, /"Add Robert to your Home Screen"/, "iPhone only pushes to home-screen apps");
+});
+
+test("the worker: shell for offline (every script the page loads), answers from the tray, alerts acked on tap", () => {
+  for (const f of ["/phone-voice.js", "/phone-deck.js", "/ask-card.js", "/artifact-view.js", "/chat-reply.js", "/vendor/marked.min.js", "/vendor/purify.min.js"]) {
+    assert.match(sw, new RegExp(`"${f.replace(/[./]/g, (c) => "\\" + c)}"`), f);
+    if (!f.startsWith("/vendor")) assert.match(html, new RegExp(`<script src="${f.replace(/[./]/g, (c) => "\\" + c)}"></script>`), f);
+  }
+  assert.match(sw, /fetch\("\/api\/sessions\/" \+ d\.session_id \+ "\/input"/);
+  assert.match(sw, /\(p\.actions \|\| \[\]\)\.slice\(0, 2\)/, "Android shows two buttons");
+  assert.match(sw, /res\.ok && res\.status === 200 && res\.type === "basic" && !res\.redirected/);
+  assert.match(sw, /url\.pathname\.startsWith\("\/api"\)/);
+  assert.match(sw, /if \(e\.request\.headers\.has\("range"\)\) return;/, "the build check never hits the cache");
+  assert.match(sw, /const VERSION = "v16"/);
+  assert.match(sw, /if \(d\.alert_id\) \{/, "a stuck-work alert is acknowledged by the tap (src/stuck-alerts.ts)");
+  assert.match(sw, /p\.url = "\/phone#a=" \+ encodeURIComponent\(p\.item\)/);
+});
+
+test("never on a stale build: the page reads the served stamp on resume and reloads when quiet", () => {
+  assert.match(html, /<meta name="chronos-build" content="[0-9a-z-]+">/);
+  assert.match(html, /fetch\("\/phone\.html", \{ cache: "no-store", headers: \{ Range: "bytes=0-2047" \} \}\)/);
+  assert.match(html, /const quiet = \(\) => !PhoneVoice\.on && !V\.state && !rComposer\.value\.trim\(\)/);
+  assert.match(html, /data-reload/);
+  assert.match(html, /qs\("#upd"\)\.hidden = false;/);
+});
+
+test("the keyboard and the notch: the app follows the visual viewport; safe areas on every side", () => {
+  assert.match(html, /const vv = window\.visualViewport/);
+  assert.match(html, /app\.style\.height = Math\.round\(vv\.height\) \+ "px";/);
+  assert.match(html, /body\.kb \{ --sab:0px; \}/);
+  assert.match(html, /--sal:env\(safe-area-inset-left,0px\); --sar:env\(safe-area-inset-right,0px\);/);
+});
+
+test("plain words in front of him: no ids, no workspace machinery, no internal states on the conversation", () => {
+  const front = html.slice(html.indexOf('<div id="v-home"'), html.indexOf('<div id="v-deck"'));
+  assert.doesNotMatch(front, /workspace|session|stall|wake/i);
+});
+
+test("the Desk reasserts its pane sizes when the window comes back (the phone used to resize the shared pty)", () => {
+  const desk = read("static/desk.html");
+  assert.match(desk, /pane\.forceSize = \(\) => \{ sentCols = sentRows = 0; sendSize\(\); \}/);
+  assert.match(desk, /window\.addEventListener\("focus", \(\) => \{ for \(const \[, p\] of S\.panes\)/);
+  assert.match(desk, /const NOTIFY_MAX = 3;/);
 });
