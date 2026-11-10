@@ -610,7 +610,7 @@ function node(sel: string, parent: any = null, size: any = {}) {
 test("a swipe does not start on a button, a field, the before/after compare, a sideways-scrolling block, or outside a card", () => {
   const card = node(".qcard"), scroll = node(".qc-scroll", card);
   assert.equal(T.swipeStartOk(node("p", scroll)), true, "plain card text");
-  assert.equal(T.swipeStartOk(node("span", node("button", scroll))), false, "a button (Yes, an option, a check row)");
+  assert.equal(T.swipeStartOk(node("span", node("button", scroll))), true, "a row that is a button (a check, an option): the swipe may start there, its click is swallowed");
   assert.equal(T.swipeStartOk(node("a", scroll)), false);
   assert.equal(T.swipeStartOk(node("textarea", scroll)), false);
   assert.equal(T.swipeStartOk(node("img", node(".ba", scroll))), false, "the compare slider keeps its own drag");
@@ -640,8 +640,9 @@ test("a full swipe across the deck navigates and calls nothing: no decision, no 
   // A vertical drag is the card scrolling: the deck does not move.
   const before = scrolled.length;
   on.pointerdown(ev("pointerdown", 200, 300)); on.pointermove(ev("pointermove", 204, 360)); on.pointermove(ev("pointermove", 60, 420)); on.pointerup(ev("pointerup", 60, 420));
-  // Starting on the Yes button, at the screen's edge, or with a mouse: not a swipe.
-  on.pointerdown(ev("pointerdown", 300, 700, node("button", card))); on.pointermove(ev("pointermove", 100, 700)); on.pointerup(ev("pointerup", 100, 700));
+  // Starting on a link, at the screen's edge, or with a mouse: not a swipe. (Yes · Later · Change sit
+  // in the bar, outside the track: no swipe can start on them at all.)
+  on.pointerdown(ev("pointerdown", 300, 700, node("a", card))); on.pointermove(ev("pointermove", 100, 700)); on.pointerup(ev("pointerup", 100, 700));
   on.pointerdown(ev("pointerdown", 8, 400)); on.pointermove(ev("pointermove", 200, 400)); on.pointerup(ev("pointerup", 200, 400));
   on.pointerdown({ ...ev("pointerdown", 300, 400), pointerType: "mouse" }); on.pointermove(ev("pointermove", 100, 400)); on.pointerup(ev("pointerup", 100, 400));
   assert.equal(scrolled.length, before, "none of those navigated");
@@ -662,4 +663,10 @@ test("a double tap on Yes is one decision: the card that slides in under the fin
   assert.equal(T.settled(), false, "the second tap of a double tap lands on a bar that is not armed yet");
   await tick(750);
   assert.equal(T.settled(), true, "and then it answers again");
+});
+
+test("a swipe that began on a row button swallows the click that follows it", () => {
+  const js = fs.readFileSync(new URL("../static/phone-deck.js", import.meta.url), "utf8");
+  assert.match(js, /track\.addEventListener\("click", function \(e\) \{\s*if \(Date\.now\(\) - swiped < 500\) \{ e\.preventDefault\(\); e\.stopPropagation\(\); \}\s*\}, true\);/);
+  assert.match(js, /g\.lock = true; clearTimeout\(snapT\); swiped = Date\.now\(\);/);
 });

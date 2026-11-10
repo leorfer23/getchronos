@@ -889,7 +889,7 @@
   // ── swipe between cards (touch) ────────────────────────────────────────────────────────────────
   // A finger moves the deck: left = next card, right = previous; the cards follow it and snap. A swipe
   // only ever NAVIGATES — nothing in here can reach decide(): Yes · Later · Change stay taps.
-  // It does not start on a button or a field, on the before/after compare, on a block that scrolls
+  // It does not start on a link or a field, on the before/after compare, on a block that scrolls
   // sideways itself (code, a table, the row of screenshots), over selected text, or at the screen's
   // edge (Android's back gesture). It only takes the gesture after a clear horizontal intent, so a
   // long card still scrolls up and down (the cards are touch-action:pan-y: the browser keeps vertical).
@@ -898,7 +898,9 @@
   function swipeStartOk(target) {
     if (!target || !target.closest) return false;
     if (!target.closest(".qcard")) return false;
-    if (target.closest("button, a, input, textarea, select, summary, [contenteditable], .ba, .pv")) return false;
+    // A row of a card is often a button (a check, an option): a swipe may start on one — once it is a
+    // swipe, the click that would follow is swallowed (wireSwipe), so it still decides nothing.
+    if (target.closest("a, input, textarea, select, [contenteditable], .ba, .pv")) return false;
     for (var n = target; n && !(n.classList && n.classList.contains("qcard")); n = n.parentElement) {
       if ((n.scrollWidth || 0) > (n.clientWidth || 0) + 4) return false;
     }
@@ -918,7 +920,11 @@
     return Math.max(0, Math.min(Math.max(0, count - 1), idx + step));
   }
   function wireSwipe(track) {
-    var g = null, snapT = 0;
+    var g = null, snapT = 0, swiped = 0;
+    // The click a browser may still fire on the button the finger landed on, after a swipe: never a tap.
+    track.addEventListener("click", function (e) {
+      if (Date.now() - swiped < 500) { e.preventDefault(); e.stopPropagation(); }
+    }, true);
     var snapTo = function (n) {
       var still = root.matchMedia && root.matchMedia("(prefers-reduced-motion: reduce)").matches;
       heading(n);
@@ -943,7 +949,7 @@
         var i = swipeIntent(dx, dy);
         if (i === "ignore") { g = null; return; }
         if (i !== "navigate") return;
-        g.lock = true; clearTimeout(snapT);
+        g.lock = true; clearTimeout(snapT); swiped = Date.now();
         track.style.scrollSnapType = "none";
         try { track.setPointerCapture(e.pointerId); } catch (x) {}
       }
@@ -953,6 +959,7 @@
       if (!g || e.pointerId !== g.id) return;
       var was = g; g = null;
       if (!was.lock) return;
+      swiped = Date.now();
       snapTo(e.type === "pointerup" ? swipeTarget(was.idx0, Q.items.length, e.clientX - was.x0, track.clientWidth, Date.now() - was.t0) : was.idx0);
     };
     track.addEventListener("pointerup", end);
