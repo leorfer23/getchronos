@@ -256,6 +256,13 @@ export function buildDelegation(
   return { ok: true, ws: p, payload: lines.join("\n"), words: [...earlier, words].join(" … "), requestIds: rows.map((r) => r.id), kind };
 }
 
+/** Nothing is working on it and nothing waits on it: no terminal linked, no deliverable, no open question. */
+export function answeredOnly(requestId: string): boolean {
+  if (requests.linksFor(requestId).some((l) => !l.until)) return false;
+  if (requests.deliverables(requestId).length) return false;
+  return !requests.items(requestId).some((i) => i.status === "open" || i.status === "held");
+}
+
 export type Delegator = (payload: string, wsId: string, turn: string) => Promise<{ reply: string }>;
 let delegator: Delegator | null = null;
 /** Tests swap the project Robert for a stub. null restores the real one (askManagerWeb). */
@@ -298,6 +305,14 @@ export function startDelegation(d: Extract<ReturnType<typeof buildDelegation>, {
     } catch (e: any) {
       const f = plainFailure(e, st.words);
       line = `${d.ws.name}: ${f.kind === "other" ? `no le pude pasar el pedido (${clip(e?.message ?? e, 120)}).` : f.reply}`;
+    }
+    // A hand-over that was simply answered (no terminal took it, nothing came back to decide) is
+    // done: left open, the ledger called it "stuck: nothing picked it up", the front told him about
+    // it as waiting work, and the stuck alert would have fired on a question already answered.
+    try {
+      if (reply && answeredOnly(req.id)) closeRequest(req.id, null, "the front: answered");
+    } catch (e: any) {
+      console.warn("[talker] close", e?.message ?? e);
     }
     try {
       // That project's own thread keeps his words and its Robert's answer — its recap, its memory.
