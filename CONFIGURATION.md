@@ -404,7 +404,7 @@ The voice front (`src/talker.ts`, VOICE.md) — every knob is also a Desk settin
 | `CHRONOS_TALKER_API_MODEL` | `claude-haiku-5-5` | model id for the `api` engine (the gateway form is derived) |
 | `CHRONOS_TALKER_PROVIDER` | `auto` | `api` engine key: `auto` (Anthropic first, else gateway), `anthropic`, `gateway` |
 | `CHRONOS_TALKER_API_KEY` | *(falls back to `ANTHROPIC_API_KEY`)* | Anthropic key for the `api` engine; `AI_GATEWAY_API_KEY` is used for `gateway`. Keys live in `.secrets`, never in a setting |
-| `CHRONOS_WHISPER_MODEL` | *(best in ~/.cache/whisper)* | which ggml model file `install-launchd` puts in `sh.chronos.whisper` (multilingual large-v3-turbo first, English-only `.en` last) |
+| `CHRONOS_WHISPER_MODEL` | *(best in ~/.cache/whisper)* | which ggml model file `install-launchd` puts in `sh.chronos.whisper` (default: small — fastest; `ggml-large-v3-turbo.bin` hears mixed Spanish-English far better at ~1 s more per sentence; English-only `.en` models last) |
 
 ### Memory and learning
 
