@@ -164,6 +164,7 @@ export async function triageAsk(askId: string): Promise<void> {
     // Model is the Desk pick (getWebModel inside askManagerWeb) — same as a typed chat turn.
     const out = await askManagerWeb(triagePrompt(ask, escalateOnly), undefined, ask.workspace_id ?? null, {
       label: "ask",
+      lane: "wake", // an agent's question is the daemon waking him, not the operator talking
     });
     reply = (out.reply || "").trim();
     steps = out.steps;

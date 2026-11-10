@@ -838,14 +838,17 @@ export function spawnManager(opts: {
     maxBudgetUsd: CONFIG.agent.maxBudgetUsd,
     inheritProfileMcp: true, // the chief of everything runs on the operator's own MCP inventory
   });
+  // Same as the warm managers: his profile's login and MCP, not its output style or CLAUDE.md.
+  const claude = backend.name === "claude-code";
+  const args = claude ? [...spec.args, ...personaIsolationArgs(profileDir)] : spec.args;
 
-  const { cmd, cmdArgs } = sandboxWrap("guard", cwd, wall.addDirs ?? [], profileDir, wall.denyDirs ?? [], spec.cmd, spec.args);
+  const { cmd, cmdArgs } = sandboxWrap("guard", cwd, wall.addDirs ?? [], profileDir, wall.denyDirs ?? [], spec.cmd, args);
 
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, cmdArgs, {
       cwd,
       // The operator's personal daemon-level agent keeps the full env; a project's turn gets its workspace's.
-      env: { ...(wall.baseEnv ?? process.env), ...spec.env, ...(opts.extraEnv ?? {}) },
+      env: { ...(wall.baseEnv ?? process.env), ...spec.env, ...(claude ? PERSONA_ENV : {}), ...(opts.extraEnv ?? {}) },
       stdio: ["ignore", "pipe", "pipe"],
     });
     opts.onChild?.(child);
@@ -952,6 +955,34 @@ export function profileMcpTools(profileDir: string): string[] {
     return []; // no config dir, or not readable — same as no servers
   }
 }
+
+/**
+ * What a persona manager (Robert, an executive) must NOT take from the Claude profile it runs on. The
+ * profile dir stays CLAUDE_CONFIG_DIR — it holds his login and his MCP servers' OAuth tokens — but the
+ * operator's customisations for his OWN interactive sessions are not the persona's:
+ *  - the output style (settings.json `outputStyle`). A style rides every turn as a system reminder
+ *    that claims to win over any other formatting guidance, so it beat "four short lines" and Robert
+ *    answered every line as a long report with the answer last — unusable read aloud;
+ *  - the profile's user CLAUDE.md and user rules: the operator's personal instructions;
+ *  - auto memory (env below): notes the operator's own sessions in this cwd wrote.
+ * `--settings` sits above every settings file (only managed policy beats it) and claudeMdExcludes
+ * arrays merge across layers, so this drops exactly those and keeps the rest of the profile — hooks,
+ * plugins, permissions, MCP servers. Checked on claude 2.1.321: init reports output_style "default",
+ * the instructions attachment is empty, and a resumed session is told the style was reset.
+ *
+ * `--system-prompt-snapshot off`: by default a resumed conversation reuses the system prompt recorded on
+ * its first request, so an edited persona, memory or brief (all baked into --append-system-prompt at
+ * spawn) never reached a --resume'd manager — and the conversation now outlives idle gaps. Off
+ * rebuilds it per request; within one process the text is constant, so the prompt cache still hits.
+ */
+export function personaIsolationArgs(profileDir: string): string[] {
+  const settings = {
+    outputStyle: "default",
+    claudeMdExcludes: [path.join(profileDir, "CLAUDE.md"), path.join(profileDir, "rules", "**")],
+  };
+  return ["--settings", JSON.stringify(settings), "--system-prompt-snapshot", "off"];
+}
+export const PERSONA_ENV: Record<string, string> = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" };
 
 // Streamed turn progress: kind "text" = reply delta, "thinking" = reasoning delta, "tool" = a tool
 // starting (text = one-line description), "tool_done" = the most recent tool returned.
@@ -1068,6 +1099,8 @@ export class WarmManager {
       "--dangerously-skip-permissions",
       // Robert never sends either (no-send.ts): he loads every profile MCP, so the deny is what stops it.
       ...claudeDenyArgs(),
+      // The profile is his login and his MCP, not the operator's output style or CLAUDE.md.
+      ...personaIsolationArgs(profileDir),
       "--model", this.opts.model,
       // budget covers the whole process lifetime (up to maxTurns turns), not one message
       "--max-budget-usd", String(CONFIG.agent.maxBudgetUsd * this.opts.maxTurns),
@@ -1079,7 +1112,7 @@ export class WarmManager {
     );
     const child = spawn(cmd, cmdArgs, {
       cwd,
-      env: { ...(this.opts.baseEnv ?? process.env), CLAUDE_CONFIG_DIR: profileDir, ...(this.opts.extraEnv ?? {}) },
+      env: { ...(this.opts.baseEnv ?? process.env), CLAUDE_CONFIG_DIR: profileDir, ...PERSONA_ENV, ...(this.opts.extraEnv ?? {}) },
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child = child;
@@ -1284,10 +1317,24 @@ export class WarmManager {
 //    own chat thread; "all workspaces" uses the operator's own profile and the unscoped thread (shared
 //    with Telegram + briefings). Keyed by workspace rather than by profile so two workspaces on the same
 //    account still hold separate conversations.
-//    Continuity via claude --resume (session id in kv, per workspace), so it survives recycles/restarts
-//    like Telegram — but a >1h idle gap rotates to a FRESH session ("web-session" semantics): the
-//    dashboard still shows the full persisted thread, only the model's context resets. ──
+//    Continuity via claude --resume (session id in kv, per workspace), so it survives recycles,
+//    restarts AND idle gaps: a >1h idle gap only frees the process; the next turn resumes the same
+//    conversation. Only "new conversation" (resetWebConversation) starts a fresh one.
+//    Wakes (wake-queue.ts) run on a SECOND manager per workspace — the "wake" lane — with its own
+//    --resume session, so the operator's turn never queues behind a wake and a wake's prompt and tool
+//    output never land in his conversation. ──
 const WEB_IDLE_ROTATE_MS = 60 * 60 * 1000;
+/**
+ * The wake lane's process is one more CLI per active workspace. Wakes come in bursts and none of them
+ * is latency-bound (the operator is not waiting on one), so the process dies after this much quiet —
+ * the next wake pays a cold start, the box does not carry an idle CLI per client all day.
+ */
+export const WAKE_IDLE_KILL_MS = 3 * 60_000;
+/** A wake session starts over after this many turns (or an idle hour): each wake stands alone, and an
+ *  ever-growing transcript only makes every later wake slower and dearer. */
+export const WAKE_SESSION_MAX_TURNS = 40;
+/** Whose conversation a Robert turn belongs to: the operator's own, or the background wake lane. */
+export type RobertLane = "operator" | "wake";
 // Workspace → its Claude profile dir; no workspace (or unknown id) → the operator's default.
 export function webProfileDir(wsId?: string | null): string {
   const pinned = (wsId ? workspaces.get(wsId)?.config_dir : null) || DEFAULT_PROFILE_DIR;
@@ -1300,9 +1347,14 @@ export function webProfileDir(wsId?: string | null): string {
 const acctKey = (key: string, m: WarmManager) => `${key}@${path.basename(m.profileDir)}`;
 // kv/map key for a thread. Unknown ids collapse to the unscoped thread, same as no selection.
 const wsKey = (wsId?: string | null) => (wsId && workspaces.get(wsId) ? wsId : "default");
-const getWebSession = (key: string) => kv.get(`web.session:${key}`) ?? null;
-const setWebSession = (key: string, id: string) => kv.set(`web.session:${key}`, id);
-const clearWebSession = (key: string) => kv.del(`web.session:${key}`);
+/** kv keys per lane — exported so tests can prove the two conversations never share a row. */
+export const laneKeys = (lane: RobertLane, key: string) =>
+  lane === "wake"
+    ? { session: `web.wakeSession:${key}`, lastTurnAt: `web.wakeLastTurnAt:${key}`, turns: `web.wakeTurns:${key}` }
+    : { session: `web.session:${key}`, lastTurnAt: `web.lastTurnAt:${key}`, turns: null };
+const getWebSession = (key: string, lane: RobertLane = "operator") => kv.get(laneKeys(lane, key).session) ?? null;
+const setWebSession = (key: string, id: string, lane: RobertLane = "operator") => kv.set(laneKeys(lane, key).session, id);
+const clearWebSession = (key: string, lane: RobertLane = "operator") => kv.del(laneKeys(lane, key).session);
 
 // Operator-picked model for the web chat; falls back to the configured voice model.
 export const getWebModel = () => kv.get("web.model") || CONFIG.agent.voiceModel;
@@ -1310,15 +1362,11 @@ export const getWebModel = () => kv.get("web.model") || CONFIG.agent.voiceModel;
 export function setWebModel(model: string) {
   if (model === getWebModel()) return;
   kv.set("web.model", model);
-  for (const m of webMgrs.values()) m.kill();
-  webMgrs.clear();
+  dropAllRobertManagers();
 }
 
 // The same switch from ⚙ Settings (the setting's kv key IS web.model): restart the warm managers.
-onSettingChange("robert.model", () => {
-  for (const m of webMgrs.values()) m.kill();
-  webMgrs.clear();
-});
+onSettingChange("robert.model", () => dropAllRobertManagers());
 
 // The skill index is baked into the system prompt at spawn time, so a skill approved (or edited) while
 // a manager is warm would stay invisible until the next recycle. Drop that workspace's processes
@@ -1326,8 +1374,8 @@ onSettingChange("robert.model", () => {
 bus.on("event", (e: BusEvent) => {
   if (e.topic !== "skill.created" && e.topic !== "skill.updated") return;
   const key = wsKey(e.workspace_id);
-  webMgrs.get(key)?.kill();
-  webMgrs.delete(key);
+  dropRobertManager("operator", key);
+  dropRobertManager("wake", key);
   dropTgWsManagers(key);
 });
 
@@ -1398,11 +1446,34 @@ export const engineLabel = (backend: string, model: string | null | undefined): 
   return backend === "claude" ? "claude" : backend;
 };
 
-const webMgrs = new Map<string, WarmManager>(); // workspace key → warm manager
-function webManager(key: string, wsId: string | null): WarmManager {
-  let m = webMgrs.get(key);
+const webMgrs = new Map<string, WarmManager>(); // workspace key → the operator's conversation
+const wakeMgrs = new Map<string, WarmManager>(); // workspace key → the wake lane (never his session)
+const mgrsFor = (lane: RobertLane) => (lane === "wake" ? wakeMgrs : webMgrs);
+// The memory/brief stamp each manager was built with. Per manager, not per agent: with one manager
+// per workspace and lane, a shared stamp was overwritten by whichever rebuilt first, and the rest
+// never saw the edit.
+const builtStamp = new WeakMap<WarmManager, string>();
+const wakeIdle = new Map<string, NodeJS.Timeout>();
+
+function dropRobertManager(lane: RobertLane, key: string) {
+  const mgrs = mgrsFor(lane);
+  mgrs.get(key)?.kill();
+  mgrs.delete(key);
+  if (lane === "wake") {
+    const t = wakeIdle.get(key);
+    if (t) clearTimeout(t);
+    wakeIdle.delete(key);
+  }
+}
+function dropAllRobertManagers() {
+  for (const lane of ["operator", "wake"] as const) for (const key of [...mgrsFor(lane).keys()]) dropRobertManager(lane, key);
+}
+
+function webManager(key: string, wsId: string | null, lane: RobertLane = "operator"): WarmManager {
+  const mgrs = mgrsFor(lane);
+  let m = mgrs.get(key);
   const dir = webProfileDir(wsId);
-  if (m && (memoryMoved("robert") || m.profileDir !== dir)) { m.kill(); webMgrs.delete(key); m = undefined; }
+  if (m && (builtStamp.get(m) !== stampOf("robert") || m.profileDir !== dir)) { dropRobertManager(lane, key); m = undefined; }
   if (!m) {
     m = new WarmManager({
       // Same standing workspace context every job runner and terminal agent gets: operator notes + the
@@ -1425,26 +1496,62 @@ function webManager(key: string, wsId: string | null): WarmManager {
     // instead of making him carry a uuid around. Absent for the unscoped/personal manager, where
     // there is no one right answer and the command should say so rather than guess.
     extraEnv: { CHRONOS_ADMIN: robertCredential(wsId), MC_AGENT_NAME: "robert", ...(wsId ? { MC_WORKSPACE: wsId } : {}) },
-      resumeSessionId: getWebSession(key),
-      onSessionId: (id) => setWebSession(key, id),
-      onStaleResume: () => clearWebSession(key),
+      // Each lane resumes ITS OWN session: the wake lane never writes the operator's id, or the next
+      // operator turn would --resume into a transcript full of wakes.
+      resumeSessionId: getWebSession(key, lane),
+      onSessionId: (id) => setWebSession(key, id, lane),
+      onStaleResume: () => clearWebSession(key, lane),
       turnTimeoutMs: WEB_TURN_TIMEOUT_MS,
       maxTurns: WEB_MAX_TURNS,
     });
-    webMgrs.set(key, m);
+    builtStamp.set(m, stampOf("robert"));
+    mgrs.set(key, m);
   }
   return m;
 }
 
-// >1h since that workspace's last turn → kill its warm process, drop the resume id; the next call
-// respawns on a clean session. Idle is per thread so a quiet client chat doesn't reset the busy one.
-function rotateWebIfIdle(key: string) {
-  const last = Number(kv.get(`web.lastTurnAt:${key}`) ?? 0);
-  if (last && Date.now() - last > WEB_IDLE_ROTATE_MS) {
-    webMgrs.get(key)?.kill();
-    webMgrs.delete(key);
-    clearWebSession(key);
+/**
+ * Idle housekeeping at the start of a turn (or a hub open), per workspace and lane.
+ * Operator: after >1h of quiet the warm process is freed, but the resume id STAYS — the next turn
+ * respawns into the same conversation (a stale id is still caught by WarmManager's "No conversation
+ * found" path). Wake: the session itself starts over after an idle hour or WAKE_SESSION_MAX_TURNS.
+ * Exported for tests.
+ */
+export function rotateWebIfIdle(key: string, lane: RobertLane = "operator", nowMs = Date.now()) {
+  const k = laneKeys(lane, key);
+  const last = Number(kv.get(k.lastTurnAt) ?? 0);
+  const idle = !!last && nowMs - last > WEB_IDLE_ROTATE_MS;
+  const full = !!k.turns && Number(kv.get(k.turns) ?? 0) >= WAKE_SESSION_MAX_TURNS;
+  if (!idle && !full) return;
+  dropRobertManager(lane, key);
+  if (lane === "wake") {
+    clearWebSession(key, lane);
+    if (k.turns) kv.del(k.turns);
   }
+}
+
+/** After a wake turn: free the wake lane's process once it has been quiet for WAKE_IDLE_KILL_MS. */
+function armWakeIdleKill(key: string) {
+  const prev = wakeIdle.get(key);
+  if (prev) clearTimeout(prev);
+  const t = setTimeout(() => {
+    wakeIdle.delete(key);
+    const m = wakeMgrs.get(key);
+    if (!m) return;
+    if (m.busyWith()) return armWakeIdleKill(key); // a wake is running: look again later
+    m.kill(); // the resume id stays in kv; the next wake respawns into the same wake session
+    wakeMgrs.delete(key);
+  }, WAKE_IDLE_KILL_MS);
+  t.unref?.();
+  wakeIdle.set(key, t);
+}
+
+/** Test seam: the manager a lane would run a turn on (built if absent), no turn sent. */
+export const robertManagerForTest = (lane: RobertLane, key: string, wsId: string | null) => webManager(key, wsId, lane);
+
+/** Test seam: which live managers exist for a key, per lane. */
+export function robertManagersForTest(key: string): { operator: WarmManager | undefined; wake: WarmManager | undefined } {
+  return { operator: webMgrs.get(key), wake: wakeMgrs.get(key) };
 }
 
 /**
@@ -1460,10 +1567,8 @@ function rotateWebIfIdle(key: string) {
  */
 export function abortWebTurn(wsId?: string | null): boolean {
   const key = wsKey(wsId);
-  const m = webMgrs.get(key);
-  if (!m) return false;
-  m.kill();
-  webMgrs.delete(key);
+  if (!webMgrs.get(key)) return false;
+  dropRobertManager("operator", key); // his turn only — a wake running on the wake lane goes on
   return true;
 }
 
@@ -1471,8 +1576,7 @@ export function abortWebTurn(wsId?: string | null): boolean {
 // persisted thread keeps its rows — chat.divide() marks where the model's memory now begins.
 export function resetWebConversation(wsId?: string | null) {
   const key = wsKey(wsId);
-  webMgrs.get(key)?.kill();
-  webMgrs.delete(key);
+  dropRobertManager("operator", key);
   clearWebSession(key);
   dropTgWsManagers(key); // Telegram may be resuming this same thread
 }
@@ -1596,13 +1700,20 @@ export async function askManagerWeb(
   wsId?: string | null,
   // focus: the router's pick on an auto-routed turn. The turn then runs on the fleet-wide Robert
   // (wsId null) with that project named as where to start — never a fence (agents/_blocks/threads.md).
-  opts?: { model?: string; voice?: boolean; turn?: string; label?: string; focus?: string | null },
+  // lane "wake": the wake queue's turns, on their own manager and session (see WAKE_IDLE_KILL_MS).
+  opts?: { model?: string; voice?: boolean; turn?: string; label?: string; focus?: string | null; lane?: RobertLane },
 ): Promise<{ reply: string; actions: UiAction[]; steps: RobertStep[]; turn: string; engine: string }> {
   // Workspaces never mix: a turn the router pinned on a project runs on THAT project's Robert — its
   // own Claude profile, brief, recap and fleet — never on the fleet-wide one holding every client.
   if (!wsId && opts?.focus && workspaces.get(opts.focus)) wsId = opts.focus;
   const key = wsKey(wsId);
-  rotateWebIfIdle(key);
+  const lane: RobertLane = opts?.lane ?? "operator";
+  const lk = laneKeys(lane, key);
+  rotateWebIfIdle(key, lane);
+  if (lane === "wake") {
+    const t = wakeIdle.get(key);
+    if (t) { clearTimeout(t); wakeIdle.delete(key); }
+  }
   // Every tool call he makes becomes a timestamped step: published live, returned for the chat row.
   const turn = opts?.turn ?? randomUUID();
   const steps: RobertStep[] = [];
@@ -1622,19 +1733,21 @@ export async function askManagerWeb(
     }
     outer?.(t, kind);
   };
-  const m = webManager(key, wsId ?? null);
+  const m = webManager(key, wsId ?? null, lane);
   // Caller-chosen model for THIS turn (wake paths run chat fast, escalate on request). No model → the
   // operator's dashboard pick stands — re-applied every turn, or one wake would leave the desk on its
   // model, and a credit-wall downgrade (fable → opus) would never come back.
   const model = opts?.model || getWebModel();
   let engine = engineLabel("claude", model);
-  kv.set(`web.lastTurnAt:${key}`, String(Date.now()));
+  kv.set(lk.lastTurnAt, String(Date.now()));
+  if (lk.turns) kv.set(lk.turns, String(Number(kv.get(lk.turns) ?? 0) + 1));
   const realWsId = key === "default" ? null : key;
   // The live fleet first, then a recap of this workspace's thread (web + any Telegram/briefing rows
   // in it, cut at the last divider), then what he said.
   // This project's own thread recap only — never the interleaved one (workspaces never mix).
   const recap = chatLog.contextBlock({ limit: 12, workspaceId: realWsId });
   const prompt = fleetLine(realWsId) + "\n\n" + (recap || "") + (opts?.voice ? VOICE_TURN + "\n\n" : "") + text;
+  // One cooldown key for both lanes: a wall is the ACCOUNT's, whichever lane hit it first.
   const reply = await withProviderFallback({
     key: acctKey(`web:${key}`, m),
     primary: () => m.turn(prompt, onDelta, undefined, model),
@@ -1663,8 +1776,10 @@ export async function askManagerWeb(
     },
     killPrimary: () => {
       m.kill();
-      webMgrs.delete(key);
+      if (mgrsFor(lane).get(key) === m) mgrsFor(lane).delete(key); // never a replacement built meanwhile
     },
+  }).finally(() => {
+    if (lane === "wake") armWakeIdleKill(key);
   });
   // No turn ends blind: a few DB reads at the boundary, one notice per episode. Late import — the
   // guard reads the wake queue, which imports this module for the turn it drains.

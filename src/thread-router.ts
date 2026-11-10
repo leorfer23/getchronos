@@ -47,6 +47,12 @@ export type Route = {
   why: string;
   /** True when this turn should NOT move the sticky workspace (a greeting, a thanks). */
   social: boolean;
+  /**
+   * A question for the WHOLE shop ("status", "who needs me", #all), as opposed to a turn that merely
+   * landed on no project. Only this — or two named projects — fans a turn out to every project's
+   * Robert; small talk and a work request with nothing to go on get ONE reply from the unscoped one.
+   */
+  fleet?: boolean;
 };
 
 export type RouteCtx = {
@@ -89,13 +95,35 @@ const FLEET_INTENT: RegExp[] = [
 
 // A greeting or a thanks routes like any other message but must never MOVE the sticky workspace:
 // "gracias" after a Atlas turn is still about Atlas, and "hola" tomorrow must not pin the thread.
-const SOCIAL: RegExp[] = [
-  /^\s*(hi|hey|hello|yo|sup|hola|buenas|buen[oa]s? (d[ií]as|tardes|noches)|good (morning|afternoon|evening|night))[\s!.,…]*$/i,
-  /^\s*(thanks|thank you|thx|ty|gracias|mil gracias|perfecto|perfect|genial|nice|great|ok|okay|oka?y?|dale|listo|bien|cool|👍|🙏|❤️|😄|jaja+|haha+|lol)[\s!.,…]*$/i,
-  /^\s*(how are you|c[oó]mo est[aá]s|qu[eé] tal|todo bien)[\s?!.,…]*$/i,
-  /^\s*(good ?night|buenas noches|chau|bye|nos vemos|hasta ma[ñn]ana)[\s!.,…]*$/i,
-];
-
+//
+// Judged on WORDS, not on one regex per phrasing: speech-to-text hands us "Hola, hola.", "buenas
+// buenas", "ok dale gracias", "¿me escuchás?" — repeats, fillers and punctuation a phrase regex never
+// anticipates. A message is small talk when EVERY word in it is from this vocabulary (accents folded,
+// stretched letters squeezed: "holaaa" → "hola"). A work request always carries at least one word
+// that is not here ("dale, mergealo" → "mergealo"), so it can never read as social. Yes/no answers
+// ("sí", "no", "yes") are deliberately absent: those answer a question, they are not small talk.
+const SOCIAL_WORDS = new Set(
+  (
+    // greetings
+    "hi hey hello hiya howdy yo sup ey hola holis holi buenas buenos buena buen dia dias tardes noches " +
+    "good morning afternoon evening night goodnight alo che " +
+    // thanks / acknowledgements
+    "thanks thank thx ty tks gracias graciass mil muchas muchisimas perfecto perfect genial nice great ok okay oka " +
+    "okey oki okis dale listo bien muy cool joya barbaro buenisimo excelente awesome sweet gotcha entendido " +
+    "claro vale bueno super " +
+    // how are you
+    "how are u you doing como estas esta andas anda que tal todo onda haces " +
+    // goodbyes
+    "chau chao bye adios nos vemos hasta manana luego later see cya ciao " +
+    // fillers, his name, a mic check
+    "robert rob eh em este ah ahh oh mm mmm hmm uh um pues ahi there me escuchas escucha oyes oye se can hear " +
+    "probando testing amigo bro capo crack jefe"
+  ).split(/\s+/),
+);
+const LAUGH_RE = /^([jh][aeiou])\1+[jh]?$|^lol$|^xd+$/;
+const fold = (s: string) => s.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase();
+const EMOJI_RE = /\p{Extended_Pictographic}/u;
+const MAX_SOCIAL_WORDS = 12;
 const STICKY_KEY = (surface: string) => `thread.sticky:${surface || "web"}`;
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -259,8 +287,18 @@ function sessionWs(idOrPrefix: string): string | null {
   return hit?.workspace_id ?? null;
 }
 
-const isSocial = (text: string) => SOCIAL.some((re) => re.test(text));
 const isFleetIntent = (text: string) => FLEET_INTENT.some((re) => re.test(text));
+
+/** Small talk: every word a greeting, thanks, filler or goodbye — never a fleet question. Exported for tests. */
+export function isSocial(text: string): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw || isFleetIntent(raw)) return false;
+  const words = fold(raw).split(/[^\p{L}\p{N}]+/u).filter(Boolean).map((w) => w.replace(/(\p{L})\1{2,}/gu, "$1"));
+  // Nothing but emoji ("👍", "🙏🙏") is a thanks; nothing at all is not a message.
+  if (!words.length) return EMOJI_RE.test(raw);
+  if (words.length > MAX_SOCIAL_WORDS) return false;
+  return words.every((w) => SOCIAL_WORDS.has(w) || LAUGH_RE.test(w));
+}
 
 /** Deduplicate a signal set down to the workspaces it actually agrees on. */
 function collapse(signals: Signal[]): { ws: string[]; how: "key" | "name"; why: string } | null {
@@ -288,7 +326,7 @@ export function routeMessage(text: string, ctx: RouteCtx = {}): Route {
   if (distinct.length === 1) {
     const ws = tags.targets[0] ?? null;
     const w = ws ? workspaces.get(ws) : null;
-    return { ...base, ws, how: "tag", confidence: 1, text: tags.text, why: `#${w ? w.slug : "all"} (explicit tag)` };
+    return { ...base, ws, how: "tag", confidence: 1, text: tags.text, why: `#${w ? w.slug : "all"} (explicit tag)`, fleet: ws === null };
   }
   if (distinct.length > 1) {
     const tagged = tags.targets.filter((t): t is string => !!t).map((t) => cand(workspaces.get(t)!));
@@ -326,7 +364,7 @@ export function routeMessage(text: string, ctx: RouteCtx = {}): Route {
 
   // c. fleet-wide intent, with nothing pointing at a project.
   if (isFleetIntent(body)) {
-    return { ...base, ws: null, how: "fleet", confidence: 0.7, text: body, why: "fleet-wide question" };
+    return { ...base, ws: null, how: "fleet", confidence: 0.7, text: body, why: "fleet-wide question", fleet: true };
   }
 
   // c'. the bubble this line answers — stronger than sticky / the staged terminal.
@@ -345,8 +383,10 @@ export function routeMessage(text: string, ctx: RouteCtx = {}): Route {
   // signal. The Desk always has something on its stage, so above the sticky this would decide almost
   // every untagged message and make the composer's chip a lie: it shows the sticky. Here it only
   // answers the case the sticky cannot — a thread with no pin, looking straight at a terminal.
+  // Small talk skips it: the Desk always has a terminal on stage, and "hola" is not about that
+  // terminal — it gets one short reply from the unscoped Robert below.
   const staged = ctx.uiWorkspace || (ctx.stagedSessionId ? sessionWs(ctx.stagedSessionId) : null);
-  if (staged && workspaces.get(staged)) {
+  if (staged && workspaces.get(staged) && !base.social) {
     return { ...base, ws: staged, how: "key", confidence: 0.6, text: body, why: "the terminal on your screen" };
   }
 
@@ -373,6 +413,10 @@ export async function routeSmart(text: string, ctx: RouteCtx = {}): Promise<Rout
   if (tags.targets.length) return routeMessage(text, ctx);
   const body = tags.text;
   const social = isSocial(body.trim());
+  // Small talk never needs judgment, and is never worth a model round trip: the rules already send
+  // it to the bubble it answers, the sticky project, or the unscoped Robert. Asking the model used to
+  // fan "Hola, hola." out to every project ("all" is also its answer for small talk).
+  if (social) return routeMessage(text, ctx);
   const slugOf = (id: string | null) => (id ? workspaces.get(id)?.slug ?? id : null);
   const sticky = getSticky(surface, now);
   const staged = ctx.uiWorkspace || (ctx.stagedSessionId ? sessionWs(ctx.stagedSessionId) : null);
@@ -391,14 +435,19 @@ export async function routeSmart(text: string, ctx: RouteCtx = {}): Promise<Rout
   if (!m) return routeMessage(text, ctx);
   const base = { text: body, social, why: "model: " + m.why };
   if (m.ws === "ask" || m.confidence < MODEL_MIN_CONFIDENCE) {
-    // "gracias" is never worth a question — the rules already know where small talk goes.
-    if (social) return routeMessage(text, ctx);
     const all = askCandidates();
     const first = m.candidates.map((sl) => all.find((c) => c.slug.toLowerCase() === sl)).filter((c): c is RouteCandidate => !!c);
     return { ...base, ws: null, how: "ask", confidence: m.confidence, candidates: [...new Set([...first, ...all])] };
   }
-  return { ...base, ws: m.ws, how: "model", confidence: m.confidence, candidates: [] };
+  // The model's "all" is the whole shop only when the words say so too, or the message is long
+  // enough to be a request: a two-word line it shrugged onto "all" ("¿estás?") is not a status call
+  // to every project.
+  const fleet = m.ws === null && (hints.fleetIntent || wordCount(body) > SHORT_LINE_WORDS);
+  return { ...base, ws: m.ws, how: "model", confidence: m.confidence, candidates: [], fleet };
 }
+
+const SHORT_LINE_WORDS = 3;
+const wordCount = (s: string) => s.split(/[^\p{L}\p{N}]+/u).filter(Boolean).length;
 
 // ── the one seam both surfaces use ───────────────────────────────────────────────────────────────
 
@@ -442,6 +491,38 @@ export async function resolveTurnSmart(
   const r = await routeSmart(text, { surface: opts.surface, stagedSessionId: opts.stagedSessionId, uiWorkspace: opts.uiWorkspace, replyWorkspace: opts.replyWorkspace });
   if (r.how === "ask") return { ws: null, text: r.text, routed: null, ask: r, how: "ask" };
   return { ws: r.ws, text: r.text, routed: r, ask: null, how: r.how };
+}
+
+/**
+ * A SPOKEN turn never gets "Which project is this about?": he is talking, not looking at chips. The
+ * router's ask is resolved here instead, in this order: the project of the bubble he is answering →
+ * the thread's sticky project → the unscoped Robert, who answers once (no fan-out — a work request
+ * with nothing to go on is not a question for the whole shop). Typed turns never come through here.
+ */
+export function resolveVoiceAsk(
+  t: ResolvedTurn,
+  opts: { replyWorkspace?: string | null; surface?: string; now?: number } = {},
+): ResolvedTurn {
+  if (!t.ask) return t;
+  const base = { text: t.ask.text, candidates: [] as RouteCandidate[], social: t.ask.social, fleet: false };
+  const reply = opts.replyWorkspace && workspaces.get(opts.replyWorkspace) ? opts.replyWorkspace : null;
+  const sticky = reply ? null : getSticky(opts.surface || "web", opts.now ?? Date.now())?.ws ?? null;
+  const ws = reply ?? sticky;
+  const routed: Route = ws
+    ? { ...base, ws, how: "sticky", confidence: 0.4, why: `voice: ${reply ? "replying on" : "still on"} #${workspaces.get(ws)?.slug ?? "?"}` }
+    : { ...base, ws: null, how: "fleet", confidence: 0.3, why: "voice: no project to go on — the unscoped Robert answers" };
+  return { ws: routed.ws, text: routed.text, routed, ask: null, how: routed.how };
+}
+
+/**
+ * Does a turn that runs on no single project go to EVERY project's Robert? Only when it is a question
+ * for the whole shop (routed.fleet) or he picked "the whole shop" by hand (no routed decision). Small
+ * talk and a work request with nothing to go on get one reply from the unscoped Robert. Pure.
+ */
+export function wantsFanout(t: ResolvedTurn): boolean {
+  if (t.ask || t.ws !== null) return false;
+  if (!t.routed) return true;
+  return !t.routed.social && !!t.routed.fleet;
 }
 
 /** Remember where the turn landed, so the next bare message follows it. An ask lands nowhere. */
