@@ -846,4 +846,13 @@ test("no phone and no Telegram for 5 minutes → ONE alert that says so; a phone
   subs = 1;
   await _test.checkReach(NOW + UNREACHABLE_AFTER_MS + 2 * MIN);
   assert.ok(alerts.get(reach[0].id)!.resolved_at, "a phone can reach him again: over");
+  assert.equal(pushes.filter((p) => p.alert_id === reach[0].id).length, 0, "the phone that just subscribed is never told it cannot be reached");
+});
+
+test("minutes read like a person says them: 1 minute, 3 minutes — 1 minuto, 3 minutos", () => {
+  const one = { kind: "stalled", ws: "Acme", work: "w", minutes: 1 } as TextInput;
+  assert.match(alertText(one, "en"), /1 minute ago\./);
+  assert.match(alertText(one, "es"), /hace 1 minuto\./);
+  assert.match(alertText({ ...one, minutes: 3 } as TextInput, "en"), /3 minutes ago\./);
+  assert.match(alertText({ kind: "stalled", ws: "Acme", work: "export", minutes: 1, job: true }, "en"), /for 1 minute\./);
 });

@@ -978,11 +978,14 @@ async function checkReach(now: number): Promise<Readiness> {
   const usable = Object.fromEntries(r.rungs.filter((x) => x.rung !== "mac").map((x) => [x.rung, x.usable]));
   const back = Object.keys(usable).filter((k) => usable[k] && !(lastUsable?.[k] ?? false));
   lastUsable = usable;
-  if (back.length) await retryUnreached(now, back);
+  // Close "I can't reach you" BEFORE retrying anything: the phone that just subscribed must not be
+  // told it cannot be reached.
   if (r.remote_usable) {
     remoteDownSince = null;
     alerts.resolve(REACH_SUBJECT, "unreachable", now);
-  } else {
+  }
+  if (back.length) await retryUnreached(now, back);
+  if (!r.remote_usable) {
     remoteDownSince ??= now;
     if (now - remoteDownSince >= UNREACHABLE_AFTER_MS && alertsOn() && !alerts.openFor(REACH_SUBJECT, "unreachable")) {
       const reasons = r.rungs.filter((x) => (x.rung === "push" || x.rung === "telegram") && x.reason && x.reason !== "off").map((x) => x.reason!);
@@ -999,6 +1002,7 @@ const REACH_SUBJECT = "readiness:remote";
 /** A call started, a phone subscribed, Telegram came back: walk the ladder again for every alert that never reached him. */
 async function retryUnreached(now: number, back: string[]): Promise<void> {
   for (const r of alerts.unreached()) {
+    if (r.kind === "unreachable") continue; // its own episode: over as soon as a remote rung is back
     if (r.kind !== "summary" && !alertsOn(r.workspace_id)) continue;
     alerts.update(r.id, { state: "active", next_at: now, meta: { ...r.meta, retry_from: r.channels.length, retried: Number(r.meta?.retried ?? 0) + 1 } }, now);
     console.log(`[alerts] ${r.kind} ${r.subject.replace(/:(.{8}).*/, ":$1")} never reached him — ${back.join(", ")} can take it now, trying again`);

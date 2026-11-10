@@ -73,8 +73,13 @@ const list = (xs: string[], lang: AlertLang, n = 4) => {
   const more = items.length - head.length;
   return head.join("; ") + (more > 0 ? (lang === "es" ? ` y ${more} más` : ` and ${more} more`) : "");
 };
+/** "1 minute" / "3 minutes" — "1 minuto" / "3 minutos". */
+const mins = (m: number, lang: AlertLang) => {
+  const n = Math.max(1, Math.round(m));
+  return lang === "es" ? `${n} minuto${n === 1 ? "" : "s"}` : `${n} minute${n === 1 ? "" : "s"}`;
+};
 const minutes = (m: number | null | undefined, lang: AlertLang) =>
-  m && m > 0 ? (lang === "es" ? ` hace ${Math.round(m)} minutos` : ` ${Math.round(m)} minutes ago`) : "";
+  m && m > 0 ? (lang === "es" ? ` hace ${mins(m, lang)}` : ` ${mins(m, lang)} ago`) : "";
 
 /** "claude-code" → "Claude", "cursor-agent" → "Cursor": the tool as he names it. */
 function toolName(backend: string | null | undefined): string {
@@ -117,7 +122,7 @@ export function alertText(inp: TextInput, lang: AlertLang = "en"): string {
         const j = flat(inp.work, 60);
         return cap(es
           ? `${where(inp.ws, lang)}la tarea programada “${j}” no da señales de vida${minutes(inp.minutes, lang)}. Decidí si la freno o la dejo correr.`
-          : `${where(inp.ws, lang)}the scheduled job “${j}” has shown no sign of life${inp.minutes ? ` for ${Math.round(inp.minutes)} minutes` : ""}. Decide whether to stop it or let it run.`);
+          : `${where(inp.ws, lang)}the scheduled job “${j}” has shown no sign of life${inp.minutes ? ` for ${mins(inp.minutes, lang)}` : ""}. Decide whether to stop it or let it run.`);
       }
       return cap(es
         ? `${where(inp.ws, lang)}${work(inp.work, lang)} dejó de responder a mitad del trabajo${minutes(inp.minutes, lang)}. Decidí si la reinicio o la dejo.`
@@ -148,7 +153,7 @@ export function alertText(inp: TextInput, lang: AlertLang = "en"): string {
           : `${h} went offline and ${n === 1 ? "its work" : `${n} pieces of work`} could not move to another computer: ${items}. Bring ${h} back or tell me to restart ${n === 1 ? "it" : "them"} here.`);
       return (es
         ? `${h} está desconectada${minutes(inp.minutes, lang)} con ${n === 1 ? "un trabajo" : `${n} trabajos`} adentro: ${items}. Volvé a conectarla o decime que ${n === 1 ? "lo" : "los"} reinicie acá.`
-        : `${h} has been offline${inp.minutes ? ` for ${Math.round(inp.minutes)} minutes` : ""} with ${n === 1 ? "work" : `${n} pieces of work`} on it: ${items}. Bring it back or tell me to restart ${n === 1 ? "it" : "them"} here.`);
+        : `${h} has been offline${inp.minutes ? ` for ${mins(inp.minutes, lang)}` : ""} with ${n === 1 ? "work" : `${n} pieces of work`} on it: ${items}. Bring it back or tell me to restart ${n === 1 ? "it" : "them"} here.`);
     }
     case "job_failed": {
       const j = flat(inp.job, 60);
