@@ -194,11 +194,12 @@
   .dk-dots i.on { background:var(--ink); }
   .dk-track { flex:1; min-height:0; display:flex; overflow-x:auto; overflow-y:hidden; scroll-snap-type:x mandatory; scrollbar-width:none; overscroll-behavior-x:contain; }
   .dk-track::-webkit-scrollbar { display:none; }
-  /* pan-y: up/down is the browser's (a long card scrolls); left/right is the deck's own swipe (phone-deck.js wireSwipe). */
+  /* pan-y: up/down is the browser's (a long card scrolls); left/right is the deck's own swipe (phone-deck.js
+     wireSwipe). On the card AND on its scroller: a browser reads touch-action only up to the nearest scroller. */
   .qcard { flex:0 0 100%; min-width:0; scroll-snap-align:center; scroll-snap-stop:always; display:flex; flex-direction:column; touch-action:pan-y; }
   .dk-nav { display:none; gap:4px; }
   .dk-nav button { width:36px; height:36px; border-radius:10px; color:var(--muted); display:flex; align-items:center; justify-content:center; }
-  .qc-scroll { flex:1; min-height:0; overflow-y:auto; padding:8px 20px 28px; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+  .qc-scroll { flex:1; min-height:0; overflow-y:auto; touch-action:pan-y; padding:8px 20px 28px; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
   .qc-top { display:flex; align-items:center; gap:10px; font-size:13px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
   .qc-ws { display:inline-flex; align-items:center; gap:7px; color:var(--ink); }
   .qc-ws::before { content:""; width:9px; height:9px; border-radius:50%; background:var(--c); }

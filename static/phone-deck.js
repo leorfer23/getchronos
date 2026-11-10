@@ -633,6 +633,7 @@
     var i = want ? D.keys.indexOf(want) : 0;
     D.idx = i < 0 ? Math.min(D.idx, Math.max(0, items.length - 1)) : i;
     D.track.scrollLeft = D.idx * D.track.clientWidth;
+    clearTimeout(headT); D.dest = null; // drawn where it stands: not on its way anywhere
     paintHead();
     hydrate();
     wireCompare();
@@ -863,12 +864,23 @@
   }
   function move(step) {
     var n = Math.max(0, Math.min(Q.items.length - 1, D.idx + step));
+    heading(n);
     D.track.scrollTo({ left: n * D.track.clientWidth, behavior: "smooth" });
+  }
+  // The deck is on its way to another card (←/→, ‹ ›, a swipe let go): until it gets there the bar
+  // still names the card it left, so nothing on it or on a card answers (settled()). Cleared when the
+  // track arrives, and by the clock in case it never moves.
+  var headT = 0;
+  function heading(n) {
+    clearTimeout(headT);
+    D.dest = n === D.idx ? null : n;
+    if (D.dest != null) { headT = setTimeout(function () { D.dest = null; }, 1200); if (headT && headT.unref) headT.unref(); }
   }
   function onScroll() {
     var w = D.track.clientWidth || 1, i = Math.round(D.track.scrollLeft / w);
+    if (i === D.dest) { clearTimeout(headT); D.dest = null; } // arrived
     if (i === D.idx || i < 0 || i >= Q.items.length) return;
-    D.idx = i;
+    D.idx = i; D.dest = null;
     if (C.fx) C.fx.tick();
     paintHead(); hydrate();
     if (C.voice.on) readCard(current());
@@ -909,6 +921,7 @@
     var g = null, snapT = 0;
     var snapTo = function (n) {
       var still = root.matchMedia && root.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      heading(n);
       track.scrollTo({ left: n * track.clientWidth, behavior: still ? "auto" : "smooth" });
       // The track's own snapping comes back once it has arrived (it would yank the card mid-glide).
       clearTimeout(snapT); snapT = setTimeout(function () { track.style.scrollSnapType = ""; }, still ? 0 : 420);
@@ -983,6 +996,10 @@
     } finally { D.busy = false; changed(); }
   }
   function dropCard(it) {
+    // The next card slides in under the finger (or the pointer) that just decided this one, its Yes
+    // exactly where this one's was: for a moment its buttons answer nothing, so a double tap or a
+    // double click is one decision, never one on each card.
+    D.cool = Date.now() + 700;
     var i = Q.items.indexOf(it);
     if (i >= 0) Q.items.splice(i, 1);
     var next = Q.items[Math.min(i, Q.items.length - 1)];
@@ -995,6 +1012,7 @@
   // Is the card the bar belongs to the one on screen? Between a swipe (or ←/→) and the moment the
   // track settles, the bar still names the previous card: a click in that gap decides nothing.
   function settled() {
+    if (D.dest != null || Date.now() < (D.cool || 0)) return false;
     if (!D.track || !D.track.clientWidth) return true;
     return Math.abs(D.track.scrollLeft - D.idx * D.track.clientWidth) < D.track.clientWidth * 0.25;
   }
@@ -1478,9 +1496,9 @@
     // Pure helpers, for the tests (src/phone-deck.test.ts).
     _t: { intentOf: intentOf, groupProof: groupProof, lineFails: lineFails, pairShots: pairShots, firstSentence: firstSentence, handoffItem: handoffItem, questionItem: questionItem, draftItem: draftItem, blockedItem: blockedItem, readout: readout, decide: decide, setCtx: function (c) { C = c; }, OK_LINE: OK_LINE, hidden: hidden, record: record, draftHash: draftHash, draftCanon: draftCanon, ledgerItem: ledgerItem,
       SAY: SAY, STRONG_YES: STRONG_YES, WEAK_YES: WEAK_YES, STRONG_PHRASE: STRONG_PHRASE, IRREVERSIBLE: IRREVERSIBLE, pageWords: pageWords, deckLines: deckLines, reprompt: reprompt, voiceAnswer: voiceAnswer,
-      swipeStartOk: swipeStartOk, swipeIntent: swipeIntent, swipeTarget: swipeTarget, wireSwipe: wireSwipe, SWIPE: SWIPE,
+      settled: settled, swipeStartOk: swipeStartOk, swipeIntent: swipeIntent, swipeTarget: swipeTarget, wireSwipe: wireSwipe, SWIPE: SWIPE,
       setHold: function (ms, wait) { HOLD_MS = ms; if (wait != null) HOLD_WAIT_MS = wait; }, va: function () { return VA; }, act: act,
       // Put items on the deck without a page (the vm tests): open, first card current.
-      mount: function (items) { Q.items = items.slice(); Q.loaded = true; D.open = true; D.idx = 0; } },
+      mount: function (items) { Q.items = items.slice(); Q.loaded = true; D.open = true; D.idx = 0; D.dest = null; D.cool = 0; } },
   };
 })(typeof window !== "undefined" ? window : globalThis);

@@ -9590,6 +9590,38 @@ booted.then(ovHistory);
 booted.then(loopsLoad);
 setInterval(() => { if (!document.hidden) loopsLoad(); }, 60000);
 addEventListener("hashchange", openFromHash);
+
+// ── Robert, full screen ──────────────────────────────────────────────────────────────────────
+// The phone's front (static/phone.html: the one conversation, the hands-free call, the approval deck)
+// over the whole Desk, in a frame on this origin — the same token, no second login, and one codebase
+// for the conversation and the approvals on both. 💬 or ⌘⇧R opens it; Esc inside it (or ⌘⇧R again)
+// hands the screen back. The Desk underneath keeps running; its keys never reach the frame, and the
+// frame's never reach the Desk. Not while the client lock is on: that front is every workspace at once.
+(() => {
+  let frame = null;
+  const btn = document.createElement("button");
+  btn.className = "icon"; btn.id = "btn-robert-full"; btn.title = "Robert, full screen (⌘⇧R)"; btn.textContent = "💬";
+  qs("#btn-robert").before(btn);
+  const close = () => { if (frame) { frame.remove(); frame = null; } };
+  const open = () => {
+    if (frame || qs("dialog[open]")) return;
+    if (LOCK) return toast("Robert's full screen is hidden while the Desk shows one client");
+    if (VC.on) vcStop(); // one call at a time: the front has its own
+    frame = document.createElement("iframe");
+    frame.src = "/phone"; frame.title = "Robert"; frame.allow = "microphone; autoplay";
+    frame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;z-index:9999;background:var(--bg)";
+    frame.addEventListener("load", () => frame?.contentWindow?.focus());
+    document.body.appendChild(frame);
+  };
+  btn.onclick = open;
+  addEventListener("message", (e) => { if (frame && e.origin === location.origin && e.source === frame.contentWindow && e.data?.type === "robert:close") close(); });
+  // Capture: the chord is the page's even while a terminal has the keyboard.
+  addEventListener("keydown", (e) => {
+    if (!((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "r")) return;
+    e.preventDefault(); e.stopPropagation();
+    if (frame) close(); else open();
+  }, true);
+})();
 </script>
 </body>
 </html>
