@@ -8,7 +8,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import {
   pickEngine, hearFinal, warmFinal, vocabPrompt, finalFields, finalUrl, wavMs, resetFinalEngine, transcribeDetailed,
-  TranscribeError, SHORT_CLIP_MS, PROMPT_MIN_MS, VOCAB_MAX_CHARS, FINAL_DOWN_MS, AUDIO_CTX_MAX_MS, type AskOpts, type Heard,
+  TranscribeError, SHORT_CLIP_MS, PROMPT_MIN_MS, VOCAB_MAX_CHARS, FINAL_DOWN_MS, AUDIO_CTX_MAX_MS, collapseRepeat, type AskOpts, type Heard,
 } from "./transcribe.js";
 import { setting } from "./settings.js";
 
@@ -187,4 +187,13 @@ test("prompt and decoder fields reach whisper as form fields of that one request
   } finally {
     server.close();
   }
+});
+
+test("a transcript that is one sentence written two or three times over is that sentence once", () => {
+  const one = "¿Cuánto gastamos esta semana comparado con la semana pasada?";
+  assert.equal(collapseRepeat(`${one} ${one}`), one);
+  assert.equal(collapseRepeat(`${one} ${one} ${one}`), one);
+  assert.equal(collapseRepeat("no, no"), "no, no");
+  assert.equal(collapseRepeat("dale dale dale dale"), "dale dale dale dale");
+  assert.equal(collapseRepeat("primero esto y después esto otro"), "primero esto y después esto otro");
 });
