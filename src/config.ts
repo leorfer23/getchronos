@@ -706,6 +706,17 @@ export const CONFIG = {
           inRepo("chronos.db-shm"),
           inRepo(".secrets"),
           inRepo("backups"),
+          // Push signing + who to push to. `.vapid.json` holds the VAPID PRIVATE key (whoever reads it
+          // can sign web-push to the operator's own devices); `.push-subscriptions.json` holds every
+          // device endpoint and its keys. Both sit beside the code, so guard mode — `(allow default)`
+          // plus a cwd re-grant on ~/chronos for the daemon's own processes (Robert) — read them unless
+          // they are denied here, exactly as `.admin-token` would be. (Audited 2026-11: a real
+          // sandbox-exec read of these two succeeded for every Robert process before this line.)
+          inRepo(".vapid.json"),
+          inRepo(".push-subscriptions.json"),
+          // The client→public-name map (OSS scrubbing): it IS the list of real client names the public
+          // repos must never carry. Daemon-only; no agent needs it, and one that read it could leak them.
+          inRepo(".oss-names.local"),
           // Broker credentials (src/broker.ts) — the whole point is that sandboxed agents can
           // SPEND these via POST /api/broker/:slug but never READ them. Resolved, not hardcoded:
           // an operator who sets CHRONOS_BROKER_FILE would otherwise move the creds OUT of the
