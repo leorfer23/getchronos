@@ -95,13 +95,43 @@ test("the talk button: a tap opens the hands-free call inside the gesture, a hol
   assert.match(html, /const VIEW_RE = /);
 });
 
-test("stuck work reaches a live call: presence every 20 s, the alert said first, 'spoken' only after it played", () => {
-  assert.match(html, /api\("\/voice\/presence", \{ method: "POST", body: JSON\.stringify\(\{ client: CLIENT, surface: "phone", live: on, lang: voiceLang\(\), lock: null \}\) \}\)/);
-  assert.match(html, /presT = setInterval\(\(\) => ping\(true\), 20000\)/);
+test("stuck work reaches a live call through the ONE shared client (static/voice-alerts.js), no inlined copy", () => {
+  assert.match(html, /<script src="\/voice-alerts\.js"><\/script>\s*<script src="\/phone-voice\.js"><\/script>/);
+  assert.match(html, /const VA = VoiceAlerts\.create\(\{\s*client: CLIENT, surface: "phone", lang: \(\) => voiceLang\(\), lock: \(\) => null,/);
+  assert.match(html, /function presence\(live\) \{ presT = live \? 1 : 0; VA\.presence\(!!live\); \}/);
   assert.match(html, /"alert\.raised"/);
-  assert.match(html, /if \(!PhoneVoice\.on \|\| !e\.say \|\| !e\.alert_id \|\| \(e\.client && e\.client !== CLIENT\)\) return;/);
-  assert.match(html, /api\("\/alerts\/" \+ encodeURIComponent\(e\.alert_id\) \+ "\/spoken", \{ method: "POST", body: JSON\.stringify\(\{ client: CLIENT, stage \}\) \}\)/);
-  assert.match(html, /onStart: \(\) => report\("started"\) \}\)\.then\(\(played\) => \{\s*if \(played\) report\("done"\);/);
+  assert.match(html, /const a = VA\.take\(e, PhoneVoice\.on\);/);
+  assert.match(html, /onStart: a\.started \}\)\.then\(\(played\) => \{\s*if \(played\) a\.done\(\);/);
+  // The copy that used to live here is gone: the contract is in one file only.
+  assert.doesNotMatch(html, /api\("\/alerts\/" \+ encodeURIComponent\(e\.alert_id\)/);
+  assert.doesNotMatch(html, /presT = setInterval/);
+});
+
+test("he can keep talking while Robert works: his lines show at once and go as ONE follow-up when the turn ends", () => {
+  // Spoken or typed while busy: drawn now as his bubble, queued (askRobert), never dropped.
+  assert.match(html, /if \(R\.busy \|\| !navigator\.onLine\) \{ el\.classList\.add\("queued"\); R\.outbox\.push\(\{ text, el, quote \}\);/);
+  // The engine's busy() only paints "thinking" — the page still hands every transcript over.
+  assert.match(html, /4\. Everything else|5\. Everything else is a turn for Robert/);
+  const src = html.slice(html.indexOf("function takeNext() {"));
+  const body = src.slice(0, src.indexOf("\n}\n") + 3);
+  const takeNext = new Function("R", body + "; return takeNext;");
+  const el = () => ({ classList: { remove() {} }, _voice: true });
+  const R: any = { outbox: [{ text: "y además", el: el(), quote: null }, { text: "lo del export", el: el(), quote: null }, { text: "otra cosa", el: el(), quote: { id: 1 } }] };
+  const next = takeNext(R)();
+  assert.equal(next.text, "y además\nlo del export", "consecutive lines join into one turn");
+  assert.equal(R.outbox.length, 1, "a quoted reply stays its own turn");
+  assert.match(html, /const next = navigator\.onLine \? takeNext\(\) : null;/);
+});
+
+test("a tap on the call screen stops him at once; the call trace goes up at hang-up and from ⋯", () => {
+  assert.match(html, /qs\("#call"\)\.addEventListener\("click", \(e\) => \{/);
+  assert.match(html, /if \(PhoneVoice\.tapStop\(\)\) fx\.tap\(\);/);
+  assert.match(html, /onTrace: \(dump\) => \{ sendTrace\(dump\); \}/);
+  assert.match(html, /api\("\/voice\/trace", \{ method: "POST"/);
+  assert.match(html, /<button data-m="trace">/);
+  // A failed turn of his is said, not left as a spinner.
+  assert.match(html, /String\(e\.reply \|\| ""\)\.startsWith\("⚠️"\)\) \{ PhoneVoice\.waitDone\(\); PhoneVoice\.say\(/);
+  assert.match(html, /PhoneVoice\.waiting\(r\.turn\)/);
 });
 
 test("voice goes to the Mac: push-to-talk posts raw audio to /api/transcribe with the admin token", () => {

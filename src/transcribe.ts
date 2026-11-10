@@ -29,6 +29,19 @@ export async function transcribe(
   buf: Buffer,
   opts: { filename?: string; contentType?: string; language?: string } = {}
 ): Promise<string> {
+  return (await transcribeDetailed(buf, opts)).text;
+}
+
+export type Heard = { text: string; probs: Record<string, number> | null };
+
+/**
+ * The same call, with whisper.cpp's language probabilities when the engine gives them
+ * (verbose_json: `language_probabilities`, reported even when the language was forced).
+ */
+export async function transcribeDetailed(
+  buf: Buffer,
+  opts: { filename?: string; contentType?: string; language?: string } = {}
+): Promise<Heard> {
   const url = transcribeUrl();
   const openai = /\/audio\/transcriptions/.test(url); // OpenAI-style endpoint
   const key = process.env.OPENAI_API_KEY;
@@ -40,7 +53,8 @@ export async function transcribe(
     new Blob([new Uint8Array(buf)], { type: opts.contentType || "audio/webm" }),
     opts.filename || audioFilename(opts.contentType)
   );
-  form.append("response_format", "json");
+  // The local engine answers verbose_json with the language probabilities transcribeBilingual weighs.
+  form.append("response_format", openai ? "json" : "verbose_json");
   // Explicit language (e.g. "en"/"es") is far more reliable than auto-detect on short clips.
   if (opts.language) form.append("language", opts.language);
   if (openai) form.append("model", process.env.CHRONOS_TRANSCRIBE_MODEL || "whisper-1");
@@ -65,7 +79,35 @@ export async function transcribe(
     fail(`transcription HTTP ${res.status}: ${body.slice(0, 300)}`, res.status, body);
   }
   const data: any = await res.json();
-  return String(data.text ?? "").trim();
+  const probs = data.language_probabilities && typeof data.language_probabilities === "object" ? data.language_probabilities : null;
+  return { text: String(data.text ?? "").trim(), probs };
+}
+
+export type Lang2 = "es" | "en";
+
+/**
+ * Spanish or English, never a third language. Whisper's own auto-detect on a one-word answer picks
+ * anything ("Sí" came back as Arabic, "Dale" as Hindi — measured on the local small model), and a
+ * fixed language garbles the other one (English forced to Spanish: 64–73% word errors). So: transcribe
+ * in the call's language, read whisper's probabilities for the two, and only when the other language
+ * clearly wins (≥ 0.3 and 1.5× the hint) transcribe again in that one. One pass when he speaks the
+ * call's language; two when he switched.
+ */
+export async function transcribeBilingual(
+  buf: Buffer,
+  opts: { filename?: string; contentType?: string; hint: Lang2 },
+  ask: (b: Buffer, o: { filename?: string; contentType?: string; language?: string }) => Promise<Heard> = transcribeDetailed,
+): Promise<{ text: string; lang: Lang2; passes: number }> {
+  const first = await ask(buf, { filename: opts.filename, contentType: opts.contentType, language: opts.hint });
+  const p = first.probs;
+  if (!p) return { text: first.text, lang: opts.hint, passes: 1 };
+  const other: Lang2 = opts.hint === "es" ? "en" : "es";
+  const ph = Number(p[opts.hint] ?? 0), po = Number(p[other] ?? 0);
+  if (po >= 0.3 && po >= 1.5 * ph) {
+    const second = await ask(buf, { filename: opts.filename, contentType: opts.contentType, language: other });
+    return { text: second.text, lang: other, passes: 2 };
+  }
+  return { text: first.text, lang: opts.hint, passes: 1 };
 }
 
 export class TranscribeError extends Error {

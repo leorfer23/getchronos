@@ -394,6 +394,18 @@ these two knobs are only for shorthand and for how long the thread stays where y
 Nothing else needs configuring: `#all` / `#fleet` / `#shop` always mean the whole shop, and when the
 daemon cannot tell it asks instead of guessing.
 
+The voice front (`src/talker.ts`, VOICE.md) — every knob is also a Desk setting (⚙ Settings → Voice):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CHRONOS_TALKER` | *(off)* | `1` = every line to Robert is answered by the fast front, which reads every project's ledger and hands work to that project's Robert |
+| `CHRONOS_TALKER_ENGINE` | `cli` | `cli` = its own warm `claude -p` on your subscription (no key); `api` = the Messages API (needs a key below; falls back to `cli` without one) |
+| `CHRONOS_TALKER_CLI_MODEL` | `haiku` | Claude Code alias for the `cli` engine |
+| `CHRONOS_TALKER_API_MODEL` | `claude-haiku-5-5` | model id for the `api` engine (the gateway form is derived) |
+| `CHRONOS_TALKER_PROVIDER` | `auto` | `api` engine key: `auto` (Anthropic first, else gateway), `anthropic`, `gateway` |
+| `CHRONOS_TALKER_API_KEY` | *(falls back to `ANTHROPIC_API_KEY`)* | Anthropic key for the `api` engine; `AI_GATEWAY_API_KEY` is used for `gateway`. Keys live in `.secrets`, never in a setting |
+| `CHRONOS_WHISPER_MODEL` | *(best in ~/.cache/whisper)* | which ggml model file `install-launchd` puts in `sh.chronos.whisper` (default: small — fastest; `ggml-large-v3-turbo.bin` hears mixed Spanish-English far better at ~1 s more per sentence; English-only `.en` models last) |
+
 ### Memory and learning
 
 | Variable | Default | Meaning |
@@ -822,6 +834,13 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_THREAD_ROUTER_MODEL` | `haiku` | `src/config.ts` |
 | `CHRONOS_THREAD_ROUTER_TIMEOUT_MS` | `15000` | `src/config.ts` |
 | `CHRONOS_THREAD_ROUTER_API_KEY` | — | `src/config.ts` |
+| `CHRONOS_TALKER` | — | `src/settings.ts` |
+| `CHRONOS_TALKER_ENGINE` | `cli` | `src/settings.ts` |
+| `CHRONOS_TALKER_CLI_MODEL` | `haiku` | `src/settings.ts` |
+| `CHRONOS_TALKER_API_MODEL` | `claude-haiku-5-5` | `src/settings.ts` |
+| `CHRONOS_TALKER_PROVIDER` | `auto` | `src/settings.ts` |
+| `CHRONOS_TALKER_API_KEY` | — | `src/talker.ts` |
+| `CHRONOS_WHISPER_MODEL` | — | `scripts/install-launchd.mjs` |
 | `CHRONOS_TG_CHAT_ID` | `""` | `src/config.ts` |
 | `CHRONOS_TG_PROPOSAL_CAP` | `40` | `src/config.ts` |
 | `CHRONOS_TG_PROPOSAL_TTL_MS` | `24` | `src/config.ts` |

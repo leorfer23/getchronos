@@ -12,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { islands, pickLang, type Segment } from "./voice-lang.js";
 
 export type VoiceLang = "en" | "es";
 
@@ -87,7 +88,7 @@ function render(voice: string, text: string, out: string, rate?: number): Promis
   });
 }
 
-export type Spoken = { audio: Buffer; mime: string; engine: "kokoro" | "say" };
+export type Spoken = { audio: Buffer; mime: string; engine: "kokoro" | "say"; lang: VoiceLang };
 
 const TTS_DEFAULT = "http://127.0.0.1:7779";
 // Not installed (connection refused) is the common case on a Mac without it: say so once and stop
@@ -100,7 +101,7 @@ export function resetNeuralState(): void { ttsDownUntil = 0; }
 export async function neuralSpeak(
   text: string,
   lang: VoiceLang,
-  opts: { url?: string; timeoutMs?: number; now?: number } = {},
+  opts: { url?: string; timeoutMs?: number; now?: number; segments?: Segment[] } = {},
 ): Promise<Buffer | null> {
   const url = opts.url ?? process.env.CHRONOS_TTS_URL ?? TTS_DEFAULT;
   if (!url || url === "off") return null;
@@ -110,7 +111,9 @@ export async function neuralSpeak(
     const r = await fetch(url.replace(/\/+$/, "") + "/speak", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text, lang }),
+      // segments: the sentence's English runs inside Spanish (voice-lang.ts islands) — read with English
+      // phonemes in the sentence's own voice. A server that predates them ignores the field.
+      body: JSON.stringify({ text, lang, ...(opts.segments && opts.segments.length > 1 ? { segments: opts.segments } : {}) }),
       signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000),
     });
     if (!r.ok) return null;
@@ -124,18 +127,28 @@ export async function neuralSpeak(
   }
 }
 
-export async function speak(text: string, lang: VoiceLang = "en"): Promise<Spoken> {
+/**
+ * One sentence → audio. `lang` is the page's language; with `pick` (the default, setting
+ * voice.lang_pick) the sentence's own language wins when it is clear (voice-lang.ts pickLang) and
+ * `lang` is only the tie-breaker — so an English sentence on a Spanish call is read in English.
+ */
+export async function speak(text: string, lang: VoiceLang = "en", opts: { pick?: boolean; islands?: boolean } = {}): Promise<Spoken> {
   const clean = sayable(text);
   if (!clean) throw new Error("nothing to say");
-  const neural = await neuralSpeak(clean, lang);
-  if (neural) return { audio: neural, mime: "audio/wav", engine: "kokoro" };
+  const use: VoiceLang = opts.pick === false ? lang : pickLang(clean, lang);
+  // English runs inside a Spanish sentence (voice.islands, off by default): measured by reading the
+  // audio back through whisper, the English words came out right but the Spanish right after each
+  // join suffered (14% → 19% word errors on four mixed sentences) — not a win yet.
+  const segments = opts.islands ? islands(clean, use) : undefined;
+  const neural = await neuralSpeak(clean, use, { segments });
+  if (neural) return { audio: neural, mime: "audio/wav", engine: "kokoro", lang: use };
   const out = path.join(os.tmpdir(), `chronos-say-${randomUUID()}.m4a`);
   const rate = Number(process.env.CHRONOS_VOICE_RATE) || undefined;
   try {
     // A voice that was never downloaded (or renamed by an OS update) is not an error to `say`: it
     // quietly uses the system voice, so the call never goes silent — GET /api/voices shows which.
-    await render(await voiceFor(lang), clean, out, rate);
-    return { audio: await fs.promises.readFile(out), mime: "audio/mp4", engine: "say" };
+    await render(await voiceFor(use), clean, out, rate);
+    return { audio: await fs.promises.readFile(out), mime: "audio/mp4", engine: "say", lang: use };
   } finally {
     fs.promises.unlink(out).catch(() => {});
   }

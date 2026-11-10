@@ -46,11 +46,28 @@ const subs = {
 // Only the daemon is mandatory. whisper needs a downloaded model, the app needs its bundle —
 // installing an agent whose program does not exist just gets launchd into a crash-restart loop,
 // so each optional agent states its precondition and is skipped when unmet.
+/** Multilingual before English-only; small (the latency pick) first; an explicit name wins when it exists. */
+export function pickWhisperModel(models, pinned) {
+  if (pinned && models.includes(pinned)) return pinned;
+  const rank = (f) => {
+    if (/\.en\b|\.en\.bin$/.test(f)) return 100; // English-only: last resort
+    const order = ["small", "large-v3-turbo", "large-v3", "large-v2", "large", "medium", "base", "tiny"];
+    const i = order.findIndex((o) => f.includes(o));
+    return i < 0 ? 50 : i;
+  };
+  return [...models].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))[0];
+}
+
 const AGENTS = [
   { label: "sh.chronos.daemon", required: true },
   {
     label: "sh.chronos.whisper",
-    // Newest model in ~/.cache/whisper wins; the template's __WHISPER_MODEL__ takes its filename.
+    // A multilingual model from ~/.cache/whisper (CHRONOS_WHISPER_MODEL names one by file); the
+    // template's __WHISPER_MODEL__ takes its filename. It used to be the alphabetically LAST file, which
+    // would pick an English-only *.en model if one sorted last. small first: a conversation pays for every
+    // second. Measured on synthetic es/en/mixed speech (load avg ~30–100): small ~0.3–0.4 s per sentence,
+    // 19% word errors on mixed Spanish-English; large-v3-turbo ~1.2–1.4 s, 7%. For accuracy over speed:
+    // CHRONOS_WHISPER_MODEL=ggml-large-v3-turbo.bin.
     precondition: () => {
       const dir = path.join(home, ".cache", "whisper");
       const models = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".bin")).sort() : [];
@@ -60,7 +77,7 @@ const AGENTS = [
       // fails every phone upload, so run it rather than trusting the file is there.
       const ff = ffmpegProblem();
       if (ff) return `${ff} — whisper-server --convert needs a working ffmpeg (brew reinstall ffmpeg)`;
-      subs.__WHISPER_MODEL__ = models[models.length - 1];
+      subs.__WHISPER_MODEL__ = pickWhisperModel(models, process.env.CHRONOS_WHISPER_MODEL);
       return null;
     },
   },

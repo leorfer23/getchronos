@@ -8520,6 +8520,8 @@ qs("#v-lang").onclick = () => {
 // hold level closes it. A segment that never had ~220ms of real speech in it (a cough, a door, the
 // keyboard) is dropped. The start level floats above the room's own noise.
 const vOrb = qs("#v-orb");
+// A click on the orb while he speaks stops him at once and listens (the barge-in that always works).
+vOrb.addEventListener("click", (e) => { if (VC.on && vcSpeaking()) { e.stopPropagation(); VC.muted = VC.turn; vcSkip(true); VC.deafUntil = performance.now() + 150; } });
 function vcFrame(f) {
   let sum = 0;
   for (let i = 0; i < f.length; i++) sum += f[i] * f[i];
@@ -8551,6 +8553,8 @@ function vcFrame(f) {
   }
   const s = VC.seg;
   s.frames.push(frame); s.ms += ms;
+  // His words while he talks (display only): the open segment re-transcribed every ~700 ms.
+  if (!VC.partial && s.ms >= 600 && now - (VC.partialAt || 0) >= 700) vcPartial(s, now);
   if (rms > Math.max(VAD.hold, VC.noise * 2)) { s.last = now; if (rms > VAD.speech) s.loudMs += ms; }
   if (!s.barge && vcSpeaking() && s.loudMs >= VAD.bargeMs) { s.barge = true; vcBargeIn(); } // you were already talking when he started
   if (now - s.last > VAD.endMs || s.ms > VAD.maxMs) {
@@ -8577,15 +8581,38 @@ function vcWav(frames, rate = VC.rate) {
   new Int16Array(buf, 44, o).set(out.subarray(0, o));
   return new Blob([buf], { type: "audio/wav" });
 }
+// A dropped connection is retried twice with the same audio before he hears about it.
+async function vcTranscribe(wav, query, tries) {
+  for (let i = 0; ; i++) {
+    try {
+      const r = await fetch("/api/transcribe?" + query, { method: "POST", headers: { "content-type": "audio/wav", ...vcAuth() }, body: wav });
+      if (r.ok) return await r.json();
+      if (i < tries && [502, 503, 504, 520, 521, 522, 523, 524].includes(r.status)) { await new Promise((ok) => setTimeout(ok, i ? 700 : 250)); continue; }
+      throw new Error((await r.text()).slice(0, 120) || "HTTP " + r.status);
+    } catch (err) {
+      if (i < tries && err?.name === "TypeError") { await new Promise((ok) => setTimeout(ok, i ? 700 : 250)); continue; }
+      throw err;
+    }
+  }
+}
+function vcPartial(seg, now) {
+  VC.partialAt = now;
+  const keep = []; let ms = 0;
+  for (let i = seg.frames.length - 1; i >= 0 && ms < 12000; i--) { keep.unshift(seg.frames[i]); ms += (seg.frames[i].length / VC.rate) * 1000; }
+  const p = VC.partial = { seg };
+  vcTranscribe(vcWav(keep), "partial=1&lang=" + VC.lang, 0).then((j) => {
+    const text = typeof j?.text === "string" ? j.text.replace(/\s+/g, " ").trim() : "";
+    if (VC.partial === p && VC.on && text && !HEARD_NOISE.test(text) && (VC.seg === seg || VC.sending)) qs("#v-sub").textContent = "“" + text + "…”";
+  }).catch(() => {}).finally(() => { if (VC.partial === p) VC.partial = null; });
+}
 // One transcript at a time, in the order you said them.
 function vcSend(frames, barge) {
   const wav = vcWav(frames);
   VC.sending++; earcon("sent"); vcState();
   VC.chain = VC.chain.then(async () => {
     try {
-      const r = await fetch("/api/transcribe?lang=" + VC.lang, { method: "POST", headers: { "content-type": "audio/wav", ...vcAuth() }, body: wav });
-      if (!r.ok) throw new Error((await r.text()).slice(0, 120) || "HTTP " + r.status);
-      const text = String((await r.json()).text || "").replace(/\s+/g, " ").trim();
+      const text = String((await vcTranscribe(wav, "lang=" + VC.lang, 2)).text || "").replace(/\s+/g, " ").trim();
+      VC.partial = null;
       if (VC.on && text && !HEARD_NOISE.test(text) && !(barge && vcEcho(text))) vcHeard(text, barge);
     } catch (err) { if (VC.on) toast("transcribe failed: " + String(err.message || err).slice(0, 100)); }
     finally { VC.sending--; vcState(); }
