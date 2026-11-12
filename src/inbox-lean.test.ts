@@ -112,7 +112,7 @@ test("resolve: own workspace token or operator, with a reason; another client ge
   let r = fakeRes(); routes.resolveRoute(fakeReq({ id: item.id }, TOK(b.id), { body: { reason: "x" } }), r);
   assert.equal(r.statusCode, 404);
   r = fakeRes(); routes.resolveRoute(fakeReq({ id: item.id }, {}, { body: { reason: "x" } }), r);
-  assert.equal(r.statusCode, 403, "a tokenless loopback caller is neither");
+  assert.equal(r.statusCode, 401, "a tokenless loopback caller is neither (unidentified: deny is the default)");
   r = fakeRes(); routes.resolveRoute(fakeReq({ id: item.id }, TOK(a.id), { body: {} }), r);
   assert.equal(r.statusCode, 400, "a reason is required");
   r = fakeRes(); routes.resolveRoute(fakeReq({ id: item.id.slice(0, 8) }, TOK(a.id), { body: { reason: "you replied in the thread" } }), r);

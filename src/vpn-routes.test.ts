@@ -10,6 +10,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
 
+const { CONFIG } = await import("./config.js");
 const { workspaces, sessions } = await import("./store.js");
 const routes = await import("./vpn-routes.js");
 const vpnMod = await import("./vpn.js");
@@ -58,10 +59,11 @@ await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
 after(() => { server.close(); vpnMod.setVpnLeasesForTest(null); });
 
+/** `token` null = the operator (the admin token). */
 async function call(method: string, path: string, token: string | null, body?: unknown) {
   const r = await fetch(base + path, {
     method,
-    headers: { ...(body ? { "content-type": "application/json" } : {}), ...(token ? { "x-mc-workspace-token": token } : {}) },
+    headers: { ...(body ? { "content-type": "application/json" } : {}), ...(token ? { "x-mc-workspace-token": token } : { "x-mc-admin": CONFIG.adminToken }) },
     body: body ? JSON.stringify(body) : undefined,
   });
   return { status: r.status, json: (await r.json()) as any };
@@ -133,7 +135,7 @@ test("down drops the caller's hold only; the VPN stays up while another holds it
   assert.equal(again.json.released, false);
 });
 
-test("the operator (no token on this Mac) sees every workspace with a VPN, and can turn one off outright", async () => {
+test("the operator (admin token) sees every workspace with a VPN, and can turn one off outright", async () => {
   const all = await call("GET", "/vpn", null);
   assert.equal(all.status, 200);
   const slugs = all.json.map((v: any) => v.workspace);

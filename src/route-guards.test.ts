@@ -132,9 +132,11 @@ test("a note, a repo's graph and an ask answer only to their own workspace", asy
 
 test("only the operator grants ship: an agent cannot widen its own permission", async () => {
   const s = sessions.create({ workspace_id: A.id, cwd: tmp, goal: "a work" } as any);
-  for (const h of [asA, asLeadA]) {
+  // A real Lead sends its workspace token too (`mc` identityHeaders); a bare Lead credential names no
+  // workspace, so it is refused earlier, as unidentified (401 — deny is the default).
+  for (const [h, code] of [[asA, 403], [{ ...asA, ...asLeadA }, 403], [asLeadA, 401]] as const) {
     const r = await call("PATCH", `/sessions/${s.id}`, h, { ship: "deploy", goal: "rewritten" });
-    assert.equal(r.status, 403, JSON.stringify(r.json));
+    assert.equal(r.status, code, JSON.stringify(r.json));
   }
   assert.equal(sessions.get(s.id)!.ship ?? "ask", "ask");
   assert.equal(sessions.get(s.id)!.goal, "a work", "refused before anything was written");

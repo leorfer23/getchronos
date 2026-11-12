@@ -188,7 +188,8 @@ export type CallerScope = { ws: string | null; robert?: RobertRole; fleet?: true
 // "No token from this Mac = the operator" let ANY local process — every sandboxed agent included —
 // reach every workspace by leaving its token off a curl. Workspaces never mix, so a request now has
 // to say who it is. Rolled out in three modes (CHRONOS_TOKENLESS): `allow` (old behaviour), `log`
-// (allow, but record every caller so nothing legitimate breaks when it flips), `deny` (refused).
+// (allow, but record every caller so nothing legitimate breaks when it flips), `deny` (refused — the
+// default since the public release; an unknown value also means deny).
 
 /** Paths a caller may reach with no token at all: liveness, the push key, webhooks with their own secret. */
 const TOKENLESS_PUBLIC = [/^\/health$/, /^\/push\/vapid$/, /^\/triggers\/hook\/[^/]+$/];
@@ -196,8 +197,9 @@ export type TokenlessSeen = { method: string; path: string; ua: string; n: numbe
 const tokenlessSeen = new Map<string, TokenlessSeen>();
 const idSeg = (seg: string) => (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(seg) || /^[0-9a-f]{8,}$/i.test(seg) || /^\d+$/.test(seg) ? ":id" : seg);
 export function tokenlessMode(): "allow" | "log" | "deny" {
-  const m = String(process.env.CHRONOS_TOKENLESS ?? CONFIG.tokenlessMode ?? "log").toLowerCase();
-  return m === "allow" || m === "deny" ? m : "log";
+  const m = String(process.env.CHRONOS_TOKENLESS ?? CONFIG.tokenlessMode ?? "deny").toLowerCase();
+  // An unrecognised value fails closed: a typo in .secrets must not reopen the wall.
+  return m === "allow" || m === "log" ? m : "deny";
 }
 /** Who called with no token, grouped by route shape and client (GET /api/authz/tokenless). */
 export function tokenlessReport(): TokenlessSeen[] {

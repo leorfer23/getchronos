@@ -33,7 +33,8 @@ test("callerScope: admin token wins even if a workspace token is also sent", () 
 });
 
 test("callerScope: no headers at all stays unrestricted (back-compat for dashboard/manual CLI)", () => {
-  assert.deepEqual(callerScope(fakeReq()), { ws: null });
+  // Only under the opt-in `log` rollout mode — the default (deny) refuses it, see "default is deny" below.
+  withMode("log", () => assert.deepEqual(callerScope(fakeReq()), { ws: null }));
 });
 
 test("callerScope: valid workspace token resolves to its own workspace id", () => {
@@ -71,8 +72,9 @@ test("checkScope: passes when the token owns the resource's workspace", () => {
 });
 
 test("checkScope: unrestricted caller (no token) passes regardless of owner", () => {
+  // `log` mode: the only one where a tokenless caller is unrestricted (deny is the default).
   const res = fakeRes();
-  assert.equal(checkScope(fakeReq(), res, "any-workspace-id"), true);
+  withMode("log", () => assert.equal(checkScope(fakeReq(), res, "any-workspace-id"), true));
 });
 
 test("checkScope: a resource with no known owner (undefined) is never blocked", () => {
@@ -165,8 +167,8 @@ test("spawnRefusal: only the operator, Robert and a live Lead of that workspace 
   const lead = sessions.create({ workspace_id: home.id, role: "lead", cwd: "/tmp" });
   const leadReq = (tok: string | null) => fakeReq({ "x-mc-workspace-token": home.token, ...(tok ? { "x-mc-lead": tok } : {}) });
 
-  // The Desk and Robert: no workspace token on loopback, or the admin one.
-  assert.equal(spawnRefusal(callerScope(fakeReq()), null), null);
+  // The Desk and Robert: the admin token.
+  assert.equal(spawnRefusal(callerScope(fakeReq({ "x-mc-admin": CONFIG.adminToken })), null), null);
   assert.equal(spawnRefusal({ ws: null }, null), null);
   // A Lead, with its own credential, in its own workspace.
   const lr = leadReq(sessions.leadToken(lead.id));
@@ -225,6 +227,25 @@ test("tokenless gate, deny mode: refused with 401 — and a WRONG admin token co
     assert.equal(callerScope(fakeReq({ "x-mc-admin": "not-the-token" })), null, "and callerScope agrees");
     assert.equal(callerScope(fakeReq({})), null);
   });
+});
+
+test("tokenless gate: the DEFAULT (CHRONOS_TOKENLESS unset) is deny — and an unknown value denies too", () => {
+  const prev = process.env.CHRONOS_TOKENLESS;
+  try {
+    delete process.env.CHRONOS_TOKENLESS;
+    resetTokenless();
+    const none = runGate(gateReq("/board"));
+    assert.equal(none.passed, false);
+    assert.equal(none.status, 401);
+    assert.equal(callerScope(fakeReq()), null, "no headers is not the operator");
+    process.env.CHRONOS_TOKENLESS = "lgo"; // a typo fails closed
+    const typo = runGate(gateReq("/board"));
+    assert.equal(typo.passed, false);
+    assert.equal(typo.status, 401);
+    assert.equal(callerScope(fakeReq()), null);
+  } finally {
+    if (prev === undefined) delete process.env.CHRONOS_TOKENLESS; else process.env.CHRONOS_TOKENLESS = prev;
+  }
 });
 
 test("tokenless gate: identified callers and the public paths always pass", () => {

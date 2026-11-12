@@ -6,6 +6,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import express from "express";
+import { CONFIG } from "../config.js";
 import { hosts, sessions, workspaces, LOCAL_HOST_ID } from "../store.js";
 import { hostBriefRoutes, hostsBrief } from "./brief.js";
 import type { HostCandidate } from "./placement.js";
@@ -66,10 +67,11 @@ test("GET /hosts/brief: a workspace token answers for its own workspace, whateve
 
 test("GET /hosts/brief: a bad token is refused; the operator may name a workspace or none", async () => {
   assert.equal((await fetch(`${base}/hosts/brief`, { headers: { "x-mc-workspace-token": "nope" } })).status, 401);
-  const op = await (await fetch(`${base}/hosts/brief?workspace=${globex.slug}`)).json();
+  const admin = { headers: { "x-mc-admin": CONFIG.adminToken } };
+  const op = await (await fetch(`${base}/hosts/brief?workspace=${globex.slug}`, admin)).json();
   assert.equal(op.workspace_id, globex.id);
   assert.equal(op.hosts[1].may_run, false);
-  const bare = await (await fetch(`${base}/hosts/brief`)).json();
+  const bare = await (await fetch(`${base}/hosts/brief`, admin)).json();
   assert.equal(bare.workspace_id, null);
   assert.ok(bare.hosts.every((h: any) => h.may_run === null));
 });

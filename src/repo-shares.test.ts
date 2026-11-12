@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { CONFIG } from "./config.js";
 import { db, repos, sessions, workspaces } from "./store.js";
 import { buildProfile, sandboxAvailable, SANDBOX_EXEC } from "./sandbox.js";
 import { mainCheckouts } from "./terminal.js";
@@ -259,7 +260,7 @@ describe("checkRepoScope", () => {
     const r4 = res();
     assert.equal(checkRepoScope(req({ "x-mc-workspace-token": "forged" }), r4, repo), false);
     assert.equal(r4.statusCode, 401);
-    assert.equal(checkRepoScope(req(), res(), repo), true, "the operator (no token) is unrestricted, as everywhere");
+    assert.equal(checkRepoScope(req({ "x-mc-admin": CONFIG.adminToken }), res(), repo), true, "the operator (admin token) is unrestricted, as everywhere");
   });
 });
 

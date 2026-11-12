@@ -256,7 +256,7 @@ test("GET /workspaces/:id/memory/usage: own token reads, another workspace's tok
   assert.equal(junk.statusCode, 400);
 
   const missing = fakeRes();
-  usageRoute(fakeReq("no-such-ws", {}), missing);
+  usageRoute(fakeReq("no-such-ws", { "x-mc-admin": CONFIG.adminToken }), missing);
   assert.equal(missing.statusCode, 404);
 });
 
