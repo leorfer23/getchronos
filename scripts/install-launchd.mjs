@@ -29,7 +29,10 @@ const home = os.homedir();
 const uid = process.getuid();
 const repoDir = path.resolve(import.meta.dirname, "..");
 const nodeBin = process.execPath; // the node running THIS script — same one npm/deps were built for
-const logDir = process.env.CHRONOS_LOG_DIR ?? path.join(home, "chronos");
+// Beside the state (the checkout, or CHRONOS_HOME): that is where the daemon's monitor rotates
+// chronos.*.log and whisper.*.log (src/monitor.ts). A literal ~/chronos sent a checkout cloned
+// anywhere else to write its logs into a stray folder nothing ever rotated.
+const logDir = process.env.CHRONOS_LOG_DIR ?? process.env.CHRONOS_HOME ?? repoDir;
 const port = process.env.CHRONOS_PORT ?? "7777";
 const agentDir = path.join(home, "Library", "LaunchAgents");
 const templateDir = path.join(repoDir, "launchd");

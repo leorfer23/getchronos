@@ -45,7 +45,8 @@ export function brainbarDeps(o = {}) {
     home,
     repoDir: o.repoDir ?? REPO_DIR,
     mcHome: o.mcHome ?? path.join(home, ".mc"),
-    logDir: o.logDir ?? process.env.CHRONOS_LOG_DIR ?? path.join(home, "chronos"),
+    // Where install:launchd points every agent's logs: beside the state (scripts/install-launchd.mjs).
+    logDir: o.logDir ?? process.env.CHRONOS_LOG_DIR ?? process.env.CHRONOS_HOME ?? REPO_DIR,
     port: String(o.port ?? process.env.CHRONOS_PORT ?? "7777"),
     launchAgentsDir: o.launchAgentsDir ?? path.join(home, "Library", "LaunchAgents"),
     uid: o.uid ?? process.getuid?.() ?? 501,

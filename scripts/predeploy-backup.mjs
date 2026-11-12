@@ -9,18 +9,19 @@
 // should proceed to build + restart, which is what creates it.
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 const KEEP = Number(process.env.CHRONOS_BACKUP_KEEP ?? 5);
-const dbPath = process.env.CHRONOS_DB ?? path.join(os.homedir(), "chronos", "chronos.db");
+// src/repo-root.ts: the state lives beside the code, or wherever CHRONOS_HOME moves it.
+const stateRoot = process.env.CHRONOS_HOME || path.join(import.meta.dirname, "..");
+const dbPath = process.env.CHRONOS_DB ?? path.join(stateRoot, "chronos.db");
 
 if (dbPath === ":memory:" || !fs.existsSync(dbPath)) {
   console.log(`[predeploy] no db at ${dbPath} — nothing to back up (fresh machine?)`);
   process.exit(0);
 }
 
-const backupDir = path.join(import.meta.dirname, "..", "backups");
+const backupDir = path.join(stateRoot, "backups");
 fs.mkdirSync(backupDir, { recursive: true });
 
 // Local time, filename-safe: 20260731-142600.

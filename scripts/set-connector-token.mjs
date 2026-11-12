@@ -11,7 +11,6 @@
 // "keep what is stored" — so every OTHER secret in that config survives a one-key rotation. It then
 // runs one real sync, because a credential you haven't used is a credential you haven't fixed.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 
@@ -37,7 +36,8 @@ const adminToken =
   process.env.CHRONOS_ADMIN_TOKEN ||
   (() => {
     try {
-      return fs.readFileSync(path.join(os.homedir(), "chronos", ".admin-token"), "utf8").trim();
+      // Beside the daemon's state (src/repo-root.ts): this checkout, or CHRONOS_HOME.
+      return fs.readFileSync(path.join(process.env.CHRONOS_HOME || path.join(import.meta.dirname, ".."), ".admin-token"), "utf8").trim();
     } catch {
       die("no admin token: set CHRONOS_ADMIN_TOKEN, or run this on the daemon host");
     }

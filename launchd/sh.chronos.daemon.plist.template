@@ -43,7 +43,7 @@
     <key>LOGNAME</key>
     <string>__USER__</string>
     <key>PATH</key>
-    <string>__NODE_DIR__:__HOME__/.local/bin:__HOME__/flutter/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>__NODE_DIR__:__HOME__/.local/bin:__HOME__/flutter/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <!-- launchd gives a gui agent no locale, and CoreFoundation-backed tools then assume MacRoman:
          pbcopy/pbpaste (and anything a spawned agent shells out to) turn "│ ❯" into "‚îÇ ‚ùØ" on the
          way to the clipboard. UTF-8 here, and child-env.ts defaults it again for spawned agents. -->

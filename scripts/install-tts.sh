@@ -51,5 +51,5 @@ for _ in $(seq 1 60); do
   curl -s -m 2 http://127.0.0.1:7779/health >/dev/null 2>&1 && { curl -s http://127.0.0.1:7779/health; echo; exit 0; }
   sleep 1
 done
-echo "sh.chronos.tts did not answer — see ~/chronos/tts.err.log" >&2
+echo "sh.chronos.tts did not answer — see ${CHRONOS_LOG_DIR:-${CHRONOS_HOME:-$REPO}}/tts.err.log" >&2
 exit 1
