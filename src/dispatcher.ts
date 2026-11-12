@@ -180,7 +180,41 @@ function wsHasConcurrencySlot(jobId: string): boolean {
   return runs.runningCountForWorkspace(wsId) < ws.max_concurrent;
 }
 
+/**
+ * Dark-wake hold. A laptop asleep on battery dark-wakes for 2–10 s every ~17 min; croner catches a
+ * missed fire up inside one of those blips, the agent sends its first API request, the Mac sleeps
+ * again, and the wall-clock watchdog kills the run on a later blip (reap-stale-worktrees-personal:
+ * 26 of 30 runs timed out, 2026-10-02..11-02). So while the Mac is in a dark wake nothing starts:
+ * queued runs stay queued and pump() looks again every minute. The probe is off (never dark) until
+ * startAwake() installs the real one, so tests and non-macOS brains are unaffected.
+ */
+let darkWake: () => boolean = () => false;
+export function setWakeProbe(fn: (() => boolean) | null) {
+  darkWake = fn ?? (() => false);
+}
+const WAKE_RECHECK_MS = 60_000;
+let wakeRecheck: ReturnType<typeof setTimeout> | null = null;
+let holding = false;
+function holdForDarkWake(): boolean {
+  if (!queue.length) return false;
+  let dark = false;
+  try { dark = darkWake(); } catch {}
+  if (!dark) {
+    if (holding) console.log(`[dispatch] Mac fully awake — starting ${queue.length} held run(s)`);
+    holding = false;
+    return false;
+  }
+  if (!holding) console.log(`[dispatch] Mac is in a dark wake — holding ${queue.length} queued run(s) until it fully wakes`);
+  holding = true;
+  if (!wakeRecheck) {
+    wakeRecheck = setTimeout(() => { wakeRecheck = null; pump(); }, WAKE_RECHECK_MS);
+    wakeRecheck.unref?.();
+  }
+  return true;
+}
+
 function pump() {
+  if (holdForDarkWake()) return;
   while (CONFIG.maxConcurrent <= 0 || active < CONFIG.maxConcurrent) {
     // Promote the first queued run whose workspace still has a slot; leave the others queued (don't
     // drop them) so they start when a slot frees. findIndex→-1 breaks the loop, so no livelock.

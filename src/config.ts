@@ -165,6 +165,8 @@ export const CONFIG = {
   gwsBin: process.env.CHRONOS_GWS_BIN ?? "gws",
   icalBin: process.env.CHRONOS_ICAL_BIN ?? "/opt/homebrew/bin/ical",
   maxConcurrent: Number(process.env.CHRONOS_MAX_CONCURRENT ?? 0), // 0 = unlimited; per-workspace max_concurrent (Spaces tab) is the real control
+  // Don't start headless runs while the Mac is in a dark wake (src/dispatcher.ts holdForDarkWake). off = start anyway.
+  darkWakeHold: process.env.CHRONOS_DARKWAKE_HOLD !== "off",
   // Max concurrent LIVE terminal sessions per workspace (fork-bomb guard for agent-spawned terminals).
   maxSessionsPerWorkspace: Number(process.env.CHRONOS_MAX_WS_SESSIONS ?? 6),
   // Scheduling priority every agent CLI (Desk pty + headless run) is spawned at, so the Desk webview
