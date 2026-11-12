@@ -210,6 +210,34 @@ sandbox egress “tunnel” (agent CONNECT proxy). Those are unrelated knobs.
 
 ---
 
+## Optional upgrades — what works without them
+
+A plain Mac with one agent CLI runs every core feature. Everything below is optional: each one has a
+free default that keeps the feature working, or simply adds something new. `GET /api/setup/optional`
+(operator token) answers the same list live for this Mac — `status` is `on` (set up), `default` (not
+set up; the default below is in use) or `off` (not set up; the feature is not there) — and never
+returns a key, only whether it is present.
+
+| Upgrade | Without it | To turn it on |
+|---|---|---|
+| Robert's neural voice (Kokoro, local, Apple Silicon) | macOS `say` with the best installed voice in the call's language | `bash scripts/install-tts.sh` (needs `uv`) |
+| Speech-to-text: the mic, calls (whisper.cpp, local) | the mic answers *"Speech-to-text isn't set up on this Mac yet"*, said once in the log | `bash scripts/install-whisper.sh` (Homebrew whisper.cpp + ffmpeg, the `small` model, ~470 MB) |
+| Sharper hearing for whole sentences (large-v3-turbo) | the small model hears them too | `bash scripts/install-whisper.sh --accurate` (+1.5 GB) |
+| Cloud transcription on calls (ElevenLabs, paid) | local whisper | `ELEVENLABS_API_KEY` in `.secrets`, then ⚙ Settings → Voice → `cloud`. The call's audio then leaves the Mac |
+| Telegram | Mac notifications (and phone push once a phone is paired) | `CHRONOS_TG_TOKEN` + `CHRONOS_TG_CHAT_ID` (§4 above) |
+| Phone over HTTPS | the Desk on this Mac | §4 above |
+| Calendar | no agenda | `POST /api/calendars {"name","ics_url"}` with a private ICS link |
+| A stand-in CLI when a terminal hits its limit | the terminal tries `/model <fallback>`, then waits for you | install and sign in to another CLI, then ⚙ Settings → Failover. Only backends installed (and, for grok, signed in; for cursor, with `CURSOR_API_KEY`) are ever used — the boot line `[terminal-failover]` prints the plan this Mac can actually take |
+| GitHub CLI | repos set to deliver as a PR cannot open one | `brew install gh && gh auth login` |
+| A browser agents drive (`mc browser`) | `mc browser` says what to install | `npx @puppeteer/browsers install chrome-headless-shell@stable --path ~/.cache/puppeteer` |
+| fff (search MCP) / RTK (smaller shell output) | agents use grep and full output | `brew install dmtrKovalenko/fff/fff-mcp` / `brew install rtk`, then restart |
+
+On an Intel Mac, Homebrew lives in `/usr/local`: the installers and the launchd agents look there as
+well as in `/opt/homebrew`. whisper.cpp has no Intel bottle, so `brew` builds it from source (a few
+minutes); Kokoro needs Apple Silicon and `say` stays the voice.
+
+---
+
 ## How the daemon finds its own state
 
 Everything Chronos writes lives beside its code: the database, the admin token, the notes mirror,
@@ -300,7 +328,7 @@ point Chronos at a repo you care about:
 | `CHRONOS_TERMINAL_PROMPT_CONFIRM_SEC` | `90` | after his answer, how long before the daemon checks the terminal actually moved on |
 | `CHRONOS_TERMINAL_PROMPT_DEADLINE_MIN` | `8` | how long a terminal's prompt may sit with him before you get it as buttons |
 | `CHRONOS_TERMINAL_FAILOVER` | on | a Desk terminal stopped on a credit/usage wall moves on by itself: `/model <CHRONOS_AGENT_MODEL_FALLBACK>` in the same terminal, then a new terminal on the next backend (`src/terminal-failover.ts`). The walled terminal stays open for you to close — Chronos never auto-kills it. `off` = it waits for you with no stand-in |
-| `CHRONOS_TERMINAL_FALLBACK_BACKENDS` | `grok,cursor` | backends tried in order after `workspace.fallback_backend`; unregistered, uninstalled or not-allowed ones are skipped |
+| `CHRONOS_TERMINAL_FALLBACK_BACKENDS` | `grok,cursor` | backends tried in order after `workspace.fallback_backend`; unregistered, uninstalled, signed-out (grok without its `auth.json`) or not-allowed ones are skipped. The boot line names only the ones this Mac can use |
 | `CHRONOS_TERMINAL_FAILOVER_MAX` | `3` | failover steps per terminal lineage (the original plus every stand-in) before it gives up and tells you |
 | `CHRONOS_TERMINAL_FAILOVER_TYPING_SEC` | `20` | someone typed into the terminal this recently → hold off, look again after |
 | `CHRONOS_RECOVER_SWEEP_MIN` | `30` | look for abandoned work this often |
@@ -333,7 +361,8 @@ Nothing here kills, restarts or steers anything.
 | `CHRONOS_INTAKE_MODEL` | `sonnet` | turns a brain-dump into tickets |
 | `CHRONOS_VOICE_MODEL` | `opus` | the warm coordinator process (Desk Robert default; overridable in the chat UI) |
 | `CHRONOS_AGENT_MODEL` | `opus` | one-shot Telegram turns |
-| `CHRONOS_AGENT_FALLBACK_BACKEND` / `_MODEL` | `grok` / `grok-4.5` | used when the primary hits a rate limit |
+| `CHRONOS_AGENT_FALLBACK_BACKEND` / `_MODEL` | `grok` / `grok-4.5` | Robert's engine when Claude hits a rate limit or loses its login — only if that CLI is installed and signed in here (cursor: with a `CURSOR_API_KEY`). None usable → the limit itself is the answer, no engine swap |
+| `CHRONOS_AGENT_FALLBACK_CHAIN` | `cursor` | tried after the fallback backend, same rule (`backend` or `backend/model`, comma-separated) |
 | `CHRONOS_ROUTE_MODELS` | `1=haiku,2=haiku,3=sonnet,4=opus,5=opus` | difficulty tier → model, overridable per project |
 | `CHRONOS_QUOTA_GATE` | `warn` | `off` / `warn` / `enforce` — see below |
 | `CHRONOS_QUOTA_TOKENS_5H` | `0` | token ceiling for the rolling 5h window (`0` = unmeasured, and it stays that way) |
@@ -430,9 +459,10 @@ The voice front (`src/talker.ts`, VOICE.md) — every knob is also a Desk settin
 | `CHRONOS_TRANSCRIBE_FINAL_URL` | `http://127.0.0.1:7781/inference` | where the second engine listens; `off` = none. Only used beside the local fast engine unless set explicitly |
 | `CHRONOS_TRANSCRIBE_FINAL_AUDIO_CTX` | `768` | whisper `audio_ctx` sent to the second engine for clips up to 8 s (15 s of context instead of 30 — about half the time per sentence on large-v3-turbo); `0` = always the full window |
 | `CHRONOS_WHISPER_FINAL_MODEL` | *(largest other multilingual model in ~/.cache/whisper)* | which ggml file `install-launchd` puts in `sh.chronos.whisper-final`; with none present the agent is skipped and finished sentences stay on the fast engine |
-| `CHRONOS_WHISPER_FINAL_PORT` | `7781` | the second engine's port (then set `CHRONOS_TRANSCRIBE_FINAL_URL` to match) |
+| `CHRONOS_WHISPER_FINAL_PORT` | `7781` | the second engine's port — read by `install-launchd` and by the daemon alike, so set it in `.secrets` |
+| `CHRONOS_WHISPER_PORT` | `7778` | the fast engine's port, same rule — for a Mac where 7778 is taken |
 | `CHRONOS_VOICE_CLIPS` | `~/.mc/voice-clips` | where the last 40 call clips are kept while setting `voice.keep_clips` is on (off by default; sealed from every agent sandbox; deleted when it goes off) |
-| `CHRONOS_WHISPER_MODEL` | *(best in ~/.cache/whisper)* | which ggml model file `install-launchd` puts in `sh.chronos.whisper` (default: small — fastest; `ggml-large-v3-turbo.bin` hears mixed Spanish-English far better at ~1 s more per sentence; English-only `.en` models last) |
+| `CHRONOS_WHISPER_MODEL` | *(best in ~/.cache/whisper)* | which ggml model file `install-launchd` puts in `sh.chronos.whisper` (default: small — fastest; `ggml-large-v3-turbo.bin` hears mixed Spanish-English far better at ~1 s more per sentence; English-only `.en` models last). `bash scripts/install-whisper.sh` fetches `small` (and `--accurate` large-v3-turbo), checksum-verified |
 
 ### Memory and learning
 
@@ -886,7 +916,8 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_VOICE_VOCAB` | — | `src/settings.ts` |
 | `CHRONOS_VOICE_CLIPS` | `~/.mc/voice-clips` | `src/voice-clips.ts` |
 | `CHRONOS_WHISPER_FINAL_MODEL` | — | `scripts/install-launchd.mjs` |
-| `CHRONOS_WHISPER_FINAL_PORT` | `7781` | `scripts/install-launchd.mjs` |
+| `CHRONOS_WHISPER_FINAL_PORT` | `7781` | `scripts/install-launchd.mjs`, `src/voice-setup.ts` |
+| `CHRONOS_WHISPER_PORT` | `7778` | `scripts/install-launchd.mjs`, `src/voice-setup.ts` |
 | `CHRONOS_TTS_URL` | `"http://127.0.0.1:7779"` (Kokoro, `scripts/tts-server.py`); `off` = `say` only | `src/speak.ts` |
 | `CHRONOS_VAPID_FILE` | `path.join` | `src/push.ts` |
 | `CHRONOS_VERIFY_MODE` | `"enforce"` | `src/config.ts` |
