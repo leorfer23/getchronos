@@ -60,7 +60,9 @@ const reserveWas = CONFIG.placement.brainReserve;
 const modeWas = CONFIG.placement.mode;
 
 const base = `http://127.0.0.1:${PORT}/api`;
-const post = (p: string, body: unknown) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+/** The operator (the Desk): the admin token — a call with no token is refused (CHRONOS_TOKENLESS=deny is the default). */
+const ADMIN = { "x-mc-admin": CONFIG.adminToken };
+const post = (p: string, body: unknown) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json", ...ADMIN }, body: JSON.stringify(body) });
 /** Operator-hand kill (Desk/phone shape) — agents may not close terminals. */
 const kill = (id: string) =>
   fetch(`${base}/sessions/${id}/kill`, {
@@ -222,7 +224,7 @@ test("mc heavy from a host is granted from THAT host's pool (ncpu/6), and freed 
   assert.equal(a.json.slots, 2);
 
   // The brain's own pool never saw them: two suites on two Macs do not wait for each other.
-  const local = await (await fetch(base + "/machine")).json();
+  const local = await (await fetch(base + "/machine", { headers: ADMIN })).json();
   assert.equal(local.host_id, undefined);
   assert.deepEqual(local.heavy.holders, []);
   const there = await fromHost(s.id, "GET", "/machine");
@@ -230,7 +232,7 @@ test("mc heavy from a host is granted from THAT host's pool (ncpu/6), and freed 
 
   // Heartbeat and release go to the same pool.
   assert.equal((await fromHost(s.id, "PUT", `/machine/slots/${a.json.slot_id}`)).status, 200);
-  assert.equal((await fetch(`${base}/machine/slots/${a.json.slot_id}`, { method: "PUT" })).status, 404, "unknown to the brain's pool");
+  assert.equal((await fetch(`${base}/machine/slots/${a.json.slot_id}`, { method: "PUT", headers: ADMIN })).status, 404, "unknown to the brain's pool");
   assert.equal((await fromHost(s.id, "DELETE", `/machine/slots/${a.json.slot_id}`)).json.released, true);
 
   // The terminal ends → whatever it still held on its host is released.
