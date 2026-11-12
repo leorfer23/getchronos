@@ -27,7 +27,7 @@ import fs from "node:fs";
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
 import { LOCAL_HOST_ID, sessions, tickets, workspaces } from "./store.js";
-import { backendInstalled, getBackend, hasBackend } from "./backends/index.js";
+import { backendReady, getBackend, hasBackend } from "./backends/index.js";
 import { childEnv } from "./child-env.js";
 import { placementCandidates } from "./hosts/candidates.js";
 import { cliFor } from "./hosts/placement.js";
@@ -245,7 +245,7 @@ export function fallbackChain(ws: { fallback_backend?: string | null } | undefin
 export function failoverUsable(
   backend: string,
   ws: Workspace | null | undefined,
-  installed: (b: string) => boolean = backendInstalled,
+  installed: (b: string) => boolean = backendReady,
   /** The walled terminal's host — stand-ins must run there. null/local → brain install check. */
   hostId?: string | null,
   hostCanRun: (hostId: string, backend: string, cursorKey: boolean) => boolean = hostHasCli,
@@ -350,7 +350,9 @@ const defaultOps: FailoverOps = {
   open: openSession,
   kill: killSession,
   feed: (id) => focusEvents(id).map((e) => `${e.kind}: ${e.text}`),
-  installed: backendInstalled,
+  // Installed and not known to be logged out (grok's auth file): a stand-in that opens on a login
+  // screen is a second walled terminal, not a stand-in.
+  installed: backendReady,
   hostCanRun: hostHasCli,
   // Lazy: wake-queue pulls in Robert's whole agent, and this module is imported by terminal-prompts.
   wake: (w) => void import("./wake-queue.js").then((m) => m.enqueueWake(w)).catch(() => {}),
@@ -690,7 +692,21 @@ export function startTerminalFailover(): void {
   });
   console.log(
     terminalFailoverEnabled()
-      ? `[terminal-failover] walled terminals move on: /model ${CONFIG.agent.modelFallback || "(off)"} → ${fallbackChain(undefined).join(" → ") || "(no backends)"} (cap ${CONFIG.terminalFailoverMax})`
+      ? `[terminal-failover] walled terminals: ${failoverPlan(fallbackChain(undefined, setting<string[]>("failover.backends")), (b) => failoverUsable(b, null))}`
       : "[terminal-failover] off (CHRONOS_TERMINAL_FAILOVER=off) — a walled terminal waits for the operator",
   );
+}
+
+/**
+ * The boot line's plan: the steps this Mac can actually take. The configured chain names grok and
+ * cursor whether or not they are here — printing it as is told a Mac with only claude that its walled
+ * terminals would move to two CLIs it does not have.
+ */
+export function failoverPlan(chain: string[], usable: (b: string) => boolean, modelFallback = CONFIG.agent.modelFallback, cap = CONFIG.terminalFailoverMax): string {
+  const ready = chain.filter((b) => hasBackend(b) && usable(b));
+  const model = modelFallback ? `/model ${modelFallback}` : null;
+  const steps = [...(model ? [model] : []), ...ready];
+  if (!ready.length)
+    return `${model ? `${model}, then ` : ""}they wait for you — no stand-in CLI is installed and signed in here (looked for: ${chain.join(", ") || "none"} — ⚙ Settings → Failover picks others)`;
+  return `${steps.join(" → ")} (cap ${cap})`;
 }

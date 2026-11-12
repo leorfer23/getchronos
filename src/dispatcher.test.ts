@@ -73,7 +73,7 @@ test("rejects retired model / unknown backend before creating a run", () => {
   const retired = mkJob({ backend: "opencode", model: "vercel/moonshotai/kimi-k3" });
   const r1 = dispatch(retired.id, "manual");
   assert.ok("error" in r1);
-  assert.match(r1.error, /modelo desconocido \(retirado\)/);
+  assert.match(r1.error, /retired model \(no longer served\)/);
   assert.equal(runs.list(retired.id).length, 0);
 
   const unknown = mkJob({ backend: "not-a-real-backend", model: "sonnet" });
