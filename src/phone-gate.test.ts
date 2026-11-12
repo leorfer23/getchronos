@@ -91,7 +91,9 @@ test("the owner, this Mac and the Cloudflare tunnel get exactly what they got be
   setPhoneOwner(OWNER);
   for (const p of ["/desk", "/phone", "/sw.js", "/api/health", "/api/sessions", "/api/workspaces"]) {
     const plain = await get(p);
-    assert.equal(plain.status, 200, `${p} with no header: ${plain.status}`);
+    // Pages and liveness answer a bare request; an API route refuses one (deny is the default) — either
+    // way the owner and cloudflared must get exactly what a bare request from this Mac gets.
+    if (!p.startsWith("/api/") || p === "/api/health") assert.equal(plain.status, 200, `${p} with no header: ${plain.status}`);
     assert.equal((await get(p, owner)).status, plain.status, `${p} as the owner`);
     assert.equal((await get(p, cloudflare)).status, plain.status, `${p} through cloudflared`);
   }
@@ -102,13 +104,14 @@ test("forging a header never adds access: the owner's login buys nothing a bare 
   const forged = { "tailscale-user-login": OWNER }; // what a process on this Mac could send
   for (const p of ["/api/authz/tokenless", "/api/phone/status", "/api/isolation/audit", "/api/drafts"]) {
     const bare = await get(p);
-    assert.equal(bare.status, 403, `${p} is admin-only without a token`);
-    assert.equal((await get(p, forged)).status, 403, `${p}: the owner's login is not a credential`);
-    assert.equal((await get(p, owner)).status, 403, `${p}: not even through Tailscale itself`);
+    // No token = no identity: refused at the tokenless gate (401, deny is the default) — and a login header changes nothing.
+    assert.equal(bare.status, 401, `${p} needs a token`);
+    assert.equal((await get(p, forged)).status, bare.status, `${p}: the owner's login is not a credential`);
+    assert.equal((await get(p, owner)).status, bare.status, `${p}: not even through Tailscale itself`);
     assert.equal((await get(p, { ...owner, "x-mc-admin": CONFIG.adminToken })).status, 200, `${p}: the owner with the token gets in`);
   }
   const enable = await fetch(root + "/api/phone/tailscale/enable", { method: "POST", headers: forged });
-  assert.equal(enable.status, 403, "turning phone access on needs the admin token, not a login");
+  assert.equal(enable.status, 401, "turning phone access on needs the admin token, not a login");
   // …and forging someone else's login, or a Funnel marker, only locks the forger out.
   assert.equal((await get("/api/health", { "tailscale-user-login": "someone@example.com" })).status, 403);
   assert.equal((await get("/api/health", { "tailscale-funnel-request": "?1" })).status, 403);
