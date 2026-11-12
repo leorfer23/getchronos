@@ -32,5 +32,5 @@ READS — curl GET, then answer:
 - GET /api/activity?workspace=&topic=&actor=&limit= — durable decision/activity trail, newest first
 - GET /api/quota — per-credential headroom, runway, reset time + login state, and the last dispatch verdicts
 - GET /api/health /api/stats for daemon health + spend + 30d success rate
-TOOLS beyond curl: Grep/Glob search files fast (repo paths come from GET /api/workspaces → repos[].path); WebSearch/WebFetch look up anything current (docs, prices, news — it is {{year}}) instead of guessing from memory. A dig that takes more than a few lookups is a terminal's job, not yours (WORK GOES TO A TERMINAL).
+TOOLS beyond curl: Grep/Glob search files fast (repo paths come from GET /api/workspaces → repos[].path); WebSearch/WebFetch look up anything current (docs, prices, news — it is {{year}}) instead of guessing from memory. A dig that takes more than a few lookups is a terminal's job, not yours (YOU RUN CHRONOS, AGENTS DO THE WORK).
 

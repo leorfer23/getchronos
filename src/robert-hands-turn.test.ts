@@ -35,8 +35,9 @@ fs.appendFileSync(LOG, "spawn\\n");
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
 const CALL = {
   read: (n) => ({ name: "Read", input: { file_path: "/tmp/fake-" + n + ".ts" } }),
-  api: () => ({ name: "Bash", input: { command: 'curl -s -H "x-mc-admin: $CHRONOS_ADMIN" http://localhost:7777/api/fleet' } }),
-  open: () => ({ name: "Bash", input: { command: 'curl -s -X POST -H "x-mc-admin: $CHRONOS_ADMIN" -H "content-type: application/json" http://localhost:7777/api/sessions -d \\'{"role":"worker","goal":"x"}\\'' } }),
+  api: () => ({ name: "Bash", input: { command: 'curl -s -H "x-mc-admin: $CHRONOS_ADMIN" http://localhost:${PORT}/api/fleet' } }),
+  post: (n) => ({ name: "Bash", input: { command: 'curl -s -X POST -H "x-mc-admin: $CHRONOS_ADMIN" -H "content-type: application/json" http://localhost:${PORT}/api/workspaces/w/brief -d \\'{"fact":"line ' + n + '; next | billing"}\\'' } }),
+  open: () => ({ name: "Bash", input: { command: 'curl -s -X POST -H "x-mc-admin: $CHRONOS_ADMIN" -H "content-type: application/json" http://localhost:${PORT}/api/sessions -d \\'{"role":"worker","goal":"x"}\\'' } }),
 };
 let n = 0;
 require("readline").createInterface({ input: process.stdin }).on("line", (line) => {
@@ -133,6 +134,20 @@ test("a status brief takes its nine reads and answers inline", { skip }, async (
     const out = await askManagerWeb(`[[plan:${Array(9).fill("api").join(",")}]][[reply:Quiet shop.]] status`, undefined, w.id, { chat: { words: "status" } });
     assert.equal(out.reply, "Quiet shop.");
     assert.equal(opened.length, 0);
+    assert.equal(count(/^result$/gm), 1);
+  });
+});
+
+test("an admin turn — a dozen Chronos reads and writes, a couple of outside looks — stays with him", { skip }, async () => {
+  const w = project("turn-admin");
+  await turn(w.id, async () => {
+    const plan = [...Array(6).fill("api"), "read", ...Array(6).fill("post"), "read"].join(",");
+    const out = await askManagerWeb(`[[plan:${plan}]][[reply:Done: the brief says next is the billing page.]] update acme's brief: next is the billing page`, undefined, w.id, {
+      chat: { words: "update acme's brief: next is the billing page" },
+    });
+    assert.equal(out.reply, "Done: the brief says next is the billing page.");
+    assert.equal(opened.length, 0);
+    assert.equal(count(/^tool /gm), 14, "every call ran");
     assert.equal(count(/^result$/gm), 1);
   });
 });

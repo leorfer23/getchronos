@@ -25,7 +25,7 @@ import { agentDef, agentPrompt } from "../agent-defs.js";
 import { widgetPromptBlock } from "../widgets/index.js";
 import { askLine, commitTurn, resolveTurnSmart, type Route } from "../thread-router.js";
 import { robertToken, withoutOperatorToken, type RobertLane } from "../authz.js";
-import { HANDED_OFF, TurnBudget, handOff, limitsFor, robertBuiltinTools, robertHands, robertReadonlyDirs } from "../robert-hands.js";
+import { HANDED_OFF, TurnBudget, handOff, robertBuiltinTools, robertHands, robertReadonlyDirs } from "../robert-hands.js";
 import { childEnv } from "../child-env.js";
 import { claudeGlobalConfig, withClaudeHome } from "../parity-env.js";
 import { send, sendChatAction, esc } from "./api.js";
@@ -689,7 +689,7 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
         agent: { name: assistantName(), tools: MANAGER_TOOLS },
         // Telegram propose-and-confirm: no CHRONOS_ADMIN on primary or fallback — only his project's
         // read-only credential, so his reads still name him.
-        ...(runWs ? { extraEnv: { CHRONOS_READ_TOKEN: robertToken(runWs, "ro"), MC_AGENT_NAME: "robert", MC_WORKSPACE: runWs } } : {}),
+        ...(runWs ? { extraEnv: { CHRONOS_READ_TOKEN: robertToken(runWs, "ro"), MC_AGENT_NAME: "robert", MC_API: MC_API_URL, MC_WORKSPACE: runWs } } : {}),
         // A fallback engine keeps his walls: his dir, the deny list, his workspace's env.
         ...robertSandbox(runWs),
         killPrimary: () => {
@@ -708,7 +708,7 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
         system: robertPrompt("telegram"),
         prompt,
         wsId: runWs,
-        ...(runWs ? { profileDir: webProfileDir(runWs), extraEnv: { CHRONOS_READ_TOKEN: robertToken(runWs, "ro"), MC_AGENT_NAME: "robert", MC_WORKSPACE: runWs } } : {}),
+        ...(runWs ? { profileDir: webProfileDir(runWs), extraEnv: { CHRONOS_READ_TOKEN: robertToken(runWs, "ro"), MC_AGENT_NAME: "robert", MC_API: MC_API_URL, MC_WORKSPACE: runWs } } : {}),
         ...robertSandbox(runWs),
       });
     }
@@ -907,7 +907,7 @@ function spawnAgent(ask: Ask, model?: string): Promise<string> {
     onChild: (c) => { ask.child = c; },
     model,
     // A routed turn is that project's Robert, read-only, walled like his warm manager.
-    ...(ask.ws ? { wsId: ask.ws, extraEnv: { CHRONOS_READ_TOKEN: robertToken(ask.ws, "ro"), MC_AGENT_NAME: "robert", MC_WORKSPACE: ask.ws } } : {}),
+    ...(ask.ws ? { wsId: ask.ws, extraEnv: { CHRONOS_READ_TOKEN: robertToken(ask.ws, "ro"), MC_AGENT_NAME: "robert", MC_API: MC_API_URL, MC_WORKSPACE: ask.ws } } : {}),
   });
 }
 
@@ -1560,7 +1560,7 @@ function webManager(key: string, wsId: string | null, lane: RobertLane = "operat
     // there is no one right answer and the command should say so rather than guess.
     // CHRONOS_ADMIN is HIS credential — derived per workspace (or the fleet) and per lane, never the operator's
     // token (authz.ts robertToken): the server can always tell his calls from the operator's own devices.
-    extraEnv: { CHRONOS_ADMIN: robertCredential(wsId, "rw", lane), MC_AGENT_NAME: "robert", ...(wsId ? { MC_WORKSPACE: wsId } : {}) },
+    extraEnv: { CHRONOS_ADMIN: robertCredential(wsId, "rw", lane), MC_AGENT_NAME: "robert", MC_API: MC_API_URL, ...(wsId ? { MC_WORKSPACE: wsId } : {}) },
       // Each lane resumes ITS OWN session: the wake lane never writes the operator's id, or the next
       // operator turn would --resume into a transcript full of wakes.
       resumeSessionId: getWebSession(key, lane),
@@ -1706,6 +1706,13 @@ export function handFilesTo<T extends { path: string; text_path?: string | null 
   return files.map((f) => ({ ...f, path: copy(f.path), ...(f.text_path ? { text_path: copy(f.text_path) } : {}) }));
 }
 
+/**
+ * Where his `mc` talks: this daemon, whatever port it runs on. `mc` defaults to :7777, and a project's
+ * Robert starts from his workspace's allowlisted env (childEnv), which carries no MC_API — so on any
+ * other CHRONOS_PORT his `mc` reached another daemon, or nothing.
+ */
+const MC_API_URL = `http://localhost:${CONFIG.port}/api`;
+
 export function robertCredential(wsId: string | null | undefined, role: "rw" | "ro" = "rw", lane: RobertLane = "operator"): string {
   return robertToken(wsId ?? null, role, lane);
 }
@@ -1829,10 +1836,10 @@ export async function askManagerWeb(
   // This project's own thread recap only — never the interleaved one (workspaces never mix).
   const recap = chatLog.contextBlock({ limit: 12, workspaceId: realWsId });
   const prompt = fleetLine(realWsId) + "\n\n" + (recap || "") + (opts?.voice ? VOICE_TURN + "\n\n" : "") + text;
-  // What he does himself (robert-hands.ts): the operator's own turn, while Robert answers, gets a few
-  // looks. Wakes, triage and watch reports pass no words and never carry one.
+  // What he does himself (robert-hands.ts): Chronos itself never counts; the operator's own turn, while
+  // Robert answers, gets a few calls of work outside it. Wakes, triage and watch reports carry no budget.
   if (opts?.chat && lane === "operator" && robertHands(realWsId) === "answers") {
-    budget = new TurnBudget(limitsFor(opts.chat.words), realWsId);
+    budget = new TurnBudget(realWsId);
     cut = () => {
       m.kill();
       if (mgrsFor(lane).get(key) === m) mgrsFor(lane).delete(key); // the resume id stays: next turn continues
@@ -1856,7 +1863,7 @@ export async function askManagerWeb(
     // MC_AGENT_NAME signs what he does through `mc`; MC_WORKSPACE is which client this desk
     // Robert belongs to (see the warm-manager spawn above). The fallback engine has to carry both,
     // or a degraded turn silently loses the workspace default the primary had.
-    extraEnv: { CHRONOS_ADMIN: robertCredential(realWsId, "rw", lane), MC_AGENT_NAME: "robert", ...(realWsId ? { MC_WORKSPACE: realWsId } : {}) },
+    extraEnv: { CHRONOS_ADMIN: robertCredential(realWsId, "rw", lane), MC_AGENT_NAME: "robert", MC_API: MC_API_URL, ...(realWsId ? { MC_WORKSPACE: realWsId } : {}) },
     profileDir: m.profileDir,
     // A fallback engine keeps his walls: his dir, the deny list, his workspace's env.
     ...robertSandbox(realWsId),
@@ -2146,7 +2153,7 @@ function warmForChatWs(chat: number, wsId: string): WarmManager {
       profileDir: dir, // the workspace's account (or its sibling when walled) + skills + MCP
       // No CHRONOS_ADMIN: he reads and PROPOSES. His reads carry his project's read-only credential
       // (authz.ts robertToken "ro") — the daemon refuses any write it is used for.
-      extraEnv: { CHRONOS_READ_TOKEN: robertToken(wsId, "ro"), MC_AGENT_NAME: "robert", MC_WORKSPACE: wsId },
+      extraEnv: { CHRONOS_READ_TOKEN: robertToken(wsId, "ro"), MC_AGENT_NAME: "robert", MC_API: MC_API_URL, MC_WORKSPACE: wsId },
       resumeSessionId: getWebSession(key),
       onSessionId: (id) => setWebSession(key, id),
       onStaleResume: () => clearWebSession(key),

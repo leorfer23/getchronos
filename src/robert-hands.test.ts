@@ -44,7 +44,7 @@ test("robert.hands: answers by default, both levels, on the Settings page with i
   assert.equal(v.type, "enum");
   assert.deepEqual(v.options, ["answers", "anything"]);
   assert.match(v.label, /does himself/);
-  assert.match(v.help, /opens a terminal/);
+  assert.match(v.help, /runs Chronos .*goes to an agent terminal/);
   assert.equal(settingsView(ws("hands-view").id).find((s) => s.key === "robert.hands")?.level, "both", "per project too");
   assert.throws(() => writeSetting("robert.hands", "sometimes"), /one of answers, anything/);
 });
@@ -71,49 +71,56 @@ test("no Robert credential takes the wall down; putting it up is fine", () => {
   assert.equal(robertGateFor(req("answers"), fleet), null);
 });
 
-// ───────────────────────────── what a turn is ─────────────────────────────
+// ───────────────────────────── what counts ─────────────────────────────
 
-test("a status read gets the long budget; anything that may be work gets the short one", () => {
-  for (const s of ["status", "what's running right now?", "What is up?", "who needs me", "qué pasa?", "¿cómo venimos?", "recap", "where were we", "hola", "thanks!"])
-    assert.equal(H.turnKind(s), "status", s);
-  for (const w of [
-    "fix the typo in README",
-    "research the best sqlite backup approach and write it up",
-    "look into why CI fails",
-    "fix everything in the readme", // shares a word with "how's everything", is still work
-    "qué hay que hacer para arreglar el login",
-    "write the release notes",
-    "",
-  ]) assert.equal(H.turnKind(w), "work", w);
-  assert.deepEqual(H.limitsFor("status"), H.STATUS_LIMITS);
-  assert.deepEqual(H.limitsFor("fix it"), H.WORK_LIMITS);
-});
+const chronos = { routes: false, outside: false };
+const work = { routes: false, outside: true };
 
-test("a call is coordination only when it talks to Chronos; changing Chronos is free, opening work routes", () => {
+test("running Chronos never counts: the daemon's API and mc, reads and writes, however they are written", () => {
   const k = (c: H.ToolCall) => H.classifyCall(c);
-  assert.deepEqual(k(bash(curl(`${API}/fleet`))), { routes: false, acts: false, outside: false }, "a read of the shop");
-  assert.deepEqual(k(bash(`H="x-mc-admin: $CHRONOS_ADMIN"; curl -s -H "$H" ${API}/agents/rollup | jq '.[0]'`)), { routes: false, acts: false, outside: false });
-  assert.deepEqual(k(bash(curl(`-X POST ${API}/tickets -d '{"title":"x"}'`))), { routes: false, acts: true, outside: false }, "a ticket is coordination");
-  assert.deepEqual(k(bash("~/.mc/bin/mc session send ab12cd34 \"rebase on main\"")), { routes: false, acts: true, outside: false });
-  assert.deepEqual(k(bash("mc desk digest")), { routes: false, acts: false, outside: false });
-  // Opening or dispatching work routes it — whole command, even when the one-line description clips the URL.
+  for (const cmd of [
+    curl(`${API}/fleet`),
+    curl(`-X POST ${API}/workspaces -d '{"slug":"globex","name":"Globex","config_dir":"/x/.claude-globex"}'`),
+    curl(`-X PUT ${API}/settings -d '{"key":"ws.auto_review","value":true,"workspace":"acme"}'`),
+    // A body's own ";" and "|" are text, not statements.
+    curl(`-X POST ${API}/workspaces/w1/learn -d '{"fact":"deploys on Fridays; never Mondays | ask first"}'`),
+    `H="x-mc-admin: $CHRONOS_ADMIN"; curl -s -H "$H" ${API}/agents/rollup | jq '.counts'`,
+    `API=${API}; curl -s -H "x-mc-admin: $CHRONOS_ADMIN" "$API/jobs?workspace=acme" | node -e 'process.stdin.pipe(process.stdout)'`,
+    curl(`-X POST ${API}/notes -d "{\\"since\\":\\"$(date -v-1d +%F)\\"}"`),
+    "~/.mc/bin/mc session send ab12cd34 \"rebase on main\"",
+    "mc desk digest && mc worklog acme --limit 5",
+    `for id in a1 b2; do ${curl(`-X PATCH ${API}/jobs/$id -d '{"enabled":true}'`)}; done`,
+    `cd /repo && mc session list`,
+  ]) assert.deepEqual(k(bash(cmd)), chronos, cmd);
+  // Opening or dispatching work routes it — read from the whole command, even when the one-line
+  // description has clipped the URL away.
   const open = bash(curl(`-X POST ${API}/sessions -d '{"workspace_id":"w","role":"worker","goal":"fix it"}'`));
   assert.ok(!open.desc.includes("/api/sessions"), "the 90-char description has lost the URL");
   assert.equal(k(open).routes, true);
-  assert.equal(k(bash('mc session new --goal "fix the login bug"')).routes, true);
-  assert.equal(k(bash('mc lead new "ship the export"')).routes, true);
-  assert.equal(k(bash(curl(`-X POST ${API}/tickets/0123abcd-0000-4000-8000-000000000000/dispatch`))).routes, true);
-  assert.equal(k(bash("mc job run nightly-export")).routes, true);
-  // Anything else leaves Chronos.
+  for (const cmd of ['mc session new --goal "fix the login bug"', 'mc lead new "ship the export"', "mc job run nightly-export",
+    curl(`-X POST ${API}/tickets/0123abcd-0000-4000-8000-000000000000/dispatch`),
+    `for id in a1 b2; do ${curl(`-X POST ${API}/jobs/$id/run`)}; done`])
+    assert.equal(k(bash(cmd)).routes, true, cmd);
+});
+
+test("work outside Chronos counts, including work tucked inside a Chronos-looking command", () => {
+  const k = (c: H.ToolCall) => H.classifyCall(c);
   for (const c of [
     { name: "Read", input: { file_path: "/repo/README.md" }, desc: "Read /repo/README.md" },
     { name: "Grep", input: { pattern: "recieve" }, desc: "search recieve" },
+    { name: "Glob", input: { pattern: "**/*.ts" }, desc: "find **/*.ts" },
     { name: "WebSearch", input: { query: "sqlite backup" }, desc: "WebSearch" },
     { name: "mcp__slack__read_channel", input: {}, desc: "mcp__slack__read_channel" },
     bash("cd /repo && grep -rn recieve ."),
+    bash("git -C /repo log --oneline -20"),
+    bash("echo checking"), // any other shell command
     bash("curl -s https://api.github.com/repos/acme/web/pulls"),
+    bash("curl -s http://localhost:3000/api/users"), // the project's own dev server, not the daemon
+    bash(`${curl(`${API}/fleet`)} && grep -rn TODO /repo`),
+    bash(`${curl(`${API}/workspaces`)} | jq -r '.[0].repos[0].path' | xargs grep -rn login`),
+    bash(curl(`-X POST ${API}/notes -d "$(cat /repo/notes.md)"`)),
     { desc: "run sed -n 1,80p src/login.ts" }, // a fallback engine's delta: no raw block
-  ]) assert.deepEqual(k(c), { routes: false, acts: false, outside: true }, JSON.stringify(c).slice(0, 80));
+  ]) assert.deepEqual(k(c), work, JSON.stringify(c).slice(0, 90));
 });
 
 // ───────────────────────────── the budget ─────────────────────────────
@@ -121,8 +128,9 @@ test("a call is coordination only when it talks to Chronos; changing Chronos is 
 const read = (n: number) => ({ name: "Read", input: { file_path: `/repo/f${n}.ts` }, desc: `Read /repo/f${n}.ts` });
 const look = bash(curl(`${API}/fleet`));
 
-test("work: four looks outside Chronos pass, the fifth is cut — once", () => {
-  const b = new H.TurnBudget(H.WORK_LIMITS, "ws");
+test("four calls outside Chronos pass, the fifth is cut — once", () => {
+  const b = new H.TurnBudget("ws");
+  assert.equal(b.limit, 4);
   for (let i = 1; i <= 4; i++) assert.equal(b.note(read(i)), "ok", `read ${i}`);
   assert.equal(b.note(read(5)), "trip");
   assert.equal(b.tripped, true);
@@ -130,20 +138,20 @@ test("work: four looks outside Chronos pass, the fifth is cut — once", () => {
   assert.deepEqual(b.seen, ["Read f1.ts", "Read f2.ts", "Read f3.ts", "Read f4.ts"], "the cut call is not something he looked at");
 });
 
-test("work: eight reads of Chronos pass, the ninth is cut", () => {
-  const b = new H.TurnBudget(H.WORK_LIMITS, "ws");
-  for (let i = 1; i <= 8; i++) assert.equal(b.note(look), "ok", `look ${i}`);
-  assert.equal(b.note(look), "trip");
-});
-
-test("coordinating costs nothing: twenty changes to Chronos never trip", () => {
-  const b = new H.TurnBudget(H.WORK_LIMITS, "ws");
-  for (let i = 0; i < 20; i++) assert.equal(b.note(bash(curl(`-X POST ${API}/asks/a${i}/answer -d '{"answer":"yes"}'`))), "ok");
-  assert.equal(b.looks, 0);
+test("an admin turn of thirty Chronos calls never trips, and its outside calls still count", () => {
+  const b = new H.TurnBudget("ws");
+  for (let i = 0; i < 15; i++) {
+    assert.equal(b.note(look), "ok");
+    assert.equal(b.note(bash(curl(`-X POST ${API}/workspaces/w1/brief -d '{"fact":"line ${i}"}'`))), "ok");
+  }
+  assert.equal(b.outside, 0);
+  for (let i = 1; i <= 4; i++) assert.equal(b.note(read(i)), "ok");
+  assert.equal(b.note(look), "ok", "Chronos between them changes nothing");
+  assert.equal(b.note(read(5)), "trip");
 });
 
 test("once he opened the terminal himself, the count is off — that is the job", () => {
-  const b = new H.TurnBudget(H.WORK_LIMITS, "ws");
+  const b = new H.TurnBudget("ws");
   b.note(read(1));
   b.note(bash('mc session new --goal "fix the typo"'));
   for (let i = 0; i < 30; i++) assert.equal(b.note(read(i)), "ok");
@@ -151,22 +159,15 @@ test("once he opened the terminal himself, the count is off — that is the job"
   assert.equal(b.tripped, false);
 });
 
-test("a status brief: the longest real one (9 reads) stays inline, a runaway one is still cut", () => {
-  const b = new H.TurnBudget(H.limitsFor("status"), null);
-  for (let i = 0; i < 9; i++) assert.equal(b.note(look), "ok");
-  for (let i = 0; i < 7; i++) assert.equal(b.note(look), "ok");
-  assert.equal(b.note(look), "trip", "17th read");
-});
-
 test("a long path is named by its real file in the brief, not by the clipped description", () => {
-  const b = new H.TurnBudget(H.WORK_LIMITS, "ws");
+  const b = new H.TurnBudget("ws");
   const long = "/Users/operator/clients/acme/" + "nested/".repeat(14) + "README.md";
   b.note({ name: "Read", input: { file_path: long }, desc: `Read ${long.slice(0, 100)}` });
   assert.deepEqual(b.seen, ["Read README.md"]);
 });
 
 test("what he wrote while looking is kept for the brief, up to the cut", () => {
-  const b = new H.TurnBudget(H.WORK_LIMITS, "ws");
+  const b = new H.TurnBudget("ws");
   b.hear("The README has ");
   b.hear("a typo on line 12.");
   for (let i = 1; i <= 5; i++) b.note(read(i));
@@ -213,7 +214,7 @@ function opener() {
   return { calls, open: open as any };
 }
 function tripped(scope: string | null, calls: H.ToolCall[], said = "") {
-  const b = new H.TurnBudget(H.WORK_LIMITS, scope);
+  const b = new H.TurnBudget(scope);
   if (said) b.hear(said);
   for (const c of calls) if (b.note(c) === "trip") break;
   assert.equal(b.tripped, true, "fixture must trip");

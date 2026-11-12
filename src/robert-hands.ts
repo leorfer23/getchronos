@@ -1,27 +1,28 @@
 /**
  * What Robert does himself — the setting `robert.hands`, and the code that holds him to it.
  *
- * The operator's words: "only if it's a simple answer then Robert, all the rest goes to its own
- * terminal." The persona has always said so (agents/_blocks/routing.md), and a new user still watched
+ * The operator's words: "Robert can do all the admin of Chronos, but actual work for a workspace has to
+ * be an agent." The persona has always said so (agents/_blocks/routing.md), and a new user still watched
  * Robert do the work in the chat: prose is a request, not a wall. With `answers` (the default) two walls
- * stand in code, and both leave his real job — reading the shop and coordinating it — untouched:
+ * stand in code, and both leave his real job — running Chronos — untouched:
  *
  *  - his sandbox (robertReadonlyDirs → sandbox.ts's read-only tier, look-only form): every project's
  *    places on disk and the daemon's own checkout are read-only to him. He can read a file to answer a
  *    question; he cannot edit one, build in one, or commit in one.
- *  - his turn (TurnBudget → handOff): an operator chat turn gets a few looks. Calls to the Chronos API or
- *    `mc` that change something (a ticket, a terminal, a setting, an ask, a memo) are coordination and
- *    cost nothing; reads cost one; reads outside Chronos (files, searches, shell, the web) also count
- *    against a smaller allowance. The call past the budget ends the turn, a terminal opens in that
- *    project seeded with the request and what he had found, and his reply is one line naming it.
- *    Opening or dispatching anything himself switches the count off for that turn: that IS the job.
+ *  - his turn (TurnBudget → handOff): Chronos itself never counts — every call to the daemon's own API
+ *    or `mc`, reads and writes alike, however many (a status brief, creating a project, a nightly job, a
+ *    memo, a brief, a setting, retrying the red jobs). Only work outside Chronos counts: reading,
+ *    grepping or listing files, the web, any other shell command. The fifth such call in an operator
+ *    chat turn ends it, a terminal opens in that project seeded with the request and what he had found,
+ *    and his reply is one line naming it. Opening or dispatching work himself switches the count off
+ *    for that turn: that IS the job.
  *
- * The numbers come from his real turns (chat_messages.steps, 248 operator turns with tool calls,
- * 2026-09-22 → 2026-11-10): tool calls per turn p50 2 · p75 4 · p90 8 · max 14; outside-Chronos calls
- * p50 1 · p75 2 · p90 5; a status brief p50 6 · max 9. The turns past 8 calls (8%) were mostly him in a
- * repo — cd, grep, sed, git grep — which is the behaviour being removed. Wakes and automatic turns never
- * carry a budget (only callers that pass the operator's words do), and a status read gets twice the
- * longest brief seen.
+ * The number comes from his real turns (chat_messages.steps, 248 operator turns with tool calls,
+ * 2026-09-22 → 2026-11-10): calls outside Chronos per turn p50 1 · p75 2 · p90 5 · max 11. A quick answer
+ * needs a file or two and one web fact — three; four leaves one of slack. The turns with five or more
+ * (25 of 238 that were not status reads, the top ~10%) were him reading and grepping repos, the work that
+ * moves to terminals. Wakes and automatic turns never carry a budget: only callers that pass the
+ * operator's words do.
  *
  * `anything` is the old behaviour: the same prose, no walls.
  */
@@ -35,7 +36,6 @@ import { humanizeStep, normalizeCommand, terminalMove, type RobertStep } from ".
 import { wsTicketsDir } from "./sandbox.js";
 import { setting } from "./settings.js";
 import { repos, sessions, tickets, workspaces } from "./store.js";
-import { isSocial } from "./thread-router.js";
 import { saidInSpanish } from "./turn-failure.js";
 import { worktreeRootFor } from "./worktree-core.js";
 import type { Workspace } from "./types.js";
@@ -114,44 +114,23 @@ export function robertReadonlyDirs(wsId: string | null): string[] {
 
 // ───────────────────────────── the turn budget ─────────────────────────────
 
-export type Limits = { looks: number; outside: number };
-/** A turn that may be work: 8 looks, at most 4 of them outside Chronos. The next one hands it off. */
-export const WORK_LIMITS: Limits = { looks: 8, outside: 4 };
-/** A status read ("status", "what's running", a recap): twice the longest brief seen (9), no outside cap of its own. */
-export const STATUS_LIMITS: Limits = { looks: 16, outside: 16 };
-
-// Questions about the shop, answered from reads — not the routing list (thread-router FLEET_INTENT):
-// "fix everything" is work, whatever word it shares with "how's everything".
-const STATUS_RE: RegExp[] = [
-  /^\s*(status|estado|state)\b/i,
-  /\bwhat('?s| is| are)?\s*(now|next|up|running|going on|happening|left|on fire|waiting|pending)\b/i,
-  /\bwho needs me\b/i,
-  /\bqu[eé]\s*(pas[oó]|pasa|sigue|falta|est[aá] corriendo|hay(?!\s+que))/i,
-  /\b(standup|overview|brief me|briefing|rollup|pulse)\b/i,
-  /\bhow('?s| is) (it going|everything|the shop|the fleet)\b/i,
-  /\bc[oó]mo (va|vamos|venimos|anda)\b/i,
-  /\ben qu[eé] estamos\b/i,
-  /\b(recap|ahoy|where were we|d[oó]nde quedamos)\b/i,
-];
-
-/** "status", "what's running", a recap, a hello → a read of the shop. Anything else may be work. */
-export function turnKind(words: string): "status" | "work" {
-  const t = String(words ?? "").trim();
-  if (!t) return "work";
-  return STATUS_RE.some((re) => re.test(t)) || isSocial(t) ? "status" : "work";
-}
-
-export const limitsFor = (words: string): Limits => (turnKind(words) === "status" ? STATUS_LIMITS : WORK_LIMITS);
+/** Calls outside Chronos an operator turn may make before it is handed to a terminal (the fifth is cut). */
+export const OUTSIDE_LIMIT = 4;
 
 /** One tool call as it starts: the CLI's raw block when the engine streams it, else its one-line description. */
 export type ToolCall = { name?: string | null; input?: unknown; desc?: string };
-/** routes: opened or dispatched work (the count stops); acts: changed something in Chronos (free); outside: left Chronos. */
-export type CallKind = { routes: boolean; acts: boolean; outside: boolean };
+/** routes: opened or dispatched work (the count stops); outside: work outside Chronos — the only thing that counts. */
+export type CallKind = { routes: boolean; outside: boolean };
 
-const LOCAL_API = /\b(?:localhost|127\.0\.0\.1)(?::\d+)?\/api\//i;
 const SHELL_TOOLS = new Set(["Bash", "shell", "exec", "run_terminal_command", "local_shell"]);
 // Moves that hand work to an agent, as humanizeStep words them (terminal opens come from terminalMove).
 const ROUTE_STEP = /^POST \/(?:tickets\/[^/]+\/(?:dispatch|dispatch-plan|dispatch-grade)|jobs\/[^/]+\/run|runs\/[^/]+\/continue|sessions\/[^/]+\/resume|nextday|startday)$|^Reopened the terminal$|^mc job run\b/;
+/** The daemon's own API, on its own port: a project's dev server answering on localhost is not Chronos. */
+const chronosApi = () => new RegExp(String.raw`\b(?:localhost|127\.0\.0\.1):${CONFIG.port}/api/`, "i");
+// Statements that touch nothing on their own: variables, echo, a date for a JSON body, cd, loop syntax.
+const INERT = /^(?:[A-Za-z_][A-Za-z0-9_]*=|(?:echo|printf|sleep|true|false|export|set|cd|date|read|test|for|case|done|fi|esac)\b|\[|[{}()]\s*$)/;
+// A pipeline stage that runs what it is fed is a command of its own, not a filter of Chronos's answer.
+const RUNS = /^(?:xargs|sh|bash|zsh|eval|source|env|exec|sudo)\b/;
 
 /** The shell command a call runs, whole when the engine streamed the raw block, else from its description. */
 function shellCommand(c: ToolCall): string | null {
@@ -161,27 +140,106 @@ function shellCommand(c: ToolCall): string | null {
   return m ? m[1] : null;
 }
 
-/** What one tool call was, for the budget. A command is coordination only when it talks to Chronos itself. */
-export function classifyCall(c: ToolCall): CallKind {
-  const cmd = shellCommand(c);
-  if (cmd == null) return { routes: false, acts: false, outside: true }; // a file, a search, the web, an MCP tool
-  const kinds = cmd
-    .split(/&&|\|\||[;|\n]/)
-    .map((s) => s.trim())
-    .filter((s) => LOCAL_API.test(s) || /^mc\s/.test(normalizeCommand(s)))
-    .map((s) => humanizeStep(`run ${s}`))
-    .filter((s): s is RobertStep => !!s);
-  if (!kinds.length) return { routes: false, acts: false, outside: true };
-  const routes = kinds.some((s) => terminalMove(s)?.move === "open" || ROUTE_STEP.test(s.text));
-  return { routes, acts: routes || kinds.some((s) => s.kind === "act"), outside: false };
+/** `$(…)`, `<(…)` and backticks pulled out (each is a command of its own), quotes respected. */
+function pullSubstitutions(cmd: string): { rest: string; inner: string[] } {
+  const inner: string[] = [];
+  let rest = "";
+  let q: '"' | "'" | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (q === "'") { if (c === "'") q = null; rest += c; continue; }
+    if (c === "\\" && i + 1 < cmd.length) { rest += c + cmd[++i]; continue; }
+    if (c === "`") {
+      const j = cmd.indexOf("`", i + 1);
+      if (j < 0) { rest += cmd.slice(i); break; }
+      inner.push(cmd.slice(i + 1, j)); rest += "_"; i = j; continue;
+    }
+    if ((c === "$" || c === "<" || c === ">") && cmd[i + 1] === "(") {
+      let depth = 1, j = i + 2;
+      for (; j < cmd.length && depth; j++) { if (cmd[j] === "(") depth++; else if (cmd[j] === ")") depth--; }
+      inner.push(cmd.slice(i + 2, j - 1)); rest += "_"; i = j - 1; continue;
+    }
+    if (c === '"') q = q === '"' ? null : '"';
+    else if (c === "'" && !q) q = "'";
+    rest += c;
+  }
+  return { rest, inner };
+}
+
+/** Statements (split on unquoted ;, &&, ||, newline) of pipeline stages (unquoted |): a JSON body's ";" stays text. */
+function parseShell(cmd: string): string[][] {
+  const out: string[][] = [];
+  let stages: string[] = [];
+  let cur = "";
+  let q: '"' | "'" | null = null;
+  const endStage = () => { stages.push(cur.trim()); cur = ""; };
+  const endStatement = () => { endStage(); const st = stages.filter(Boolean); if (st.length) out.push(st); stages = []; };
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (q) {
+      if (c === "\\" && q === '"' && i + 1 < cmd.length) { cur += c + cmd[++i]; continue; }
+      if (c === q) q = null;
+      cur += c;
+      continue;
+    }
+    if (c === "\\" && i + 1 < cmd.length) { cur += c + cmd[++i]; continue; }
+    if (c === "'" || c === '"') { q = c; cur += c; continue; }
+    if (c === "\n" || c === ";") { endStatement(); continue; }
+    if ((c === "&" || c === "|") && cmd[i + 1] === c) { i++; endStatement(); continue; }
+    if (c === "|") { endStage(); continue; }
+    cur += c;
+  }
+  endStatement();
+  return out;
+}
+
+/** Chronos (curl to the daemon's API, `mc`, whatever filters its answer), inert, or work. */
+function statementKind(stages: string[], vars: Map<string, string>): "chronos" | "inert" | "outside" {
+  // `do curl …` / `if mc …`: the keyword is syntax, the command after it is what runs.
+  const expand = (s: string) => s.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (m, k: string) => vars.get(k) ?? m);
+  let head = stages[0].replace(/^(?:(?:do|then|else|elif|if|while|until|!)\s+)+/, "");
+  const assign = /^([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|'([^']*)'|(\S*))\s*$/.exec(head);
+  if (assign && stages.length === 1) { vars.set(assign[1], expand(assign[2] ?? assign[3] ?? assign[4] ?? "")); return "inert"; }
+  head = normalizeCommand(expand(head));
+  const chronos = (/^curl\b/.test(head) && chronosApi().test(head)) || /^mc\s/.test(head);
+  if (!chronos) return stages.length === 1 && INERT.test(head) ? "inert" : "outside";
+  return stages.slice(1).some((s) => RUNS.test(s.trim())) ? "outside" : "chronos";
+}
+
+/** Every statement of a command, substitutions included: is any of it work, and which of it is Chronos. */
+function scan(cmd: string, depth = 0): { outside: boolean; chronos: string[] } {
+  const { rest, inner } = pullSubstitutions(cmd);
+  // `-d "$(cat /repo/notes.md)"` inside a Chronos call is still reading the repo.
+  let outside = depth < 3 ? inner.some((s) => scan(s, depth + 1).outside) : inner.length > 0;
+  const chronos: string[] = [];
+  const vars = new Map<string, string>();
+  for (const st of parseShell(rest)) {
+    const k = statementKind(st, vars);
+    if (k === "outside") outside = true;
+    else if (k === "chronos") chronos.push(normalizeCommand(st[0].replace(/^(?:(?:do|then|else|elif|if|while|until|!)\s+)+/, "")));
+  }
+  return { outside, chronos };
 }
 
 /**
- * One operator turn's allowance. `note` every tool call as it starts; the first call past the limits
- * answers "trip" (once) and the caller ends the turn. What it saw rides into the terminal's brief.
+ * What one tool call was, for the budget. Chronos never counts: a command is Chronos when every
+ * statement in it talks to the daemon's own API or runs `mc` (or only shapes their answer, or is a
+ * variable / echo / loop syntax). A file, a search, the web, an MCP tool or any other command is work.
+ */
+export function classifyCall(c: ToolCall): CallKind {
+  const cmd = shellCommand(c);
+  if (cmd == null) return { routes: false, outside: true };
+  const { outside, chronos } = scan(cmd);
+  if (outside || !chronos.length) return { routes: false, outside: true };
+  const steps = chronos.map((s) => humanizeStep(`run ${s}`)).filter((s): s is RobertStep => !!s);
+  return { routes: steps.some((s) => terminalMove(s)?.move === "open" || ROUTE_STEP.test(s.text)), outside: false };
+}
+
+/**
+ * One operator turn's allowance. `note` every tool call as it starts; the call past the limit answers
+ * "trip" (once) and the caller ends the turn. What it saw rides into the terminal's brief.
  */
 export class TurnBudget {
-  looks = 0;
   outside = 0;
   routed = false;
   tripped = false;
@@ -191,18 +249,17 @@ export class TurnBudget {
   readonly reached: string[] = [];
   private said = "";
 
-  constructor(readonly limits: Limits, readonly scope: string | null = null) {}
+  constructor(readonly scope: string | null = null, readonly limit = OUTSIDE_LIMIT) {}
 
   note(c: ToolCall): "ok" | "trip" {
     if (this.tripped) return "ok";
     const k = classifyCall(c);
     if (k.routes) this.routed = true;
     if (this.routed) return "ok";
-    if (!k.acts) this.looks++;
     if (k.outside) this.outside++;
     // Where the cut call was going is still evidence of which project this is.
     if (this.scope === null) this.reached.push(callText(c));
-    if (this.looks > this.limits.looks || this.outside > this.limits.outside) {
+    if (this.outside > this.limit) {
       this.tripped = true;
       return "trip";
     }
