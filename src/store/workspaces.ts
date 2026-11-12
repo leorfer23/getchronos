@@ -228,4 +228,21 @@ export const workspaces = {
     const worktrees = otherRoots.map((r) => worktreeRootFor(r.p));
     return [...new Set([...otherRoots.map((r) => r.p), ...worktrees, ...otherSecrets.map((r) => r.p), ...extra])];
   },
+  // The places on disk that ARE this workspace's: its repos (and those shared into it), their
+  // worktree roots, its landing dir, its notes and tickets mirrors. A walled profile (home-wall.ts)
+  // reads these under $HOME and little else — the mirror image of isolationDenyDirs.
+  ownPlaces(workspaceId: string): string[] {
+    const me = db.prepare(`SELECT slug, default_dir FROM workspaces WHERE id = ?`).get(workspaceId) as { slug: string; default_dir: string | null } | undefined;
+    if (!me) return [];
+    const roots = db
+      .prepare(
+        `SELECT r.path AS p FROM repos r WHERE r.workspace_id = ?
+           OR r.id IN (SELECT repo_id FROM repo_shares WHERE workspace_id = ?)`
+      )
+      .all(workspaceId, workspaceId) as Array<{ p: string }>;
+    const out = roots.flatMap((r) => [r.p, worktreeRootFor(r.p)]);
+    if (me.default_dir) out.push(me.default_dir, worktreeRootFor(me.default_dir));
+    out.push(path.join(resolveNotesDir(), me.slug), path.join(inRepo("tickets"), me.slug));
+    return [...new Set(out)];
+  },
 };

@@ -76,6 +76,28 @@ CHRONOS_PROTECTED_DIRS_EXTRA=/Users/you/code
 CHRONOS_PROTECTED_SECRETS_EXTRA=/Users/you/code/api/.env:/Users/you/code/api/.dev.vars
 ```
 
+**Client profiles read only what they are let read under `$HOME`.** A workspace on a profile of its
+own (`~/.claude-<client>`, anything but the default `~/.claude`) runs behind a home wall: `$HOME` is
+closed and only these are opened — its own repos, worktrees, landing dir and notes/tickets mirrors,
+its config dir, the config dirs its own env names (`GH_CONFIG_DIR`, `CURSOR_CONFIG_DIR`, `CODEX_HOME`,
+`CLOUDSDK_CONFIG`), its gh login (its own when it carries `GH_TOKEN`, otherwise the operator's), its
+`sandbox_allow`, the CLIs' runtime (`~/.local/bin`, `~/.bun`, `~/.npm`, Go/uv caches, `~/.gitconfig`,
+`~/Library/Keychains`, `~/.mc/bin` …) and the default profile's shared instructions (top-level `*.md`,
+`skills`, `commands`, `agents`, `hooks`, `output-styles`). Everything else — another client's codex or
+cursor login, `~/.zsh_history`, `~/.zshrc`, `~/Downloads`, a CSV left in `~` — is unreadable, named
+or not. The default profile is not walled. Desk terminals, dispatched jobs and hand-started
+`claude-<client>` launchers all get it (`src/home-wall.ts`).
+
+```bash
+# Machine-specific things every client profile needs (an MCP wrapper kept in ~/.claude, say).
+# Colon-separated, ~/ allowed. One client's own store goes in that workspace's sandbox_allow instead.
+CHRONOS_HOME_ALLOW_EXTRA=~/.claude/mcp-wrappers:~/.claude/browser-mcp.sh
+
+# Leave named workspaces unwalled (a second personal profile, a test profile). `off` disables it.
+CHRONOS_HOME_WALL_SKIP=lab,scratch
+# CHRONOS_HOME_WALL=off
+```
+
 ### 3. Point it at your accounts
 
 A **profile** is a CLI config directory: its own login, settings, skills and MCP servers. Whichever
@@ -695,6 +717,9 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_HEARTBEAT_URL` | `""` | `src/config.ts` |
 | `CHRONOS_HOLD_AGED_HOURS` | `72` | `src/config.ts` |
 | `CHRONOS_HOME` | — | `src/agent-memory.test.ts` |
+| `CHRONOS_HOME_ALLOW_EXTRA` | — (colon-separated, `~/` allowed) | `src/home-wall.ts` |
+| `CHRONOS_HOME_WALL` | `on` (`off` = no home wall anywhere) | `src/home-wall.ts` |
+| `CHRONOS_HOME_WALL_SKIP` | — (comma-separated workspace slugs) | `src/home-wall.ts` |
 | `CHRONOS_HOSTLINK_DIR` | `inRepo("hostlink")` | `src/hostlink/join.ts` |
 | `CHRONOS_HOST_BRAINS` | — | `src/hostd/index.ts` |
 | `CHRONOS_HOST_CERT_FP` | — | `src/hostd/index.ts` |

@@ -20,6 +20,7 @@ import { ensureGrokTrustedCwd, grokHome } from "./grok-trust.js";
 import { isEarlyDeath, reportEarlyDeath } from "./desk-incidents.js";
 import { inFlightAtRestart, lastActivityState, reviveSeedFor } from "./revive.js";
 import { childEnv } from "./child-env.js";
+import { workspaceHomeWall } from "./home-wall-ws.js";
 import { sanitizeCwd } from "./spawn-guard.js";
 import { ensureTicketWorktree, cleanupWorktree, cleanupRemoteWorktree } from "./worktrees.js";
 import { egressBrokered, egressEnforced, egressEnv, egressLocked, egressPolicy } from "./egress.js";
@@ -920,7 +921,9 @@ export async function openSession(
     // Credential stores this client is trusted with (Globex ↔ ~/.config/gcloud, so `bq` can auth).
     // Empty for every workspace that hasn't been given one explicitly.
     const allowSecrets = workspaceSandboxAllow(ws?.sandbox_allow);
-    const sandboxed = sandboxWrap(mode, cwd, repoDirs, configDir, denyDirs, backend.bin(), iArgs, egressLocked(opts.workspace_id), sharedCheckouts, allowSecrets);
+    // A client profile reads only what it is let read under $HOME (home-wall.ts).
+    const homeWall = ws ? workspaceHomeWall(ws, configDir) : null;
+    const sandboxed = sandboxWrap(mode, cwd, repoDirs, configDir, denyDirs, backend.bin(), iArgs, egressLocked(opts.workspace_id), sharedCheckouts, allowSecrets, homeWall);
     // …and `nice` OUTSIDE the sandbox wrapper: this CLI and everything it forks (vitest, tsc, its own
     // subagents) run below the Desk webview and the daemon. One wrap for every way a terminal is
     // opened — fresh, reopened, resumed, or a failover stand-in — since they all land here.
