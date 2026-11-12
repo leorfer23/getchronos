@@ -8,6 +8,7 @@ import { mergeConnectorConfigWithSentinel } from "../redact.js";
 import type { NewWorkspace, Workspace } from "../types.js";
 import { parseEnvFile } from "../env-file.js";
 import { expandHome, hasOwnGithub, operatorGhDir } from "../gh-env.js";
+import { defaultClaudeDir, isDefaultClaudeDir, ownClaudeConfig, ownCodexHome } from "../parity-env.js";
 import { workspaceVars } from "./workspace-vars.js";
 
 /** A workspace's GitHub credential as its env carries it: its own (token or login dir) and that dir. */
@@ -224,6 +225,14 @@ export const workspaces = {
     for (const o of otherGh) {
       const g = githubOf(o.id, o.secrets_file);
       if (g.dir && g.dir !== myGh.dir && g.dir !== opGh) extra.push(g.dir);
+    }
+    // The operator's own CLI homes belong to the workspaces on his default profile, which run on them
+    // (parity-env.ts): his ~/.claude.json (every MCP server he has, with any credential written into
+    // one), claude's backups of it, and his ~/.codex (his ChatGPT login). A workspace on a client's
+    // profile never reads them — its claude and codex use that profile's dir — so it is denied all three,
+    // as launcher-sandbox.ts denies them to a client CLI started by hand.
+    if (me?.config_dir && !isDefaultClaudeDir(me.config_dir)) {
+      extra.push(ownClaudeConfig(), path.join(defaultClaudeDir(), "backups"), ownCodexHome());
     }
     const worktrees = otherRoots.map((r) => worktreeRootFor(r.p));
     return [...new Set([...otherRoots.map((r) => r.p), ...worktrees, ...otherSecrets.map((r) => r.p), ...extra])];

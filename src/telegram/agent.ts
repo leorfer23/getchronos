@@ -26,6 +26,7 @@ import { widgetPromptBlock } from "../widgets/index.js";
 import { askLine, commitTurn, resolveTurnSmart, type Route } from "../thread-router.js";
 import { robertToken, withoutOperatorToken, type RobertLane } from "../authz.js";
 import { childEnv } from "../child-env.js";
+import { claudeGlobalConfig, withClaudeHome } from "../parity-env.js";
 import { send, sendChatAction, esc } from "./api.js";
 import { kb, type Btn } from "./keyboards.js";
 import { getActiveExec } from "./active-exec.js";
@@ -952,7 +953,7 @@ const DEFAULT_PROFILE_DIR = CONFIG.profiles[CONFIG.agent.profile] ?? CONFIG.prof
 // is meant to be the operator's own, not a bundle the repo pins.
 export function profileMcpTools(profileDir: string): string[] {
   try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(profileDir, ".claude.json"), "utf8"));
+    const cfg = JSON.parse(fs.readFileSync(claudeGlobalConfig(profileDir), "utf8"));
     return Object.keys(cfg?.mcpServers ?? {}).map((name) => `mcp__${name}`);
   } catch {
     return []; // no config dir, or not readable — same as no servers
@@ -961,7 +962,8 @@ export function profileMcpTools(profileDir: string): string[] {
 
 /**
  * What a persona manager (Robert, an executive) must NOT take from the Claude profile it runs on. The
- * profile dir stays CLAUDE_CONFIG_DIR — it holds his login and his MCP servers' OAuth tokens — but the
+ * profile stays his (parity-env.ts: CLAUDE_CONFIG_DIR, or the operator's own home for the default
+ * profile) — it holds his login and his MCP servers' OAuth tokens — but the
  * operator's customisations for his OWN interactive sessions are not the persona's:
  *  - the output style (settings.json `outputStyle`). A style rides every turn as a system reminder
  *    that claims to win over any other formatting guidance, so it beat "four short lines" and Robert
@@ -1124,7 +1126,7 @@ export class WarmManager {
     );
     const child = spawn(cmd, cmdArgs, {
       cwd,
-      env: withoutOperatorToken({ ...(this.opts.baseEnv ?? process.env), CLAUDE_CONFIG_DIR: profileDir, ...PERSONA_ENV, ...(this.opts.extraEnv ?? {}) }),
+      env: withoutOperatorToken({ ...withClaudeHome(this.opts.baseEnv ?? process.env, profileDir), ...PERSONA_ENV, ...(this.opts.extraEnv ?? {}) }),
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child = child;

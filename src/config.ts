@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 // Imports node builtins only — safe to pull in this early (no cycle back through config).
 import { caKeyFile, leafKeyFile } from "./egress-ca.js";
 import { inRepo, resolveNotesDir } from "./repo-root.js";
+import { parityStateFile } from "./parity-env.js";
 // Builtins + repo-root only, like egress-ca: no cycle back through config.
 import { hostlinkDir } from "./hostlink/join.js";
 import { mirrorRoot } from "./hosts/transcript-mirror.js";
@@ -722,6 +723,9 @@ export const CONFIG = {
           // The client→public-name map (OSS scrubbing): it IS the list of real client names the public
           // repos must never carry. Daemon-only; no agent needs it, and one that read it could leak them.
           inRepo(".oss-names.local"),
+          // Which home the default profile's agents run with (parity-env.ts): daemon-only state. An agent
+          // that could write it could flip the config — and the login — the operator's agents start with.
+          parityStateFile(),
           // Broker credentials (src/broker.ts) — the whole point is that sandboxed agents can
           // SPEND these via POST /api/broker/:slug but never READ them. Resolved, not hardcoded:
           // an operator who sets CHRONOS_BROKER_FILE would otherwise move the creds OUT of the

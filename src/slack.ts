@@ -5,14 +5,17 @@ import { spawn } from "node:child_process";
 import { CONFIG } from "./config.js";
 import { workspaces, repos, jobs } from "./store.js";
 import { childEnv } from "./child-env.js";
+import { claudeGlobalConfig, claudeOwnHome, sameDef, updateClaudeConfig, withClaudeHome } from "./parity-env.js";
 import { reloadSchedules } from "./scheduler.js";
 import type { Workspace } from "./types.js";
 
-// Per-workspace Slack = the OFFICIAL Slack MCP server (remote HTTP + OAuth) written into the
-// workspace's CLAUDE_CONFIG_DIR. No custom Slack app, no bot token: each config dir authenticates
-// via OAuth to ONE Slack workspace, and that token caches in the config dir. Isolation = the config
-// dir boundary (agents in another workspace's dir never see this Slack). Admin must approve the
-// Slack MCP integration in that Slack workspace first. Docs: https://docs.slack.dev/ai/slack-mcp-server
+// Per-workspace Slack = the OFFICIAL Slack MCP server (remote HTTP + OAuth) written into the global
+// config of the workspace's Claude profile (parity-env.ts claudeGlobalConfig — `<config_dir>/.claude.json`,
+// or `~/.claude.json` for a default profile on the person's own setup). No custom Slack app, no bot
+// token: each profile authenticates via OAuth to ONE Slack workspace, and claude keeps that token with
+// the profile's login (the keychain item on macOS). Isolation = the profile boundary (agents on another
+// profile never see this Slack). Admin must approve the Slack MCP integration in that Slack workspace
+// first. Docs: https://docs.slack.dev/ai/slack-mcp-server
 const MCP_NAME = "slack";
 const SERVER_SPEC = {
   type: "http",
@@ -21,7 +24,7 @@ const SERVER_SPEC = {
 };
 
 function configFile(configDir: string): string {
-  return path.join(configDir, ".claude.json");
+  return claudeGlobalConfig(configDir);
 }
 function readJson(file: string): any {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return {}; }
@@ -47,6 +50,7 @@ function sharesConfigDir(ws: Workspace): Workspace[] {
 // Write or remove the Slack MCP entry for one workspace based on its slack_config.enabled.
 export function installSlackMcp(ws: Workspace): void {
   authCache.delete(ws.config_dir); // enable/disable changes auth state — drop the stale verdict
+  if (claudeOwnHome(ws.config_dir)) return installSlackInOwnConfig(ws, configFile(ws.config_dir));
   const file = configFile(ws.config_dir);
   const cfg = readJson(file);
   cfg.mcpServers = cfg.mcpServers || {};
@@ -59,6 +63,35 @@ export function installSlackMcp(ws: Workspace): void {
   cfg.mcpServers[MCP_NAME] = { ...SERVER_SPEC };
   writeJson(file, cfg);
   console.log(`[slack] installed Slack MCP (official, OAuth) for ${ws.slug} → ${file}`);
+}
+
+/**
+ * The same entry in the person's OWN `~/.claude.json`, which their terminal claude reads too: merge-only.
+ * A `slack` server of theirs (another Slack MCP, another app) is never replaced, and disabling Slack
+ * removes only the entry Chronos wrote. A file that is there but does not parse is left alone, and the
+ * write goes through claude's own lock (parity-env.ts updateClaudeConfig): their session's changes stay.
+ */
+function installSlackInOwnConfig(ws: Workspace, file: string): void {
+  const enabled = slackEnabled(ws);
+  let theirs = false;
+  const r = updateClaudeConfig(file, (cur) => {
+    const cfg: any = cur ?? {};
+    const prev = cfg.mcpServers?.[MCP_NAME];
+    const ours = !!prev && sameDef(prev, SERVER_SPEC);
+    theirs = !!prev && !ours;
+    if (!enabled) {
+      if (!ours) return null;
+      delete cfg.mcpServers[MCP_NAME];
+      return cfg;
+    }
+    if (prev) return null;
+    (cfg.mcpServers ??= {})[MCP_NAME] = { ...SERVER_SPEC };
+    return cfg;
+  });
+  if (r === "broken") console.warn(`[slack] ${file} is not valid JSON — Slack MCP not touched`);
+  else if (r === "busy") console.warn(`[slack] claude is saving ${file} right now (its lock is held) — Slack MCP for ${ws.slug} left for the next start`);
+  else if (enabled && theirs) console.warn(`[slack] ${file} already has its own "${MCP_NAME}" MCP server — left as it is for ${ws.slug}`);
+  else if (enabled && r === "written") console.log(`[slack] installed Slack MCP (official, OAuth) for ${ws.slug} → ${file}`);
 }
 
 export function installAllSlackMcp(): void {
@@ -155,7 +188,7 @@ function isAuthed(ws: Workspace): Promise<boolean> {
     // Genuinely Claude-CLI-specific (queries Claude's MCP inventory) — not a routable LLM call, so
     // it stays on the claude binary rather than going through a backend.oneShot().
     const child = spawn(CONFIG.claudeBin, ["mcp", "list"], {
-      env: { ...childEnv(ws), CLAUDE_CONFIG_DIR: ws.config_dir },
+      env: withClaudeHome(childEnv(ws), ws.config_dir),
       stdio: ["ignore", "pipe", "ignore"],
     });
     let out = "";

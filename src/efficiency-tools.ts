@@ -15,6 +15,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { childEnv } from "./child-env.js";
 import { CONFIG } from "./config.js";
+import { claudeGlobalConfig, claudeOwnHome, updateClaudeConfig } from "./parity-env.js";
 import { workspaces } from "./store.js";
 
 const FFF_NAME = "fff";
@@ -49,8 +50,10 @@ export function rtkAvailable(): boolean {
   return !!which("rtk");
 }
 
+// The `.claude.json` claude reads for this profile — `~/.claude.json` when the default profile runs with
+// the person's own Claude Code setup (parity-env.ts), `<configDir>/.claude.json` otherwise.
 function configFile(configDir: string): string {
-  return path.join(configDir, ".claude.json");
+  return claudeGlobalConfig(configDir);
 }
 function readJson(file: string): any {
   try {
@@ -122,6 +125,7 @@ export function installFffMcp(
 ): "written" | "noop" | "removed" | "skipped" {
   if (!CONFIG.fffEnabled) return "skipped";
   if (!configDir) return "skipped";
+  if (claudeOwnHome(configDir)) return installFffInOwnConfig(configFile(configDir), bin, wrapper);
   const file = configFile(configDir);
   const cfg = readJson(file);
   cfg.mcpServers = cfg.mcpServers || {};
@@ -138,6 +142,40 @@ export function installFffMcp(
   cfg.mcpServers[FFF_NAME] = next;
   writeJson(file, cfg);
   return "written";
+}
+
+/** An `fff` entry Chronos wrote: the launcher, or the bare fff-mcp binary it used to register. */
+const oursFff = (prev: any) => !!prev && typeof prev.command === "string" && /(^|\/)fff-mcp(\.sh)?$/.test(prev.command);
+
+/**
+ * The same registration in the person's OWN `~/.claude.json`, which their terminal claude reads too — so
+ * merge-only: an `fff` of theirs is never replaced or removed (only one Chronos wrote), a file that is
+ * there but does not parse is left alone rather than rewritten from nothing, and the write goes through
+ * claude's own lock (parity-env.ts updateClaudeConfig) so a change their session saves meanwhile is kept.
+ */
+function installFffInOwnConfig(file: string, bin: string | null, wrapper: string | null): "written" | "noop" | "removed" | "skipped" {
+  let result: "written" | "noop" | "removed" | "skipped" = "noop";
+  let theirs = false;
+  const r = updateClaudeConfig(file, (cur) => {
+    const cfg: any = cur ?? {};
+    const prev = cfg.mcpServers?.[FFF_NAME];
+    theirs = false;
+    if (!bin) {
+      if (!oursFff(prev)) { result = "skipped"; return null; }
+      delete cfg.mcpServers[FFF_NAME];
+      result = "removed";
+      return cfg;
+    }
+    const next = { type: "stdio", ...fffCommand(bin, wrapper) };
+    if (sameCommand(prev, next)) { result = "noop"; return null; }
+    if (prev && !oursFff(prev)) { theirs = true; result = "skipped"; return null; }
+    (cfg.mcpServers ??= {})[FFF_NAME] = next;
+    result = "written";
+    return cfg;
+  });
+  if (theirs) console.warn(`[efficiency] ${file} already has its own "${FFF_NAME}" MCP server — left as it is`);
+  if (r === "busy") console.warn(`[efficiency] claude is saving ${file} right now (its lock is held) — fff left for the next start`);
+  return r === "busy" || r === "broken" ? "skipped" : result;
 }
 
 /**

@@ -16,6 +16,8 @@ secrets/
 .admin-token
 .vapid.json
 .push-subscriptions.json
+# Which home the default profile's agents run with (src/parity-env.ts): daemon state, never committed.
+.parity.json
 relay/.relay-secrets
 relay/.dev.vars
 

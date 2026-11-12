@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CONFIG } from "../config.js";
 import { childEnv } from "../child-env.js";
+import { codexHomeEnv } from "../parity-env.js";
 import { pricedOrEstimate } from "../pricing.js";
 import { workspaces } from "../store/workspaces.js";
 import type { Job } from "../types.js";
@@ -18,7 +19,10 @@ const pexec = promisify(execFile);
 export function codexAgentEnv(workspaceId?: string | null): NodeJS.ProcessEnv {
   const ws = workspaceId ? workspaces.get(workspaceId) : undefined;
   const dir = ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude;
-  return { ...childEnv(ws ?? null), CODEX_HOME: dir };
+  // The home parity-env.ts gives that dir: ~/.codex (no CODEX_HOME) for the default profile, its own dir otherwise.
+  const env: NodeJS.ProcessEnv = { ...childEnv(ws ?? null) };
+  delete env.CODEX_HOME;
+  return { ...env, ...codexHomeEnv(dir) };
 }
 
 // OpenAI Codex CLI (`codex exec`), headless JSONL mode.
@@ -30,9 +34,11 @@ export function codexAgentEnv(workspaceId?: string | null): NodeJS.ProcessEnv {
 //   resume via `codex exec resume <SESSION_ID>`, auth check via `codex login status` (exit 0 = authed).
 // JSONL events: thread.started{thread_id} → turn.started → item.completed{item:{type:"agent_message",text}} → turn.completed{usage}.
 //
-// Auth: ChatGPT-subscription login lives under $CODEX_HOME → map each workspace's configDir to CODEX_HOME
-// so capsules isolate their own login. API-key auth (OPENAI_API_KEY) arrives via child-env (secrets_file
-// for scoped workspaces, ambient for unscoped) — deliberately NOT re-injected here (see env()).
+// Auth: ChatGPT-subscription login lives under $CODEX_HOME → a named profile's dir becomes its CODEX_HOME
+// so capsules isolate their own login; the default profile runs with the person's own ~/.codex (their
+// login, MCP servers, AGENTS.md, ChatGPT apps) — parity-env.ts codexHome. API-key auth (OPENAI_API_KEY)
+// arrives via child-env (secrets_file for scoped workspaces, ambient for unscoped) — deliberately NOT
+// re-injected here (see env()).
 export const codexBackend: AgentBackend = {
   name: "codex",
   supportsResume: true,
@@ -60,7 +66,7 @@ export const codexBackend: AgentBackend = {
     if (resumeSessionId) args.push("resume", resumeSessionId);
     args.push(goal, "--json", "--dangerously-bypass-approvals-and-sandbox");
     if (model) args.push("--model", model);
-    return { cmd: CONFIG.codexBin, args, env: { CODEX_HOME: configDir } };
+    return { cmd: CONFIG.codexBin, args, env: codexHomeEnv(configDir) };
   },
 
   interactiveArgs(model: string | null): string[] {
@@ -70,10 +76,11 @@ export const codexBackend: AgentBackend = {
   },
 
   env(_job, configDir) {
-    // CODEX_HOME isolates each workspace's codex login. OPENAI_API_KEY is intentionally NOT pulled from
-    // process.env here — that would leak the daemon's ambient key into scoped workspaces (child-env
-    // guards against exactly that). It arrives via child-env: secrets_file (scoped) or ambient (unscoped).
-    return { CODEX_HOME: configDir };
+    // CODEX_HOME isolates each named profile's codex login (unset = ~/.codex for the default profile).
+    // OPENAI_API_KEY is intentionally NOT pulled from process.env here — that would leak the daemon's
+    // ambient key into scoped workspaces (child-env guards against exactly that). It arrives via
+    // child-env: secrets_file (scoped) or ambient (unscoped).
+    return codexHomeEnv(configDir);
   },
 
   parseLine: jsonLine,
