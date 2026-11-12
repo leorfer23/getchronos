@@ -1,3 +1,5 @@
+> **Installing or running Chronos rather than changing its code? Follow [INSTALL.md](INSTALL.md).** The rest of this file is for contributors.
+
 # CLAUDE.md — Contributing to Chronos
 
 Rules for any agent (or human) editing this codebase. These are hard-won: every one of them

@@ -50,6 +50,14 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 
+# Which checkout and port this app belongs to (desktop/app.swift chronosConfig): the token is read from
+# that checkout and the Desk loaded from that port however the app is started. ChronosSource is the
+# source's hash, so `npm run setup` rebuilds only when app.swift or either of these changed.
+REPO="$(dirname "$DESKTOP")"
+plutil -insert ChronosHome -string "${CHRONOS_HOME:-$REPO}" "$APP/Contents/Info.plist"
+plutil -insert ChronosURL -string "http://localhost:${CHRONOS_PORT:-7777}" "$APP/Contents/Info.plist"
+plutil -insert ChronosSource -string "$(shasum -a 256 "$SRC" | cut -c1-16)" "$APP/Contents/Info.plist"
+
 cp "$ICNS" "$APP/Contents/Resources/icon.icns"
 swiftc -O "$SRC" -o "$APP/Contents/MacOS/mc-app"
 
@@ -74,16 +82,22 @@ SPOT="$HOME/Applications/Chronos.app"
 mkdir -p "$(dirname "$SPOT")"
 rm -rf "$SPOT"
 ditto "$APP" "$SPOT"
-mdimport "$SPOT" 2>/dev/null || true
 
-# The Services menu and the chronos:// scheme are read from Info.plist by LaunchServices and pbs; a
-# rebuilt bundle is not picked up until they re-scan.
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" 2>/dev/null || true
-/System/Library/CoreServices/pbs -update 2>/dev/null || true
+# Everything below reaches past $HOME into the login session (Spotlight, LaunchServices, the Dock).
+# CHRONOS_APP_NO_REGISTER=1 skips it: a test build into a scratch HOME must not register a second
+# sh.chronos.app — chronos:// links would open it instead of the real one — or restart the Dock.
+if [ -z "${CHRONOS_APP_NO_REGISTER:-}" ]; then
+  mdimport "$SPOT" 2>/dev/null || true
 
-# The icon is cached per bundle path by the icon services daemon, and a rebuilt bundle at the same
-# path keeps showing the old tile until the mtime moves and the Dock restarts. Both are cheap.
-touch "$APP"
-killall Dock 2>/dev/null || true
+  # The Services menu and the chronos:// scheme are read from Info.plist by LaunchServices and pbs; a
+  # rebuilt bundle is not picked up until they re-scan.
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" 2>/dev/null || true
+  /System/Library/CoreServices/pbs -update 2>/dev/null || true
+
+  # The icon is cached per bundle path by the icon services daemon, and a rebuilt bundle at the same
+  # path keeps showing the old tile until the mtime moves and the Dock restarts. Both are cheap.
+  touch "$APP"
+  killall Dock 2>/dev/null || true
+fi
 
 echo "built $APP (symlinked as $LINK, copied to $SPOT for Spotlight)"

@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script src="/pair.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="theme-color" content="#0C0F0B">
 <meta name="mobile-web-app-capable" content="yes">
@@ -2565,7 +2566,7 @@ navigator.serviceWorker?.addEventListener("message", (e) => {
 
 // ── token ───────────────────────────────────────────────────────────────────
 function tokenSheet() {
-  const b = sheet(`<h3>Admin token</h3><p style="color:var(--muted);margin:0 0 14px">From <span class="mono">~/chronos/.admin-token</span> on the Mac. Stored only in this browser.</p>
+  const b = sheet(`<h3>Sign in</h3><p style="color:var(--muted);margin:0 0 14px">On the Mac, run <span class="mono">npm run desk</span> in your Chronos folder and pair this phone from the Desk — or paste the key from the <span class="mono">.admin-token</span> file in that folder. Stored only in this browser.</p>
     <div class="field"><input id="tok" placeholder="paste token" autocapitalize="off" autocomplete="off" spellcheck="false"></div>
     <div class="btns"><button class="big primary wide" id="tok-ok">Connect</button></div>`);
   qs("#tok-ok", b).onclick = () => { const t = qs("#tok", b).value.trim(); if (!t) return; store.set("mc-token", t); TOKEN = t; location.reload(); };

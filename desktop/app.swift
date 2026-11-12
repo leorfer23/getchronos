@@ -6,12 +6,34 @@
 //   swiftc -O desktop/app.swift -o ~/.mc/bin/mc-app && mc-app &
 //
 // Token: same rule as the retired overlay — this process runs unsandboxed as the operator, reads
-// ~/chronos/.admin-token itself and injects window.__MC_TOKEN__; the daemon never templates the
+// the checkout's .admin-token itself and injects window.__MC_TOKEN__; the daemon never templates the
 // token into HTML (sandboxed job agents keep loopback network and could read it back out).
 
 import Cocoa
 import WebKit
 import UserNotifications
+
+// Which checkout and port this app belongs to. scripts/build-app.sh stamps both into Info.plist
+// (ChronosHome, ChronosURL) from the checkout that built it, so a clone outside ~/chronos, or a daemon
+// on another port, opens signed in however the app is started — Dock, Spotlight or the LaunchAgent,
+// none of which can pass arguments. CHRONOS_HOME / CHRONOS_ADMIN_TOKEN in the env and a URL argument
+// still win; with nothing stamped (an older build) it is ~/chronos on 7777, as it always was.
+func chronosConfig(env: [String: String], info: [String: Any], args: [String], home: URL) -> (tokenFile: URL, target: String) {
+  let stamped = (info["ChronosHome"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+  let root = env["CHRONOS_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? stamped
+  let tokenFile = root.map { URL(fileURLWithPath: $0).appendingPathComponent(".admin-token") } ?? home.appendingPathComponent("chronos/.admin-token")
+  let base = (info["ChronosURL"] as? String).flatMap { $0.hasPrefix("http") ? $0 : nil } ?? "http://localhost:7777"
+  // `mc-app /app` (a path on this daemon) or `mc-app http://localhost:7788/desk` (a dev daemon).
+  let arg = args.dropFirst().first(where: { $0.hasPrefix("/") || $0.hasPrefix("http") })
+  return (tokenFile, arg.map { $0.hasPrefix("http") ? $0 : base + $0 } ?? base + "/desk")
+}
+let chronos = chronosConfig(env: ProcessInfo.processInfo.environment, info: Bundle.main.infoDictionary ?? [:], args: CommandLine.arguments, home: FileManager.default.homeDirectoryForCurrentUser)
+// What a test (and a puzzled operator) can ask without a window opening: where the token is read
+// from — never the token — and which page loads.
+if CommandLine.arguments.contains("--print-config") {
+  print("token_file=\(chronos.tokenFile.path)\ntarget=\(chronos.target)")
+  exit(0)
+}
 
 let app = NSApplication.shared
 app.setActivationPolicy(.regular) // Dock icon + ⌘-tab: this is the main surface, not a satellite
@@ -246,11 +268,10 @@ func jsString(_ s: String) -> String {
 }
 let bridge = Bridge()
 
-// Same token read: env override, else ~/chronos/.admin-token, once at launch.
+// Same token read: env override, else the checkout's .admin-token (chronosConfig above), once at launch.
 func adminToken() -> String? {
   if let env = ProcessInfo.processInfo.environment["CHRONOS_ADMIN_TOKEN"], !env.isEmpty { return env }
-  let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("chronos/.admin-token")
-  guard let raw = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+  guard let raw = try? String(contentsOf: chronos.tokenFile, encoding: .utf8) else { return nil }
   let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
   return token.isEmpty ? nil : token
 }
@@ -271,10 +292,9 @@ let web = WKWebView(frame: window.contentView!.bounds, configuration: config)
 web.autoresizingMask = [.width, .height]
 web.uiDelegate = ui
 // Which page this window hosts: default /desk (the terminal wall), a path (`mc-app /app`), or a full
-// URL (`mc-app http://localhost:7788/desk` → a dev daemon on another port). Token injection is the
-// same either way, which is what lets /desk attach to /term at all.
-let arg = CommandLine.arguments.dropFirst().first(where: { $0.hasPrefix("/") || $0.hasPrefix("http") })
-let target = arg.map { $0.hasPrefix("http") ? $0 : "http://localhost:7777" + $0 } ?? "http://localhost:7777/desk"
+// URL (`mc-app http://localhost:7788/desk` → a dev daemon on another port) — chronosConfig above.
+// Token injection is the same either way, which is what lets /desk attach to /term at all.
+let target = chronos.target
 let targetURL = URL(string: target)!
 
 // At login launchd spawns this window and the daemon in the same second, and the daemon takes

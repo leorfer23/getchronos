@@ -1,7 +1,67 @@
+import { execFile } from "node:child_process";
 import { CONFIG } from "../config.js";
+import { childEnv } from "../child-env.js";
 import { claudeDenyArgs, NO_SEND_RULE } from "../no-send.js";
+import { workspaces } from "../store/workspaces.js";
 import type { Job } from "../types.js";
 import { CREDIT_WALL_RE, jsonLine, type AgentBackend, type NormalizedEvent, type OneShotOpts, type RateLimit, type RunResult, type SpawnSpec } from "./types.js";
+
+/** What `claude auth status` says about one config dir. null = could not tell. Never the account itself. */
+export type ClaudeAuth = { loggedIn: boolean | null; detail: string | null };
+
+/**
+ * Read `claude auth status --json` output. Only `loggedIn` and the plan are kept: the same JSON
+ * carries the account's email, org id and org name, and none of that may leave this function — it
+ * ends up in the Desk, in setup's terminal output and in logs. Anything that does not parse is
+ * "can't tell", never "logged out".
+ */
+export function claudeAuthFrom(stdout: string): ClaudeAuth {
+  let j: any;
+  try {
+    j = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+  } catch {
+    return { loggedIn: null, detail: null };
+  }
+  if (typeof j?.loggedIn !== "boolean") return { loggedIn: null, detail: null };
+  if (!j.loggedIn) return { loggedIn: false, detail: null };
+  const plan = typeof j.subscriptionType === "string" && /^[a-z0-9_-]{1,20}$/i.test(j.subscriptionType) ? j.subscriptionType : null;
+  if (j.authMethod === "claude.ai") return { loggedIn: true, detail: plan ? `Claude ${plan[0].toUpperCase()}${plan.slice(1)} subscription` : "claude.ai subscription" };
+  if (typeof j.apiProvider === "string" && j.apiProvider !== "firstParty" && /^[a-z0-9_-]{1,20}$/i.test(j.apiProvider)) return { loggedIn: true, detail: `${j.apiProvider} account` };
+  return { loggedIn: true, detail: /key|console/i.test(String(j.authMethod ?? "")) ? "Anthropic API key" : null };
+}
+
+// Per config dir, 30 s: GET /backends/claude-code/auth and the Desk's setup panel both poll, and each
+// answer is a process spawn. `fresh` skips it (a sign-in in progress polls for the flip).
+const authCache = new Map<string, { at: number; value: Promise<ClaudeAuth> }>();
+const AUTH_TTL_MS = 30_000;
+
+/**
+ * Is claude logged in for `configDir`, asked the way a spawn asks: CLAUDE_CONFIG_DIR set to that dir
+ * and the environment an agent gets (childEnv). claude keeps one login per config dir — on macOS a
+ * keychain item named after a hash of the dir — so a login made in a plain terminal is not
+ * necessarily the one an agent spawned with CLAUDE_CONFIG_DIR=~/.claude reads, and a check without
+ * the variable would say ✓ while every agent hit "not logged in".
+ */
+export function claudeAuthStatus(
+  configDir: string,
+  o: { bin?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; fresh?: boolean } = {},
+): Promise<ClaudeAuth> {
+  const bin = o.bin ?? CONFIG.claudeBin;
+  const key = `${bin}\0${configDir}`;
+  const hit = authCache.get(key);
+  if (!o.fresh && hit && Date.now() - hit.at < AUTH_TTL_MS) return hit.value;
+  const value = new Promise<ClaudeAuth>((resolve) => {
+    execFile(
+      bin,
+      ["auth", "status", "--json"],
+      { encoding: "utf8", timeout: o.timeoutMs ?? 10_000, env: { ...(o.env ?? childEnv(null)), CLAUDE_CONFIG_DIR: configDir } },
+      // Logged out exits 1 with the JSON still on stdout, so the exit code alone means nothing here.
+      (_err, stdout) => resolve(claudeAuthFrom(String(stdout ?? ""))),
+    );
+  });
+  authCache.set(key, { at: Date.now(), value });
+  return value;
+}
 
 // Flags shared by buildArgs and steerArgs — everything AFTER the prompt/session/permissions core.
 function flagTail(job: Job): string[] {
@@ -112,6 +172,18 @@ export const claudeBackend: AgentBackend = {
   },
 
   parseLine: jsonLine,
+
+  // The workspace's own config dir (else the default profile's), checked the way its agents run.
+  // Unknown is NOT logged out: a claude that will not start, times out or prints a shape we do not
+  // know answers true. Today only GET /backends/:name/auth calls this (dispatch, failover and the
+  // quota gate never do), but the day something gates work on it a false "no" would stall every
+  // claude run with nothing wrong — while a false "yes" fails loudly at spawn, as it always has.
+  async checkAuth(workspaceId?: string | null): Promise<boolean> {
+    const ws = workspaceId ? workspaces.get(workspaceId) : undefined;
+    const dir = ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude;
+    const r = await claudeAuthStatus(dir, { env: childEnv(ws ?? null) });
+    return r.loggedIn !== false;
+  },
 
   extractResult(ev: NormalizedEvent): RunResult | null {
     const p = ev.payload;

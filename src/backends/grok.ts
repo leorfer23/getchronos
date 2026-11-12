@@ -8,6 +8,14 @@ import { jsonLine, type AgentBackend, type NormalizedEvent, type OneShotOpts, ty
 
 const pexec = promisify(execFile);
 
+/** `grok models` output → signed in / not / can't tell ("You are logged in with grok.com." vs "You are not authenticated."). */
+export function grokAuthFrom(out: string): boolean | null {
+  const t = out.replace(/\x1b\[[0-9;]*m/g, "");
+  if (/not (authenticated|logged in|signed in)/i.test(t)) return false;
+  if (/(logged|signed) in (with|as|to)|authenticated (with|as)/i.test(t)) return true;
+  return null;
+}
+
 // xAI Grok CLI (`grok`), headless streaming-json mode.
 //
 // Headless: `grok -p <PROMPT> --output-format streaming-json --permission-mode bypassPermissions`.
@@ -139,11 +147,12 @@ export const grokBackend: AgentBackend = {
     return null;
   },
 
-  // `grok models` exits 0 and prints the model list only when logged in.
+  // `grok models` says which it is in its first line — and exits 0 either way (grok 1.0.70: "You are
+  // not authenticated." still lists the models), so the exit code alone called every grok signed in.
   async checkAuth(): Promise<boolean> {
     try {
-      await pexec(CONFIG.grokBin, ["models"], { timeout: 15000 });
-      return true;
+      const { stdout, stderr } = await pexec(CONFIG.grokBin, ["models"], { timeout: 15000 });
+      return grokAuthFrom(`${stdout}\n${stderr}`) !== false;
     } catch {
       return false;
     }
