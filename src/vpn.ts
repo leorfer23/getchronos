@@ -80,7 +80,7 @@ async function waitFor(d: VpnDriver, want: VpnState, timeoutMs: number, pollMs: 
 
 // launchd hands the daemon a minimal PATH, so look where the CLI actually lives.
 const TAILSCALE_BINS = ["/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
-function tailscaleBin(): string {
+export function tailscaleBin(): string {
   const pinned = process.env.CHRONOS_TAILSCALE_BIN;
   if (pinned) return pinned;
   return TAILSCALE_BINS.find((p) => fs.existsSync(p)) ?? "tailscale";
