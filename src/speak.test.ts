@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import http from "node:http";
-import { neuralSpeak, pickVoice, resetNeuralState, sayable, sayArgs, speak } from "./speak.js";
+import { neuralSpeak, parseVoices, pickVoice, resetNeuralState, sayable, sayArgs, speak } from "./speak.js";
 
 const v = (name: string, lang: string) => ({ name, lang, premium: /\((Premium|Enhanced)\)/.test(name) });
 
@@ -15,6 +15,30 @@ test("Robert speaks with the best installed male voice, env pins a name per lang
   assert.equal(pickVoice("en", [], {}), "Zoe (Premium)");
   assert.equal(pickVoice("en", mac, { CHRONOS_VOICE_EN: "Ava (Premium)" }), "Ava (Premium)");
   assert.equal(pickVoice("es", mac, { CHRONOS_VOICE_EN: "Ava (Premium)" }), "Jorge");
+});
+
+test("a Mac where nobody downloaded a voice: the stock male voice of the language, else any voice of it — never English for Spanish", () => {
+  // `say -v '?'` as a current Mac prints it: names past the 20-character column get ONE space.
+  const stock = parseVoices([
+    "Daniel              en_GB    # Hello! My name is Daniel.",
+    "Eddy (English (US)) en_US    # Hello! My name is Eddy.",
+    "Eddy (Spanish (Spain)) es_ES    # ¡Hola! Me llamo Eddy.",
+    "Flo (Spanish (Mexico)) es_MX    # ¡Hola! Me llamo Flo.",
+    "Mónica              es_ES    # ¡Hola! Me llamo Mónica.",
+    "Samantha            en_US    # Hello! My name is Samantha.",
+    "Zoe (Premium)       en_US    # Hello! My name is Zoe.",
+    "",
+  ].join("\n"));
+  assert.deepEqual(stock.map((x) => `${x.name}|${x.lang}|${x.premium}`), [
+    "Daniel|en_GB|false", "Eddy (English (US))|en_US|false", "Eddy (Spanish (Spain))|es_ES|false",
+    "Flo (Spanish (Mexico))|es_MX|false", "Mónica|es_ES|false", "Samantha|en_US|false", "Zoe (Premium)|en_US|true",
+  ], "every line parsed, the long names included");
+  assert.equal(pickVoice("es", stock, {}), "Eddy (Spanish (Spain))", "the stock male Spanish voice, not the system (English) voice");
+  assert.equal(pickVoice("en", stock, {}), "Daniel", "a downloaded/curated male voice still beats the stock one");
+  // The Premium fallback, when installed, keeps its place ahead of the stock voices (no change for a tuned Mac).
+  assert.equal(pickVoice("es", [...stock, v("Marisol (Premium)", "es_ES")], {}), "Marisol (Premium)");
+  // No male voice at all in that language: any installed voice of it, best tier first.
+  assert.equal(pickVoice("es", parseVoices("Mónica              es_ES    # ¡Hola!\nPaulina (Enhanced)  es_MX    # ¡Hola!"), {}), "Paulina (Enhanced)");
 });
 
 test("directive lines, control characters and runaway length never reach the synthesizer", () => {

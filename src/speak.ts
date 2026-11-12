@@ -23,26 +23,40 @@ const MALE: Record<VoiceLang, string[]> = {
   en: ["Evan", "Nathan", "Tom", "Aaron", "Oliver", "Arthur", "Alex", "Daniel", "Gordon", "Lee", "Rishi"],
   es: ["Jorge", "Juan", "Diego", "Carlos", "Enrique"],
 };
+// The male voices a Mac ships with in both languages ("Eddy (Spanish (Spain))", "Reed (English (US))"):
+// after the downloaded ones and the Premium fallback, so a Mac where nobody downloaded a voice still
+// answers in a man's voice of the right language.
+const STOCK_MALE = ["Eddy", "Reed"];
 const MAX_CHARS = 1200;
 
 export type InstalledVoice = { name: string; lang: string; premium: boolean };
 
 const tier = (name: string) => (/\(Premium\)/.test(name) ? 0 : /\(Enhanced\)/.test(name) ? 1 : 2);
 
-// The best installed male voice for a language — Premium, then Enhanced, then the compact one — and
-// the female Premium voice when no male voice for that language is installed at all.
+// The best installed male voice for a language — Premium, then Enhanced, then the compact one — then
+// the female Premium voice when it is installed, then ANY installed voice of that language (best tier
+// first). Only a Mac with no voice in that language at all gets the female Premium name, which `say`
+// quietly swaps for the system voice: the Spanish half of a call is never read by an English voice
+// while a Spanish one sits installed.
 export function pickVoice(lang: VoiceLang, installed: InstalledVoice[], env: NodeJS.ProcessEnv = process.env): string {
   const pinned = lang === "es" ? env.CHRONOS_VOICE_ES : env.CHRONOS_VOICE_EN;
   if (pinned) return pinned;
-  let best: { name: string; rank: number } | null = null;
-  for (const v of installed) {
-    if (!v.lang.startsWith(lang + "_")) continue;
-    const i = MALE[lang].indexOf(v.name.replace(/\s*\(.*\)\s*$/, ""));
-    if (i < 0) continue;
-    const rank = tier(v.name) * 100 + i;
-    if (!best || rank < best.rank) best = { name: v.name, rank };
-  }
-  return best?.name ?? FALLBACK_VOICE[lang];
+  const mine = installed.filter((v) => v.lang.startsWith(lang + "_"));
+  const bestOf = (names: string[]): string | null => {
+    let best: { name: string; rank: number } | null = null;
+    for (const v of mine) {
+      const i = names.indexOf(v.name.replace(/\s*\(.*\)\s*$/, ""));
+      if (i < 0) continue;
+      const rank = tier(v.name) * 100 + i;
+      if (!best || rank < best.rank) best = { name: v.name, rank };
+    }
+    return best?.name ?? null;
+  };
+  const male = bestOf(MALE[lang]);
+  if (male) return male;
+  if (mine.some((v) => v.name === FALLBACK_VOICE[lang])) return FALLBACK_VOICE[lang];
+  const anyOf = [...mine].sort((a, b) => tier(a.name) - tier(b.name))[0];
+  return bestOf(STOCK_MALE) ?? anyOf?.name ?? FALLBACK_VOICE[lang];
 }
 
 // `say -v '?'`, cached for a minute: a voice downloaded while the daemon runs is picked up without a
@@ -165,12 +179,19 @@ export async function neuralHealth(url = process.env.CHRONOS_TTS_URL ?? TTS_DEFA
   }
 }
 
+/**
+ * `say -v '?'` → voices. The locale is the token right before the "#" sample line — not "two spaces
+ * after the name": a name past the 20-character column ("Eddy (Spanish (Spain)) es_ES") is followed by
+ * one space, and that rule dropped 109 of the 186 voices one current Mac listed, among them every Eddy
+ * and Reed — the male voices a Mac ships with in Spanish.
+ */
+export function parseVoices(out: string): InstalledVoice[] {
+  return String(out).split("\n").map((l) => l.match(/^(.+?)\s+([a-z]{2,3}_[A-Z0-9]{2,4})\s+#/)).filter(Boolean)
+    .map((m) => ({ name: m![1].trim(), lang: m![2], premium: /\((Premium|Enhanced)\)/.test(m![1]) }));
+}
+
 export function listVoices(): Promise<InstalledVoice[]> {
   return new Promise((resolve) => {
-    execFile("say", ["-v", "?"], { timeout: 5000 }, (err, stdout) => {
-      if (err) return resolve([]);
-      resolve(String(stdout).split("\n").map((l) => l.match(/^(.+?)\s{2,}([a-z]{2}_[A-Z0-9]{2,3})\s/)).filter(Boolean)
-        .map((m) => ({ name: m![1].trim(), lang: m![2], premium: /\((Premium|Enhanced)\)/.test(m![1]) })));
-    });
+    execFile("say", ["-v", "?"], { timeout: 5000 }, (err, stdout) => resolve(err ? [] : parseVoices(String(stdout))));
   });
 }

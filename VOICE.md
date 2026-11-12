@@ -6,6 +6,22 @@
 > (a failed turn in one sentence) · `src/voice-trace.ts` (call traces) · `static/phone-voice.js` (the
 > phone's call engine) · `scripts/talk-latency.mjs`.
 
+## Setting it up (both halves are local and free)
+
+- **Speaking works out of the box**: macOS `say`, with the best installed voice for the sentence's
+  language (a downloaded male voice, else the Premium fallback, else the stock Eddy/Reed, else any voice
+  of that language). `bash scripts/install-tts.sh` adds Kokoro, a neural voice on 127.0.0.1:7779
+  (Apple Silicon, needs `uv`); `say` stays the fallback whenever it is down.
+- **Hearing needs one install**: `bash scripts/install-whisper.sh` — Homebrew's whisper.cpp + ffmpeg,
+  the multilingual `small` model (checksum-verified against whisper.cpp's own list) and the launchd
+  agent `sh.chronos.whisper` on 127.0.0.1:7778. `--accurate` adds large-v3-turbo as the second engine
+  (`sh.chronos.whisper-final`, :7781). Until then the mic answers *"Speech-to-text isn't set up on this
+  Mac yet. Run: bash scripts/install-whisper.sh"* (HTTP 501 with a `setup` field) and the daemon says so
+  once in its log — not once per press. A missing second engine is optional: one line, then silence.
+- **Language**: the call follows the browser's language (Spanish when it is `es*`, English otherwise)
+  until the call's EN/ES button is pressed. Hearing and speaking are bilingual Spanish/English only.
+- `GET /api/setup/optional` says which of these this Mac has.
+
 ## The front (setting `voice.talker`, default off)
 
 Every line to Robert — spoken or typed, Desk or phone — is answered by a small fast model that is

@@ -111,7 +111,7 @@ const S = {
   reply: "",
   voice: false,     // this turn was spoken: speak the answer
   openedAt: 0,
-  lang: (() => { try { return localStorage.getItem("desk-voice-lang") || "es"; } catch { return "es"; } })(),
+  lang: (() => { let l = null; try { l = localStorage.getItem("desk-voice-lang"); } catch {} return l === "en" || l === "es" ? l : /^es\b/i.test(navigator.language || "") ? "es" : "en"; })(), // the browser's language until EN/ES is pressed, like the Desk
 };
 const hasCapture = () => !!(S.file || (S.ctx.text && S.ctx.text.trim()) || S.ctx.url);
 const wsById = (id) => S.list.find((w) => w.id === id) || null;
@@ -469,6 +469,7 @@ async function heard(frames) {
   try {
     const r = await fetch("/api/transcribe?lang=" + S.lang, { method: "POST", headers: { "content-type": "audio/wav", ...(TOKEN ? { "x-mc-admin": TOKEN } : {}) }, body: wav(frames, VC.rate) });
     const j = await r.json().catch(() => ({}));
+    if (!r.ok) { renderCapture(); return show("err", "Transcribe failed: " + (j.error || "HTTP " + r.status)); } // e.g. speech-to-text not installed yet
     const text = String(j.text || "").trim();
     renderCapture();
     if (!text || HEARD_NOISE.test(text)) return show("", "Didn't catch that — press the hotkey and try again.");

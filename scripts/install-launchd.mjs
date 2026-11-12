@@ -51,6 +51,17 @@ const whisperModels = () => {
   const dir = path.join(home, ".cache", "whisper");
   return fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".bin")).sort() : [];
 };
+// Homebrew's whisper-server: /opt/homebrew on Apple Silicon, /usr/local on Intel. Its bin dir also goes
+// first on the agent's PATH, because --convert runs the ffmpeg that sits beside it.
+const whisperServer = () => {
+  const bin = ["/opt/homebrew/bin/whisper-server", "/usr/local/bin/whisper-server"].find((p) => fs.existsSync(p));
+  if (bin) {
+    subs.__WHISPER_BIN__ = bin;
+    subs.__BREW_BIN__ = path.dirname(bin);
+  }
+  return bin;
+};
+const WHISPER_MISSING = "whisper-server not installed (bash scripts/install-whisper.sh)";
 
 const AGENTS = [
   { label: "sh.chronos.daemon", required: true },
@@ -64,8 +75,12 @@ const AGENTS = [
     // CHRONOS_WHISPER_MODEL=ggml-large-v3-turbo.bin.
     precondition: () => {
       const models = whisperModels();
-      if (!models.length) return "no model in ~/.cache/whisper (see README → Voice)";
-      if (!fs.existsSync("/opt/homebrew/bin/whisper-server")) return "whisper-server not installed (brew install whisper-cpp)";
+      if (!models.length) return "no model in ~/.cache/whisper (bash scripts/install-whisper.sh fetches one)";
+      if (!whisperServer()) return WHISPER_MISSING;
+      // CHRONOS_WHISPER_PORT moves it; the daemon reads the same variable (src/voice-setup.ts).
+      const port = process.env.CHRONOS_WHISPER_PORT ?? "7778";
+      if (!/^\d{2,5}$/.test(port)) return `CHRONOS_WHISPER_PORT=${port} is not a port`;
+      subs.__WHISPER_PORT__ = port;
       // The template runs --convert (webm/mp4/ogg → wav via ffmpeg): a missing or dyld-broken ffmpeg
       // fails every phone upload, so run it rather than trusting the file is there.
       const ff = ffmpegProblem();
@@ -79,11 +94,11 @@ const AGENTS = [
     // stays free for the live words and a sentence never queues behind a preview (src/transcribe.ts).
     // Skipped when no larger model is downloaded — the daemon then keeps finals on the fast engine.
     // CHRONOS_WHISPER_FINAL_MODEL names the file; CHRONOS_WHISPER_FINAL_PORT moves the port (the
-    // daemon then needs CHRONOS_TRANSCRIBE_FINAL_URL to match).
+    // daemon reads the same variable, so put it in .secrets).
     label: "sh.chronos.whisper-final",
     precondition: () => {
       const models = whisperModels();
-      if (!fs.existsSync("/opt/homebrew/bin/whisper-server")) return "whisper-server not installed (brew install whisper-cpp)";
+      if (!whisperServer()) return WHISPER_MISSING;
       const fast = pickWhisperModel(models, process.env.CHRONOS_WHISPER_MODEL);
       const model = pickFinalModel(models, fast, process.env.CHRONOS_WHISPER_FINAL_MODEL);
       if (!model) {

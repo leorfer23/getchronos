@@ -143,7 +143,7 @@ import {
 } from "./agent-lifecycle.js";
 import { runCommandLine } from "./commands.js";
 import { flowData } from "./flow.js";
-import { transcribe, hearFinal, warmFinal, pickEngine, finalUrl, wavMs, audioFilename, transcribeFailure } from "./transcribe.js";
+import { transcribe, hearFinal, warmFinal, pickEngine, finalUrl, wavMs, audioFilename, transcribeFailure, TranscribeError, notSetUpLogLine } from "./transcribe.js";
 import { cloudHealth } from "./transcribe-cloud.js";
 import { keepClip, listClips, clipsDir, wavStats } from "./voice-clips.js";
 import { speak, voiceFor, listVoices, neuralHealth } from "./speak.js";
@@ -4959,6 +4959,13 @@ export function startServer() {
       }
       res.json({ text: out.text, ...(language ? { lang: out.lang, passes: out.passes } : {}), engine: out.engine, ms, bytes: buf.length });
     } catch (e: any) {
+      // Nothing installed to hear with: one log line per daemon run, and the command for the page. 501,
+      // not 503 — the pages retry 502–504 as a tunnel blip, and a missing engine is not one.
+      if (e instanceof TranscribeError && e.setup) {
+        const line = notSetUpLogLine(e);
+        if (line) console.warn(line);
+        return res.status(501).json({ error: e.message, setup: e.setup });
+      }
       const f = transcribeFailure(e, { mime: req.get("content-type") || "-", bytes: (req.body as Buffer)?.length ?? 0 });
       console.error(f.log);
       res.status(500).json({ error: f.error });
