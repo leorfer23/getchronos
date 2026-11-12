@@ -14,6 +14,7 @@ import { bus } from "./bus.js";
 import { desktop } from "./notify.js";
 import { events, jobs, runs, workspaces } from "./store.js";
 import { esc, notify } from "./telegram/api.js";
+import { lastVoiceLang } from "./voice-presence.js";
 
 /** The draft tools: Slack's draft, Gmail's create/update draft — on any MCP server spelling. */
 export const DRAFT_TOOL_RE = /^mcp__.+__(slack_send_message_draft|create_draft|update_draft)$/;
@@ -43,6 +44,11 @@ export function setDraftNotifier(s: Send | null, p?: ((t: string, b: string) => 
   if (p !== undefined) ping = p ?? ((t, b) => { try { desktop(t, b); } catch {} });
 }
 
+const DRAFT_TEXT = {
+  en: { title: "Draft ready", unsent: "Not sent: review it and send it yourself." },
+  es: { title: "Draft listo", unsent: "No se envió: revisalo y mandalo vos." },
+};
+
 const recent = new Map<string, number>();
 /** One notice per (where, label) per 2 minutes — an agent that rewrites its draft three times is one draft. */
 export async function notifyDraft(d: { workspace_id: string | null; where: string; label: string }, nowMs = Date.now()): Promise<boolean> {
@@ -51,8 +57,11 @@ export async function notifyDraft(d: { workspace_id: string | null; where: strin
   recent.set(key, nowMs);
   if (recent.size > 500) for (const [k, t] of recent) if (nowMs - t > 120_000) recent.delete(k);
   const ws = d.workspace_id ? workspaces.get(d.workspace_id)?.name ?? "—" : "—";
-  await send(`📝 <b>Draft listo</b> · ${esc(ws)} · ${esc(d.where)}\n${esc(d.label)}\n<i>No se envió: revisalo y mandalo vos.</i>`).catch(() => {});
-  ping(`📝 Draft listo · ${ws}`, d.label);
+  // The language of his last call, English until there is one — the rule every alert follows
+  // (stuck-alerts.ts alertLang): a Mac that never heard Spanish gets no Spanish notifications.
+  const t = DRAFT_TEXT[lastVoiceLang() ?? "en"];
+  await send(`📝 <b>${t.title}</b> · ${esc(ws)} · ${esc(d.where)}\n${esc(d.label)}\n<i>${t.unsent}</i>`).catch(() => {});
+  ping(`📝 ${t.title} · ${ws}`, d.label);
   return true;
 }
 

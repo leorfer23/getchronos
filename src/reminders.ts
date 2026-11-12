@@ -43,7 +43,7 @@ export function startReminders() {
     console.log("[reminders] disabled (CHRONOS_REMINDER_LEAD=0)");
     return;
   }
-  console.log(`[reminders] event alerts ${CONFIG.reminderLeadMin} min before (Mac + Telegram)`);
+  console.log(`[reminders] event alerts ${CONFIG.reminderLeadMin} min before (Mac${CONFIG.telegram.token ? " + Telegram" : ""})`);
   setInterval(tick, 60000).unref?.();
   tick();
 }

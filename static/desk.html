@@ -9216,7 +9216,7 @@ function renderUsage() {
   DeskCockpit.render();
   const chips = [];
   let worst = null;
-  for (const cli of ["claude", "grok", "cursor"]) {
+  for (const cli of ["claude", "grok", "cursor"].filter((c) => s.meters.some((m) => m.cli === c))) { // a CLI not on this Mac gets no chip (usage-meter.ts cliOnThisMac)
     const ms = s.meters.filter((m) => m.cli === cli);
     const top = uTop(s, cli);
     if (top && (!worst || top.w.usedPct > worst.w.usedPct)) worst = top;

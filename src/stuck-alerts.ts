@@ -982,6 +982,7 @@ async function checkReach(now: number): Promise<Readiness> {
   // told it cannot be reached.
   if (r.remote_usable) {
     remoteDownSince = null;
+    if (kv.get(REMOTE_SEEN_KEY) !== "1") kv.set(REMOTE_SEEN_KEY, "1");
     alerts.resolve(REACH_SUBJECT, "unreachable", now);
   }
   if (back.length) await retryUnreached(now, back);
@@ -989,15 +990,34 @@ async function checkReach(now: number): Promise<Readiness> {
     remoteDownSince ??= now;
     if (now - remoteDownSince >= UNREACHABLE_AFTER_MS && alertsOn() && !alerts.openFor(REACH_SUBJECT, "unreachable")) {
       const reasons = r.rungs.filter((x) => (x.rung === "push" || x.rung === "telegram") && x.reason && x.reason !== "off").map((x) => x.reason!);
-      await raise({
-        subject: REACH_SUBJECT, kind: "unreachable", workspace_id: null, since: remoteDownSince, reason: "no_remote_rung",
-        input: { kind: "unreachable", reasons }, url: "/phone", tag: "alert:reach",
-      }, now);
+      if (!remoteEverSetUp()) {
+        // Nothing to lose: no phone was ever paired and Telegram was never set up, so "I can't reach you
+        // away from the Mac" would be a fresh install's Mac saying out loud, five minutes in, that it
+        // lacks two optional extras. Said once in the log; GET /api/setup/optional lists both.
+        if (!saidNeverSetUp) {
+          saidNeverSetUp = true;
+          console.log("[alerts] no phone or Telegram set up — stuck work is told on this Mac (notification + voice); pair a phone or add Telegram to hear it away from the Mac");
+        }
+      } else {
+        await raise({
+          subject: REACH_SUBJECT, kind: "unreachable", workspace_id: null, since: remoteDownSince, reason: "no_remote_rung",
+          input: { kind: "unreachable", reasons }, url: "/phone", tag: "alert:reach",
+        }, now);
+      }
     }
   }
   return alertsReadiness(now);
 }
 const REACH_SUBJECT = "readiness:remote";
+/** Set the first time a phone or Telegram could take an alert — from then on, losing them is news. */
+const REMOTE_SEEN_KEY = "alerts.remote_seen";
+let saidNeverSetUp = false;
+/** Was a way to reach him away from the Mac ever there? Telegram configured (even if down now), or a remote rung seen usable. */
+function remoteEverSetUp(): boolean {
+  let tgConfigured = false;
+  try { tgConfigured = senders.telegramHealth().configured; } catch {}
+  return tgConfigured || kv.get(REMOTE_SEEN_KEY) === "1";
+}
 
 /** A call started, a phone subscribed, Telegram came back: walk the ladder again for every alert that never reached him. */
 async function retryUnreached(now: number, back: string[]): Promise<void> {
@@ -1195,6 +1215,7 @@ export function resetStuckAlerts(): void {
   lastCoverage = null;
   remoteDownSince = null;
   lastUsable = null;
+  saidNeverSetUp = false;
   lastHostSweep = 0;
   lastPrune = 0;
   ticking = false;
@@ -1223,7 +1244,7 @@ export function startStuckAlerts(): void {
   t.unref?.();
   console.log(
     alertsOn()
-      ? `[alerts] stuck work is told once: voice call → phone → Telegram (ack window ${Math.round(ackWindowMs() / SEC)}s, Robert's chance ${Math.round(chanceMs(null) / SEC)}s, ${setting<number>("alerts.per_hour")}/hour then one summary)`
+      ? `[alerts] stuck work is told once: voice call → phone → ${TELEGRAM_TOKEN ? "Telegram → " : ""}this Mac (ack window ${Math.round(ackWindowMs() / SEC)}s, Robert's chance ${Math.round(chanceMs(null) / SEC)}s, ${setting<number>("alerts.per_hour")}/hour then one summary)`
       : "[alerts] off (⚙ Settings → Alerts) — stuck work waits to be noticed",
   );
 }

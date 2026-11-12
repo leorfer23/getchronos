@@ -13,6 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { backendInstalled } from "./backends/index.js";
 import { childEnv } from "./child-env.js";
 import { CONFIG } from "./config.js";
 import { claudeGlobalConfig, claudeOwnHome, updateClaudeConfig } from "./parity-env.js";
@@ -187,12 +188,14 @@ export function installCursorFffMcp(
   dir: string,
   bin: string | null = resolveFffMcp(),
   wrapper: string | null = fffWrapperPath(),
+  /** Is cursor on this Mac? A config dir is created for a CLI that is here, never for one that is not. */
+  cliHere: boolean = backendInstalled("cursor-agent"),
 ): "written" | "noop" | "removed" | "skipped" {
   if (!CONFIG.fffEnabled) return "skipped";
   if (!dir) return "skipped";
   const file = path.join(dir, "mcp.json");
   if (!fs.existsSync(dir)) {
-    if (!bin) return "skipped";
+    if (!bin || !cliHere) return "skipped";
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
   if (fs.existsSync(file)) {
@@ -247,9 +250,12 @@ export function installGrokFffMcp(
   home = process.env.GROK_HOME || path.join(os.homedir(), ".grok"),
   bin: string | null = resolveFffMcp(),
   wrapper: string | null = fffWrapperPath(),
+  /** Is grok on this Mac? Without it, no ~/.grok is made just to hold an fff block nobody reads. */
+  cliHere: boolean = backendInstalled("grok"),
 ): "written" | "noop" | "removed" | "skipped" {
   if (!CONFIG.fffEnabled) return "skipped";
   if (!home) return "skipped";
+  if (!fs.existsSync(home) && !cliHere) return "skipped";
   const file = path.join(home, "config.toml");
   const prev = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
   const re = new RegExp(

@@ -849,6 +849,34 @@ test("no phone and no Telegram for 5 minutes → ONE alert that says so; a phone
   assert.equal(pushes.filter((p) => p.alert_id === reach[0].id).length, 0, "the phone that just subscribed is never told it cannot be reached");
 });
 
+test("a fresh install with no phone and no Telegram ever set up: no spoken 'I can't reach you', one log line; losing a phone later still alerts", async () => {
+  reset();
+  subs = 0;
+  tgReady = false;
+  tgHealth = { configured: false, lastOkAt: null, lastErrorAt: null, lastError: null, failStreak: 0 };
+  const logs: string[] = [];
+  const log = console.log;
+  console.log = (...a: unknown[]) => { logs.push(a.join(" ")); };
+  try {
+    await _test.checkReach(NOW);
+    await _test.checkReach(NOW + UNREACHABLE_AFTER_MS);
+    await _test.checkReach(NOW + UNREACHABLE_AFTER_MS + MIN);
+  } finally {
+    console.log = log;
+  }
+  assert.equal(rows().filter((x) => x.kind === "unreachable").length, 0, "nothing was ever there to lose");
+  assert.equal(macs.length, 0, "the Mac does not say it out loud five minutes after the first boot");
+  assert.equal(logs.filter((l) => /no phone or Telegram set up/.test(l)).length, 1, "said once, in the log");
+  // A phone pairs, then goes away: that IS news, and the alert is back.
+  subs = 1;
+  await _test.checkReach(NOW + 10 * MIN);
+  subs = 0;
+  await _test.checkReach(NOW + 11 * MIN);
+  await _test.checkReach(NOW + 11 * MIN + UNREACHABLE_AFTER_MS);
+  assert.equal(rows().filter((x) => x.kind === "unreachable").length, 1);
+  assert.equal(macs.length, 1);
+});
+
 test("minutes read like a person says them: 1 minute, 3 minutes — 1 minuto, 3 minutos", () => {
   const one = { kind: "stalled", ws: "Acme", work: "w", minutes: 1 } as TextInput;
   assert.match(alertText(one, "en"), /1 minute ago\./);
