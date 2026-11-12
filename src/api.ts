@@ -144,6 +144,7 @@ import {
 import { runCommandLine } from "./commands.js";
 import { flowData } from "./flow.js";
 import { transcribe, hearFinal, warmFinal, pickEngine, finalUrl, wavMs, audioFilename, transcribeFailure, TranscribeError, notSetUpLogLine } from "./transcribe.js";
+import { setupOptionalRoutes } from "./setup-optional-routes.js";
 import { cloudHealth } from "./transcribe-cloud.js";
 import { keepClip, listClips, clipsDir, wavStats } from "./voice-clips.js";
 import { speak, voiceFor, listVoices, neuralHealth } from "./speak.js";
@@ -3115,6 +3116,7 @@ export function startServer() {
   api.use(phoneRoutes(requireAdmin));
   api.use(assistantRoutes(requireAdmin));
   api.use(parityRoutes(requireAdmin));
+  api.use(setupOptionalRoutes(requireAdmin));
 
   // Every live terminal whose goal is ticked, closed in one call — Desk / phone / Telegram ✅ only.
   // Robert and Leads never hit this door (operatorMayCloseTerminal); a Lead has its own scoped one.
