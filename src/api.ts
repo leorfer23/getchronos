@@ -210,6 +210,8 @@ import { procsView } from "./resources/brain.js";
 import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
 import { hostName, reposOnHost } from "./hosts/workdir.js";
 import { HOST_PATH, brainLink, forwardedHost, hostRoutes } from "./hostlink/brain-link.js";
+import { setupRoutes } from "./setup-routes.js";
+import { pairRoutes } from "./pair.js";
 import { barRoutes } from "./hostlink/bar.js";
 import { PlacementError } from "./hosts/candidates.js";
 import { hostBriefRoutes } from "./hosts/brief.js";
@@ -3090,6 +3092,10 @@ export function startServer() {
   // Where work can go, for anyone in a workspace — no admin token (src/hosts/brief.ts).
   api.use(hostBriefRoutes());
   api.use(hostRoutes(requireAdmin));
+  // Setup: are the agent CLIs installed, signed in and answering (src/setup-routes.ts).
+  api.use(setupRoutes(requireAdmin));
+  // Pairing: a one-time code that signs a browser in without copying the token (src/pair.ts).
+  api.use(pairRoutes());
 
   // Every live terminal whose goal is ticked, closed in one call — Desk / phone / Telegram ✅ only.
   // Robert and Leads never hit this door (operatorMayCloseTerminal); a Lead has its own scoped one.
@@ -5567,6 +5573,7 @@ export function startServer() {
   // by opening this port beyond the host itself.
   server.listen(CONFIG.port, "127.0.0.1", () => {
     console.log(`[chronos] overlay + API on http://localhost:${CONFIG.port}`);
+    console.log(`[chronos] ready — open the Desk with: npm run desk`);
   });
 
   return server;

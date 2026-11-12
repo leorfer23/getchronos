@@ -191,8 +191,8 @@ export type CallerScope = { ws: string | null; robert?: RobertRole; fleet?: true
 // (allow, but record every caller so nothing legitimate breaks when it flips), `deny` (refused — the
 // default since the public release; an unknown value also means deny).
 
-/** Paths a caller may reach with no token at all: liveness, the push key, webhooks with their own secret. */
-const TOKENLESS_PUBLIC = [/^\/health$/, /^\/push\/vapid$/, /^\/triggers\/hook\/[^/]+$/];
+/** Paths a caller may reach with no token at all: liveness, the push key, webhooks with their own secret, a one-time sign-in code (pair.ts). */
+const TOKENLESS_PUBLIC = [/^\/health$/, /^\/push\/vapid$/, /^\/triggers\/hook\/[^/]+$/, /^\/pair\/redeem$/];
 export type TokenlessSeen = { method: string; path: string; ua: string; n: number; first: string; last: string };
 const tokenlessSeen = new Map<string, TokenlessSeen>();
 const idSeg = (seg: string) => (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(seg) || /^[0-9a-f]{8,}$/i.test(seg) || /^\d+$/.test(seg) ? ":id" : seg);

@@ -46,6 +46,8 @@
     "serve": "node dist/index.js",
     "host": "node bin/getchronos.mjs host",
     "install:launchd": "node scripts/install-launchd.mjs",
+    "setup": "node scripts/setup.mjs",
+    "desk": "node scripts/open-desk.mjs",
     "test": "node scripts/test.mjs",
     "test:all": "node scripts/test.mjs --all",
     "deploy": "node scripts/predeploy-backup.mjs && npm test && npm run build && launchctl kickstart -k gui/$(id -u)/sh.chronos.daemon && sleep 3 && curl -s localhost:${CHRONOS_PORT:-7777}/api/health && node scripts/brainbar.mjs refresh",

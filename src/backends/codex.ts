@@ -1,11 +1,25 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CONFIG } from "../config.js";
+import { childEnv } from "../child-env.js";
 import { pricedOrEstimate } from "../pricing.js";
+import { workspaces } from "../store/workspaces.js";
 import type { Job } from "../types.js";
 import { jsonLine, type AgentBackend, type NormalizedEvent, type OneShotOpts, type RateLimit, type RunResult, type SpawnSpec } from "./types.js";
 
 const pexec = promisify(execFile);
+
+/**
+ * The environment a codex agent of this workspace runs with: the allowlisted agent env (childEnv) and
+ * CODEX_HOME = the workspace's config dir — the default profile's dir without one — exactly what
+ * runner.ts / terminal.ts hand env() below. A ChatGPT login made in a plain terminal lives in ~/.codex,
+ * which no agent reads: a status check without this env said "signed in" while every codex agent was not.
+ */
+export function codexAgentEnv(workspaceId?: string | null): NodeJS.ProcessEnv {
+  const ws = workspaceId ? workspaces.get(workspaceId) : undefined;
+  const dir = ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude;
+  return { ...childEnv(ws ?? null), CODEX_HOME: dir };
+}
 
 // OpenAI Codex CLI (`codex exec`), headless JSONL mode.
 //
@@ -114,11 +128,13 @@ export const codexBackend: AgentBackend = {
     return null;
   },
 
-  // `codex login status` exits 0 when credentials are present (subscription or API key).
-  async checkAuth(): Promise<boolean> {
-    if (process.env.OPENAI_API_KEY) return true;
+  // `codex login status` exits 0 when credentials are present (subscription or API key) — asked in the
+  // env the workspace's agents get (codexAgentEnv), where an API key only counts if it reaches them.
+  async checkAuth(workspaceId?: string | null): Promise<boolean> {
+    const env = codexAgentEnv(workspaceId);
+    if (env.OPENAI_API_KEY) return true;
     try {
-      await pexec(CONFIG.codexBin, ["login", "status"], { timeout: 15000 });
+      await pexec(CONFIG.codexBin, ["login", "status"], { timeout: 15000, env });
       return true;
     } catch {
       return false;
@@ -126,9 +142,10 @@ export const codexBackend: AgentBackend = {
   },
 
   // `codex login` opens the ChatGPT browser flow and waits; poll status instead of blocking on it.
+  // Same CODEX_HOME as checkAuth, or the login lands in ~/.codex and the poll never sees it.
   async login(): Promise<{ ok: boolean; message?: string }> {
     try {
-      const child = execFile(CONFIG.codexBin, ["login"], { timeout: 180000 }, () => {});
+      const child = execFile(CONFIG.codexBin, ["login"], { timeout: 180000, env: codexAgentEnv() }, () => {});
       const deadline = Date.now() + 170000;
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 2000));

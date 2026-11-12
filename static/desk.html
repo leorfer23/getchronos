@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script src="/pair.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Desk — Chronos</title>
 <link rel="stylesheet" href="/vendor/xterm.css">
@@ -2153,11 +2154,10 @@
 
 <dialog id="dlg-token">
   <form class="dlg" method="dialog" id="form-token">
-    <h3>Admin token</h3>
+    <h3>Sign in</h3>
     <div style="font-size:14px;color:var(--muted);line-height:1.5">
-      Live terminals need the daemon's admin token. A plain browser tab has none, so paste it once —
-      it stays in this browser's localStorage.<br>
-      <code class="mono">cat ~/chronos/.admin-token</code>
+      In your Chronos folder run <code class="mono">npm run desk</code> — it opens this page signed in.<br>
+      Or paste the key from the <code class="mono">.admin-token</code> file in that folder; it stays in this browser.
     </div>
     <label>Token <input name="token" class="mono" autocomplete="off" required></label>
     <div class="actions"><button class="btn primary" value="ok">Save</button></div>

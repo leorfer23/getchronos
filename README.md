@@ -70,6 +70,15 @@ curl -fsSL https://raw.githubusercontent.com/leorfer23/getchronos/main/install.s
 That clones into `~/chronos`, runs `npm ci` and `npm run setup`. Already cloned? Run
 `npm ci && npm run setup` in your checkout.
 
+**Or let your agent do it.** Paste this into Claude Code, Codex or Cursor:
+
+```text
+Install Chronos on this Mac by following https://github.com/leorfer23/getchronos/blob/main/INSTALL.md and tell me when the Desk is open.
+```
+
+[INSTALL.md](INSTALL.md) is written for that agent: the exact commands, how to check it worked, what to
+hand back to you (signing in to Claude or ChatGPT in the browser is yours to click), and what not to touch.
+
 Then `npm run desk` opens the Desk in your browser, already signed in (if the daemon is not running,
 it tells you how to start it). No configuration file, no database to create, no account.
 
