@@ -26,6 +26,10 @@ process.env.CHRONOS_WHISPER_FINAL_PORT = String(await freePort());
 process.env.CHRONOS_TTS_URL = `http://127.0.0.1:${await freePort()}`;
 delete process.env.CHRONOS_TRANSCRIBE_URL;
 delete process.env.CHRONOS_TRANSCRIBE_FINAL_URL;
+// Nothing from the machine running the suite: no grok login, no cursor key, no Telegram.
+delete process.env.GROK_HOME;
+delete process.env.CURSOR_API_KEY;
+delete process.env.CHRONOS_TG_TOKEN;
 
 const { startServer } = await import("./api.js");
 const { CONFIG } = await import("./config.js");

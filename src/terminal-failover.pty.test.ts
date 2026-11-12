@@ -64,6 +64,10 @@ for (const [name, body] of [["claude", FAKE_CLAUDE], ["grok", FAKE_GROK]] as con
 process.env.CHRONOS_CLAUDE_BIN = path.join(tmp, "claude");
 process.env.CHRONOS_GROK_BIN = path.join(tmp, "grok");
 process.env.GROK_HOME = path.join(tmp, "grok-home");
+// The fake grok is signed in: failover only stands a walled terminal in on a CLI with a login
+// (backendReady — grok's auth.json), and this must not depend on the machine running the suite.
+fs.mkdirSync(process.env.GROK_HOME, { recursive: true });
+fs.writeFileSync(path.join(process.env.GROK_HOME, "auth.json"), "{}");
 process.env.CHRONOS_TERM_QUIET_MS = "1000";
 process.env.CHRONOS_TERMINAL_FALLBACK_BACKENDS = "grok";
 

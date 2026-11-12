@@ -85,7 +85,7 @@ test("grok: newest billing line wins; cursor is unmeasured, never 0", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "usage-grok-"));
   const log = path.join(dir, "unified.jsonl");
   fs.writeFileSync(log, tail + "\n" + line(88, "2026-09-18T11:59:00Z") + "\n");
-  const snap = usageSnapshot(NOW, { grokLog: log });
+  const snap = usageSnapshot(NOW, { grokLog: log, here: () => true }); // cursor's empty chip: as if installed, whatever this machine has
   assert.equal(snap.meters.find((m) => m.cli === "grok")!.windows[0].usedPct, 88);
   assert.equal(sent.length, 1);
   assert.match(sent[0], /Grok at 88%<\/b> of its weekly limit/);

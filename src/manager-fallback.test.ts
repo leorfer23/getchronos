@@ -99,25 +99,56 @@ test("withProviderFallback: non-limit primary error propagates", async () => {
   assert.equal(isProviderLimited("t-fail"), false);
 });
 
+/**
+ * A grok this test controls — installed and signed in (its auth file) in a tmp dir — so no result
+ * depends on whether the machine running the suite has grok, or a grok login. `body` is its script.
+ */
+function fakeGrok(body = "cat >/dev/null 2>&1\necho 'chronos tests: fake grok failed' >&2\nexit 1"): { dir: string; restore: () => void } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mf-fake-grok-"));
+  fs.writeFileSync(path.join(dir, "auth.json"), "{}");
+  fs.writeFileSync(path.join(dir, "grok"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  const saved = { bin: CONFIG.grokBin, home: process.env.GROK_HOME, backend: CONFIG.agent.fallbackBackend, chain: CONFIG.agent.fallbackChain };
+  (CONFIG as any).grokBin = path.join(dir, "grok");
+  process.env.GROK_HOME = dir;
+  CONFIG.agent.fallbackBackend = "grok";
+  CONFIG.agent.fallbackChain = [];
+  return {
+    dir,
+    restore: () => {
+      (CONFIG as any).grokBin = saved.bin;
+      if (saved.home == null) delete process.env.GROK_HOME; else process.env.GROK_HOME = saved.home;
+      CONFIG.agent.fallbackBackend = saved.backend;
+      CONFIG.agent.fallbackChain = saved.chain;
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
 test("withProviderFallback: auth failure routes to fallback but sets NO cooldown", async () => {
   _resetProviderLimitState();
+  const grok = fakeGrok();
   let killed = false;
-  await assert.rejects(
-    () =>
-      withProviderFallback({
-        key: "t-auth",
-        primary: async () => {
-          throw new Error("Not logged in · Please run /login");
-        },
-        system: "sys",
-        prompt: "hi",
-        killPrimary: () => {
-          killed = true;
-        },
-        timeoutMs: 2_000,
-      }),
-    /not logged in|fallback/i,
-  );
+  try {
+    await assert.rejects(
+      () =>
+        withProviderFallback({
+          key: "t-auth",
+          primary: async () => {
+            throw new Error("Not logged in · Please run /login");
+          },
+          system: "sys",
+          prompt: "hi",
+          sandbox: "off",
+          killPrimary: () => {
+            killed = true;
+          },
+          timeoutMs: 2_000,
+        }),
+      /not logged in.*fallback grok also failed/i,
+    );
+  } finally {
+    grok.restore();
+  }
   assert.equal(killed, true);
   // A re-login fixes it immediately — the next turn must go back to Claude, not stay on grok.
   assert.equal(isProviderLimited("t-auth"), false);
@@ -344,6 +375,7 @@ test("only engines this Mac can run: grok needs its binary and its login, cursor
   const savedGrok = CONFIG.grokBin;
   const savedHome = process.env.GROK_HOME;
   const savedKey = process.env.CURSOR_API_KEY;
+  const savedCursorBin = CONFIG.cursorBin;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mf-ready-"));
   try {
     CONFIG.agent.fallbackBackend = "grok";
@@ -352,20 +384,25 @@ test("only engines this Mac can run: grok needs its binary and its login, cursor
     delete process.env.CURSOR_API_KEY;
     process.env.GROK_HOME = dir;
     (CONFIG as any).grokBin = "/nonexistent/grok";
+    (CONFIG as any).cursorBin = "/nonexistent/cursor-agent";
     assert.equal(fallbackUsable("grok"), false, "not installed");
-    assert.equal(fallbackUsable("cursor"), false, "headless cursor without a key cannot answer");
+    assert.equal(fallbackUsable("cursor"), false, "not installed");
     assert.deepEqual(resolveManagerFallbacks(null), [], "a Mac with only claude has no fallback — not a grok that does not exist");
     fs.writeFileSync(path.join(dir, "grok"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     (CONFIG as any).grokBin = path.join(dir, "grok");
     assert.equal(fallbackUsable("grok"), false, "installed but never signed in");
     fs.writeFileSync(path.join(dir, "auth.json"), "{}");
     assert.equal(fallbackUsable("grok"), true);
+    fs.writeFileSync(path.join(dir, "cursor-agent"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    (CONFIG as any).cursorBin = path.join(dir, "cursor-agent");
+    assert.equal(fallbackUsable("cursor"), false, "installed, still no key");
     process.env.CURSOR_API_KEY = "test-key";
-    assert.equal(fallbackUsable("cursor"), true, "cursor-agent is on PATH (the test stub) and has a key");
+    assert.equal(fallbackUsable("cursor"), true, "installed and a key");
     assert.deepEqual(resolveManagerFallbacks(null).map((f) => f.backend), ["grok", "cursor"]);
   } finally {
     Object.assign(CONFIG.agent, saved);
     (CONFIG as any).grokBin = savedGrok;
+    (CONFIG as any).cursorBin = savedCursorBin;
     if (savedHome == null) delete process.env.GROK_HOME; else process.env.GROK_HOME = savedHome;
     if (savedKey == null) delete process.env.CURSOR_API_KEY; else process.env.CURSOR_API_KEY = savedKey;
     fs.rmSync(dir, { recursive: true, force: true });
@@ -384,6 +421,7 @@ test("withProviderFallback: no fallback installed → the wall itself is the err
     CONFIG.agent.fallbackChain = ["cursor"];
     (CONFIG as any).grokBin = "/nonexistent/grok";
     delete process.env.CURSOR_API_KEY;
+    let kills = 0;
     const turn = () => withProviderFallback({
       key: "t-none",
       primary: async () => { calls++; throw new Error("You've hit your session limit · resets 2:20pm"); },
@@ -392,10 +430,12 @@ test("withProviderFallback: no fallback installed → the wall itself is the err
       sandbox: "off",
       timeoutMs: 10_000,
       onFallback: (fb) => swaps.push(`${fb.backend}: ${fb.why}`),
+      killPrimary: () => { kills++; },
     }).then(() => assert.fail("should throw"), (e: Error) => e);
     const e = await turn();
     assert.match(e.message, /^You've hit your session limit · resets 2:20pm$/, "the limit as the CLI said it, nothing about grok");
     assert.deepEqual(swaps, []);
+    assert.equal(kills, 1, "the walled process still goes: the next turn starts a fresh one");
     // No cooldown to sit out on another engine: the next turn asks Claude again.
     await turn();
     assert.equal(calls, 2);

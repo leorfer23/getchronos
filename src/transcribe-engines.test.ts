@@ -18,7 +18,7 @@ import { setting } from "./settings.js";
 import { HEARING_NOT_SET_UP, WHISPER_INSTALL, whisperInstalled, whisperState, type WhisperState } from "./voice-setup.js";
 
 const FINAL = "http://127.0.0.1:7781/inference";
-const URL_VARS = ["CHRONOS_TRANSCRIBE_URL", "CHRONOS_TRANSCRIBE_FINAL_URL", "CHRONOS_TRANSCRIBE_FINAL_AUDIO_CTX"] as const;
+const URL_VARS = ["CHRONOS_TRANSCRIBE_URL", "CHRONOS_TRANSCRIBE_FINAL_URL", "CHRONOS_TRANSCRIBE_FINAL_AUDIO_CTX", "CHRONOS_WHISPER_PORT", "CHRONOS_WHISPER_FINAL_PORT"] as const;
 const saved = URL_VARS.map((k) => process.env[k]);
 for (const k of URL_VARS) delete process.env[k];
 after(() => URL_VARS.forEach((k, i) => { if (saved[i] == null) delete process.env[k]; else process.env[k] = saved[i]; }));

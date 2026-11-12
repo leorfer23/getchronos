@@ -604,14 +604,16 @@ export async function withProviderFallback(opts: WithProviderFallbackOpts): Prom
 
   const auth = isAuthError(err);
   if (!auth && !isProviderLimitError(err)) throw err;
-  // Nothing installed to fall back to (claude is the only CLI here): the wall itself is the answer —
-  // not "fallback grok also failed" for an engine that was never there.
-  if (!fb) throw err;
   const msg = String(err?.message ?? err);
   // A dead token is fixed by re-login, not by waiting: keep this turn alive on the fallback, but
   // never mark a cooldown — that would keep every later turn on grok long after /login.
   if (!auth) markProviderLimited(opts.key, err);
+  // The walled (or logged-out) process goes either way: the next turn starts a fresh one, which is
+  // what picks up a new login.
   opts.killPrimary?.();
+  // Nothing installed to fall back to (claude is the only CLI here): the wall itself is the answer —
+  // not "fallback grok also failed" for an engine that was never there.
+  if (!fb) throw err;
   console.warn(
     `[manager-fallback] ${opts.key}: primary ${auth ? "not authenticated" : "limited"} (${msg.slice(0, 120)}) → ${fb.backend}${fb.model ? `/${fb.model}` : ""}`,
   );
