@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { CONFIG } from "./config.js";
 import { serveHtml } from "./static-html.js";
+import { guideRoutes } from "./guide-routes.js";
 import { bus } from "./bus.js";
 import { activity, agentChat, asks, board, calEvents, calendars, chat, quotePrompt, quoteExcerpt, connectorSyncs, egressLog, events, ideas, jobs, jots, launches, lessons, repos, reviews, runs, searchIndex, sessions, sessionGoals, skills, steps, tickets, ticketLinks, triggers, watches, workspaces, workspaceVars, repoAccelerators, isAcceleratorTool, accelTelemetry } from "./store.js";
 import { accelStatus } from "./accel/status.js";
@@ -5418,6 +5419,7 @@ export function startServer() {
   // ask Robert, or send what is on screen to a terminal (src/capture.ts). Same token rules as the Desk.
   const sendBar = serveHtml(path.join(staticDir, "bar.html"), "Bar UI missing from static/bar.html.");
   app.get(["/bar", "/bar.html"], sendBar);
+  app.use(guideRoutes()); // The guide (docs/guide/*.md) at /guide — public docs, allowlisted names (src/guide-routes.ts).
   // Widget modules (static/desk-widgets/*.js), fetched by the Desk's loader with a dynamic import.
   // Reachable by bare file name only: the name is the registry key, so the pattern below is the same
   // `[a-z0-9-]` alphabet and no path can be built out of it. no-store because a widget edited during
