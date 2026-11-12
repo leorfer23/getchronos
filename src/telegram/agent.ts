@@ -25,6 +25,7 @@ import { agentDef, agentPrompt } from "../agent-defs.js";
 import { widgetPromptBlock } from "../widgets/index.js";
 import { askLine, commitTurn, resolveTurnSmart, type Route } from "../thread-router.js";
 import { robertToken, withoutOperatorToken, type RobertLane } from "../authz.js";
+import { HANDED_OFF, TurnBudget, handOff, limitsFor, robertBuiltinTools, robertHands, robertReadonlyDirs } from "../robert-hands.js";
 import { childEnv } from "../child-env.js";
 import { claudeGlobalConfig, withClaudeHome } from "../parity-env.js";
 import { send, sendChatAction, esc } from "./api.js";
@@ -842,11 +843,14 @@ export function spawnManager(opts: {
     maxBudgetUsd: CONFIG.agent.maxBudgetUsd,
     inheritProfileMcp: true, // the chief of everything runs on the operator's own MCP inventory
   });
-  // Same as the warm managers: his profile's login and MCP, not its output style or CLAUDE.md.
+  // Same as the warm managers: his profile's login and MCP, not its output style or CLAUDE.md — and,
+  // while he answers (robert-hands.ts), only the built-in tools he declares.
   const claude = backend.name === "claude-code";
   const args = claude ? [...spec.args, ...personaIsolationArgs(profileDir)] : spec.args;
+  const builtins = robertBuiltinTools(opts.wsId, MANAGER_TOOLS);
+  if (claude && builtins) args.push("--tools", builtins);
 
-  const { cmd, cmdArgs } = sandboxWrap("guard", cwd, wall.addDirs ?? [], profileDir, wall.denyDirs ?? [], spec.cmd, args);
+  const { cmd, cmdArgs } = sandboxWrap("guard", cwd, wall.addDirs ?? [], profileDir, wall.denyDirs ?? [], spec.cmd, args, false, wall.readonlyDirs ?? [], [], { readonlyWorktrees: false });
 
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, cmdArgs, {
@@ -990,9 +994,11 @@ export function personaIsolationArgs(profileDir: string): string[] {
 export const PERSONA_ENV: Record<string, string> = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" };
 
 // Streamed turn progress: kind "text" = reply delta, "thinking" = reasoning delta, "tool" = a tool
-// starting (text = one-line description), "tool_done" = the most recent tool returned.
+// starting (text = one-line description), "tool_done" = the most recent tool returned. A "tool" delta
+// from the warm CLI also carries the raw block (name + whole input): the one-line description clips a
+// command at 90 characters, which is before the URL of a long curl (robert-hands.ts reads the whole).
 
-export type AgentDelta = (t: string, kind: "text" | "thinking" | "tool" | "tool_done") => void;
+export type AgentDelta = (t: string, kind: "text" | "thinking" | "tool" | "tool_done", tool?: { name: string; input: unknown }) => void;
 
 // Silence budget, not a turn budget: re-armed on every line the CLI emits, so a turn that is actively
 // working (long Bash, subagent) never gets killed — only one that has genuinely stopped talking.
@@ -1020,6 +1026,10 @@ type WarmOpts = {
   denyDirs?: string[];
   /** Extra dirs it may read and write (a project's Robert: his own home, ~/.mc/robert/<slug>). */
   addDirs?: string[];
+  /** Dirs it may read but never write, no worktree re-grants (Robert answering: robert-hands.ts). */
+  readonlyDirs?: string[];
+  /** `claude --tools`: the built-in tool set itself, not just what is pre-approved (Robert answering). */
+  builtinTools?: string | null;
   /** The env he starts from. Absent → the daemon's own (the fleet-wide Robert). A project's Robert
    *  gets his workspace's (childEnv, like its terminals): its own GitHub token, none of the daemon's
    *  secrets (bot tokens, relay, tunnel credentials). */
@@ -1115,6 +1125,7 @@ export class WarmManager {
       ...claudeDenyArgs(),
       // The profile is his login and his MCP, not the operator's output style or CLAUDE.md.
       ...personaIsolationArgs(profileDir),
+      ...(this.opts.builtinTools ? ["--tools", this.opts.builtinTools] : []),
       "--model", this.opts.model,
       // budget covers the whole process lifetime (up to maxTurns turns), not one message
       "--max-budget-usd", String(CONFIG.agent.maxBudgetUsd * this.opts.maxTurns),
@@ -1122,7 +1133,8 @@ export class WarmManager {
     if (this.resumeId) args.push("--resume", this.resumeId);
     const cwd = this.opts.cwd || process.cwd();
     const { cmd, cmdArgs } = sandboxWrap(
-      this.opts.sandbox ?? "guard", cwd, this.opts.addDirs ?? [], profileDir, this.opts.denyDirs ?? [], CONFIG.claudeBin, args
+      this.opts.sandbox ?? "guard", cwd, this.opts.addDirs ?? [], profileDir, this.opts.denyDirs ?? [], CONFIG.claudeBin, args,
+      false, this.opts.readonlyDirs ?? [], [], { readonlyWorktrees: false },
     );
     const child = spawn(cmd, cmdArgs, {
       cwd,
@@ -1149,7 +1161,7 @@ export class WarmManager {
       if (p.type === "assistant" || p.type === "user") {
         const blocks = Array.isArray(p.message?.content) ? p.message.content : [];
         for (const b of blocks) {
-          if (b?.type === "tool_use") this.own(child)?.onDelta?.(describeTool(b.name ?? "tool", b.input), "tool");
+          if (b?.type === "tool_use") this.own(child)?.onDelta?.(describeTool(b.name ?? "tool", b.input), "tool", { name: b.name ?? "tool", input: b.input });
           else if (b?.type === "tool_result") this.own(child)?.onDelta?.("", "tool_done");
         }
         return;
@@ -1399,6 +1411,15 @@ export function setWebModel(model: string) {
 
 // The same switch from ⚙ Settings (the setting's kv key IS web.model): restart the warm managers.
 onSettingChange("robert.model", () => dropAllRobertManagers());
+// What he does himself (robert-hands.ts) changes his sandbox and tool set, both baked in at spawn:
+// every Robert process respawns on its next turn — the desk's (webManager would also catch it at the
+// turn boundary) and Telegram's, which has no such check. Resume ids survive.
+onSettingChange("robert.hands", () => {
+  dropAllRobertManagers();
+  for (const m of [...tgWarm.values(), ...tgWsWarm.values()]) m.kill();
+  tgWarm.clear();
+  tgWsWarm.clear();
+});
 
 // The skill index is baked into the system prompt at spawn time, so a skill approved (or edited) while
 // a manager is warm would stay invisible until the next recycle. Drop that workspace's processes
@@ -1487,6 +1508,8 @@ const mgrsFor = (lane: RobertLane) => (lane === "wake" ? wakeMgrs : webMgrs);
 // per workspace and lane, a shared stamp was overwritten by whichever rebuilt first, and the rest
 // never saw the edit.
 const builtStamp = new WeakMap<WarmManager, string>();
+/** The walls each manager was spawned inside (read-only dirs + built-in tools) — see webManager. */
+const builtWalls = new WeakMap<WarmManager, string>();
 const wakeIdle = new Map<string, NodeJS.Timeout>();
 
 function dropRobertManager(lane: RobertLane, key: string) {
@@ -1507,7 +1530,12 @@ function webManager(key: string, wsId: string | null, lane: RobertLane = "operat
   const mgrs = mgrsFor(lane);
   let m = mgrs.get(key);
   const dir = webProfileDir(wsId);
-  if (m && (builtStamp.get(m) !== stampOf("robert") || m.profileDir !== dir)) { dropRobertManager(lane, key); m = undefined; }
+  // His walls are baked into the sandbox at spawn: a project or repo added, or robert.hands flipped,
+  // recycles him here, at the next turn boundary (the resume id survives), like a memory edit does.
+  const walls = robertSandbox(wsId);
+  const builtinTools = robertBuiltinTools(wsId, MANAGER_TOOLS);
+  const wallsKey = JSON.stringify([walls.readonlyDirs ?? [], builtinTools]);
+  if (m && (builtStamp.get(m) !== stampOf("robert") || m.profileDir !== dir || builtWalls.get(m) !== wallsKey)) { dropRobertManager(lane, key); m = undefined; }
   if (!m) {
     m = new WarmManager({
       // Same standing workspace context every job runner and terminal agent gets: operator notes + the
@@ -1518,10 +1546,11 @@ function webManager(key: string, wsId: string | null, lane: RobertLane = "operat
       // page cannot mount. Web surface only — Telegram has nowhere to render one.
       system: personaSystem("robert", robertPrompt("web"), wsId ? agentContext(wsId) : "", briefsBlock(wsId), widgetPromptBlock()),
       // A project's Robert reads only his project's places (workspaces never mix).
-      ...robertSandbox(wsId),
+      ...walls,
       model: getWebModel(),
       profileDir: dir,
       allowedTools: MANAGER_TOOLS,
+      builtinTools,
       inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
       // MC_AGENT_NAME signs what he does through `mc` — a keystroke he types into someone
     // else's terminal lands in the activity trail as "robert", not as the operator.
@@ -1541,6 +1570,7 @@ function webManager(key: string, wsId: string | null, lane: RobertLane = "operat
       maxTurns: WEB_MAX_TURNS,
     });
     builtStamp.set(m, stampOf("robert"));
+    builtWalls.set(m, wallsKey);
     mgrs.set(key, m);
   }
   return m;
@@ -1640,13 +1670,17 @@ export const VOICE_TURN =
  * dir of his own — never the daemon's checkout, which holds every client), walled off from every
  * other workspace's repos, notes, tickets and Claude transcripts like any of his workspace's agents.
  */
-export function robertSandbox(wsId: string | null | undefined): { cwd?: string; addDirs?: string[]; denyDirs?: string[]; baseEnv?: NodeJS.ProcessEnv } {
-  if (!wsId) return {};
+export function robertSandbox(wsId: string | null | undefined): { cwd?: string; addDirs?: string[]; denyDirs?: string[]; baseEnv?: NodeJS.ProcessEnv; readonlyDirs?: string[] } {
+  // While he answers (setting robert.hands, robert-hands.ts): his project's places — every project's,
+  // for the fleet-wide one, whose cwd is the daemon's own checkout — are read-only to him.
+  const ro = robertReadonlyDirs(wsId ?? null);
+  const readonly = ro.length ? { readonlyDirs: ro } : {};
+  if (!wsId) return readonly;
   const w = workspaces.get(wsId);
   let cwd = w?.default_dir && fs.existsSync(w.default_dir) ? w.default_dir : null;
   const home = robertHome(wsId);
   if (!cwd) cwd = home;
-  return { cwd, addDirs: [home], denyDirs: workspaces.isolationDenyDirs(wsId), baseEnv: childEnv(w) };
+  return { cwd, addDirs: [home], denyDirs: workspaces.isolationDenyDirs(wsId), baseEnv: childEnv(w), ...readonly };
 }
 
 /** ~/.mc/robert/<slug>: a project's Robert's own dir — the files handed to his turns land here. */
@@ -1738,7 +1772,9 @@ export async function askManagerWeb(
   // focus: the router's pick on an auto-routed turn. The turn then runs on the fleet-wide Robert
   // (wsId null) with that project named as where to start — never a fence (agents/_blocks/threads.md).
   // lane "wake": the wake queue's turns, on their own manager and session (see WAKE_IDLE_KILL_MS).
-  opts?: { model?: string; voice?: boolean; turn?: string; label?: string; focus?: string | null; lane?: RobertLane },
+  // chat: the operator's own words (the Desk/phone/bar chat, the voice front's hand-over). Only such a
+  // turn carries the budget robert.hands sets (robert-hands.ts); `spoken` = its reply is read aloud.
+  opts?: { model?: string; voice?: boolean; turn?: string; label?: string; focus?: string | null; lane?: RobertLane; chat?: { words: string; spoken?: boolean } },
 ): Promise<{ reply: string; actions: UiAction[]; steps: RobertStep[]; turn: string; engine: string }> {
   // Workspaces never mix: a turn the router pinned on a project runs on THAT project's Robert — its
   // own Claude profile, brief, recap and fleet — never on the fleet-wide one holding every client.
@@ -1755,7 +1791,10 @@ export async function askManagerWeb(
   const turn = opts?.turn ?? randomUUID();
   const steps: RobertStep[] = [];
   const outer = onDelta;
-  onDelta = (t, kind) => {
+  // Set just before the turn runs (below): what this turn may look at before it is handed to a terminal.
+  let budget: TurnBudget | null = null;
+  let cut: (() => void) | null = null;
+  onDelta = (t, kind, tool) => {
     if (kind === "tool") {
       // Engine swaps are stamped on the bubble as a quiet model name — not as a warn step every turn.
       if (/^⚠️\s*(engine degradado|.*(?:en cooldown|sin créditos|sin login|rate-limited|también falló))/i.test(t)) {
@@ -1767,6 +1806,11 @@ export async function askManagerWeb(
         steps.push(step);
         bus.publish({ topic: "agent.step", ws: wsId ?? null, turn, step, label: opts?.label ?? null });
       }
+      // The call past the budget ends the turn here, while it is still starting; handOff() below opens
+      // the terminal. The cut call itself never gets to finish.
+      if (budget?.note({ ...(tool ?? {}), desc: t }) === "trip") cut?.();
+    } else if (kind === "text") {
+      budget?.hear(t);
     }
     outer?.(t, kind);
   };
@@ -1785,14 +1829,26 @@ export async function askManagerWeb(
   // This project's own thread recap only — never the interleaved one (workspaces never mix).
   const recap = chatLog.contextBlock({ limit: 12, workspaceId: realWsId });
   const prompt = fleetLine(realWsId) + "\n\n" + (recap || "") + (opts?.voice ? VOICE_TURN + "\n\n" : "") + text;
+  // What he does himself (robert-hands.ts): the operator's own turn, while Robert answers, gets a few
+  // looks. Wakes, triage and watch reports pass no words and never carry one.
+  if (opts?.chat && lane === "operator" && robertHands(realWsId) === "answers") {
+    budget = new TurnBudget(limitsFor(opts.chat.words), realWsId);
+    cut = () => {
+      m.kill();
+      if (mgrsFor(lane).get(key) === m) mgrsFor(lane).delete(key); // the resume id stays: next turn continues
+    };
+  }
+  // A turn the budget cut fails with HANDED_OFF, never with whatever the dying CLI left on stderr — so
+  // no limit-looking tail can send the same turn on to a fallback engine.
+  const ended = (e: unknown): never => { throw budget?.tripped ? new Error(HANDED_OFF) : e; };
   // One cooldown key for both lanes: a wall is the ACCOUNT's, whichever lane hit it first.
   const reply = await withProviderFallback({
     key: acctKey(`web:${key}`, m),
-    primary: () => m.turn(prompt, onDelta, undefined, model),
+    primary: () => m.turn(prompt, onDelta, undefined, model).catch(ended),
     model,
     primaryOn: (alt) => {
       engine = engineLabel("claude", alt);
-      return m.turn(prompt, onDelta, undefined, alt);
+      return m.turn(prompt, onDelta, undefined, alt).catch(ended);
     },
     system: m.system,
     prompt,
@@ -1817,6 +1873,9 @@ export async function askManagerWeb(
       m.kill();
       if (mgrsFor(lane).get(key) === m) mgrsFor(lane).delete(key); // never a replacement built meanwhile
     },
+  }).catch((e) => {
+    if (budget?.tripped) return ""; // handed off below
+    throw e;
   }).finally(() => {
     if (lane === "wake") armWakeIdleKill(key);
   });
@@ -1825,6 +1884,21 @@ export async function askManagerWeb(
   void import("../supervision-guard.js")
     .then((g) => g.checkSupervision())
     .catch((e) => console.warn("[agent] supervision check", e?.message ?? e));
+  // Past the budget: the work goes to a terminal and his reply is the one line naming it. The open is
+  // announced as this turn's step first (in the terminal's project), so the ledger ties it to his words.
+  if (budget?.tripped) {
+    const out = await handOff({
+      words: opts!.chat!.words,
+      wsId: realWsId,
+      budget,
+      spoken: !!opts?.chat?.spoken,
+      announce: (step, ws) => {
+        steps.push(step);
+        bus.publish({ topic: "agent.step", ws, turn, step, label: opts?.label ?? null });
+      },
+    });
+    return { reply: out.reply, actions: [], steps, turn, engine };
+  }
   // An `ask` directive is a question for the operator: filed as an asks row and swapped for its live
   // card in the reply (src/robert-asks.ts). Late import — the asks layer sits far below the manager.
   const { liftRobertAsks } = await import("../robert-asks.js");
@@ -2019,9 +2093,12 @@ function warmForChat(chat: number): WarmManager {
   if (!m) {
     m = new WarmManager({
       system: personaSystem("robert", robertPrompt("telegram")),
+      // The fleet-wide walls: none of his own, but every project read-only while he answers.
+      ...robertSandbox(null),
       model: CONFIG.agent.model,
       profileDir: dir,
       allowedTools: MANAGER_TOOLS,
+      builtinTools: robertBuiltinTools(null, MANAGER_TOOLS),
       inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
       resumeSessionId: getChatSession(chat) ?? null,
       onSessionId: (id) => setChatSession(chat, id),
@@ -2064,6 +2141,7 @@ function warmForChatWs(chat: number, wsId: string): WarmManager {
       ...robertSandbox(wsId),
       model: CONFIG.agent.model,
       allowedTools: MANAGER_TOOLS,
+      builtinTools: robertBuiltinTools(wsId, MANAGER_TOOLS),
       inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
       profileDir: dir, // the workspace's account (or its sibling when walled) + skills + MCP
       // No CHRONOS_ADMIN: he reads and PROPOSES. His reads carry his project's read-only credential

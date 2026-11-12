@@ -339,6 +339,16 @@ defineSetting({
   default: () => DEFAULT_ASSISTANT_NAME,
   check: (v) => cleanAssistantName(v),
 });
+// What he does himself when you talk to him (src/robert-hands.ts holds him to it in code: his
+// sandbox, and a turn budget that opens the terminal for him). Unlike the switches below, this one
+// is about the chat itself.
+defineSetting({
+  key: "robert.hands", group: "Robert", level: "both", type: "enum", env: "CHRONOS_ROBERT_HANDS",
+  label: "What Robert does himself",
+  help: "answers: he answers what a few quick lookups settle (what is running, a fact from memory, a file or two, one web fact) and does the coordinating himself — tickets, terminals, settings, questions, notes. Anything that changes files, runs your project's code or needs real research or writing opens a terminal with your request, and he replies in one line naming it. Your projects' folders are read-only to him. anything: he may also do the work himself in the chat, as before.",
+  options: () => ["answers", "anything"],
+  default: () => (process.env.CHRONOS_ROBERT_HANDS === "anything" ? "anything" : "answers"),
+});
 defineSetting({
   key: "robert.enabled", group: "Robert", level: "both", type: "bool",
   label: "Robert works on his own",

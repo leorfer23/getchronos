@@ -153,6 +153,9 @@ export function derivedWriteRefusal(req: express.Request): string | null {
     if (key === "assistant.name") return operatorOnly(`${key} (the operator names his assistant)`);
     // Sending his voice to a cloud provider is his decision alone too (transcribe-cloud.ts).
     if (key === "voice.final_engine" && String(body.value ?? "").trim().toLowerCase() === "cloud") return operatorOnly(`${key} = cloud (it sends the operator's voice off this machine)`);
+    // What Robert does himself is the wall around Robert (robert-hands.ts: his sandbox and his turn
+    // budget). He may put it up; only the operator takes it down — `anything`, or clearing it to inherit.
+    if (key === "robert.hands" && String(body.value ?? "").trim() !== "answers") return operatorOnly(`${key} (what Robert may do himself)`);
     const col = SETTING_COLUMN[key];
     if (col) {
       const wsRef = typeof body.workspace === "string" ? body.workspace : typeof body.workspace_id === "string" ? body.workspace_id : "";

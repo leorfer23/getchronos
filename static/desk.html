@@ -7456,7 +7456,8 @@ function renderSettings() {
   const row = (v) => {
     const overridden = ST.ws ? v.level === "both" && v.source === "workspace" : v.source === "global" && v.level !== "ws";
     const src = overridden ? `<span class="src">${ST.ws ? "this workspace" : "changed"}<button data-st-reset="${esc(v.key)}">reset</button></span>` : "";
-    const dim = robertOff && v.key.startsWith("robert.") && v.key !== "robert.enabled" && v.key !== "robert.model" ? " dim" : "";
+    // robert.hands is about the chat, which answers whatever robert.enabled says — never dimmed with it.
+    const dim = robertOff && v.key.startsWith("robert.") && !["robert.enabled", "robert.model", "robert.hands"].includes(v.key) ? " dim" : "";
     return `<div class="st-row${v.type === "bool" ? " b" : ""}${dim}" title="${esc(v.env || "")}"><div class="st-l"><div class="t">${esc(v.label)}${src}</div>${v.help ? `<div class="h">${esc(v.help)}</div>` : ""}</div><div class="st-c">${stControl(v)}</div></div>`;
   };
   const groups = D.groups.filter((g) => D.settings.some((v) => v.group === g));

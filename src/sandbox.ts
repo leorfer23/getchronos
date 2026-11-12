@@ -142,16 +142,24 @@ const inside = (child: string, parent: string) => {
  * terminal spawned in, or handed, a shared checkout must still not write it. Anything else the
  * caller granted that lives strictly inside one (a worktree root nested under a repo, a workspace's
  * tickets dir under ~/chronos) is re-granted with the worktree paths.
+ *
+ * `worktrees: false` is the look-don't-touch form (Robert answering, robert-hands.ts): no `.git`,
+ * `.mc` or `.claude/worktrees` re-grant — he commits nothing, claims no worktree, and a writable
+ * `.git` would hand him its hooks and config — so there is no git state left to seal either. What
+ * stays writable inside one is only what the caller itself granted, his Claude profile included.
  */
-function readonlyRules(readonlyDirs: string[], granted: string[]): string[] {
+function readonlyRules(readonlyDirs: string[], granted: string[], worktrees = true): string[] {
   if (!readonlyDirs.length) return [];
   const regrant = [
-    ...readonlyDirs.flatMap((d) => SHARED_CHECKOUT_GRANTS.map((g) => path.join(d, g))),
+    ...(worktrees ? readonlyDirs.flatMap((d) => SHARED_CHECKOUT_GRANTS.map((g) => path.join(d, g))) : []),
     ...granted.filter((g) => readonlyDirs.some((d) => inside(g, d))),
   ];
-  const sealed = readonlyDirs.flatMap((d) => SHARED_CHECKOUT_STATE.map((f) => path.join(d, ".git", f)));
+  const sealed = worktrees ? readonlyDirs.flatMap((d) => SHARED_CHECKOUT_STATE.map((f) => path.join(d, ".git", f))) : [];
   return [rule("deny", "file-write*", readonlyDirs), rule("allow", "file-write*", regrant), rule("deny", "file-write*", sealed)];
 }
+
+/** How the read-only tier treats a checkout: a terminal's (worktrees beside it stay writable) or a look-only one. */
+export type ReadonlyOpts = { readonlyWorktrees?: boolean };
 
 // Build an SBPL profile string for a job, or null for passthrough (off / unsupported platform).
 export function buildProfile(
@@ -167,7 +175,8 @@ export function buildProfile(
   readonlyDirs: string[] = [],
   // Secrets paths THIS workspace is trusted with, re-granted after the global deny. Always from
   // `workspaceSandboxAllow()`, never straight from a request body — see that function.
-  allowSecrets: string[] = []
+  allowSecrets: string[] = [],
+  ro: ReadonlyOpts = {}
 ): string | null {
   if (mode === "off" || !sandboxAvailable()) {
     // Egress enforce still wants a kernel wall even when filesystem sandboxing is "off": emit a
@@ -201,6 +210,10 @@ export function buildProfile(
   // checkout, say): re-denied after the re-grant, or `own` would open it right back up.
   const nested = projectDeny.filter((d) => own.some((o) => d.startsWith(o.endsWith("/") ? o : o + "/")));
   const reDeny = nested.length ? [rule("deny", "file-read*", nested), rule("deny", "file-write*", nested)] : [];
+  // The look-only form re-grants nothing of a checkout's own, but must keep the caller's profile dir
+  // writable if a read-only dir happens to hold it (claude writes its session there every turn).
+  const worktrees = ro.readonlyWorktrees !== false;
+  const roRules = readonlyRules(readonlyDirs, worktrees ? addDirs : [...addDirs, configDir].filter(Boolean), worktrees);
 
   if (mode === "guard") {
     // Run normally, but deny other project dirs (yield to own cwd) and secrets (absolute).
@@ -212,8 +225,9 @@ export function buildProfile(
       rule("allow", "file-read*", own),
       rule("allow", "file-write*", own),
       ...reDeny,
+      ...roRules,
+      // After the read-only walls too: nothing re-grants another profile's view of ~/.claude.json.
       notOurConfig,
-      ...readonlyRules(readonlyDirs, addDirs),
       rule("deny", "file-read*", secrets),
       rule("deny", "file-write*", secrets),
       // LAST, so it re-grants a secrets path this workspace is explicitly trusted with. Deliberately
@@ -255,7 +269,7 @@ export function buildProfile(
     // own places re-granted, as guard does.
     rule("deny", "file-write*", projectDeny),
     rule("allow", "file-write*", own),
-    ...readonlyRules(readonlyDirs, addDirs),
+    ...roRules,
     rule("deny", "file-read*", projectDeny),
     rule("allow", "file-read*", [...own, ...readonlyDirs]),
     ...reDeny,
@@ -282,9 +296,10 @@ export function sandboxWrap(
   args: string[],
   lockEgress = false,
   readonlyDirs: string[] = [],
-  allowSecrets: string[] = []
+  allowSecrets: string[] = [],
+  ro: ReadonlyOpts = {}
 ): { cmd: string; cmdArgs: string[] } {
-  const profile = buildProfile(mode, cwd, addDirs, configDir, denyDirs, lockEgress, readonlyDirs, allowSecrets);
+  const profile = buildProfile(mode, cwd, addDirs, configDir, denyDirs, lockEgress, readonlyDirs, allowSecrets, ro);
   if (!profile) {
     if (mode !== "off" && !sandboxAvailable())
       console.warn(`[sandbox] '${mode}' requested but sandbox-exec unavailable — running unsandboxed`);

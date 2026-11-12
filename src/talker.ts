@@ -266,13 +266,14 @@ export function answeredOnly(requestId: string): boolean {
   return !requests.items(requestId).some((i) => i.status === "open" || i.status === "held");
 }
 
-export type Delegator = (payload: string, wsId: string, turn: string) => Promise<{ reply: string }>;
+/** `words`: his own words in that hand-over — the turn robert.hands budgets (robert-hands.ts), read aloud. */
+export type Delegator = (payload: string, wsId: string, turn: string, words?: string) => Promise<{ reply: string }>;
 let delegator: Delegator | null = null;
 /** Tests swap the project Robert for a stub. null restores the real one (askManagerWeb). */
 export function setTalkerDelegator(fn: Delegator | null): void { delegator = fn; }
-async function realDelegator(payload: string, wsId: string, turn: string) {
+async function realDelegator(payload: string, wsId: string, turn: string, words?: string) {
   const { askManagerWeb } = await import("./telegram/agent.js"); // late: agent.ts is heavy and imports half the daemon
-  return askManagerWeb(payload, undefined, wsId, { turn, label: "front" });
+  return askManagerWeb(payload, undefined, wsId, { turn, label: "front", ...(words ? { chat: { words, spoken: true } } : {}) });
 }
 
 /** What a project Robert's reply sounds like in the thread: its first one or two sentences, spoken. */
@@ -303,7 +304,7 @@ export function startDelegation(d: Extract<ReturnType<typeof buildDelegation>, {
     let line: string;
     let reply = "";
     try {
-      reply = (await ask(d.payload, d.ws.id, turn)).reply || "";
+      reply = (await ask(d.payload, d.ws.id, turn, d.words || st.words)).reply || "";
       line = spokenResult(d.ws.name, reply);
     } catch (e: any) {
       const f = plainFailure(e, st.words);
