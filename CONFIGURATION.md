@@ -118,6 +118,9 @@ does **not** ship a public tunnel. Two outbound options need no inbound port at 
 the optional relay Worker). To open Desk / Phone from the public internet the way this project is
 run day-to-day, put **Cloudflare Tunnel + Cloudflare Access** in front of `127.0.0.1:7777`.
 
+**No domain?** Tailscale pairs a phone in about a minute, reachable only from your own tailnet:
+Desk → ⋯ → 📱 Phone ([docs/guide/phone.md](./docs/guide/phone.md)).
+
 Telegram and the relay are off unless configured, and the daemon says so at boot:
 
 ```bash

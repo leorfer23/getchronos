@@ -215,6 +215,8 @@ import { pairRoutes } from "./pair.js";
 import { barRoutes } from "./hostlink/bar.js";
 import { PlacementError } from "./hosts/candidates.js";
 import { hostBriefRoutes } from "./hosts/brief.js";
+import { phoneOwnerGate, phoneUpgradeGate } from "./phone-gate.js";
+import { phoneRoutes } from "./phone-routes.js";
 import { kv } from "./store/kv.js";
 import { noteClaudeStatusline, usageSnapshot } from "./usage-meter.js";
 import { defaultQuickActions, QUICK_ACTIONS_KV, type QuickAction } from "./quick-actions.js";
@@ -581,6 +583,9 @@ export function spawnWallRefusal(
 
 export function startServer() {
   const app = express();
+  // First, before any parser, page or route: a request that came through Tailscale serve arrives on
+  // loopback like a local agent's — only the owner's Tailscale account gets past (src/phone-gate.ts).
+  app.use(phoneOwnerGate);
   // express.json() for everything, EXCEPT a file dropped on a terminal, which is parsed as raw bytes
   // first so a dropped .json keeps its bytes (the why is on mountBodyParsers in drop-routes.ts).
   dropRoutes.mountBodyParsers(app);
@@ -3096,6 +3101,7 @@ export function startServer() {
   api.use(setupRoutes(requireAdmin));
   // Pairing: a one-time code that signs a browser in without copying the token (src/pair.ts).
   api.use(pairRoutes());
+  api.use(phoneRoutes(requireAdmin));
 
   // Every live terminal whose goal is ticked, closed in one call — Desk / phone / Telegram ✅ only.
   // Robert and Leads never hit this door (operatorMayCloseTerminal); a Lead has its own scoped one.
@@ -5476,6 +5482,7 @@ export function startServer() {
   // Both hubs carry live client data (bus firehose) or a shell (PTY IO) — same admin token as the
   // dashboard-only REST routes, passed as ?token= since browsers can't set WS handshake headers.
   server.on("upgrade", (req, socket, head) => {
+    if (!phoneUpgradeGate(req, socket)) return; // same owner gate as the app's first middleware
     const url = new URL(req.url ?? "", "http://x");
     const path = url.pathname;
     // The tunnel door for `chronos host` links (HOSTS.md → Transport). Its own auth — a host token or

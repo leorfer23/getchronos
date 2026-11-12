@@ -19,8 +19,9 @@ unattended. That is the product, not a bug. Everything below is about bounding i
 token is a single credential, not a login, and anyone who holds it can open a shell through the
 terminal WebSocket. Do not expose the port to a network you do not control. If you want it on your
 phone, put an authenticating tunnel in front of it — the daemon is not the thing that should be
-deciding whether a stranger gets in. The recipe we use (Cloudflare Tunnel + Access in front of
-`127.0.0.1:7777`) is in [CONFIGURATION.md §4](./CONFIGURATION.md#4-optional-reach-it-from-your-phone).
+deciding whether a stranger gets in. The one-minute way is Tailscale serve, reachable only from your
+own tailnet ([docs/guide/phone.md](./docs/guide/phone.md)); the recipe with a domain (Cloudflare
+Tunnel + Access in front of `127.0.0.1:7777`) is in [CONFIGURATION.md §4](./CONFIGURATION.md#4-optional-reach-it-from-your-phone).
 
 ## The boundaries that do exist
 
@@ -42,6 +43,12 @@ tokens, terminal output) — is sealed: denied after every re-grant, including a
 profile, a key exported in `~/.zshrc`, one `~/.aws/credentials` for two projects.
 `GET /api/isolation/audit` (admin) lists those — names and paths, never values — with what to change
 (`src/profile-audit.ts`). It reports; it does not fix.
+
+**The owner gate** (`src/phone-gate.ts`) runs before every page, route and WebSocket. Tailscale serve
+proxies to loopback, so a phone's request looks like a local process's — and a tailnet can hold other
+people. Anything that arrives through Tailscale gets in only when its identity header is the account
+recorded when phone access was turned on; a tagged device (no identity) or Funnel (public) is refused.
+Forging the header from this Mac can only lock the forger out: the gate refuses, it never grants.
 
 **Project scoping** is a security boundary, not a UI filter. An endpoint that takes a run or ticket
 by id verifies it belongs to the caller's project. A missed check once let one project drain
