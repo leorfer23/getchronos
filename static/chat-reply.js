@@ -19,7 +19,8 @@
       .trim();
     return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
   };
-  const who = (side) => (side === "reply" ? "Robert" : "You");
+  // The assistant's side says the name the operator gave him (static/assistant-name.js).
+  const who = (side) => (side === "reply" ? (window.AssistantName ? window.AssistantName.get() : "Robert") : "You");
   const ICON = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>`;
   const css = `.bub[data-rid]{position:relative}
 .bub .rp{position:absolute;top:6px;width:28px;height:28px;padding:0;border-radius:50%;border:1px solid var(--line,#333);background:var(--surface,#1b1b1f);color:var(--muted,#888);display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;pointer-events:none;transition:opacity .12s}

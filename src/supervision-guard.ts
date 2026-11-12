@@ -15,6 +15,7 @@ import { getAgent } from "./agent-lifecycle.js";
 import { isLive, sessionActivity } from "./terminal.js";
 import { sessionGoalReached } from "./term-status.js";
 import { esc, notify, notifyInfo } from "./telegram/api.js";
+import { assistantName } from "./settings.js";
 import { wakeBeaconAgeMs, wakeBeaconFresh, wakeBeaconGraceMs, wakeBusArmed } from "./wake-queue.js";
 
 export interface SupervisionVerdict {
@@ -101,7 +102,7 @@ export async function checkSupervision(nowMs = Date.now()): Promise<SupervisionV
     kv.set(EPISODE_KEY, v.reason);
     await notifier(
       `🕳 <b>Nothing is watching</b> — ${v.inFlight} thing${v.inFlight === 1 ? " is" : "s are"} running and nothing ` +
-        `is set to wake Robert: ${esc(v.reason)}. <code>mc robert wakes</code> · <code>GET /api/robert/supervision</code>`,
+        `is set to wake ${esc(assistantName())}: ${esc(v.reason)}. <code>mc robert wakes</code> · <code>GET /api/robert/supervision</code>`,
       "action",
     ).catch(() => {});
   } else if (open) {

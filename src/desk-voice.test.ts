@@ -6,8 +6,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import vm from "node:vm";
 
 const html = fs.readFileSync(path.join(process.cwd(), "static/desk.html"), "utf8");
+// The page's name helper (static/assistant-name.js), as the Desk loads it: the call's own words follow it.
+const anCtx: any = { window: {} };
+vm.runInNewContext(fs.readFileSync(path.join(process.cwd(), "static/assistant-name.js"), "utf8"), anCtx);
+const AssistantName = anCtx.window.AssistantName;
 
 const fn = (name: string) => {
   const at = html.indexOf(`function ${name}(`);
@@ -65,6 +70,7 @@ function call(lang = "es", langPicked = false) {
     vcTranscribe: (wav: any, query: string) => new Promise((ok) => w.pending.push({ ms: wav.ms, query, answer: (text: string) => ok({ text }) })),
     vcStop: () => { w.did.push("hang-up"); }, vcSkip() {}, stopTurn: () => { w.did.push("stop"); }, vcPicked: () => false,
     queueAsk: (text: string) => { w.turns.push(text); },
+    AssistantName,
   };
   const names = Object.keys(env);
   const body = [konst("VAD"), konst("JOIN"), konst("HANG_UP"), konst("STOP_TALKING"), konst("HEARD_NOISE"), konst("vcNorm"), konst("vcLangQ"),
@@ -202,6 +208,24 @@ test("whisper's spellings of «colgá» hang up; a sentence that merely contains
   c.page.vcHeard("la app quedó colgada en el splash", false);
   assert.deepEqual(c.w.did, ["hang-up", "stop"]);
   assert.deepEqual(c.w.turns, ["la app quedó colgada en el splash"]);
+});
+
+test("«chau <name>» and «para <name>» follow the name the assistant was given — and Robert still works", () => {
+  try {
+    const c = call();
+    assert.equal(c.page.vcIsCommand("Chau Robert."), true);
+    assert.equal(c.page.vcIsCommand("Chau Ada."), false, "not a name it has yet");
+    AssistantName.set("Ada");
+    for (const w of ["Chau, Ada.", "Bye Ada!", "Chau Robert.", "Para, Ada."]) assert.equal(c.page.vcIsCommand(w), true, w);
+    assert.equal(c.page.vcIsCommand("Ada, abrí una terminal"), false, "the name alone is a turn, not a command");
+    c.page.vcHeard("Chau Ada.", false);
+    c.page.vcHeard("Para Ada", false);
+    assert.deepEqual(c.w.did, ["hang-up", "stop"]);
+    AssistantName.set("Zoë");
+    assert.equal(c.page.vcIsCommand("chau zoe"), true, "heard without the accent, as whisper writes it");
+  } finally {
+    AssistantName.set("Robert");
+  }
 });
 
 test("a language picked by hand rides every transcription as fixed=1; the default is not forced", async () => {

@@ -87,6 +87,8 @@ real voice was used — `voice.keep_clips` below is how the next round gets real
   synthetic knocks, hums and coughs instead of 3); whisper answered every one with a bracketed phantom
   or nothing, which the call already drops, and those clips play no "sent" beep.
 - **«Colgá»** is written "Colgar" by both models (and "Colgada" on a real call): all of them hang up.
+- **The assistant's name** (⚙ Settings → Name, `static/assistant-name.js`): «chau <name>», «bye <name>» and
+  «para <name>» act like «chau Robert» — which keeps working — and the name is filler in a spoken answer.
 - **A sentence cut by a breath** (750 ms of quiet ends a clip — unchanged). When he speaks again within
   1.5 s of a cut and the first half has not reached the page yet, both halves are sent again as one clip
   and become one turn. A complete sentence is never delayed by this; short answers and stops never wait.

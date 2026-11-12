@@ -14,9 +14,11 @@
  */
 import { kv } from "../store.js";
 import { EXEC_HANDLES } from "../board.js";
+import { assistantName } from "../settings.js";
 
+// What /who and the exec switch call him: the name the operator gave him, read when it is shown.
 export const EXEC_NAME: Record<string, string> = {
-  robert: "Robert",
+  get robert() { return assistantName(); },
 };
 
 export const EXEC_LINE: Record<string, string> = {

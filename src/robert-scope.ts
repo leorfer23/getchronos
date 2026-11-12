@@ -149,6 +149,8 @@ export function derivedWriteRefusal(req: express.Request): string | null {
     if (key.startsWith("executor.")) return operatorOnly(`${key} (the executor's switches)`);
     // Keeping recordings of the operator's voice is his decision alone (voice-clips.ts).
     if (key === "voice.keep_clips") return operatorOnly(`${key} (it records the operator's voice)`);
+    // The assistant's name is the one the operator gave him — never one he picks for himself.
+    if (key === "assistant.name") return operatorOnly(`${key} (the operator names his assistant)`);
     // Sending his voice to a cloud provider is his decision alone too (transcribe-cloud.ts).
     if (key === "voice.final_engine" && String(body.value ?? "").trim().toLowerCase() === "cloud") return operatorOnly(`${key} = cloud (it sends the operator's voice off this machine)`);
     const col = SETTING_COLUMN[key];
@@ -198,7 +200,7 @@ export const FLEET_OPERATOR_ONLY = new Set([
   "POST /agent", "POST /agent/exec/:id", "POST /agent/reset", "POST /agent/heartbeat", "POST /agent/warm", "POST /agent/model",
   "POST /push/subscribe", "DELETE /push/subscribe",
   "POST /voice/presence", "POST /voice/trace",
-  "POST /open", "PUT /desk/quick-actions", "POST /thread/sticky",
+  "POST /open", "PUT /desk/quick-actions", "POST /thread/sticky", "PUT /onboarding",
   "POST /capture/open", "POST /capture/resolve", "DELETE /capture/routes/:key",
   "POST /speak", "POST /transcribe",
 ]);

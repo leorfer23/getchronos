@@ -10,6 +10,7 @@ import { approve, requestChanges, merge } from "./reviews.js";
 import { fleetData, composeFleet } from "./fleet.js";
 import * as noteSvc from "./notes.js";
 import { CONFIG } from "./config.js";
+import { assistantName } from "./settings.js";
 import { tg, send, esc, TOKEN, getAllowedChat, setAllowedChat, transportFailStreak } from "./telegram/api.js";
 import { decideStall } from "./recovery.js";
 import { answerPromptTap } from "./terminal-prompts.js";
@@ -70,12 +71,13 @@ export function routeText(text: string): "claim" | "abort" | "start" | "conv" | 
   return "agent";
 }
 
-const WELCOME =
+// Built per /start, not at boot: it says the name the operator gave his assistant (/robert is the id).
+const welcome = () =>
   "<b>Mission Control</b>\n\n" +
   "Just talk to me — I run your agents, tickets, jobs and spend.\n" +
   "• “what’s going on?” · “dispatch the acme ticket” · “weekly report for globex” · “how much have we spent?”\n" +
   "• Anything that changes something comes back as a ✅/❌ confirm card — tap to run it.\n" +
-  "• /robert talks to him directly (he acts, no cards). /who shows where you are.\n" +
+  `• /robert — ${esc(assistantName())} acts directly, no confirm cards. /who shows where you are.\n` +
   "• /conv switches which Mission Control conversation you continue.\n" +
   "• /abort stops a running ask.\n" +
   "• Commands (same as <code>mc</code>):\n" +
@@ -91,7 +93,7 @@ async function handle(chatId: number, text: string, msgId = 0) {
     }
     case "claim":
     case "start":
-      return send(chatId, WELCOME);
+      return send(chatId, welcome());
     case "command": {
       // Handlers return plain text (the one format all three surfaces render), so escape it into
       // the HTML parse mode this bot posts in rather than sending it raw.

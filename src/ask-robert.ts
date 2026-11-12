@@ -18,7 +18,7 @@
  *  - **`ask_policy: 'escalate'` outranks him**, exactly as it does in answerAsk. In those
  *    workspaces he may recommend, never decide.
  */
-import { settingOn } from "./settings.js";
+import { assistantName, settingOn } from "./settings.js";
 import { asks, sessions, workspaces, type Ask } from "./store.js";
 import { getAgent } from "./agent-lifecycle.js";
 import { OP_PREFIX } from "./operational-prefix.js";
@@ -126,7 +126,7 @@ export async function escalateAsk(
     }
   })();
   const lines = [`❓ <b>${esc(cur.asked_by ?? "An agent")}</b> asks:`, esc(cur.question)];
-  if (robertNote) lines.push(`\n🤖 <i>Robert:</i> ${esc(robertNote)}`);
+  if (robertNote) lines.push(`\n🤖 <i>${esc(assistantName())}:</i> ${esc(robertNote)}`);
   if (options.length) lines.push(`Options: ${options.map(esc).join(" / ")}`);
   lines.push(`Free-form: <code>mc answer ${short} "..."</code>`);
   const rows: Btn[][] = [];
@@ -208,7 +208,7 @@ export async function triageAsk(askId: string): Promise<void> {
   // question on my behalf" is exactly the kind of thing you want to be able to catch within a minute
   // and correct with an `mc tell`, not discover at the end of the day.
   await notify(
-    `🤖 <b>Robert answered for you</b>\n` +
+    `🤖 <b>${esc(assistantName())} answered for you</b>\n` +
       `<i>${esc(ask.asked_by ?? "an agent")} asked:</i> ${esc(ask.question)}\n` +
       `<i>He said:</i> ${esc(verdict.text)}\n` +
       (ask.session_id ? `<code>mc session focus ${id8(ask.session_id)}</code>` : ""),
@@ -224,7 +224,7 @@ export async function sweepTriageDeadline(nowMs = Date.now()): Promise<void> {
   for (const a of asks.openRoutedToRobert()) {
     const age = nowMs - Date.parse(a.created_at);
     if (!Number.isFinite(age) || age < TRIAGE_DEADLINE_MIN * 60_000) continue;
-    await escalateAsk(a, `(no call from Robert within ${TRIAGE_DEADLINE_MIN}m — over to you)`).catch((e) =>
+    await escalateAsk(a, `(no call from ${assistantName()} within ${TRIAGE_DEADLINE_MIN}m — over to you)`).catch((e) =>
       console.error("[ask-robert] deadline escalate failed", e),
     );
   }

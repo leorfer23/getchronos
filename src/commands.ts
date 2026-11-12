@@ -31,6 +31,7 @@ import { decideStall, listStalls } from "./recovery.js";
 import { applyHold, resolveHoldTarget } from "./holds.js";
 import { holdBucket } from "./hold-bucket.js";
 import { abortWebTurn } from "./telegram/agent.js";
+import { assistantName } from "./settings.js";
 import { promoteIdea, killIdea } from "./ideas.js";
 import { setSkillStatus } from "./skills.js";
 import { captureLearnings, createNote, listNotes } from "./notes.js";
@@ -255,15 +256,15 @@ const stopCmd: Command = {
       // Kills the workspace's warm manager process. The resume session id is deliberately kept, so
       // the next message continues the conversation rather than starting from nothing.
       return abortWebTurn(workspaceId ?? null)
-        ? "🛑 Stopped Robert's turn. The thread keeps its context — just say the next thing."
-        : "Nothing running for Robert here.";
+        ? `🛑 Stopped ${assistantName()}'s turn. The thread keeps its context — just say the next thing.`
+        : `Nothing running for ${assistantName()} here.`;
     }
 
     if (target === "all") {
       const live = runs.listActive();
       const killed = live.filter((r) => stopRun(r.id)).length;
       const turn = abortWebTurn(workspaceId ?? null);
-      const bits = [killed ? `${killed} run(s)` : null, turn ? "Robert's turn" : null].filter(Boolean);
+      const bits = [killed ? `${killed} run(s)` : null, turn ? `${assistantName()}'s turn` : null].filter(Boolean);
       return bits.length ? `🛑 Stopped ${bits.join(" + ")}.` : "Nothing was running.";
     }
 

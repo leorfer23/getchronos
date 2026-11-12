@@ -17,7 +17,7 @@
  *  - **Ack-through on success only.** A throw leaves the rows queued with `last_error` and one more
  *    attempt; past the cap a row is PARKED and surfaced, never silently dropped.
  */
-import { settingOn } from "./settings.js";
+import { assistantName, settingOn } from "./settings.js";
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
 import { kv, robertWakes, tickets, type RobertWake } from "./store.js";
@@ -261,7 +261,7 @@ async function surfaceParked(rows: RobertWake[]): Promise<void> {
       `[wake-queue] PARKED wake ${r.id.slice(0, 8)} (${r.key}) after ${r.attempts} attempts: ${r.last_error ?? "?"}`,
     );
     await notifier(
-      `🅿️ <b>Robert wake parked</b> <code>${r.id.slice(0, 8)}</code> ${r.key} — ${r.attempts} failed turns, ` +
+      `🅿️ <b>${assistantName()} wake parked</b> <code>${r.id.slice(0, 8)}</code> ${r.key} — ${r.attempts} failed turns, ` +
         `last: ${String(r.last_error ?? "?").slice(0, 120)}. <code>mc robert wakes</code>`,
     ).catch(() => {});
   }

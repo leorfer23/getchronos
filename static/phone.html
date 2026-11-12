@@ -8,11 +8,11 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Robert">
+<meta name="apple-mobile-web-app-title" content="Robert" data-an="content">
 <link rel="manifest" href="/phone.webmanifest">
 <link rel="icon" href="/phone-icon.png">
 <link rel="apple-touch-icon" href="/phone-icon-512.png">
-<title>Robert</title>
+<title data-an="text">Robert</title>
 <meta name="chronos-build" content="2026-11-10a">
 <style>
   :root {
@@ -538,7 +538,7 @@
   <!-- ── HOME: the conversation with Robert ──────────────────────────────────── -->
   <div id="v-home" class="view">
     <header class="top">
-      <div class="who"><b>Robert</b><small id="top-sub"></small></div>
+      <div class="who"><b data-an="text">Robert</b><small id="top-sub"></small></div>
       <button class="upd" id="upd" hidden>Update</button>
       <button class="deskb" id="btn-desk" hidden title="Back to the Desk (Esc)">Desk <kbd>esc</kbd></button>
       <button class="ic" id="btn-more" aria-label="More"><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
@@ -555,7 +555,7 @@
         <div class="call-sub" id="call-sub"></div>
       </div>
       <div class="composer">
-        <textarea id="r-composer" rows="1" placeholder="Message Robert" autocapitalize="sentences" enterkeyhint="send" aria-label="Message Robert"></textarea>
+        <textarea id="r-composer" rows="1" placeholder="Message Robert" autocapitalize="sentences" enterkeyhint="send" aria-label="Message Robert" data-an="placeholder aria-label"></textarea>
         <button class="send" id="r-send" aria-label="Send" hidden><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg></button>
         <button class="talk" id="talk" aria-label="Talk"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
       </div>
@@ -606,6 +606,7 @@
   <div id="toast" role="status" aria-live="polite"></div>
 </div>
 
+<script src="/assistant-name.js"></script>
 <script src="/ask-card.js"></script>
 <script src="/artifact-view.js"></script>
 <script src="/chat-reply.js"></script>
@@ -622,6 +623,9 @@
 const qs = (s, r = document) => r.querySelector(s);
 const qsa = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// The assistant's name (static/assistant-name.js): rn() for text shown or said, rnH() inside HTML.
+const rn = (s) => AssistantName.say(s);
+const rnH = () => esc(AssistantName.get());
 const WS_SCHEME = location.protocol === "https:" ? "wss:" : "ws:";
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }, del: (k) => { try { localStorage.removeItem(k); } catch {} } };
 // The same front on the Mac. EMBED: the Desk opened this page over itself (an iframe on the same
@@ -647,7 +651,7 @@ const DESK_VAD = { endMs: 800, barge: 0.06, bargeMs: 300 };
 // front is every workspace in one conversation and has no lens of its own, so while the lock is on it
 // does not draw at all — nothing below runs, nothing is read, nothing cached is shown.
 if (DESKTOP && (() => { try { const v = JSON.parse(localStorage.getItem("desk-lock") || "null"); return !!(v && v.id); } catch { return false; } })()) {
-  document.getElementById("app").innerHTML = '<div class="locked"><b>Hidden while the Desk shows one workspace</b>Robert’s conversation spans every workspace. Unlock the Desk to open it.<br><button type="button" id="locked-back">Back to the Desk</button></div>';
+  document.getElementById("app").innerHTML = '<div class="locked"><b>Hidden while the Desk shows one workspace</b>' + esc(AssistantName.get()) + '’s conversation spans every workspace. Unlock the Desk to open it.<br><button type="button" id="locked-back">Back to the Desk</button></div>';
   const back = () => { if (EMBED) window.parent.postMessage({ type: "robert:close" }, location.origin); else location.assign("/desk"); };
   document.getElementById("locked-back").onclick = back;
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") back(); });
@@ -1159,12 +1163,12 @@ function settingsSheet() {
     <div class="field" style="margin-top:8px"><label>Language</label><div class="seg" id="lang-seg">
       ${[["", "Auto"], ["es", "Español"], ["en", "English"]].map(([v, l]) => `<button type="button" class="chip${PREFS.lang === v ? " on" : ""}" data-lang="${v}">${l}</button>`).join("")}
     </div></div>
-    <div class="field"><label>Robert's speaking speed</label><div class="seg" id="speed-seg">
+    <div class="field"><label>${rnH()}'s speaking speed</label><div class="seg" id="speed-seg">
       ${[1, 1.25, 1.5].map((v) => `<button type="button" class="chip${PREFS.speed === v ? " on" : ""}" data-speed="${v}">${v}×</button>`).join("")}
     </div></div>
     ${row("autosend", "Send dictation right away", "hold the mic, let go, and it goes — no review step", PREFS.autoSend)}
-    <div class="sgroup">Robert</div>
-    <div class="field" style="margin-top:8px"><label>Model</label><select id="r-model" aria-label="Robert model"></select></div>
+    <div class="sgroup">${rnH()}</div>
+    <div class="field" style="margin-top:8px"><label>Model</label><select id="r-model" aria-label="${rnH()} model"></select></div>
     <div class="menu"><button data-reset><span class="i">↺</span>Start a new conversation</button></div>
     <div class="sgroup">This phone</div>
     ${row("push", "Notifications", "when something needs you — answer from the tray", false)}
@@ -1176,7 +1180,7 @@ function settingsSheet() {
   loadRobertModel(qs("#r-model", b));
   qs("#r-model", b).onchange = async (e) => {
     const model = e.target.value;
-    try { await api("/agent/model", { method: "POST", body: JSON.stringify({ model }) }); toast("Robert → " + model); warmRobert(true); }
+    try { await api("/agent/model", { method: "POST", body: JSON.stringify({ model }) }); toast(rn("Robert → ") + model); warmRobert(true); }
     catch (err) { toast(err.message); loadRobertModel(e.target); }
   };
   const pushRow = qs('[data-pref="push"]', b), pushStatus = qs("#push-status", b);
@@ -1189,7 +1193,7 @@ function settingsSheet() {
   b.addEventListener("click", async (e) => {
     const t = e.target.closest("[data-pref],[data-lang],[data-speed],[data-forget],[data-push-test],[data-reload],[data-reset]"); if (!t) return;
     if (t.hasAttribute("data-reload")) { fx.tap(); return reloadApp(); }
-    if (t.hasAttribute("data-reset")) { fx.tap(); return confirmSheet("Start a new conversation with Robert?", "New conversation", async () => { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: R.sticky }) }); store.del("phone-thread"); R.loaded = false; drawThread([]); robertHistory(); toast("new conversation"); }); }
+    if (t.hasAttribute("data-reset")) { fx.tap(); return confirmSheet(rn("Start a new conversation with Robert?"), "New conversation", async () => { await api("/agent/reset", { method: "POST", body: JSON.stringify({ ws: R.sticky }) }); store.del("phone-thread"); R.loaded = false; drawThread([]); robertHistory(); toast("new conversation"); }); }
     if (t.hasAttribute("data-push-test")) { fx.tap(); try { const r = await api("/push/test", { method: "POST", body: "{}" }); toast(`sent to ${r.sent} device${r.sent === 1 ? "" : "s"}`); } catch (err) { toast(err.message); } return; }
     if (t.dataset.pref === "push") { fx.tap(); pushStatus.textContent = "…"; try { await PUSH.toggle(); } catch (err) { fx.fail(); toast(String(err.message).slice(0, 120)); } checkPush(); return paintPush(); }
     if (t.dataset.pref === "fx") { t.classList.toggle("on", fx.toggle()); return; }
@@ -1802,7 +1806,9 @@ function bubble(kind, text) {
   if (kind === "rob") foldLong(d);
   return d;
 }
-function hello() { if (!chatEl.children.length) chatEl.innerHTML = `<div class="hello"><b>${esc(tr("Hablá con Robert.", "Talk to Robert."))}</b>${esc(tr("Tocá el micrófono para una charla manos libres, o escribí.", "Tap the mic for a hands-free conversation, or type."))}</div>`; }
+function hello() { if (!chatEl.children.length) chatEl.innerHTML = `<div class="hello"><b>${esc(rn(tr("Hablá con Robert.", "Talk to Robert.")))}</b>${esc(tr("Tocá el micrófono para una charla manos libres, o escribí.", "Tap the mic for a hands-free conversation, or type."))}</div>`; }
+// The name can land after the greeting painted (a first visit, before it was kept): say it again.
+addEventListener("assistant-name", () => { const h = chatEl.querySelector(":scope > .hello"); if (h && chatEl.children.length === 1) { h.remove(); hello(); } });
 // The thread from rows (cache or /agent/history), then whatever is still in flight on top.
 function drawThread(rows) {
   // In flight = drawn here but not a stored row yet (a stored one comes back with the rows).
@@ -2097,7 +2103,7 @@ function paintCall(st = PhoneVoice.state(), why = "") {
   talk.innerHTML = on ? `<svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="3"/></svg>` : MIC_SVG.replace('width="22" height="22"', 'width="30" height="30"');
   if (!on) { const dc = qs("#v-deck .dk-call"); if (dc) dc.hidden = true; syncComposer(); return; }
   const li = voiceLang() === "es" ? 0 : 1; // which half of each [es, en] pair
-  qs("#call-st").textContent = (CALL_WORD[st] || CALL_WORD.listening)[li];
+  qs("#call-st").textContent = rn((CALL_WORD[st] || CALL_WORD.listening)[li]);
   const sub = st === "paused" ? (PAUSE_WHY[why] || PAUSE_WHY.interrupted)[li]
     : st === "speaking" ? callSub
     : st === "listening" ? (callSub || ["Decí «colgar» para terminar", "Say “hang up” to end"][li])
@@ -2106,7 +2112,7 @@ function paintCall(st = PhoneVoice.state(), why = "") {
   qs("#call-mute").classList.toggle("on", PhoneVoice.muted);
   qs("#call-lang").textContent = voiceLang().toUpperCase();
   const dc = qs("#v-deck .dk-call");
-  if (dc) { dc.hidden = false; dc.dataset.state = st; qs("b", dc).textContent = (CALL_WORD[st] || CALL_WORD.listening)[li]; }
+  if (dc) { dc.hidden = false; dc.dataset.state = st; qs("b", dc).textContent = rn((CALL_WORD[st] || CALL_WORD.listening)[li]); }
   syncComposer();
 }
 qs("#call-mute").onclick = () => { fx.tap(); PhoneVoice.setMute(!PhoneVoice.muted); paintCall(); };
@@ -2237,7 +2243,7 @@ function toDesk() {
 if (DESKTOP) {
   qs("#btn-desk").hidden = false;
   qs("#btn-desk").onclick = () => toDesk();
-  talk.title = "Call Robert (⌘⇧V) · hold to dictate";
+  talk.title = rn("Call Robert (⌘⇧V) · hold to dictate");
   document.addEventListener("keydown", (e) => {
     const chord = (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey, k = String(e.key || "").toLowerCase();
     if (chord && k === "v") { e.preventDefault(); if (V.state) return; if (PhoneVoice.on) PhoneVoice.stop(); else callStart(); return; }
@@ -2253,7 +2259,7 @@ if (DESKTOP) {
 }
 
 // ── live updates ────────────────────────────────────────────────────────────
-const BUS_TOPICS = ["session.status", "session.activity", "agent.state", "session.started", "session.ended", "session.updated", "session.usage", "agent.delta", "agent.push", "agent.asked", "agent.turn.done", "ask.created", "ask.answered", "artifact.created", "artifact.updated", "artifact.event", "draft.ready", "alert.raised", "focus.event"].join(",");
+const BUS_TOPICS = ["settings.changed", "session.status", "session.activity", "agent.state", "session.started", "session.ended", "session.updated", "session.usage", "agent.delta", "agent.push", "agent.asked", "agent.turn.done", "ask.created", "ask.answered", "artifact.created", "artifact.updated", "artifact.event", "draft.ready", "alert.raised", "focus.event"].join(",");
 let busRetry = 1000, reloadT, bus = null;
 const reloadSoon = () => { clearTimeout(reloadT); reloadT = setTimeout(() => load().catch(() => {}), 250); };
 function connectBus() {
@@ -2273,6 +2279,7 @@ function connectBus() {
   ws.onclose = () => { if (bus === ws) bus = null; S.busOpen = false; robWork(false); setTimeout(connectBus, busRetry); busRetry = Math.min(busRetry * 2, 20000); };
   ws.onmessage = (ev) => {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
+    if (e.topic === "settings.changed") { if (e.key === "assistant.name") AssistantName.refresh(); return; }
     AskCard.onEvent(e);
     PhoneDeck.onEvent(e);
     if (AskCard.TOPICS.includes(e.topic)) return;
@@ -2307,7 +2314,7 @@ function connectBus() {
       if (e.id) R.lastId = Math.max(R.lastId, e.id);
       if (PhoneVoice.on && e.reply && (mine || !e.you)) PhoneVoice.final(e, mine);
       // A failed turn is said, never left as a spinner: the engine skips "⚠️" replies, so say it here.
-      if (PhoneVoice.on && mine && String(e.reply || "").startsWith("⚠️")) { PhoneVoice.waitDone(); PhoneVoice.say(tr("Robert no pudo responder; el error quedó en el chat.", "Robert couldn't answer; the error is in the chat.")); }
+      if (PhoneVoice.on && mine && String(e.reply || "").startsWith("⚠️")) { PhoneVoice.waitDone(); PhoneVoice.say(rn(tr("Robert no pudo responder; el error quedó en el chat.", "Robert couldn't answer; the error is in the chat."))); }
       // Promote the streaming bubble into the final reply — never remove+redraw (that was the
       // "thinking → answer → answer again" flash on the PWA).
       const streamed = R.pend.get(e.turn || "?");
@@ -2498,7 +2505,7 @@ async function checkPush() {
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   if (IOS && !standalone && !("PushManager" in window)) {
     if (window.PhoneInstall?.owns("ios")) { row.hidden = true; return; } // its install banner says this, plus the sign-in link
-    qs("#nr-t").textContent = "Add Robert to your Home Screen";
+    qs("#nr-t").textContent = rn("Add Robert to your Home Screen");
     qs("#nr-s").textContent = "iPhone only sends alerts to apps on the Home Screen: Share → Add to Home Screen, then open it from there.";
     go.hidden = true;
   } else if (typeof Notification !== "undefined" && Notification.permission === "denied") {

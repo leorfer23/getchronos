@@ -133,6 +133,19 @@ test("Robert's reply pushes with its scope; dividers and empty replies do not", 
   } finally { stop(); }
 });
 
+test("a renamed assistant's reply is titled with his name; the tag and the link keep the robert id", async () => {
+  const { writeSetting } = await import("./settings.js");
+  const sent: PushPayload[] = [];
+  const stop = startPush({ enabled: true, send: async (_s, p) => { sent.push(p); }, activity: () => ({ live: false, quiet: true }), prompt: () => null });
+  try {
+    writeSetting("assistant.name", "Ada");
+    bus.publish({ topic: "agent.push", you: "status?", reply: "All quiet.", at: "now", source: "web", ws: ws.id }); await tick();
+    assert.equal(sent[0].title, "Ada · Acme");
+    assert.equal(sent[0].tag, "robert:" + ws.id);
+    assert.equal(sent[0].url, "/phone#robert=" + ws.id);
+  } finally { stop(); writeSetting("assistant.name", null); }
+});
+
 test("a subscription the browser dropped (410) is removed; other failures keep it", async () => {
   pushSubs.add(sub(1)); pushSubs.add(sub(3)); pushSubs.add(sub(4));
   const payload: PushPayload = { kind: "needs", title: "t", body: "b", tag: "x", url: "/phone", needs: 0, at: "now" };

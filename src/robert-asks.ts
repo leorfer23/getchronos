@@ -16,6 +16,7 @@
  */
 import { CONFIG } from "./config.js";
 import { asks, kv, sessions, workspaces, type Ask } from "./store.js";
+import { assistantName } from "./settings.js";
 import type { Session } from "./types.js";
 import type { UiAction } from "./telegram/agent.js";
 
@@ -130,7 +131,7 @@ export const raiseRobertAsk: Raise = ({ terminal, ...f }) => {
       .then((m) =>
         m.openSession({
           workspace_id: f.workspace_id,
-          goal: `Robert asks: ${f.question}`.slice(0, 400),
+          goal: `${assistantName()} asks: ${f.question}`.slice(0, 400),
           goal_kind: "investigation",
           goal_source: "human",
           description: holderBrief(ask),

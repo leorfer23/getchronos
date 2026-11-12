@@ -15,6 +15,8 @@
  * The page owns only where the button and panel sit; ctx = { api, toast, sessions(), askOf(s), who(s) }.
  */
 (function (root) {
+  // "Robert" as an asker or a label → the name the operator gave his assistant (static/assistant-name.js).
+  var named = function (s) { return root.AssistantName ? root.AssistantName.say(s) : s; };
   var MARK = /^::ask ([0-9a-f-]{8,36})::$/;
   var C = null; // ctx, set by init
   var rows = new Map(); // ask id → last row we read
@@ -90,7 +92,7 @@
       return '<div class="askc done gone" data-akey="' + esc(it.key) + '"><span class="ak-q1">' + esc(it.question) + '</span><span class="ak-a">dropped</span></div>';
     }
     if (it.status === "answered") {
-      return '<div class="askc done" data-akey="' + esc(it.key) + '" title="' + esc(it.who + " asked: " + it.question + (it.answer ? "\n→ " + it.answer : "")) + '">' +
+      return '<div class="askc done" data-akey="' + esc(it.key) + '" title="' + esc(named(it.who) + " asked: " + it.question + (it.answer ? "\n→ " + it.answer : "")) + '">' +
         '<span class="ak-ok">✓</span><span class="ak-q1">' + esc(it.question) + '</span>' +
         '<span class="ak-a">' + esc(it.answer || "answered") + (it.by && it.by !== "operator" && it.by !== "human" ? ' <i>· ' + esc(it.by) + '</i>' : "") + '</span></div>';
     }
@@ -98,9 +100,9 @@
       return '<button type="button" data-akopt="' + i + '" title="' + esc(o) + '">' + esc(o) + '</button>';
     }).join("");
     return '<div class="askc" data-akey="' + esc(it.key) + '">' +
-      '<div class="ak-h"><span class="ak-i">?</span><span class="ak-who">' + esc(it.who) + '</span><span class="ak-age">' + esc(ago(it.at)) + '</span></div>' +
+      '<div class="ak-h"><span class="ak-i">?</span><span class="ak-who">' + esc(named(it.who)) + '</span><span class="ak-age">' + esc(ago(it.at)) + '</span></div>' +
       '<div class="ak-q">' + esc(it.question) + '</div>' +
-      (it.note ? '<div class="ak-note"><b>Robert:</b> ' + esc(it.note) + '</div>' : "") +
+      (it.note ? '<div class="ak-note"><b>' + esc(named("Robert")) + ':</b> ' + esc(it.note) + '</div>' : "") +
       (ops ? '<div class="ak-ops">' + ops + '</div>' : "") +
       (it.text ? '<form class="ak-f"><input name="a" placeholder="' + (ops ? "or say something else…" : "Your answer…") + '" autocomplete="off" enterkeyhint="send"><button>Answer</button></form>' : "") +
       '</div>';

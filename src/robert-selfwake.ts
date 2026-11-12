@@ -28,7 +28,7 @@ import { jobHealth } from "./job-check.js";
 import { isStopped } from "./robert-drive.js";
 import { PROACTIVE_AUTO_BY } from "./inbox-guard.js";
 import { proactiveAllowed } from "./proactive-score.js";
-import { setting, settingOn } from "./settings.js";
+import { assistantName, setting, settingOn } from "./settings.js";
 import { asks, db, inbox, kv, sessionPrs, sessions, workspaces } from "./store.js";
 import { statusOf, type TermStatus } from "./term-status.js";
 import { enqueueWake, QUIET_REPLY, SWEEP_KEY } from "./wake-queue.js";
@@ -263,7 +263,7 @@ export async function openProactive(
     goal,
     goal_source: "human",
     description:
-      `Robert opened this on his own (self-wake): nobody asked for it yet.\n\n${(req.description ?? "").trim()}\n\n` +
+      `${assistantName()} opened this on his own (self-wake): nobody asked for it yet.\n\n${(req.description ?? "").trim()}\n\n` +
       `Work toward the goal up to the first thing this workspace's Standing orders say to ask about, then ask the ` +
       `operator HERE (\`mc ask "…" --options "sí,no"\`) and stop. If the goal turns out to be already done, or not ` +
       `worth doing, say so in one line and run \`mc goal done\`.`,
