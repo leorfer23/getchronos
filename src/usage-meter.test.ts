@@ -6,6 +6,7 @@ import path from "node:path";
 import { installClaudeHooks } from "./term-hooks.js";
 import {
   claudeWall,
+  cliOnThisMac,
   _resetUsage,
   noteClaudeStatusline,
   noteClaudeStreamEvent,
@@ -84,13 +85,31 @@ test("grok: newest billing line wins; cursor is unmeasured, never 0", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "usage-grok-"));
   const log = path.join(dir, "unified.jsonl");
   fs.writeFileSync(log, tail + "\n" + line(88, "2026-09-18T11:59:00Z") + "\n");
-  const snap = usageSnapshot(NOW, { grokLog: log });
+  const snap = usageSnapshot(NOW, { grokLog: log, here: () => true }); // cursor's empty chip: as if installed, whatever this machine has
   assert.equal(snap.meters.find((m) => m.cli === "grok")!.windows[0].usedPct, 88);
   assert.equal(sent.length, 1);
   assert.match(sent[0], /Grok at 88%<\/b> of its weekly limit/);
   const cursor = snap.meters.find((m) => m.cli === "cursor")!;
   assert.equal(cursor.windows.length, 0);
   assert.ok(cursor.note);
+});
+
+test("an empty chip only for a CLI this Mac has: claude always, grok and cursor when installed", () => {
+  const only = usageSnapshot(NOW, { ...noGrok, here: (cli) => cli === "claude" });
+  assert.deepEqual(only.meters.map((m) => m.cli), ["claude"], "no '— · open grok once' for a grok nobody installed");
+  const all = usageSnapshot(NOW, { ...noGrok, here: () => true });
+  assert.deepEqual(all.meters.map((m) => m.cli), ["claude", "grok", "cursor"]);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "usage-here-"));
+  try {
+    assert.equal(cliOnThisMac("claude", { PATH: "" }, dir), true);
+    assert.equal(cliOnThisMac("grok", { PATH: "", CHRONOS_GROK_BIN: path.join(dir, "grok") }, dir), false);
+    fs.writeFileSync(path.join(dir, "grok"), "#!/bin/sh\n", { mode: 0o755 });
+    assert.equal(cliOnThisMac("grok", { PATH: "", CHRONOS_GROK_BIN: path.join(dir, "grok") }, dir), true);
+    fs.writeFileSync(path.join(dir, "cursor-agent"), "#!/bin/sh\n", { mode: 0o755 });
+    assert.equal(cliOnThisMac("cursor", { PATH: dir }, dir), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("installClaudeHooks adds our statusLine, never replaces the operator's", () => {

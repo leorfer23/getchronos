@@ -8627,7 +8627,7 @@ async function vcTranscribe(wav, query, tries) {
       const r = await fetch("/api/transcribe?" + query, { method: "POST", headers: { "content-type": "audio/wav", ...vcAuth() }, body: wav });
       if (r.ok) return await r.json();
       if (i < tries && [502, 503, 504, 520, 521, 522, 523, 524].includes(r.status)) { await new Promise((ok) => setTimeout(ok, i ? 700 : 250)); continue; }
-      throw new Error((await r.text()).slice(0, 120) || "HTTP " + r.status);
+      throw new Error(((t) => { try { return JSON.parse(t).error || t; } catch { return t; } })(await r.text()).slice(0, 120) || "HTTP " + r.status);
     } catch (err) {
       if (i < tries && err?.name === "TypeError") { await new Promise((ok) => setTimeout(ok, i ? 700 : 250)); continue; }
       throw err;
@@ -8873,7 +8873,7 @@ async function dictStop(send = true) {
   DICT.busy = true; dictUi();
   try {
     const res = await fetch("/api/transcribe?lang=" + VC.lang, { method: "POST", headers: { "content-type": "audio/wav", ...vcAuth() }, body: vcWav(r.frames, r.rate) });
-    if (!res.ok) throw new Error((await res.text()).slice(0, 120) || "HTTP " + res.status);
+    if (!res.ok) throw new Error(((t) => { try { return JSON.parse(t).error || t; } catch { return t; } })(await res.text()).slice(0, 120) || "HTTP " + res.status);
     const text = String((await res.json()).text || "").replace(/\s+/g, " ").trim();
     if (!text || HEARD_NOISE.test(text)) toast("didn't catch that");
     else await answer(id, { text, enter: true });
@@ -9216,7 +9216,7 @@ function renderUsage() {
   DeskCockpit.render();
   const chips = [];
   let worst = null;
-  for (const cli of ["claude", "grok", "cursor"]) {
+  for (const cli of ["claude", "grok", "cursor"].filter((c) => s.meters.some((m) => m.cli === c))) { // a CLI not on this Mac gets no chip (usage-meter.ts cliOnThisMac)
     const ms = s.meters.filter((m) => m.cli === cli);
     const top = uTop(s, cli);
     if (top && (!worst || top.w.usedPct > worst.w.usedPct)) worst = top;

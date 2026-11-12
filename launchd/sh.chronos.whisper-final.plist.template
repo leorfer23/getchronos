@@ -7,7 +7,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/whisper-server</string>
+    <string>__WHISPER_BIN__</string>
     <string>-m</string>
     <string>__HOME__/.cache/whisper/__WHISPER_FINAL_MODEL__</string>
     <string>--host</string>
@@ -29,7 +29,7 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>__BREW_BIN__:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 
   <key>RunAtLoad</key>

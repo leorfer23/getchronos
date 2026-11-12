@@ -17,7 +17,7 @@ import { cloudFields, cloudKey, parseEngine } from "../scripts/stt-bench.mjs";
 
 const KEY = "sk_test_0123456789abcdef";
 const FINAL = "http://127.0.0.1:7781/inference";
-const VARS = ["CHRONOS_TRANSCRIBE_URL", "CHRONOS_TRANSCRIBE_FINAL_URL", "CHRONOS_TRANSCRIBE_FINAL_AUDIO_CTX", "CHRONOS_TRANSCRIBE_CLOUD_MODEL", "CHRONOS_TRANSCRIBE_CLOUD_ZERO_RETENTION", "CHRONOS_TRANSCRIBE_CLOUD_TIMEOUT_MS"] as const;
+const VARS = ["CHRONOS_TRANSCRIBE_URL", "CHRONOS_TRANSCRIBE_FINAL_URL", "CHRONOS_TRANSCRIBE_FINAL_AUDIO_CTX", "CHRONOS_TRANSCRIBE_CLOUD_MODEL", "CHRONOS_TRANSCRIBE_CLOUD_ZERO_RETENTION", "CHRONOS_TRANSCRIBE_CLOUD_TIMEOUT_MS", "CHRONOS_WHISPER_PORT", "CHRONOS_WHISPER_FINAL_PORT"] as const;
 const saved = VARS.map((k) => process.env[k]);
 for (const k of VARS) delete process.env[k];
 after(() => { VARS.forEach((k, i) => { if (saved[i] == null) delete process.env[k]; else process.env[k] = saved[i]; }); resetCloud({ key: null }); resetFinalEngine(); });

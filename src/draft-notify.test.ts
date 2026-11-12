@@ -4,7 +4,7 @@
  */
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { events, jobs, runs, workspaces } from "./store.js";
+import { events, jobs, kv, runs, workspaces } from "./store.js";
 import { DRAFT_TOOL_RE, draftLabel, draftsInRun, notifyDraft, setDraftNotifier } from "./draft-notify.js";
 import { claudeStyleHooks } from "./term-hooks.js";
 
@@ -33,9 +33,18 @@ test("one notice per draft: Telegram + the Mac, deduped for two minutes", async 
   assert.equal(await notifyDraft({ workspace_id: w.id, where: "terminal abcd1234", label: "Slack draft → C1: hi" }, now), true);
   assert.equal(await notifyDraft({ workspace_id: w.id, where: "terminal abcd1234", label: "Slack draft → C1: hi" }, now + 30_000), false);
   assert.equal(sent.length, 1);
-  assert.match(sent[0], /Draft listo<\/b> · Acme · terminal abcd1234/);
-  assert.match(sent[0], /No se envió/);
+  assert.match(sent[0], /Draft ready<\/b> · Acme · terminal abcd1234/, "English until a call says otherwise");
+  assert.match(sent[0], /Not sent: review it and send it yourself/);
   assert.equal(pinged.length, 1);
+  // After a call in Spanish, the notice follows the operator's language, like every alert.
+  kv.set("alerts.voice_lang", "es");
+  try {
+    assert.equal(await notifyDraft({ workspace_id: w.id, where: "terminal ef567890", label: "Slack draft → C1: hola" }, now), true);
+    assert.match(sent[1], /Draft listo<\/b> · Acme · terminal ef567890/);
+    assert.match(sent[1], /No se envió/);
+  } finally {
+    kv.del("alerts.voice_lang");
+  }
 });
 
 test("a finished run's drafts are found in its event stream", () => {

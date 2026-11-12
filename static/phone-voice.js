@@ -524,7 +524,9 @@
         var r = await fetch("/api/transcribe?" + query, { method: "POST", headers: Object.assign({ "content-type": "audio/wav" }, auth()), body: blob });
         if (r.ok) return await r.json();
         if (i < (tries || 0) && RETRY_STATUS.indexOf(r.status) >= 0) { tr("retry:" + r.status); await new Promise(function (ok) { setTimeout(ok, waits[i] || 700); }); continue; }
-        throw new Error((await r.text()).slice(0, 120) || "HTTP " + r.status);
+        var body = await r.text(), why = body;
+        try { why = JSON.parse(body).error || body; } catch (e) {} // the daemon's own sentence ("Speech-to-text isn't set up…"), not its JSON
+        throw new Error(String(why).slice(0, 120) || "HTTP " + r.status);
       } catch (e) {
         var net = e && (e.name === "TypeError" || /network|fetch|load failed/i.test(String(e.message || "")));
         if (net && i < (tries || 0)) { tr("retry:net"); await new Promise(function (ok) { setTimeout(ok, waits[i] || 700); }); continue; }

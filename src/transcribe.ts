@@ -2,19 +2,23 @@
 // OpenAI-free, no per-use cost). Set CHRONOS_TRANSCRIBE_URL to an OpenAI-style /audio/transcriptions
 // endpoint (+ OPENAI_API_KEY) to use a cloud model instead. Both Telegram voice notes and the web
 // dashboard mic funnel through here.
+import path from "node:path";
 import { ffmpegProblem } from "../bin/ffmpeg-check.mjs";
 import { askCloud, cloudReady, cloudFailed, cloudAnswered, cloudKeyterms, CloudError, CLOUD_OTHER_LANG_MIN, type CloudAsk, type CloudHeard } from "./transcribe-cloud.js";
+import { HEARING_NOT_SET_UP, WHISPER_INSTALL, WHISPER_INSTALL_ACCURATE, logDir, whisperFinalPort, whisperInstalled, whisperPort, whisperState, type WhisperState } from "./voice-setup.js";
 
-const LOCAL_URL = "http://127.0.0.1:7778/inference";
-// The second local engine (sh.chronos.whisper-final): a larger model for finished sentences, on its
-// own port so a sentence never waits behind a live-words preview on the fast one.
-const LOCAL_FINAL_URL = "http://127.0.0.1:7781/inference";
+// The local engines, on the ports install:launchd gives them (CHRONOS_WHISPER_PORT / _FINAL_PORT, read
+// on every call like the rest of the URL knobs here). The second one (sh.chronos.whisper-final) runs a
+// larger model for finished sentences, on its own port so a sentence never waits behind a live-words
+// preview on the fast one.
+const localUrl = () => `http://127.0.0.1:${whisperPort()}/inference`;
+const localFinalUrl = () => `http://127.0.0.1:${whisperFinalPort()}/inference`;
 
 export function transcribeUrl(): string {
-  return process.env.CHRONOS_TRANSCRIBE_URL || LOCAL_URL;
+  return process.env.CHRONOS_TRANSCRIBE_URL || localUrl();
 }
 export function transcribeIsLocal(): boolean {
-  return transcribeUrl() === LOCAL_URL;
+  return transcribeUrl() === localUrl();
 }
 /**
  * Where finished sentences go, or null when there is no second engine: CHRONOS_TRANSCRIBE_FINAL_URL
@@ -24,7 +28,7 @@ export function transcribeIsLocal(): boolean {
 export function finalUrl(): string | null {
   const v = process.env.CHRONOS_TRANSCRIBE_FINAL_URL;
   if (v) return /^(off|none|0)$/i.test(v) ? null : v;
-  return transcribeIsLocal() ? LOCAL_FINAL_URL : null;
+  return transcribeIsLocal() ? localFinalUrl() : null;
 }
 
 export type EngineName = "fast" | "final" | "cloud";
@@ -135,19 +139,50 @@ export async function transcribeDetailed(
     method: "POST",
     headers: openai && key ? { authorization: `Bearer ${key}` } : {},
     body: form,
-  }).catch((e) =>
+  }).catch((e) => {
+    // The default engine on a Mac that never installed one: say what to run, not which port is closed
+    // (no ffmpeg probe either — there is no engine for it to explain).
+    const notSetUp = localEngineMissing(url);
+    if (notSetUp) throw new TranscribeError(notSetUp.message, { engine: url, cause: e, setup: notSetUp.setup });
     // A bare "fetch failed" hides the usual cause: sh.chronos.whisper is down (it exits at start
     // when --convert can't run ffmpeg).
-    fail(`transcription engine not reachable at ${url}${url === LOCAL_URL ? " — is sh.chronos.whisper running? (see whisper.err.log)" : url === LOCAL_FINAL_URL ? " — is sh.chronos.whisper-final running? (see whisper-final.err.log)" : ""}`, undefined, undefined, e)
-  );
+    const agent = url === localUrl() ? "sh.chronos.whisper" : url === localFinalUrl() ? "sh.chronos.whisper-final" : null;
+    return fail(`transcription engine not reachable at ${url}${agent ? ` — is ${agent} running? (see ${path.join(logDir(), `${agent.slice("sh.chronos.".length)}.err.log`)})` : ""}`, undefined, undefined, e);
+  });
   if (!res.ok) {
     const body = (await res.text().catch(() => "")).slice(0, 500);
     fail(`transcription HTTP ${res.status}: ${body.slice(0, 300)}`, res.status, body);
   }
   const data: any = await res.json();
+  if (url === localUrl()) saidNotSetUp = false; // it hears now: a later outage is news again
   const probs = data.language_probabilities && typeof data.language_probabilities === "object" ? data.language_probabilities : null;
   return { text: String(data.text ?? "").trim(), probs };
 }
+
+/**
+ * The default local engine did not answer and whisper was never installed here (no server, no model or
+ * no launchd agent): the error to give instead of a closed port. null for every other URL — a custom
+ * CHRONOS_TRANSCRIBE_URL is someone's own setup and keeps the plain "not reachable at <url>" — and for
+ * an installed engine that is merely down, which keeps pointing at its log.
+ */
+export function localEngineMissing(url: string, state: () => WhisperState = whisperState): { message: string; setup: string } | null {
+  if (url !== localUrl()) return null;
+  return whisperInstalled(state()) ? null : { message: HEARING_NOT_SET_UP, setup: WHISPER_INSTALL };
+}
+
+let saidNotSetUp = false;
+/**
+ * The daemon-log line for a transcription that failed only because speech-to-text was never set up —
+ * once per daemon run (until it hears something), not once per press or per ~700 ms partial. null =
+ * already said. Every other failure keeps its own loud line (transcribeFailure).
+ */
+export function notSetUpLogLine(e: TranscribeError): string | null {
+  if (saidNotSetUp) return null;
+  saidNotSetUp = true;
+  return `[transcribe] speech-to-text is not set up on this Mac — the mic and calls need it. Install it (local, free): ${e.setup}`;
+}
+/** Tests. */
+export function resetNotSetUp(): void { saidNotSetUp = false; saidFinalMissing = false; }
 
 export type Lang2 = "es" | "en";
 
@@ -322,12 +357,28 @@ export async function hearFinal(
     } catch (e) {
       // No HTTP status = nobody answered on that port: stop knocking for a while.
       if (e instanceof TranscribeError && e.status == null) {
-        if (now >= finalDownUntil) console.warn(`[transcribe] second engine not reachable (${e.engine}) — finished sentences use the fast engine; retry in ${FINAL_DOWN_MS / 1000}s`);
+        const said = finalDownLine(e.engine);
+        if (said && now >= finalDownUntil) console.warn(said);
         finalDownUntil = now + FINAL_DOWN_MS;
       } else console.warn(`[transcribe] second engine failed (${String((e as any)?.message ?? e).slice(0, 160)}) — this sentence goes to the fast engine`);
     }
   }
   return run("fast");
+}
+
+let saidFinalMissing = false;
+/**
+ * What to log when the second engine did not answer. Installed (its launchd agent is there) and down:
+ * the old line, every FINAL_DOWN_MS — that is an outage. Never installed: it is an optional upgrade, so
+ * one line per daemon run, and none at all when the fast engine is missing too (the not-set-up line
+ * already says what to install). A custom CHRONOS_TRANSCRIBE_FINAL_URL is always treated as installed.
+ */
+export function finalDownLine(engine: string, state: () => WhisperState = whisperState): string | null {
+  const st = engine === localFinalUrl() ? state() : null;
+  if (!st || st.finalAgent) return `[transcribe] second engine not reachable (${engine}) — finished sentences use the fast engine; retry in ${FINAL_DOWN_MS / 1000}s`;
+  if (saidFinalMissing || !whisperInstalled(st)) return null;
+  saidFinalMissing = true;
+  return `[transcribe] the larger model for finished sentences is not installed — they use the fast engine (optional: ${WHISPER_INSTALL_ACCURATE})`;
 }
 
 /**
@@ -351,13 +402,16 @@ export class TranscribeError extends Error {
   status?: number;
   body?: string;
   ffmpeg?: string | null;
-  constructor(msg: string, o: { engine: string; status?: number; body?: string; ffmpeg?: string | null; cause?: unknown }) {
+  /** Set when nothing is installed to hear with: the command that installs it (src/voice-setup.ts). */
+  setup?: string;
+  constructor(msg: string, o: { engine: string; status?: number; body?: string; ffmpeg?: string | null; cause?: unknown; setup?: string }) {
     super(msg, { cause: o.cause });
     this.name = "TranscribeError";
     this.engine = o.engine;
     this.status = o.status;
     this.body = o.body;
     this.ffmpeg = o.ffmpeg;
+    if (o.setup) this.setup = o.setup;
   }
 }
 

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { CONFIG } from "./config.js";
 import {
   _resetProviderLimitState,
   clearProviderLimited,
   DEFAULT_LIMIT_COOLDOWN_MS,
+  fallbackUsable,
   isAuthError,
   isCreditWallError,
   isProviderLimitError,
@@ -95,25 +99,56 @@ test("withProviderFallback: non-limit primary error propagates", async () => {
   assert.equal(isProviderLimited("t-fail"), false);
 });
 
+/**
+ * A grok this test controls — installed and signed in (its auth file) in a tmp dir — so no result
+ * depends on whether the machine running the suite has grok, or a grok login. `body` is its script.
+ */
+function fakeGrok(body = "cat >/dev/null 2>&1\necho 'chronos tests: fake grok failed' >&2\nexit 1"): { dir: string; restore: () => void } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mf-fake-grok-"));
+  fs.writeFileSync(path.join(dir, "auth.json"), "{}");
+  fs.writeFileSync(path.join(dir, "grok"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  const saved = { bin: CONFIG.grokBin, home: process.env.GROK_HOME, backend: CONFIG.agent.fallbackBackend, chain: CONFIG.agent.fallbackChain };
+  (CONFIG as any).grokBin = path.join(dir, "grok");
+  process.env.GROK_HOME = dir;
+  CONFIG.agent.fallbackBackend = "grok";
+  CONFIG.agent.fallbackChain = [];
+  return {
+    dir,
+    restore: () => {
+      (CONFIG as any).grokBin = saved.bin;
+      if (saved.home == null) delete process.env.GROK_HOME; else process.env.GROK_HOME = saved.home;
+      CONFIG.agent.fallbackBackend = saved.backend;
+      CONFIG.agent.fallbackChain = saved.chain;
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
 test("withProviderFallback: auth failure routes to fallback but sets NO cooldown", async () => {
   _resetProviderLimitState();
+  const grok = fakeGrok();
   let killed = false;
-  await assert.rejects(
-    () =>
-      withProviderFallback({
-        key: "t-auth",
-        primary: async () => {
-          throw new Error("Not logged in · Please run /login");
-        },
-        system: "sys",
-        prompt: "hi",
-        killPrimary: () => {
-          killed = true;
-        },
-        timeoutMs: 2_000,
-      }),
-    /not logged in|fallback/i,
-  );
+  try {
+    await assert.rejects(
+      () =>
+        withProviderFallback({
+          key: "t-auth",
+          primary: async () => {
+            throw new Error("Not logged in · Please run /login");
+          },
+          system: "sys",
+          prompt: "hi",
+          sandbox: "off",
+          killPrimary: () => {
+            killed = true;
+          },
+          timeoutMs: 2_000,
+        }),
+      /not logged in.*fallback grok also failed/i,
+    );
+  } finally {
+    grok.restore();
+  }
   assert.equal(killed, true);
   // A re-login fixes it immediately — the next turn must go back to Claude, not stay on grok.
   assert.equal(isProviderLimited("t-auth"), false);
@@ -281,14 +316,15 @@ test("resolveManagerFallbacks: grok then cursor; never claude, unknown or repeat
     CONFIG.agent.fallbackBackend = "grok";
     CONFIG.agent.fallbackModel = "grok-4.5";
     CONFIG.agent.fallbackChain = ["cursor", "claude", "grok", "no-such-cli", "codex/gpt-5"];
-    assert.deepEqual(resolveManagerFallbacks(null), [
+    const all = () => true; // the chain's shape; which of these this Mac can run is the next test
+    assert.deepEqual(resolveManagerFallbacks(null, all), [
       { backend: "grok", model: "grok-4.5" },
       { backend: "cursor", model: null },
       { backend: "codex", model: "gpt-5" },
     ]);
     // A backend known to be out of balance is skipped until its cooldown ends.
     markProviderLimited(backendLimitKey("grok"), "402 Payment Required: usage balance exhausted");
-    assert.deepEqual(resolveManagerFallbacks(null).map((f) => f.backend), ["cursor", "codex"]);
+    assert.deepEqual(resolveManagerFallbacks(null, all).map((f) => f.backend), ["cursor", "codex"]);
   } finally {
     Object.assign(CONFIG.agent, saved);
     _resetProviderLimitState();
@@ -299,12 +335,18 @@ test("withProviderFallback: grok fails → the same turn runs on the next backen
   _resetProviderLimitState();
   const saved = { ...CONFIG.agent };
   const savedGrok = CONFIG.grokBin;
+  const savedHome = process.env.GROK_HOME;
   const swaps: string[] = [];
+  // A grok that is installed and signed in (its auth file) but out of balance: it runs, and fails.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mf-grok-"));
+  fs.writeFileSync(path.join(dir, "auth.json"), "{}");
+  fs.writeFileSync(path.join(dir, "grok"), "#!/bin/sh\ncat >/dev/null 2>&1\necho '402 Payment Required: usage balance exhausted' >&2\nexit 1\n", { mode: 0o755 });
   try {
     CONFIG.agent.fallbackBackend = "grok";
     CONFIG.agent.fallbackModel = null as any;
     CONFIG.agent.fallbackChain = ["mock"];
-    (CONFIG as any).grokBin = "/nonexistent/grok-out-of-balance";
+    (CONFIG as any).grokBin = path.join(dir, "grok");
+    process.env.GROK_HOME = dir;
     const out = await withProviderFallback({
       key: "t-chain",
       primary: async () => {
@@ -321,6 +363,94 @@ test("withProviderFallback: grok fails → the same turn runs on the next backen
   } finally {
     Object.assign(CONFIG.agent, saved);
     (CONFIG as any).grokBin = savedGrok;
+    if (savedHome == null) delete process.env.GROK_HOME; else process.env.GROK_HOME = savedHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+    _resetProviderLimitState();
+  }
+});
+
+test("only engines this Mac can run: grok needs its binary and its login, cursor a key; nothing usable → no chain", () => {
+  _resetProviderLimitState();
+  const saved = { ...CONFIG.agent };
+  const savedGrok = CONFIG.grokBin;
+  const savedHome = process.env.GROK_HOME;
+  const savedKey = process.env.CURSOR_API_KEY;
+  const savedCursorBin = CONFIG.cursorBin;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mf-ready-"));
+  try {
+    CONFIG.agent.fallbackBackend = "grok";
+    CONFIG.agent.fallbackModel = "grok-4.5";
+    CONFIG.agent.fallbackChain = ["cursor"];
+    delete process.env.CURSOR_API_KEY;
+    process.env.GROK_HOME = dir;
+    (CONFIG as any).grokBin = "/nonexistent/grok";
+    (CONFIG as any).cursorBin = "/nonexistent/cursor-agent";
+    assert.equal(fallbackUsable("grok"), false, "not installed");
+    assert.equal(fallbackUsable("cursor"), false, "not installed");
+    assert.deepEqual(resolveManagerFallbacks(null), [], "a Mac with only claude has no fallback — not a grok that does not exist");
+    fs.writeFileSync(path.join(dir, "grok"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    (CONFIG as any).grokBin = path.join(dir, "grok");
+    assert.equal(fallbackUsable("grok"), false, "installed but never signed in");
+    fs.writeFileSync(path.join(dir, "auth.json"), "{}");
+    assert.equal(fallbackUsable("grok"), true);
+    fs.writeFileSync(path.join(dir, "cursor-agent"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    (CONFIG as any).cursorBin = path.join(dir, "cursor-agent");
+    assert.equal(fallbackUsable("cursor"), false, "installed, still no key");
+    process.env.CURSOR_API_KEY = "test-key";
+    assert.equal(fallbackUsable("cursor"), true, "installed and a key");
+    assert.deepEqual(resolveManagerFallbacks(null).map((f) => f.backend), ["grok", "cursor"]);
+  } finally {
+    Object.assign(CONFIG.agent, saved);
+    (CONFIG as any).grokBin = savedGrok;
+    (CONFIG as any).cursorBin = savedCursorBin;
+    if (savedHome == null) delete process.env.GROK_HOME; else process.env.GROK_HOME = savedHome;
+    if (savedKey == null) delete process.env.CURSOR_API_KEY; else process.env.CURSOR_API_KEY = savedKey;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("withProviderFallback: no fallback installed → the wall itself is the error, no engine-swap notice", async () => {
+  _resetProviderLimitState();
+  const saved = { ...CONFIG.agent };
+  const savedGrok = CONFIG.grokBin;
+  const savedKey = process.env.CURSOR_API_KEY;
+  const swaps: string[] = [];
+  let calls = 0;
+  try {
+    CONFIG.agent.fallbackBackend = "grok";
+    CONFIG.agent.fallbackChain = ["cursor"];
+    (CONFIG as any).grokBin = "/nonexistent/grok";
+    delete process.env.CURSOR_API_KEY;
+    let kills = 0;
+    const turn = () => withProviderFallback({
+      key: "t-none",
+      primary: async () => { calls++; throw new Error("You've hit your session limit · resets 2:20pm"); },
+      system: "sys",
+      prompt: "hi",
+      sandbox: "off",
+      timeoutMs: 10_000,
+      onFallback: (fb) => swaps.push(`${fb.backend}: ${fb.why}`),
+      killPrimary: () => { kills++; },
+    }).then(() => assert.fail("should throw"), (e: Error) => e);
+    const e = await turn();
+    assert.match(e.message, /^You've hit your session limit · resets 2:20pm$/, "the limit as the CLI said it, nothing about grok");
+    assert.deepEqual(swaps, []);
+    assert.equal(kills, 1, "the walled process still goes: the next turn starts a fresh one");
+    // No cooldown to sit out on another engine: the next turn asks Claude again.
+    await turn();
+    assert.equal(calls, 2);
+    const auth = await withProviderFallback({
+      key: "t-none-auth",
+      primary: async () => { throw new Error("Not logged in · Please run /login"); },
+      system: "sys", prompt: "hi", sandbox: "off", timeoutMs: 10_000,
+      onFallback: (fb) => swaps.push(fb.why),
+    }).catch((x: Error) => x);
+    assert.match(String((auth as Error).message), /Not logged in/);
+    assert.deepEqual(swaps, []);
+  } finally {
+    Object.assign(CONFIG.agent, saved);
+    (CONFIG as any).grokBin = savedGrok;
+    if (savedKey == null) delete process.env.CURSOR_API_KEY; else process.env.CURSOR_API_KEY = savedKey;
     _resetProviderLimitState();
   }
 });

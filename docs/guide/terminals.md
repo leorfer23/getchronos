@@ -75,7 +75,8 @@ own, or give one a key from the chips' edit button.
 - **Restarts and crashes:** terminals live in the daemon, not in a window. When the daemon comes back,
   each terminal reopens on its own transcript; one that was mid-work is told to continue.
 - **Out of credits:** a terminal that hits its CLI's limit switches model, or opens a stand-in on the
-  next CLI with the goal and the story so far (⚙ Settings → Failover). The old one stays open.
+  next CLI with the goal and the story so far (⚙ Settings → Failover) — only a CLI that is installed
+  and signed in on this Mac. The old one stays open.
 - **Ended:** reopen it from **Recent** (or `mc session reopen <id>`) with its context intact.
 
 ---

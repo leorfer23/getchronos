@@ -9,7 +9,10 @@ import assert from "node:assert/strict";
 import { bus, type BusEvent } from "./bus.js";
 import { CONFIG } from "./config.js";
 import { db, sessions, workspaces } from "./store.js";
-import { backendInstalled } from "./backends/index.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { backendInstalled, backendReady } from "./backends/index.js";
 import type { DeskPrompt } from "./desk-prompt.js";
 import type { Session } from "./types.js";
 import {
@@ -19,6 +22,7 @@ import {
   detectLoginWall,
   detectWall,
   failoverOwns,
+  failoverPlan,
   failoverUsable,
   fallbackChain,
   onTerminalQuiet,
@@ -480,6 +484,31 @@ test("backendInstalled: registered AND on disk; end_reason survives the pty's ow
   assert.equal(sessions.get(s.id)!.end_reason, "out of credits → continued in grok terminal ab12cd34");
   sessions.revive(s.id);
   assert.equal(sessions.get(s.id)!.end_reason, null);
+});
+
+test("ready = installed and not signed out: grok needs its auth file; the boot plan names only what this Mac can take", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tf-ready-"));
+  const prev = CONFIG.grokBin;
+  try {
+    fs.writeFileSync(path.join(home, "grok"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    CONFIG.grokBin = path.join(home, "grok");
+    assert.equal(backendInstalled("grok"), true);
+    assert.equal(backendReady("grok", { GROK_HOME: home }), false, "installed, never logged in: a stand-in would open on a login screen");
+    fs.writeFileSync(path.join(home, "auth.json"), "{}");
+    assert.equal(backendReady("grok", { GROK_HOME: home }), true);
+    assert.equal(backendReady("mock"), true, "no login signal → installed is enough");
+    assert.equal(backendReady("no-such-backend"), false);
+  } finally {
+    CONFIG.grokBin = prev;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+  // A Mac with only claude: the configured chain is named as what was looked for, never as the plan.
+  assert.equal(
+    failoverPlan(["grok", "cursor"], () => false, "opus", 3),
+    "/model opus, then they wait for you — no stand-in CLI is installed and signed in here (looked for: grok, cursor — ⚙ Settings → Failover picks others)",
+  );
+  assert.equal(failoverPlan(["grok", "cursor", "codex"], (b) => b === "codex", "opus", 3), "/model opus → codex (cap 3)");
+  assert.equal(failoverPlan(["grok", "no-such-cli"], (b) => b === "grok", "", 2), "grok (cap 2)");
 });
 
 // ── the login wall (stuck-alerts tells the operator; failover never acts on it) ──

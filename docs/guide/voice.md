@@ -17,10 +17,11 @@ sentence or two. Spanish and English both work, even mixed in one sentence.
 **Hearing** runs on your Mac with whisper.cpp — the audio does not leave the machine:
 
 ```bash
-brew install whisper-cpp ffmpeg
-mkdir -p ~/.cache/whisper   # put a ggml model here, e.g. ggml-small.bin
-npm run install:launchd -- --all   # the daemon + the whisper server at login (skips what is not installed)
+bash scripts/install-whisper.sh   # whisper.cpp + ffmpeg (Homebrew), the small model, its login agent
 ```
+
+`--accurate` adds a larger model for whole sentences (+1.5 GB). Until hearing is set up, the mic
+tells you this command instead of failing.
 
 **Speaking** works out of the box with macOS `say`. On Apple Silicon, `bash scripts/install-tts.sh`
 adds a local neural voice; `say` stays the fallback.

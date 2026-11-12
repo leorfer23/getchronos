@@ -211,7 +211,7 @@ test("dispatchIdeaFeeder rejects a retired model with an explicit error", () => 
   });
   assert.throws(
     () => dispatchIdeaFeeder(ws.id, "miner", { force: true }),
-    (e: Error) => /modelo desconocido \(retirado\).*kimi-k3/.test(e.message),
+    (e: Error) => /retired model \(no longer served\).*kimi-k3/.test(e.message),
   );
 });
 

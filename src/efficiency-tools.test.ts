@@ -37,6 +37,18 @@ test("cursor mcp.json gains fff beside existing servers, reinstall is a noop", (
   assert.equal(installCursorFffMcp(dir, "/opt/homebrew/bin/fff-mcp", null), "skipped");
 });
 
+test("no config dir is made for a CLI that is not on this Mac", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "fff-absent-"));
+  const cursorDir = path.join(base, ".cursor"), grokHome = path.join(base, ".grok");
+  assert.equal(installCursorFffMcp(cursorDir, "/opt/homebrew/bin/fff-mcp", null, false), "skipped");
+  assert.equal(installGrokFffMcp(grokHome, "/opt/homebrew/bin/fff-mcp", null, false), "skipped");
+  assert.equal(fs.existsSync(cursorDir) || fs.existsSync(grokHome), false, "no ~/.cursor or ~/.grok for tools never installed");
+  // With the CLI here, the dir is made as before.
+  assert.equal(installCursorFffMcp(cursorDir, "/opt/homebrew/bin/fff-mcp", null, true), "written");
+  assert.equal(installGrokFffMcp(grokHome, "/opt/homebrew/bin/fff-mcp", null, true), "written");
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
 test("grok config.toml gets one fff block and keeps the hooks block", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "fff-grok-"));
   const file = path.join(home, "config.toml");

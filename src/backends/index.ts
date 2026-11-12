@@ -61,7 +61,7 @@ export function validateSpawnTarget(
   repo?: { name?: string | null; git_remote?: string | null; delivery?: "commit" | "pr" | null } | null,
 ): string | null {
   if (backend && !hasBackend(backend)) return `unknown backend: ${backend}`;
-  if (model && RETIRED_MODELS.has(model)) return `modelo desconocido (retirado): ${model}`;
+  if (model && RETIRED_MODELS.has(model)) return `retired model (no longer served): ${model}`;
   if (backend === "cursor-cloud") {
     if (!repo) {
       return `cursor-cloud refused: needs a GitHub repo and none was resolvable for this job — Phase 1 is GitHub-only`;
@@ -172,4 +172,17 @@ export function backendInstalled(name: string | null | undefined): boolean {
   if (bin.includes("/")) return runnable(bin);
   const dirs = [path.join(os.homedir(), ".mc", "bin"), ...(process.env.PATH ?? "").split(path.delimiter)];
   return dirs.some((d) => !!d && runnable(path.join(d, bin)));
+}
+
+/**
+ * Installed AND not known to be logged out — what a failover may hand a walled turn to. Only cheap,
+ * local signals, never a spawn (this runs inside a wall, on the daemon's event loop): grok's own auth
+ * file, the one `grok login` writes and the same rule a host reports its CLIs by (src/hostd/inventory.ts).
+ * A CLI with no such signal counts as ready once installed; cursor's key rule stays with its callers,
+ * which know the workspace whose key it would use.
+ */
+export function backendReady(name: string | null | undefined, env: NodeJS.ProcessEnv = process.env, home = os.homedir()): boolean {
+  if (!backendInstalled(name)) return false;
+  if (getBackend(name).name === "grok") return fs.existsSync(path.join(env.GROK_HOME || path.join(home, ".grok"), "auth.json"));
+  return true;
 }

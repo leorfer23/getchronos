@@ -6,14 +6,19 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   pickEngine, hearFinal, warmFinal, vocabPrompt, finalFields, finalUrl, wavMs, resetFinalEngine, transcribeDetailed,
   TranscribeError, SHORT_CLIP_MS, PROMPT_MIN_MS, VOCAB_MAX_CHARS, FINAL_DOWN_MS, AUDIO_CTX_MAX_MS, collapseRepeat, type AskOpts, type Heard,
+  finalDownLine, localEngineMissing, notSetUpLogLine, resetNotSetUp,
 } from "./transcribe.js";
 import { setting } from "./settings.js";
+import { HEARING_NOT_SET_UP, WHISPER_INSTALL, whisperInstalled, whisperState, type WhisperState } from "./voice-setup.js";
 
 const FINAL = "http://127.0.0.1:7781/inference";
-const URL_VARS = ["CHRONOS_TRANSCRIBE_URL", "CHRONOS_TRANSCRIBE_FINAL_URL", "CHRONOS_TRANSCRIBE_FINAL_AUDIO_CTX"] as const;
+const URL_VARS = ["CHRONOS_TRANSCRIBE_URL", "CHRONOS_TRANSCRIBE_FINAL_URL", "CHRONOS_TRANSCRIBE_FINAL_AUDIO_CTX", "CHRONOS_WHISPER_PORT", "CHRONOS_WHISPER_FINAL_PORT"] as const;
 const saved = URL_VARS.map((k) => process.env[k]);
 for (const k of URL_VARS) delete process.env[k];
 after(() => URL_VARS.forEach((k, i) => { if (saved[i] == null) delete process.env[k]; else process.env[k] = saved[i]; }));
@@ -196,4 +201,59 @@ test("a transcript that is one sentence written two or three times over is that 
   assert.equal(collapseRepeat("no, no"), "no, no");
   assert.equal(collapseRepeat("dale dale dale dale"), "dale dale dale dale");
   assert.equal(collapseRepeat("primero esto y después esto otro"), "primero esto y después esto otro");
+});
+
+test("a Mac that never installed whisper is told what to run, once; an installed engine that is down keeps pointing at its log", async () => {
+  const none: WhisperState = { server: null, models: [], agent: false, finalAgent: false };
+  const fast: WhisperState = { server: "/opt/homebrew/bin/whisper-server", models: ["ggml-small.bin"], agent: true, finalAgent: false };
+  const both: WhisperState = { ...fast, models: ["ggml-large-v3-turbo.bin", "ggml-small.bin"], finalAgent: true };
+  const local = "http://127.0.0.1:7778/inference";
+  assert.deepEqual(localEngineMissing(local, () => none), { message: HEARING_NOT_SET_UP, setup: WHISPER_INSTALL });
+  assert.equal(localEngineMissing(local, () => fast), null, "installed but down: the old 'not reachable' error, with its log");
+  assert.equal(localEngineMissing("http://10.0.0.2:9000/inference", () => none), null, "a custom engine is someone's own setup");
+  assert.ok(HEARING_NOT_SET_UP.length + '{"error":"'.length <= 100, "the pages show ~100 characters of an error: the command must survive");
+
+  resetNotSetUp();
+  const e = new TranscribeError(HEARING_NOT_SET_UP, { engine: local, setup: WHISPER_INSTALL });
+  assert.match(notSetUpLogLine(e) ?? "", /not set up on this Mac .* bash scripts\/install-whisper\.sh$/);
+  assert.equal(notSetUpLogLine(e), null, "said once per run, not once per press or per partial");
+
+  // The second engine: an outage when installed, an optional extra (one line, ever) when not.
+  resetNotSetUp();
+  const fin = "http://127.0.0.1:7781/inference";
+  assert.match(finalDownLine(fin, () => both) ?? "", /second engine not reachable .* retry in 30s/);
+  assert.match(finalDownLine(fin, () => both) ?? "", /second engine not reachable/, "an outage is said every window");
+  assert.match(finalDownLine(fin, () => fast) ?? "", /larger model for finished sentences is not installed .* --accurate/);
+  assert.equal(finalDownLine(fin, () => fast), null, "…once");
+  resetNotSetUp();
+  assert.equal(finalDownLine(fin, () => none), null, "nothing installed at all: the not-set-up line says it all");
+  assert.match(finalDownLine("http://10.0.0.2:9001/inference", () => none) ?? "", /second engine not reachable/, "a custom URL is always an outage");
+});
+
+test("whisper's install state is read from files only: server, a model, the launchd agent", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "whisper-state-"));
+  try {
+    const env = { PATH: "" };
+    let st = whisperState(home, env);
+    assert.deepEqual(st.models, []);
+    assert.equal(st.agent, false);
+    assert.equal(whisperInstalled(st), false);
+    fs.mkdirSync(path.join(home, ".cache", "whisper"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".cache", "whisper", "ggml-small.bin"), "");
+    fs.writeFileSync(path.join(home, ".cache", "whisper", "notes.txt"), "");
+    fs.mkdirSync(path.join(home, "Library", "LaunchAgents"), { recursive: true });
+    fs.writeFileSync(path.join(home, "Library", "LaunchAgents", "sh.chronos.whisper.plist"), "");
+    const bin = path.join(home, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "whisper-server"), "#!/bin/sh\n", { mode: 0o755 });
+    st = whisperState(home, { PATH: bin });
+    assert.deepEqual(st.models, ["ggml-small.bin"]);
+    assert.equal(st.server, path.join(bin, "whisper-server"));
+    assert.equal(st.agent, true);
+    assert.equal(st.finalAgent, false);
+    assert.equal(whisperInstalled(st), true);
+    assert.equal(whisperInstalled({ ...st, agent: false }), false, "no agent = nothing keeps it running");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });

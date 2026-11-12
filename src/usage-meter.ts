@@ -20,6 +20,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { notify, esc } from "./telegram/api.js";
+import { findBin } from "./voice-setup.js";
 
 export type UsageCli = "claude" | "grok" | "cursor";
 
@@ -250,7 +251,21 @@ function readGrok(file = GROK_LOG()): UsageMeter | null {
 
 // ── the snapshot the Desk and `mc usage` read ────────────────────────────────
 
-export function usageSnapshot(now = Date.now(), opts: { grokLog?: string } = {}): UsageSnapshot {
+/**
+ * Is this CLI on this Mac? The empty chip ("— · open grok once") is for a tool the operator has and has
+ * not read yet; on a Mac with only claude, grok and cursor chips were a nag about tools never installed.
+ * claude always gets one — it is the CLI Chronos runs on. CHRONOS_<CLI>_BIN overrides like config.ts.
+ */
+export function cliOnThisMac(cli: UsageCli, env: NodeJS.ProcessEnv = process.env, home = os.homedir()): boolean {
+  if (cli === "claude") return true;
+  const pinned = (cli === "grok" ? env.CHRONOS_GROK_BIN : env.CHRONOS_CURSOR_BIN)?.trim();
+  if (pinned && path.isAbsolute(pinned)) return fs.existsSync(pinned);
+  if (cli === "grok") return !!findBin(pinned || "grok", env) || fs.existsSync(path.join(home, ".grok", "bin", "grok"));
+  return !!findBin(pinned || "cursor-agent", env);
+}
+
+export function usageSnapshot(now = Date.now(), opts: { grokLog?: string; here?: (cli: UsageCli) => boolean } = {}): UsageSnapshot {
+  const here = opts.here ?? ((cli: UsageCli) => cliOnThisMac(cli));
   readGrok(opts.grokLog);
   const s = load();
   const meters = Object.values(s.meters).map((m) => ({
@@ -259,7 +274,7 @@ export function usageSnapshot(now = Date.now(), opts: { grokLog?: string } = {})
     windows: m.windows.filter((w) => !w.resetsAt || Date.parse(w.resetsAt) > now),
   }));
   for (const cli of ["claude", "grok", "cursor"] as UsageCli[]) {
-    if (meters.some((m) => m.cli === cli)) continue;
+    if (meters.some((m) => m.cli === cli) || !here(cli)) continue;
     meters.push({
       cli,
       scope: cli === "claude" ? profileScope(null) : cli,

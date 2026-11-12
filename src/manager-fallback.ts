@@ -9,7 +9,7 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { CONFIG } from "./config.js";
-import { getBackend, hasBackend } from "./backends/index.js";
+import { backendReady, getBackend, hasBackend } from "./backends/index.js";
 import { CREDIT_WALL_RE } from "./backends/types.js";
 import { childEnv } from "./child-env.js";
 import { sandboxWrap, type SandboxMode } from "./sandbox.js";
@@ -200,19 +200,41 @@ export function resolveManagerFallback(wsId?: string | null): FallbackTarget {
 }
 
 /**
- * Every engine a walled manager turn may still run on, in order: the fallback above (grok), then
- * CONFIG.agent.fallbackChain (cursor). Claude and repeats are dropped; a backend in its own cooldown
- * is left out so a dead balance costs one failed call per cooldown, not one per turn.
+ * May a walled manager turn run on `backend` on this Mac? Installed and not known to be logged out
+ * (backendReady), and for cursor a key headless `cursor-agent -p` can use — the daemon's or the
+ * workspace's CURSOR_API_KEY, the one fallbackLaunch hands it. The defaults name grok and cursor; on a
+ * Mac with only claude every walled turn used to spawn two binaries that do not exist and show
+ * "engine degradado: grok" for an engine that never ran.
  */
-export function resolveManagerFallbacks(wsId?: string | null): FallbackTarget[] {
-  const out: FallbackTarget[] = [resolveManagerFallback(wsId)];
+export function fallbackUsable(backend: string, wsId?: string | null): boolean {
+  if (!backendReady(backend)) return false;
+  if (getBackend(backend).name !== "cursor-agent" || process.env.CURSOR_API_KEY) return true;
+  try {
+    return !!childEnv(wsId ? workspaces.get(wsId) : undefined).CURSOR_API_KEY;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Every engine a walled manager turn may still run on, in order: the fallback above (grok), then
+ * CONFIG.agent.fallbackChain (cursor). Claude and repeats are dropped, and so is anything this Mac
+ * cannot run (`usable`) — an empty list means "no fallback here", and the wall is the answer. A backend
+ * in its own cooldown is left out so a dead balance costs one failed call per cooldown, not one per turn.
+ */
+export function resolveManagerFallbacks(
+  wsId?: string | null,
+  usable: (backend: string, wsId?: string | null) => boolean = fallbackUsable,
+): FallbackTarget[] {
+  const all: FallbackTarget[] = [resolveManagerFallback(wsId)];
   for (const step of CONFIG.agent.fallbackChain ?? []) {
     const [backend, ...rest] = step.split("/");
     // getBackend() answers claude for an unknown name — a typo here must not become a Claude call.
     if (!backend || backend === "claude" || backend === "claude-code" || !hasBackend(backend)) continue;
-    if (out.some((f) => f.backend === backend)) continue;
-    out.push({ backend, model: rest.join("/") || null });
+    if (all.some((f) => f.backend === backend)) continue;
+    all.push({ backend, model: rest.join("/") || null });
   }
+  const out = all.filter((f) => usable(f.backend, wsId));
   const live = out.filter((f) => !isProviderLimited(backendLimitKey(f.backend)));
   // Everything cooling down → still try the chain rather than fail without a single attempt.
   return live.length ? live : out;
@@ -529,7 +551,8 @@ export async function withProviderFallback(opts: WithProviderFallbackOpts): Prom
       limitError,
     });
 
-  if (isProviderLimited(opts.key)) {
+  // No fallback on this Mac: a cooldown has nowhere to send the turn, so the primary is asked again.
+  if (fb && isProviderLimited(opts.key)) {
     console.warn(
       `[manager-fallback] ${opts.key}: primary still limited → ${fb.backend}${fb.model ? `/${fb.model}` : ""}`,
     );
@@ -585,7 +608,12 @@ export async function withProviderFallback(opts: WithProviderFallbackOpts): Prom
   // A dead token is fixed by re-login, not by waiting: keep this turn alive on the fallback, but
   // never mark a cooldown — that would keep every later turn on grok long after /login.
   if (!auth) markProviderLimited(opts.key, err);
+  // The walled (or logged-out) process goes either way: the next turn starts a fresh one, which is
+  // what picks up a new login.
   opts.killPrimary?.();
+  // Nothing installed to fall back to (claude is the only CLI here): the wall itself is the answer —
+  // not "fallback grok also failed" for an engine that was never there.
+  if (!fb) throw err;
   console.warn(
     `[manager-fallback] ${opts.key}: primary ${auth ? "not authenticated" : "limited"} (${msg.slice(0, 120)}) → ${fb.backend}${fb.model ? `/${fb.model}` : ""}`,
   );
