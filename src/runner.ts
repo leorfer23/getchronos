@@ -13,6 +13,7 @@ import { resolveVerifyMode, verdictBlocks, verify } from "./verifier.js";
 import { createForRun, prDeliveryPatch } from "./reviews.js";
 import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow, type SandboxMode } from "./sandbox.js";
 import { niceWrap } from "./machine.js";
+import { awakeTimeout } from "./brain-awake.js";
 import { hostFor, LOCAL_HOST_ID, type Host, type ProcHandle } from "./hosts/index.js";
 import { brainPathsInProc, buildRemoteProcSpec, type ProcSpec } from "./hosts/proc-spec.js";
 import { profileNameFor } from "./hosts/spawn-spec.js";
@@ -655,7 +656,8 @@ export async function superviseRun(
   const STDERR_CAP = 4000;
   let stderrTail = "";
 
-  const watchdog = setTimeout(() => {
+  // Awake time only: a run the Mac slept through is not killed the moment it wakes (src/brain-awake.ts).
+  const stopWatchdog = awakeTimeout(() => {
     timedOut = true;
     // A steer-mode CLI is blocked reading stdin; EOF is its documented way to finish, and it's more
     // reliable than a signal (the child may be mid-turn and slow to handle SIGTERM). Close first,
@@ -667,7 +669,6 @@ export async function superviseRun(
     setTimeout(() => child.kill("SIGKILL"), 10_000).unref?.();
     // A re-adopted run (brain restart) already spent part of its budget before this brain saw it.
   }, s.elapsedMs ? Math.max(1000, job.timeout_sec * 1000 - s.elapsedMs) : job.timeout_sec * 1000);
-  watchdog.unref?.();
 
   const rl = readline.createInterface({ input: child.stdout });
   rl.on("line", (line) => {
@@ -744,7 +745,7 @@ export async function superviseRun(
 
   return await new Promise<RunStatus>((resolve) => {
     child.onClose(async (code) => {
-      clearTimeout(watchdog);
+      stopWatchdog();
       // Steers written to the pipe but never answered (run timed out / was killed / crashed mid-
       // turn) were marked delivered optimistically — put them back so the next dispatch re-injects
       // them. Live steering accelerates the mailbox; it must never swallow a directive.
@@ -811,7 +812,7 @@ export async function superviseRun(
       resolve(final);
     });
     child.onError((e) => {
-      clearTimeout(watchdog);
+      stopWatchdog();
       liveSteer.delete(runId);
       runs.patch(runId, {
         status: "failed",
