@@ -16,13 +16,16 @@ import { operatorGhDir } from "./gh-env.js";
  * `sandbox_allow` re-grants — plus one a Desk terminal does not need: every OTHER profile's config
  * dir (`~/.claude-<client>`, which holds that client's transcripts and login). `~/.claude` itself
  * stays readable — client profiles symlink its CLAUDE.md, skills and commands — but its history
- * (transcripts, memory, prompt history, ~/.claude.json) is denied to every other profile.
+ * (transcripts, memory, prompt history, ~/.claude.json and its backups) and the operator's ~/.codex are
+ * denied to every other profile.
  *
  * The launcher's cwd is deliberately NOT granted: started inside another client's repo, the deny
  * must win. Only its own config dir and the workspace's tickets dir are.
  */
 const DEFAULT_PROFILE_HISTORY = [
   "projects", "history.jsonl", "file-history", "paste-cache", "shell-snapshots", "sessions", "session-env", "todos",
+  // claude's copies of ~/.claude.json — the same servers and credentials as the file itself.
+  "backups",
 ];
 
 export function launcherProfile(workspaceId: string, configDir: string): string | null {
@@ -38,6 +41,8 @@ export function launcherProfile(workspaceId: string, configDir: string): string 
   const defaultHistory = own === defaultDir ? [] : [
     ...DEFAULT_PROFILE_HISTORY.map((p) => path.join(defaultDir, p)),
     path.join(os.homedir(), ".claude.json"),
+    // The operator's own Codex home (his ChatGPT login); a client profile's codex uses its own dir.
+    path.join(os.homedir(), ".codex"),
   ];
   // The operator's own gh login stays readable here: he started this CLI in his own shell, which
   // carries no workspace token (a Desk terminal of a token workspace gets its token instead).

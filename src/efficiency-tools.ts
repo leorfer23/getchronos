@@ -15,6 +15,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { childEnv } from "./child-env.js";
 import { CONFIG } from "./config.js";
+import { claudeGlobalConfig, claudeOwnHome, writeJsonAtomic } from "./parity-env.js";
 import { workspaces } from "./store.js";
 
 const FFF_NAME = "fff";
@@ -49,8 +50,10 @@ export function rtkAvailable(): boolean {
   return !!which("rtk");
 }
 
+// The `.claude.json` claude reads for this profile — `~/.claude.json` when the default profile runs with
+// the person's own Claude Code setup (parity-env.ts), `<configDir>/.claude.json` otherwise.
 function configFile(configDir: string): string {
-  return path.join(configDir, ".claude.json");
+  return claudeGlobalConfig(configDir);
 }
 function readJson(file: string): any {
   try {
@@ -122,6 +125,7 @@ export function installFffMcp(
 ): "written" | "noop" | "removed" | "skipped" {
   if (!CONFIG.fffEnabled) return "skipped";
   if (!configDir) return "skipped";
+  if (claudeOwnHome(configDir)) return installFffInOwnConfig(configFile(configDir), bin, wrapper);
   const file = configFile(configDir);
   const cfg = readJson(file);
   cfg.mcpServers = cfg.mcpServers || {};
@@ -137,6 +141,38 @@ export function installFffMcp(
   if (sameCommand(cfg.mcpServers[FFF_NAME], next)) return "noop";
   cfg.mcpServers[FFF_NAME] = next;
   writeJson(file, cfg);
+  return "written";
+}
+
+/** An `fff` entry Chronos wrote: the launcher, or the bare fff-mcp binary it used to register. */
+const oursFff = (prev: any) => !!prev && typeof prev.command === "string" && /(^|\/)fff-mcp(\.sh)?$/.test(prev.command);
+
+/**
+ * The same registration in the person's OWN `~/.claude.json`, which their terminal claude reads too — so
+ * merge-only: an `fff` of theirs is never replaced or removed (only one Chronos wrote), and a file that
+ * is there but does not parse is left alone rather than rewritten from nothing.
+ */
+function installFffInOwnConfig(file: string, bin: string | null, wrapper: string | null): "written" | "noop" | "removed" | "skipped" {
+  let cfg: any = {};
+  if (fs.existsSync(file)) {
+    try { cfg = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return "skipped"; }
+    if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) return "skipped";
+  }
+  const prev = cfg.mcpServers?.[FFF_NAME];
+  if (!bin) {
+    if (!oursFff(prev)) return "skipped";
+    delete cfg.mcpServers[FFF_NAME];
+    writeJsonAtomic(file, cfg);
+    return "removed";
+  }
+  const next = { type: "stdio", ...fffCommand(bin, wrapper) };
+  if (sameCommand(prev, next)) return "noop";
+  if (prev && !oursFff(prev)) {
+    console.warn(`[efficiency] ${file} already has its own "${FFF_NAME}" MCP server — left as it is`);
+    return "skipped";
+  }
+  (cfg.mcpServers ??= {})[FFF_NAME] = next;
+  writeJsonAtomic(file, cfg);
   return "written";
 }
 

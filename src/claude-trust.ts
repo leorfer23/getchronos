@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { claudeGlobalConfig } from "./parity-env.js";
 
 /**
  * Pre-accept claude's "Do you trust the files in this folder?" dialog for `cwd` in the profile at
@@ -11,13 +12,15 @@ import path from "node:path";
  * to answer it: the pty sat on the dialog and died within seconds (globex, 2026-09-04). Acme and
  * Initech only worked because the operator had once opened their landing dirs himself.
  *
- * Trust is per profile per folder and lives in `<configDir>/.claude.json` under `projects[cwd]`.
+ * Trust is per profile per folder and lives in the profile's global config under `projects[cwd]` —
+ * `<configDir>/.claude.json`, or `~/.claude.json` for a default profile on the person's own setup
+ * (parity-env.ts claudeGlobalConfig: the file the spawned claude will actually read).
  * Writing it before the spawn is exactly what tapping "Yes" would have done; the daemon already
  * decided this folder is the workspace's own. A profile with no `.claude.json` yet is left alone —
  * that is a brand-new login, which is interactive anyway.
  */
 export function ensureTrustedCwd(configDir: string, cwd: string): "already" | "added" | "skipped" {
-  const file = path.join(configDir, ".claude.json");
+  const file = claudeGlobalConfig(configDir);
   let state: any;
   try { state = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return "skipped"; }
   if (!state || typeof state !== "object" || Array.isArray(state)) return "skipped";

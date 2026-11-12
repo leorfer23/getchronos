@@ -379,11 +379,22 @@ export async function ensureApp(ctx) {
   return o.code === 0 ? { ok: true, built: !fresh } : { ok: false, why: `it didn't open (${lastLine(o.stderr)})`, fix: `open ${quote(bundle, d.home)}` };
 }
 
-// ── PARITY (PR E, onboarding-parity) ──────────────────────────────────────────────────────────────────
-// The "Same tools as your own Claude / ChatGPT" line goes here: GET /api/setup/parity (a 404 means the
-// route isn't there yet — print nothing) → one check { id: "parity", ok, line, fix }. Until then: none.
-async function parityCheck(_ctx) {
-  return null;
+// ── PARITY ────────────────────────────────────────────────────────────────────────────────────────────
+// "Same tools as your own Claude / ChatGPT" (GET /api/setup/parity, src/parity.ts): do the agents get
+// the person's own MCP servers, plugins and logins? Informational — it never fails setup, and an older
+// daemon without the route (or any error) prints nothing.
+async function parityCheck(ctx) {
+  let report;
+  try {
+    report = await api(ctx, "GET", "/setup/parity", 15_000);
+  } catch {
+    return null;
+  }
+  const lines = Array.isArray(report?.lines) ? report.lines.map(String) : [];
+  if (!lines.length) return null;
+  const [head, ...rest] = lines;
+  const detail = rest.map((l) => l.trim()).filter(Boolean);
+  return { id: "parity", ok: report.ok !== false, info: report.ok !== false ? false : true, line: [head, ...detail].join("\n      "), fix: null };
 }
 
 /** The whole run. Returns the exit code and the report --json prints; never calls process.exit. */

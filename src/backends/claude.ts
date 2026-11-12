@@ -3,6 +3,7 @@ import { CONFIG } from "../config.js";
 import { childEnv } from "../child-env.js";
 import { claudeDenyArgs, NO_SEND_RULE } from "../no-send.js";
 import { workspaces } from "../store/workspaces.js";
+import { claudeHomeEnv, withClaudeHome } from "../parity-env.js";
 import type { Job } from "../types.js";
 import { CREDIT_WALL_RE, jsonLine, type AgentBackend, type NormalizedEvent, type OneShotOpts, type RateLimit, type RunResult, type SpawnSpec } from "./types.js";
 
@@ -36,7 +37,8 @@ const authCache = new Map<string, { at: number; value: Promise<ClaudeAuth> }>();
 const AUTH_TTL_MS = 30_000;
 
 /**
- * Is claude logged in for `configDir`, asked the way a spawn asks: CLAUDE_CONFIG_DIR set to that dir
+ * Is claude logged in for `configDir`, asked the way a spawn asks: the home parity-env.ts gives that dir
+ * (CLAUDE_CONFIG_DIR for a named profile, none for a default profile on the person's own setup)
  * and the environment an agent gets (childEnv). claude keeps one login per config dir — on macOS a
  * keychain item named after a hash of the dir — so a login made in a plain terminal is not
  * necessarily the one an agent spawned with CLAUDE_CONFIG_DIR=~/.claude reads, and a check without
@@ -54,7 +56,7 @@ export function claudeAuthStatus(
     execFile(
       bin,
       ["auth", "status", "--json"],
-      { encoding: "utf8", timeout: o.timeoutMs ?? 10_000, env: { ...(o.env ?? childEnv(null)), CLAUDE_CONFIG_DIR: configDir } },
+      { encoding: "utf8", timeout: o.timeoutMs ?? 10_000, env: withClaudeHome(o.env ?? childEnv(null), configDir) },
       // Logged out exits 1 with the JSON still on stdout, so the exit code alone means nothing here.
       (_err, stdout) => resolve(claudeAuthFrom(String(stdout ?? ""))),
     );
@@ -80,7 +82,7 @@ function flagTail(job: Job): string[] {
   return args;
 }
 
-// Claude Code headless. Profile/account isolation via CLAUDE_CONFIG_DIR (set by the runner).
+// Claude Code headless. Profile/account isolation via CLAUDE_CONFIG_DIR (parity-env.ts decides it).
 export const claudeBackend: AgentBackend = {
   name: "claude-code",
   capabilities: { toolAllowlist: true, mcp: true },
@@ -143,7 +145,7 @@ export const claudeBackend: AgentBackend = {
     args.push(...claudeDenyArgs()); // a one-shot helper reads untrusted text: it must not be able to send either
     if (model) args.push("--model", model);
     if (resumeSessionId) args.push("--resume", resumeSessionId);
-    return { cmd: CONFIG.claudeBin, args, env: { CLAUDE_CONFIG_DIR: configDir } };
+    return { cmd: CONFIG.claudeBin, args, env: claudeHomeEnv(configDir) };
   },
 
   pinsSession: true,
@@ -167,8 +169,10 @@ export const claudeBackend: AgentBackend = {
   // sessions have them), so a headless job could not publish a page. Undocumented switch, found in
   // the 2.1.284 binary. A workspace that wants them off sets CLAUDE_CODE_DISABLE_ARTIFACT=1 in its
   // secrets_file or vars — the disable wins over this.
+  // The profile's home comes from parity-env.ts: CLAUDE_CONFIG_DIR for a named profile, nothing for a
+  // default profile running with the person's own Claude Code setup (their MCP servers, their login).
   env(_job, configDir) {
-    return { CLAUDE_CONFIG_DIR: configDir, CLAUDE_CODE_ARTIFACT: "1" };
+    return { ...claudeHomeEnv(configDir), CLAUDE_CODE_ARTIFACT: "1" };
   },
 
   parseLine: jsonLine,

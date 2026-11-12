@@ -213,6 +213,7 @@ import { hostName, reposOnHost } from "./hosts/workdir.js";
 import { HOST_PATH, brainLink, forwardedHost, hostRoutes } from "./hostlink/brain-link.js";
 import { setupRoutes } from "./setup-routes.js";
 import { pairRoutes } from "./pair.js";
+import { parityRoutes } from "./parity-routes.js";
 import { barRoutes } from "./hostlink/bar.js";
 import { PlacementError } from "./hosts/candidates.js";
 import { hostBriefRoutes } from "./hosts/brief.js";
@@ -3104,6 +3105,7 @@ export function startServer() {
   api.use(pairRoutes());
   api.use(phoneRoutes(requireAdmin));
   api.use(assistantRoutes(requireAdmin));
+  api.use(parityRoutes(requireAdmin));
 
   // Every live terminal whose goal is ticked, closed in one call — Desk / phone / Telegram ✅ only.
   // Robert and Leads never hit this door (operatorMayCloseTerminal); a Lead has its own scoped one.

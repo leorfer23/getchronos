@@ -66,6 +66,7 @@ import { startCloudReconcile } from "./cloud-reconcile.js";
 import { searchIndex } from "./store.js";
 import { installSessionSearchHooks } from "./session-search.js";
 import { startHostLink } from "./hostlink/brain-link.js";
+import { dropInheritedClaudeHome, prepareClaudeHome } from "./parity-env.js";
 
 // Defense-in-depth: every route handler and background async path is expected to catch its own
 // errors (see api.ts) — this is the backstop for whatever still slips through. Without it, Node's
@@ -93,6 +94,18 @@ if (CONFIG.sandbox.defaultMode !== "off" && CONFIG.sandbox.projectDirs.length ==
     "[sandbox] CHRONOS_PROTECTED_DIRS_EXTRA is unset — guard/strict jobs can read sibling " +
       "project dirs. Set it in .secrets (see .secrets.example) to your checkout root.",
   );
+}
+// Same tools as the person's own Claude Code (parity-env.ts): the default profile's agents switch to
+// their MCP servers, plugins and login whenever that loses nothing — before anything spawns, so no
+// agent starts half-switched. Each profile picks its own config dir, so an inherited one is dropped.
+{
+  const inherited = dropInheritedClaudeHome();
+  if (inherited) console.warn(`[parity] ignoring CLAUDE_CONFIG_DIR=${inherited} from the daemon's environment — each profile picks its own`);
+  try {
+    console.log(`[parity] ${prepareClaudeHome().detail}`);
+  } catch (e) {
+    console.warn("[parity] default profile left as it was:", (e as Error)?.message ?? e);
+  }
 }
 searchIndex.backfill();
 installSessionSearchHooks();

@@ -38,6 +38,7 @@ import { CREDIT_WALL_RE } from "./backends/types.js";
 import { DEFAULT_LIMIT_COOLDOWN_MS, isProviderLimitError, parseLimitResetsAtMs, parseResetClock } from "./manager-fallback.js";
 import { burnState } from "./burn-guard.js";
 import { notify, esc } from "./telegram/api.js";
+import { codexHome } from "./parity-env.js";
 import type { Job } from "./types.js";
 
 // ── shapes ───────────────────────────────────────────────────────────────────
@@ -213,7 +214,8 @@ export function probeAuth(backend: string, configDir: string | null | undefined)
         : { auth: "authenticated", note: null };
     }
     case "codex": {
-      const dir = configDir || "";
+      // The home codex will actually run with (parity-env.ts): ~/.codex for the default profile.
+      const dir = configDir ? codexHome(configDir) : "";
       const key = !!process.env.OPENAI_API_KEY;
       if (!dir || !fs.existsSync(dir))
         return key

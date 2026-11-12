@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CONFIG } from "./config.js";
 import { resolveTicketsDir } from "./repo-root.js";
+import { defaultClaudeDir, isDefaultClaudeDir, ownClaudeConfig, ownCodexHome } from "./parity-env.js";
 
 export type SandboxMode = "off" | "guard" | "strict";
 
@@ -78,6 +79,19 @@ export function sandboxAvailable(): boolean {
 }
 
 const q = (p: string) => `"${p.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+
+/**
+ * claude never writes `~/.claude.json` in place: it takes a `.lock` beside it and renames a temp file
+ * over it, so allowing the file alone is not enough. Checked with sandbox-exec on claude 2.1.322: a
+ * strict-style profile granting only the file failed `claude mcp add-json` with "was not saved to
+ * ~/.claude.json"; granting this prefix let it through. It only matters for a default profile running
+ * on the person's own home (parity-env.ts) — a named profile's global config sits inside its own dir.
+ */
+export function claudeJsonSiblingsRule(home: string): string {
+  if (home.includes('"')) return "";
+  const re = home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return `(allow file-write* (regex #"^${re}/\\.claude\\.json"))`;
+}
 
 // One SBPL rule covering both a dir (subpath) and an exact file (literal) for each path.
 function rule(action: "allow" | "deny", op: string, paths: string[]): string {
@@ -166,8 +180,14 @@ export function buildProfile(
   // host-link state (config.ts → sandbox.sealed).
   const seal = [rule("deny", "file-read*", sealed), rule("deny", "file-write*", sealed)];
   // The session's own Claude profile is always its own, even when another workspace's account
-  // shares the same dir (its transcripts are written there).
-  const own = [cwd, ...addDirs, configDir].filter(Boolean) as string[];
+  // shares the same dir (its transcripts are written there). On the operator's default profile that
+  // includes his own CLI homes, which it runs on (parity-env.ts) — re-granted here because a client
+  // workspace's deny list names them (store/workspaces.ts) and a walled client account can be routed
+  // onto this profile (profile-route.ts).
+  const own = [
+    cwd, ...addDirs, configDir,
+    ...(isDefaultClaudeDir(configDir) ? [ownClaudeConfig(), path.join(defaultClaudeDir(), "backups"), ownCodexHome()] : []),
+  ].filter(Boolean) as string[];
   // Static protected project dirs + dynamic per-workspace isolation deny (other workspaces' roots).
   // `own` is re-granted after, so a job scoped INTO its own repo still works.
   const projectDeny = [...projectDirs, ...denyDirs].filter((d) => !own.includes(d));
@@ -221,6 +241,7 @@ export function buildProfile(
     "(allow default)",
     '(deny file-write* (subpath "/"))',
     rule("allow", "file-write*", writeDirs),
+    claudeJsonSiblingsRule(home),
     ...readonlyRules(readonlyDirs, addDirs),
     rule("deny", "file-read*", projectDeny),
     rule("allow", "file-read*", [...own, ...readonlyDirs]),

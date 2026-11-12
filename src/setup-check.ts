@@ -24,6 +24,7 @@ import { childEnv } from "./child-env.js";
 import { workspaces } from "./store.js";
 import { getBackend } from "./backends/index.js";
 import { claudeAuthStatus } from "./backends/claude.js";
+import { claudeHomeEnv, codexHomeEnv, withClaudeHome } from "./parity-env.js";
 import { grokAuthFrom } from "./backends/grok.js";
 import type { AgentBackend } from "./backends/types.js";
 import { resultText } from "./summarize.js";
@@ -268,9 +269,23 @@ export function defaultAgentDir(): string {
 /** The env an agent of this CLI gets: childEnv's allowlist, ~/.mc/bin first on PATH, and the account dir its backend sets. */
 function agentEnv(def: Def, dir: string, home = os.homedir()): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...childEnv(null), PATH: `${path.join(home, ".mc", "bin")}:${process.env.PATH ?? ""}` };
-  if (def.dirEnv) env[def.dirEnv] = dir;
-  return env;
+  if (def.dirEnv) delete env[def.dirEnv];
+  return { ...env, ...dirEnvFor(def, dir) };
 }
+
+/**
+ * The account-dir variable a spawn of this CLI sets, as parity-env.ts decides it: none for the default
+ * profile on the person's own setup (their `claude` / `codex` login, MCP servers and config), the
+ * profile dir otherwise. The checks, the printed sign-in commands and the Desk's sign-in all use it,
+ * so a login lands exactly where the agents will look.
+ */
+function dirEnvFor(def: Def, dir: string): Record<string, string> {
+  if (def.dirEnv === "CLAUDE_CONFIG_DIR") return claudeHomeEnv(dir);
+  if (def.dirEnv === "CODEX_HOME") return codexHomeEnv(dir);
+  return {};
+}
+const envPrefixFor = (def: Def, dir: string, home: string): string =>
+  Object.entries(dirEnvFor(def, dir)).map(([k, v]) => `${k}=${shellPath(v, home)} `).join("");
 
 const tilde = (p: string, home = os.homedir()): string => (home && (p === home || p.startsWith(home + "/")) ? "~" + p.slice(home.length) : p);
 
@@ -320,7 +335,7 @@ async function cliStatus(def: Def, d: Required<Omit<StatusDeps, "fresh">> & { fr
   const bin = resolveBin(setting, { pathVar: d.pathVar, home: d.home });
   const dir = defaultAgentDir();
   const env = agentEnv(def, dir, d.home);
-  const envPrefix = def.dirEnv ? `${def.dirEnv}=${shellPath(dir, d.home)} ` : "";
+  const envPrefix = envPrefixFor(def, dir, d.home);
   const shown = shownBin(setting, d.home);
   const row: CliStatus = {
     id: def.id,
@@ -348,7 +363,7 @@ async function cliStatus(def: Def, d: Required<Omit<StatusDeps, "fresh">> & { fr
   if (def.id === "claude") {
     const others = Object.entries(d.profiles).filter(([, p]) => path.resolve(p) !== path.resolve(dir)).slice(0, 8);
     row.profiles = await Promise.all(
-      others.map(async ([name, p]) => ({ name, loggedIn: (await claudeAuthStatus(p, { bin, env: { ...env, CLAUDE_CONFIG_DIR: p }, fresh: d.fresh })).loggedIn })),
+      others.map(async ([name, p]) => ({ name, loggedIn: (await claudeAuthStatus(p, { bin, env: withClaudeHome(env, p), fresh: d.fresh })).loggedIn })),
     );
   }
   return row;
@@ -527,7 +542,7 @@ export function loginCli(id: CliId, o: { pollMs?: number; timeoutMs?: number; ho
     const env = agentEnv(def, dir, home);
     const probe = async () => (await def.auth({ bin, env, exec: defaultExec, dir, fresh: true }).catch(() => ({ loggedIn: null, detail: null }))).loggedIn;
     if ((await probe()) === true) return { ok: true, message: "already signed in" };
-    const command = `${def.dirEnv ? `${def.dirEnv}=${shellPath(dir, home)} ` : ""}${shownBin(def.bin(), home)} ${def.loginArgs.join(" ")}`;
+    const command = `${envPrefixFor(def, dir, home)}${shownBin(def.bin(), home)} ${def.loginArgs.join(" ")}`;
     let exited = false, exitCode: number | null = null;
     let child: ReturnType<typeof spawn>;
     try {
