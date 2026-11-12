@@ -15,6 +15,7 @@
 
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
+  <a href="docs/guide/README.md">Guide</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#documentation">Docs</a>
 </p>
@@ -60,29 +61,41 @@ one interface, so a cheap model can grade a ticket and an expensive one can buil
 ## Quickstart
 
 Requires Node 22+, macOS (the sandbox is Seatbelt), and at least one agent CLI installed and logged
-in.
+in — Claude Code, Codex, Cursor, Grok or opencode.
 
 ```bash
-git clone https://github.com/leorfer23/getchronos.git && cd getchronos
-npm ci
-npm start
+curl -fsSL https://raw.githubusercontent.com/leorfer23/getchronos/main/install.sh | bash
 ```
 
-Open <http://localhost:7777/desk>. That is the whole install: no configuration file, no database to
-create, no account. The daemon boots with an empty environment and tells you which optional
-features are off and how to turn them on. The Desk is empty until you add a project — next section.
+That clones into `~/chronos`, runs `npm ci` and `npm run setup`. Already cloned? Run
+`npm ci && npm run setup` in your checkout.
+
+Then `npm run desk` opens the Desk in your browser, already signed in (if the daemon is not running,
+it tells you how to start it). No configuration file, no database to create, no account.
+
+**New here? Read [the guide](docs/guide/README.md)** — start with
+[Why Chronos, not plain terminals](docs/guide/why-chronos.md) (2 minutes, with a 5-minute first
+session), then one short page per feature: terminals, the assistant, jobs, memory, briefs, asks,
+safety. It is also served by the daemon at `http://localhost:7777/guide`.
 
 **Before pointing this at a repo you care about**, read [CONFIGURATION.md § the five minutes that
-matter](./CONFIGURATION.md). Spend is uncapped by default; copy `.secrets.example` → `.secrets` and
-set at least `CHRONOS_DAILY_BUDGET` and `CHRONOS_PROTECTED_DIRS_EXTRA`.
+matter](./CONFIGURATION.md) or the [Safety](docs/guide/safety.md) page. Spend is uncapped by default;
+copy `.secrets.example` → `.secrets` and set at least `CHRONOS_DAILY_BUDGET` and
+`CHRONOS_PROTECTED_DIRS_EXTRA`.
 
 ---
 
 ## Your first project
 
-There is no Spaces form yet — create the project and attach a repo via the admin API (or ask Robert
-in the Desk chat to run the same calls). `.admin-token` is written next to the code on first boot;
-never commit it.
+The first-run welcome walks you through it: it names your assistant (Robert, unless you pick another
+name), checks which agent CLIs work, creates your first project from a repo on disk, and offers to pair
+your phone. Later projects: ask the assistant in the Desk chat, or see
+[Projects](docs/guide/projects.md).
+
+<details>
+<summary>Scripting it: the same thing with the admin API</summary>
+
+`.admin-token` is written next to the code on first boot; never commit it.
 
 ```bash
 TOKEN=$(cat .admin-token)
@@ -101,18 +114,16 @@ curl -sS "${AUTH[@]}" -X POST "http://localhost:$PORT/api/workspaces/$WS_ID/repo
   -d "{\"name\":\"my-app\",\"path\":\"$HOME/code/my-app\",\"delivery\":\"pr\",\"default_branch\":\"main\"}"
 ```
 
-Same thing via Robert (Desk chat composer, bottom of `/desk`):
-
-> create a project slug=personal name=Personal config_dir=~/.claude, then add repo my-app at
-> ~/code/my-app with delivery=pr and default_branch=main
+</details>
 
 ### Open a terminal and watch it
 
-1. Reload `/desk`. The project appears in the quick-bar client dropdown (leftmost select).
-2. Pick **Personal**, leave the CLI/model defaults (or choose Claude / Cursor / Grok).
+1. The project appears in the quick-bar client dropdown (leftmost select).
+2. Pick it, leave the CLI/model defaults (or choose Claude / Cursor / Grok).
 3. Type a goal — e.g. `list the top-level files and stop` — and press ⏎.
-4. The rail grows a card (state chip + one line). Open it: **Focus** is the plain-English story
-   (`Understanding:` → narration → `Summary:`); the raw PTY is beside it if you want the tools.
+4. The rail grows a card (state chip + one line). Open it: **Focus** shows the goal and its "done
+   when" checks, the questions it asked (a button per option), what you said to it, and its hand-off
+   with the PR. The raw PTY is one key away (⌘E). More in [Terminals](docs/guide/terminals.md).
 
 Blank terminal (no seed): empty ⏎. Full spawn dialog (cwd, brief, kind): ⇧N.
 
@@ -209,8 +220,8 @@ flowchart LR
   budgets and protected directories yourself.
 - You want tickets to ship as real PRs (or direct commits) with a review gate in front of merge, not
   a black box that pushes to `main` on its own.
-- You're fine with no configuration UI yet — the admin API and the Desk chat (Robert) are the
-  interface.
+- You're fine with a young UI: day to day is the Desk and the assistant; the common knobs are in
+  ⚙ Settings, and the rest (~150) are environment variables in `.secrets`.
 
 **No, if:**
 - You want a hosted service, a support contract, or a team product with roles and seats — none of
@@ -218,8 +229,8 @@ flowchart LR
 - You need sandboxing on Windows or Linux — the sandbox is macOS/Seatbelt only; other platforms run
   the daemon unsandboxed, and it logs a warning for every job that hits that path (`src/sandbox.ts`).
 - You want spend capped by default — `CHRONOS_DAILY_BUDGET` is opt-in, not a starting guardrail.
-- You want a polished onboarding wizard — there's no Spaces form yet; the first project is created
-  with `curl` or a copy-pasted Robert command (see [Your first project](#your-first-project)).
+- You want every knob in a UI — the first-run welcome gets you to a working project, but budgets,
+  protected directories and the rest of [CONFIGURATION.md](./CONFIGURATION.md) are lines in `.secrets`.
 
 ---
 
@@ -379,6 +390,7 @@ See [SECURITY.md](./SECURITY.md) for the threat model and how to report a proble
 
 | | |
 |---|---|
+| **[The guide](docs/guide/README.md)** | start here — why Chronos, a 5-minute first session, one short page per feature |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | the design: execution model, data model, API, relay |
 | [CONFIGURATION.md](./CONFIGURATION.md) | every environment variable, grouped, with defaults |
 | [LEADS.md](./LEADS.md) | Leads — a Robert for one goal, driving its own worker terminals |
