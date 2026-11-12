@@ -43,6 +43,8 @@
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
   var norm = function (t) { return " " + String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim() + " "; };
   var t = function (es, en) { return C && C.lang() === "es" ? es : en; };
+  // What the operator calls his assistant (static/assistant-name.js; "Robert" when it is not loaded).
+  var assistant = function () { return root.AssistantName ? root.AssistantName.get() : "Robert"; };
 
   // The Desk's approval lines (static/desk.html OK_LINE): typed, not executed by the page — the agent
   // knows its repo's own way to merge and deploy, and the line is in its transcript as his decision.
@@ -352,7 +354,7 @@
     letMeFinish: function () { return t("Dejame terminar.", "Let me finish."); },
     tapInstead: function () { return t("Para este, tocá el botón en la pantalla.", "For this one, tap the button on the screen."); },
     notCaught: function () { return t("No te entendí.", "I didn't catch that."); },
-    toRobert: function () { return t("Para hablar con Robert, decí cerrar.", "To talk to Robert, say close."); },
+    toRobert: function () { return t("Para hablar con " + assistant() + ", decí cerrar.", "To talk to " + assistant() + ", say close."); },
     nothingLeft: function () { return t("No queda nada.", "Nothing left."); },
     lastOne: function () { return t("Esta es la final.", "This is the final card."); },
     nothingMore: function () { return t("No hay más detalle.", "There's nothing more."); },
@@ -577,7 +579,7 @@
   function questionHtml(it) {
     var q = it.question;
     var opts = q.yn ? "" : q.options.map(function (o, i) { return '<button type="button" class="q-opt" data-opt="' + i + '">' + esc(o) + "</button>"; }).join("");
-    return (q.note ? '<div class="q-note"><b>Robert:</b> ' + esc(q.note) + "</div>" : "") + (opts ? '<div class="q-opts">' + opts + "</div>" : "");
+    return (q.note ? '<div class="q-note"><b>' + esc(assistant()) + ':</b> ' + esc(q.note) + "</div>" : "") + (opts ? '<div class="q-opts">' + opts + "</div>" : "");
   }
   function draftHtml(it) {
     var d = it.draft;
@@ -1065,9 +1067,13 @@
   // What a person mutters while listening: a yes for a question or a read, never for a merge.
   var WEAK_YES = "ok okay okey oka bien listo perfecto claro obvio va vale bueno correcto exacto genial joya sip sure yeah yup yep fine alright".split(" ");
   var FILLER = "por favor gracias robert please thanks thank you eh este esta nomas ya che entonces then".split(" ");
+  // His assistant's name is filler too ("sí, ada"), whatever he named it (static/assistant-name.js).
+  function nameWords() { var AN = root.AssistantName; return AN ? AN.words() : "robert"; }
+  function isFiller(w) { return FILLER.indexOf(w) >= 0 || (" " + nameWords().split("|").join(" ") + " ").indexOf(" " + w + " ") >= 0; }
   var NEG = "no not nope pero but espera wait aguanta momento cambia cambie change cancelar cancel".split(" ");
   var OPT_FILLER = "la el de que quiero elijo opcion option the one por favor please".split(" ");
-  var LATER_RE = /^ (despues|mas tarde|luego|manana|later|not now|ahora no|en otro momento|dejalo|dejalo para despues|para despues|lo veo despues|despues lo veo|after|tomorrow)( (por favor|please|robert))? $/;
+  var LATER_WORDS = "despues|mas tarde|luego|manana|later|not now|ahora no|en otro momento|dejalo|dejalo para despues|para despues|lo veo despues|despues lo veo|after|tomorrow";
+  var LATER_RE = { test: function (n) { return new RegExp("^ (" + LATER_WORDS + ")( (por favor|please|" + nameWords() + "))? $").test(n); } };
   var NEXT_RE = /^ (siguiente|el siguiente|la siguiente|proximo|proxima|next|otra|otro|pasa|pasala|pasalo|la que sigue) $/;
   var MORE_RE = /^ (mas|detalles|evidencia|pruebas|contame mas|que tests|que pruebas|lee la evidencia|leeme la evidencia|more|details|evidence|proof|read the proof|what tests) $/;
   var REPEAT_RE = /^ (repeti|repetime|repetir|repetilo|otra vez|de nuevo|como|que|que dijiste|repeat|again|say again|what) $/;
@@ -1155,7 +1161,7 @@
     words.forEach(function (w) {
       if (STRONG_YES.indexOf(w) >= 0) { if (ex.has(w)) pageWord = true; else strong = true; }
       else if (WEAK_YES.indexOf(w) >= 0) { if (ex.has(w)) pageWord = true; else weak = true; }
-      else if (FILLER.indexOf(w) < 0 && !phraseWords.has(w)) other = true;
+      else if (!isFiller(w) && !phraseWords.has(w)) other = true;
     });
     if (other || words.length > 6 || words.some(function (w) { return NEG.indexOf(w) >= 0; })) return { type: "unclear" };
     if (strong) return { type: "yes", strength: "strong" };
@@ -1169,7 +1175,7 @@
     var body = [], ask;
     if (it.kind === "question") {
       var q = it.question;
-      if (q.note) body.push(t("Robert sugiere: ", "Robert suggests: ") + q.note);
+      if (q.note) body.push(t(assistant() + " sugiere: ", assistant() + " suggests: ") + q.note);
       if (q.yn) ask = t("¿Qué le contesto?", "What do I answer?");
       else if (q.options.length) ask = t("Opciones: ", "Options: ") + q.options.join(t(", o ", ", or ")) + ".";
       else ask = t("¿Qué le respondo?", "What should I answer?");

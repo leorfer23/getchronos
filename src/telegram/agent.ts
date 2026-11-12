@@ -1,6 +1,6 @@
 import { humanizeStep, type RobertStep } from "../robert-steps.js";
 import { claudeDenyArgs } from "../no-send.js";
-import { onSettingChange } from "../settings.js";
+import { assistantName, assistantNameLine, onSettingChange } from "../settings.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import os from "node:os";
 import fs from "node:fs";
@@ -36,8 +36,10 @@ process.on("exit", () => { for (const c of liveChildren) { try { c.kill("SIGTERM
 
 // Robert speaks through two surfaces with different authority — propose-and-confirm on Telegram,
 // execute-directly on the desk/voice/board. Both prompts, and the shared catalogs they are built
-// from, live in agents/robert/ and agents/_blocks/ (see src/agent-defs.ts).
-const robertPrompt = (surface: "telegram" | "web") => agentPrompt("robert", surface);
+// from, live in agents/robert/ and agents/_blocks/ (see src/agent-defs.ts). The name the operator gave
+// him opens both (settings.ts assistantNameLine — empty while he is Robert); it rides the same stamp
+// as his memory, so a rename reaches the next turn.
+export const robertPrompt = (surface: "telegram" | "web") => assistantNameLine() + agentPrompt("robert", surface);
 
 // ── Tiered mutation protocol ─────────────────────────────────────────────────
 // The manager persona is prompt-level: the agent is TOLD to only read and to PROPOSE mutations. Enforcement
@@ -682,7 +684,7 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
         prompt,
         wsId: runWs,
         profileDir: m.profileDir,
-        agent: { name: "Robert", tools: MANAGER_TOOLS },
+        agent: { name: assistantName(), tools: MANAGER_TOOLS },
         // Telegram propose-and-confirm: no CHRONOS_ADMIN on primary or fallback — only his project's
         // read-only credential, so his reads still name him.
         ...(runWs ? { extraEnv: { CHRONOS_READ_TOKEN: robertToken(runWs, "ro"), MC_AGENT_NAME: "robert", MC_WORKSPACE: runWs } } : {}),
@@ -1415,7 +1417,9 @@ bus.on("event", (e: BusEvent) => {
 // The resume session id outlives the process, so the conversation continues across the recycle.
 const memStamp = new Map<string, string>();
 // The brief pages (src/briefs.ts) ride the same stamp: an edit from the Desk lands on the next turn.
-const stampOf = (agent: string) => agentMemoryStamp(agent) + "|" + briefStamp();
+// So does the assistant's name: a rename rebuilds each warm process at its next turn (the resume id
+// survives, so the conversation carries on), never mid-turn.
+export const stampOf = (agent: string) => agentMemoryStamp(agent) + "|" + briefStamp() + "|" + assistantName();
 function personaSystem(agent: string, ...parts: (string | null | undefined)[]): string {
   memStamp.set(agent, stampOf(agent));
   return [...parts, agentMemoryBlock(agent), memoryRules(agent), briefRules()].filter(Boolean).join("\n\n");
@@ -1800,7 +1804,7 @@ export async function askManagerWeb(
     ...robertSandbox(realWsId),
     onDelta,
     // `prompt` already carries this thread's recap, so only the declaration needs carrying.
-    agent: { name: "Robert", tools: MANAGER_TOOLS },
+    agent: { name: assistantName(), tools: MANAGER_TOOLS },
     onFallback: (fb) => {
       engine = engineLabel(fb.backend, fb.model);
       if (/sin login/.test(fb.why)) loginDead = true;

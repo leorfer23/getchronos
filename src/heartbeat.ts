@@ -11,6 +11,7 @@ import { resultText } from "./summarize.js";
 import { asks, chat, ideas, kv, reviews, workspaces } from "./store.js";
 import { askManagerWeb } from "./telegram/agent.js";
 import { esc, notify } from "./telegram/api.js";
+import { assistantName } from "./settings.js";
 
 // Fleet heartbeat — OpenClaw pattern adapted for Chronos executives:
 //   1) active hours gate (no LLM)
@@ -491,7 +492,7 @@ async function deliver(
     now: "☀️ Briefing",
     standup: "🗒️ Standup",
   };
-  const base = agent === "robert" ? (ROBERT_LABEL[kind] ?? "⏱ Robert") : `⏱ ${LABEL[agent]}`;
+  const base = agent === "robert" ? (ROBERT_LABEL[kind] ?? `⏱ ${assistantName()}`) : `⏱ ${LABEL[agent]}`;
   const label = target ? `${base} · ${target.slug}` : base;
 
   if (agent === "robert") {
@@ -532,8 +533,8 @@ async function deliver(
     // proactive briefs read as noise and the operator concluded Robert only answers when spoken to
     // (PER-26). Signing it makes his voice findable in the stream.
     const head = boardOk
-      ? `👔 <b>Robert</b> · ${esc(label)}`
-      : `👔 <b>Robert</b> · ${esc(label)} ⚠️ (board post failed — content below)`;
+      ? `👔 <b>${esc(assistantName())}</b> · ${esc(label)}`
+      : `👔 <b>${esc(assistantName())}</b> · ${esc(label)} ⚠️ (board post failed — content below)`;
     await notify(`${head}\n\n${body}`, undefined, { board: false }).catch((e) =>
       console.error("[heartbeat] telegram mirror failed", e),
     );

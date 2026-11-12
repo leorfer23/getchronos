@@ -26,7 +26,7 @@ import type { DeskPrompt, PromptOption } from "./desk-prompt.js";
 import { brainAwakeSince } from "./brain-awake.js";
 import { hostOnline } from "./hosts/index.js";
 import { LOCAL_HOST_ID } from "./store/hosts.js";
-import { setting } from "./settings.js";
+import { assistantName, setting } from "./settings.js";
 
 export const PHASES = ["blocked", "decide", "review", "your_turn", "waiting", "working", "stalled"] as const;
 export type Phase = (typeof PHASES)[number] | "ended";
@@ -248,8 +248,9 @@ export function resolve(inp: ResolveInput): Omit<TermStatus, "since"> {
   // stopped, so the group still reads as frozen if the Lead never answers.
   if (inp.ask?.route === "lead")
     return out("waiting", "its Lead is deciding: " + inp.ask.question, { on: "terminal" });
-  if (inp.ask) return out("waiting", "Robert is deciding: " + inp.ask.question, { on: "robert" });
-  if (d?.state === "waiting") return out("waiting", (d.label || `waiting on ${d.on ?? "something"}`) + eta(d.eta_at), { on: d.on ?? null, eta_at: d.eta_at ?? null });
+  if (inp.ask) return out("waiting", `${assistantName()} is deciding: ` + inp.ask.question, { on: "robert" });
+  // `--on robert` is his id; the card says the name the operator gave him.
+  if (d?.state === "waiting") return out("waiting", (d.label || `waiting on ${d.on === "robert" ? assistantName() : d.on ?? "something"}`) + eta(d.eta_at), { on: d.on ?? null, eta_at: d.eta_at ?? null });
 
   if (stopped && subs.length) {
     const tally = new Map<string, number>();

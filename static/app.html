@@ -363,7 +363,7 @@
       <div class="pane side"><h2>Agents</h2><div class="scroll" id="agent-list"></div></div>
       <div class="pane chat-main">
         <div class="chat-head"><span class="avatar av-accent" id="chat-av">R</span>
-          <div><div style="font-weight:650" id="chat-name">Robert</div><div class="role" id="chat-role"></div></div>
+          <div><div style="font-weight:650" id="chat-name" data-an="text">Robert</div><div class="role" id="chat-role"></div></div>
           <button class="btn" id="chat-new" style="margin-left:auto" title="Start a fresh context. Everything above the line stays on screen but stops reaching the agent.">New context</button>
         </div>
         <div class="banner" id="chat-banner" hidden>Not signed in — in your Chronos folder run npm run desk, then reload this page. Tickets, Board and Fleet work here meanwhile.</div>
@@ -372,7 +372,7 @@
         <div class="composer">
           <input type="file" id="chat-file" multiple hidden accept="image/*,.pdf,.txt,.md,.markdown,.csv,.tsv,.json,.log,.yml,.yaml,.xml,.html,.toml,.ini">
           <button class="attach" id="chat-attach" aria-label="Attach a file" title="Attach — the agent reads it from disk"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 12.5l-8.7 8.7a5.5 5.5 0 01-7.8-7.8l8.7-8.7a3.7 3.7 0 015.2 5.2l-8.7 8.7a1.83 1.83 0 01-2.6-2.6l8-8"/></svg></button>
-          <textarea id="chat-input" rows="1" placeholder="Message Robert…" autocomplete="off"></textarea>
+          <textarea id="chat-input" rows="1" placeholder="Message Robert…" autocomplete="off" data-an="placeholder"></textarea>
           <button class="send" id="chat-send" aria-label="Send"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8L14 2L11 14L7.5 9.5L2 8Z" fill="currentColor"/></svg></button>
         </div>
       </div>
@@ -423,6 +423,7 @@
 <div class="modal" id="modal" hidden><div class="sheet" id="modal-body" role="dialog" aria-modal="true"></div></div>
 <div class="toast" id="toast"></div>
 
+<script src="/assistant-name.js"></script>
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
 <script>
@@ -534,7 +535,8 @@ $("pill-need").onclick = () => show("inbox");
 // a message and failed on send. Their stored history was not deleted and still reads through
 // GET /api/agent/history?ws=agent:<id>.
 const ROSTER = [
-  { id: "robert",   name: "Robert",   role: "Chief of Everything — workforce, Mission Control", thread: null },
+  // His name is the one the operator gave him (static/assistant-name.js); the id stays "robert".
+  { id: "robert",   get name() { return AssistantName.get(); },   role: "Chief of Everything — workforce, Mission Control", thread: null },
 ];
 let curAgent = ROSTER[0];
 let sending = false;
@@ -551,8 +553,8 @@ const outbox = []; // { text, agent, el }
 function renderRoster() {
   $("agent-list").innerHTML = ROSTER.map((a) =>
     `<button class="agent-row${a.id === curAgent.id ? " active" : ""}" data-id="${a.id}">
-       <span class="avatar">${a.name[0]}</span>
-       <span class="agent-meta"><span class="agent-name">${a.name}</span><span class="agent-sub">${esc(a.role)}</span></span>
+       <span class="avatar">${esc(Array.from(a.name)[0] || "")}</span>
+       <span class="agent-meta"><span class="agent-name">${esc(a.name)}</span><span class="agent-sub">${esc(a.role)}</span></span>
      </button>`).join("");
 }
 $("agent-list").addEventListener("click", (e) => {
@@ -1840,6 +1842,9 @@ async function loadCounts() {
 
 // ── boot ────────────────────────────────────────────────────────────────────
 renderRoster(); loadThread(); loadCounts(); connect();
+// Renamed (or the name landed after the first paint): the roster and the room's header follow.
+addEventListener("assistant-name", () => { renderRoster(); if (curAgent.id === "robert") $("chat-av").textContent = Array.from(curAgent.name)[0] || ""; });
+$("chat-av").textContent = Array.from(curAgent.name)[0] || "";
 </script>
 </body>
 </html>

@@ -78,7 +78,7 @@
     if (r.version > 1) st = (st ? st + " · " : "") + "v" + r.version;
     return (
       '<div class="afc' + (asks ? " ask" : "") + (done ? " done" : "") + '">' +
-      '<div class="af-h"><span class="af-who">' + esc(r.created_by || "An agent") + '</span><span class="af-age">' + esc(ago(r.created_at)) + "</span></div>" +
+      '<div class="af-h"><span class="af-who">' + esc(root.AssistantName ? root.AssistantName.say(r.created_by || "An agent") : r.created_by || "An agent") + '</span><span class="af-age">' + esc(ago(r.created_at)) + "</span></div>" +
       '<div class="af-t">' + esc(r.title) + "</div>" +
       (r.question ? '<div class="af-q">' + esc(r.question) + "</div>" : "") +
       '<div class="af-row"><button type="button" class="af-open" data-afopen="' + esc(r.id) + '">' + (asks && !done ? "Open & answer" : "Open") + '</button><span class="af-st">' + st + "</span></div>" +

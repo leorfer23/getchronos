@@ -2,6 +2,7 @@ import { bus, type BusEvent } from "./bus.js";
 import { OP_PREFIX } from "./operational-prefix.js";
 import { board, tickets, type BoardPost } from "./store.js";
 import { postRobertToDesk } from "./robert-desk.js";
+import { assistantName } from "./settings.js";
 
 // The board service: publish posts onto the bus and wake @mentioned executives. This is the
 // in-house replacement for the whole Buzz inbound stack — no relay poller, no LLM router: a
@@ -117,7 +118,7 @@ function defaultMirror(post: BoardPost, reply: string): void {
   const label = post.body.split("\n")[0].slice(0, 120);
   void import("./telegram/api.js")
     .then(({ notify, esc }) =>
-      notify(`👔 <b>Robert</b> · ${esc(label)}\n\n${esc(reply.slice(0, 3500))}`, undefined, { board: false }),
+      notify(`👔 <b>${esc(assistantName())}</b> · ${esc(label)}\n\n${esc(reply.slice(0, 3500))}`, undefined, { board: false }),
     )
     .catch((err) => console.error("[board] wake telegram mirror failed", err));
 }

@@ -586,7 +586,7 @@
     font-size:13.5px; line-height:1.45; white-space:pre-wrap; overflow-wrap:anywhere; max-height:9em; overflow-y:auto; }
   .fx-q .q { font-size:16.5px; line-height:1.4; font-weight:600; color:var(--ink); white-space:pre-wrap; overflow-wrap:anywhere; max-height:7.2em; overflow-y:auto; }
   .fx-q .rec { margin-top:5px; font-size:14px; color:var(--muted); overflow-wrap:anywhere; }
-  .fx-q .rec::before { content:"Robert: "; font-weight:650; color:var(--ink); }
+  .fx-q .rec b { font-weight:650; color:var(--ink); }
   .fx-opts { display:flex; flex-wrap:wrap; gap:8px; margin-top:9px; }
   .fx-opts button { min-height:38px; padding:6px 16px; border-radius:9px; border:1px solid var(--line); background:var(--surface); color:var(--ink);
     font-size:15px; font-weight:600; text-align:left; max-width:100%; overflow-wrap:anywhere; cursor:pointer; }
@@ -1664,7 +1664,7 @@
   <div class="usage" id="usage" title="Subscription usage — click for every profile and window"></div>
   <div class="tools">
     <button class="icon" id="btn-startday" title="Start the day — one terminal per workspace proposes today's work">☀️</button>
-    <button class="icon" id="btn-robert" title="Robert (⌘K)">🤖</button><span class="fab-unread" id="fab-unread" hidden></span>
+    <button class="icon" id="btn-robert" title="Robert (⌘K)" data-an="title">🤖</button><span class="fab-unread" id="fab-unread" hidden></span>
     <button class="icon" id="btn-loops" title="Open loops — work parked on something, follow-ups, unanswered questions, what runs on a clock (L)">⏰</button><span class="fab-unread loops-n" id="loops-n" hidden></span>
     <button class="icon" id="btn-more" title="More">⋯</button>
   </div>
@@ -1729,13 +1729,13 @@
     <div class="chat-resize" id="chat-resize" title="Drag to resize"></div>
     <div class="chat-head">
       <span class="dot ended" id="rob-dot"></span>
-      <strong>Robert</strong>
+      <strong data-an="text">Robert</strong>
       <span class="who" id="rob-status" title="What he is doing right now">idle</span>
-      <select id="chat-model" class="model" title="Model Robert uses — chat, wakes, watches. Same list as a new Claude terminal."></select>
+      <select id="chat-model" class="model" title="Model Robert uses — chat, wakes, watches. Same list as a new Claude terminal." data-an="title"></select>
       <button class="icon" id="chat-voice" title="Voice call — talk, he does it and answers out loud (⌘⇧V)">🎙</button>
-      <button class="icon" id="chat-briefs" title="Briefs — what each project is and what you want from it; Robert keeps them current">📋</button>
+      <button class="icon" id="chat-briefs" title="Briefs — what each project is and what you want from it; Robert keeps them current" data-an="title">📋</button>
       <button class="icon" id="chat-new" title="New conversation — keeps the transcript, drops his context">⟲</button>
-      <button class="icon" id="chat-full" title="Full screen — Robert takes the stage (⌘⇧K)">⤢</button>
+      <button class="icon" id="chat-full" title="Full screen — Robert takes the stage (⌘⇧K)" data-an="title">⤢</button>
       <button class="icon" id="chat-close" title="Close (⌘K / ⎋)">✕</button>
     </div>
     <div class="chat-body">
@@ -1757,7 +1757,7 @@
     </div>
     <div class="chat-att" id="chat-att" hidden></div>
     <form class="chat-ask" id="chat-ask">
-      <textarea id="chat-input" rows="1" placeholder="Ask Robert… · # to name a project"></textarea>
+      <textarea id="chat-input" rows="1" placeholder="Ask Robert… · # to name a project" data-an="placeholder"></textarea>
       <button class="btn primary" id="chat-send">Ask</button>
     </form>
     <div class="chat-hint">⏎ send · ⇧⏎ newline · ⌘⏎ stop him &amp; send now · he reads the project from what you write — <code>#</code> to name one · ⌘V or drop a file to attach</div>
@@ -1940,7 +1940,7 @@
       <div><kbd>L</kbd><span>open loops: parked work, follow-ups, unanswered questions, what runs on a clock</span></div>
       <div><kbd>⇧L</kbd><span>new terminal, as a Lead — opens and drives its own terminals for this goal</span></div>
       <div><kbd>X</kbd><span>close the terminal you are in (goal done + kill; twice while it is working)</span></div>
-      <div><kbd>⌘K</kbd><span>Robert · <kbd>⌘⇧K</kbd> full screen ↔ docked (⎋ in his box goes back too)</span></div>
+      <div><kbd>⌘K</kbd><span><span data-an="text">Robert</span> · <kbd>⌘⇧K</kbd> full screen ↔ docked (⎋ in his box goes back too)</span></div>
       <div><kbd>⌘+</kbd>/<kbd>⌘-</kbd>/<kbd>⌘0</kbd><span>terminal font</span></div>
     </div>
     <div class="actions"><button class="btn" id="keys-close">Close</button></div>
@@ -2131,7 +2131,7 @@
     <h3>Briefs <span class="hint" id="brief-when"></span></h3>
     <div class="tabs" id="brief-tabs"></div>
     <textarea id="brief-body" spellcheck="false"></textarea>
-    <div class="brief-hint">Sections: what this is · what you want (goals) · how work is done here · recently · next. Robert appends under Recently and How-work-is-done as terminals close; goals change only when you say so.</div>
+    <div class="brief-hint">Sections: what this is · what you want (goals) · how work is done here · recently · next. <span data-an="text">Robert</span> appends under Recently and How-work-is-done as terminals close; goals change only when you say so.</div>
     <div class="actions"><button class="btn" id="brief-close">Close</button><button class="btn primary" id="brief-save">Save</button></div>
   </div>
 </dialog>
@@ -2167,6 +2167,7 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="/assistant-name.js"></script>
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/xterm-addon-fit.js"></script>
 <script src="/term-links.js"></script>
@@ -2207,6 +2208,10 @@ const api = (p, opts) => {
   .then((d) => DeskScope.lens(p, d, LOCK));
 };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// The assistant's name (static/assistant-name.js): rn() for text the page shows or says, rnH() for
+// the name inside an HTML string. Ids and the words "robert" in commands never change.
+const rn = (s) => AssistantName.say(s);
+const rnH = () => esc(AssistantName.get());
 let toastT;
 function toast(msg) {
   const t = qs("#toast"); t.textContent = msg; t.classList.add("show");
@@ -2473,7 +2478,7 @@ function leadChip() {
 // Openers that carry on the operator's own terminal (a reopen on another computer, a parked
 // continuation, a cloud handoff) keep it his; anything else opened it for him.
 const OWN_OPENERS = new Set(["operator", "failover", "continuation", "handoff"]);
-const OPENER_WORD = { inbox: "Inbox", robert: "Robert", "follow-up": "Follow-up" };
+const OPENER_WORD = { inbox: "Inbox", robert: "Robert", "follow-up": "Follow-up" }; // shown through rn()
 function openedFor(s) {
   const by = s.created_by || "operator";
   return OWN_OPENERS.has(by) || s.role === "lead" || s.lead_id ? null : by;
@@ -2481,8 +2486,8 @@ function openedFor(s) {
 function autoChip(by) {
   const el = document.createElement("span");
   el.className = "auto-chip";
-  el.textContent = OPENER_WORD[by] || "Auto";
-  el.title = "Opened automatically by " + (OPENER_WORD[by] || by) + " — not by you";
+  el.textContent = rn(OPENER_WORD[by] || "Auto");
+  el.title = "Opened automatically by " + rn(OPENER_WORD[by] || by) + " — not by you";
   return el;
 }
 function rowEl(s) {
@@ -2554,7 +2559,7 @@ function paintRow(el, s) {
   if (w) {
     if (!eye.firstChild) eye.innerHTML = EYE(12);
     eye.classList.toggle("looking", !!w.looking);
-    eye.title = w.looking ? "Robert is looking at it now" : `Robert watches this · every ${w.every_min}m · next look ${inMin(w.next_due)}`;
+    eye.title = rn(w.looking ? "Robert is looking at it now" : `Robert watches this · every ${w.every_min}m · next look ${inMin(w.next_due)}`);
   }
   const age0 = qs(".age", el);
   age0.textContent = s.live ? age(new Date(phaseSince(s)).toISOString()) : age(s.ended_at || s.created_at);
@@ -2728,7 +2733,7 @@ function renderStage() {
     const pill = document.createElement("button");
     pill.className = "wpill"; pill.dataset.watch = s.id;
     pill.title = (w.note ? `Watching for: ${w.note}\n` : "") + `Every ${w.every_min}m — click to change or stop`;
-    pill.innerHTML = `<span class="eye${w.looking ? " looking" : ""}">${EYE(13)}</span>Robert · ${w.looking ? "looking…" : inMin(w.next_due)}`;
+    pill.innerHTML = `<span class="eye${w.looking ? " looking" : ""}">${EYE(13)}</span>${rnH()} · ${w.looking ? "looking…" : inMin(w.next_due)}`;
     qs("#h-bits").prepend(pill);
   }
   for (const b of qsa("#mode button")) b.classList.toggle("on", b.dataset.m === S.mode);
@@ -3344,11 +3349,11 @@ function openDecisions(s) {
   for (const a of asks) {
     if (a.status !== "open") continue;
     const who = a.for_operator
-      ? `<b>For you</b>${a.escalated ? " · Robert handed it up" : ""}`
-      : a.route === "lead" ? `<b>Its Lead is deciding</b> — answer now to decide it yourself` : `<b>Robert is deciding</b> — answer now to decide it yourself`;
+      ? `<b>For you</b>${a.escalated ? ` · ${rnH()} handed it up` : ""}`
+      : a.route === "lead" ? `<b>Its Lead is deciding</b> — answer now to decide it yourself` : `<b>${rnH()} is deciding</b> — answer now to decide it yourself`;
     const draft = D.drafts.get(a.id) || "";
     open.push(`<div class="fx-q"><div class="who">${who} · ${esc(age(a.created_at))}</div><div class="q">${esc(a.question)}</div>`
-      + (a.triage ? `<div class="rec">${esc(a.triage)}</div>` : "")
+      + (a.triage ? `<div class="rec"><b>${rnH()}:</b> ${esc(a.triage)}</div>` : "")
       + `<div class="fx-opts">${(a.options || []).map((o, i) => `<button type="button" data-aans="${esc(a.id)}" data-v="${esc(o)}" class="${i === 0 ? "go" : ""}">${esc(o)}</button>`).join("")}`
       + `<input data-atext="${esc(a.id)}" value="${esc(draft)}" placeholder="${(a.options || []).length ? "or say something else" : "your answer"} · ⏎" autocomplete="off"></div></div>`);
   }
@@ -3809,9 +3814,9 @@ function qaChips() {
   const p = s && s.prompt && typeof s.prompt === "object" ? s.prompt : null;
   // Hover says what the tap will actually do — which, for a smart approve, is the prompt's own words.
   const tip = (a) => a.smart && p ? "Answer the prompt: " + (p.kind === "yn" ? "yes" : p.options?.[0]?.label || "the first option")
-    : QA_TIP[a.kind] || a.text || a.label;
+    : rn(QA_TIP[a.kind] || a.text || a.label);
   const out = acts.map((a, i) =>
-    `<button type="button" class="qa" data-qa="${i}" title="${esc(tip(a))}${a.n ? " · ⌥" + a.n : ""}">${esc(a.label)}${a.n ? `<kbd>${a.n}</kbd>` : ""}</button>`);
+    `<button type="button" class="qa" data-qa="${i}" title="${esc(tip(a))}${a.n ? " · ⌥" + a.n : ""}">${esc(rn(a.label))}${a.n ? `<kbd>${a.n}</kbd>` : ""}</button>`);
   out.push(`<button type="button" class="qa gear" data-qa-cfg title="Edit the quick actions">⚙</button>`);
   return out;
 }
@@ -3857,7 +3862,7 @@ function qaAskRobert(s, a) {
   inp.value = (a.text || "Have a look at this terminal and tell me what you'd do").trim() + " — terminal " + s.id.slice(0, 8);
   inp.dispatchEvent(new Event("input"));
   setTimeout(() => inp.focus(), 40);
-  toast("⏎ to send it to Robert");
+  toast(rn("⏎ to send it to Robert"));
 }
 // mousedown is where focus moves, so that is where it is refused: tapping a chip must never take the
 // keyboard off the pane you are about to watch answer. Same rule the companion's own bars follow.
@@ -3878,7 +3883,7 @@ function qaOpen() {
   if (!d.open) d.showModal();
 }
 function qaRender() {
-  const kinds = [["text", "types text"], ["approve", "approve"], ["changes", "say what to change"], ["ask-robert", "ask Robert"], ["kill", "end terminal"]];
+  const kinds = [["text", "types text"], ["approve", "approve"], ["changes", "say what to change"], ["ask-robert", rn("ask Robert")], ["kill", "end terminal"]];
   qs("#qa-count").textContent = `— ${QD.list.length} of ${QuickActions.MAX_ACTIONS} · at most ${QuickActions.MAX_VISIBLE} show at once`;
   qs("#qa-rows").innerHTML = QD.list.map((a, i) => {
     const kind = a.kind || "text";
@@ -4942,11 +4947,11 @@ function watchBlock(s) {
   const report = (r) => `<div class="wlast${r.failed ? " failed" : ""}"><span class="dot ${dotOf(r.state)}" title="${esc(r.state)} when he looked"></span><div class="t">${esc(r.body)}</div><span class="when" title="${esc(new Date(r.at).toLocaleString())}">${esc(age(r.at))}</span></div>`;
   let out = `<section class="fblock watch${on && w.looking ? " looking" : ""}">`;
   if (on) {
-    out += `<span class="lbl"><span><span class="eye${w.looking ? " looking" : ""}">${EYE(13)}</span>Robert is watching</span><span><button data-w="edit">change</button><button data-w="stop">stop</button></span></span>`
+    out += `<span class="lbl"><span><span class="eye${w.looking ? " looking" : ""}">${EYE(13)}</span>${rnH()} is watching</span><span><button data-w="edit">change</button><button data-w="stop">stop</button></span></span>`
       + (w.note ? `<div class="wfor">${esc(w.note)}</div>` : `<div class="wfor any">Anything that needs you</div>`)
       + `<div class="wmeta">every ${everyWord(w.every_min)} · ${w.looking ? "looking now…" : (last ? "next look " : "first look ") + inMin(w.next_due)}</div>`;
   } else {
-    out += `<span class="lbl"><span><span class="eye">${EYE(13)}</span>Robert's closing report</span></span>`;
+    out += `<span class="lbl"><span><span class="eye">${EYE(13)}</span>${rnH()}'s closing report</span></span>`;
   }
   if (W.open && W.reports) out += W.reports.map(report).join("") || "";
   else if (last) out += report(last);
@@ -4974,7 +4979,7 @@ qs("#h-bits").addEventListener("click", (e) => {
 });
 async function stopWatch(id) {
   const s = byId(id); if (!s) return;
-  try { await api("/sessions/" + id + "/watch", { method: "DELETE" }); if (s.watch) s.watch = s.watch.last?.final ? { ...s.watch, active: false } : null; s.watch_every_min = null; toast("Robert stopped watching"); }
+  try { await api("/sessions/" + id + "/watch", { method: "DELETE" }); if (s.watch) s.watch = s.watch.last?.final ? { ...s.watch, active: false } : null; s.watch_every_min = null; toast(rn("Robert stopped watching")); }
   catch (e) { toast(e.message); }
   render();
 }
@@ -4985,7 +4990,7 @@ async function toggleRobert(id) {
   try {
     const r = await api("/sessions/" + id, { method: "PATCH", body: JSON.stringify({ robert: on }) });
     s.robert = !!r.robert;
-    toast(on ? "Robert will drive this terminal" : "Robert stays out of this terminal");
+    toast(rn(on ? "Robert will drive this terminal" : "Robert stays out of this terminal"));
   } catch (e) { toast(e.message); }
   render();
 }
@@ -5000,7 +5005,7 @@ function openWatch(id) {
   chips.innerHTML = opts.map((m) => `<button type="button" data-m="${m}" class="${m === every ? "on" : ""}">${everyWord(m)}</button>`).join("");
   chips.onclick = (e) => { const c = e.target.closest("[data-m]"); if (!c) return; every = Number(c.dataset.m); for (const x of qsa("button", chips)) x.classList.toggle("on", x === c); explain(); };
   qs("#w-eye").innerHTML = EYE(17);
-  qs("#w-h").textContent = w ? "Robert is watching" : "Have Robert watch this terminal";
+  qs("#w-h").textContent = rn(w ? "Robert is watching" : "Have Robert watch this terminal");
   qs("#w-title").textContent = wsName(s.workspace_id) + " · " + title(s);
   qs("#w-note").value = w?.note || "";
   qs("#w-go").textContent = w ? "Save" : "Start watching";
@@ -5015,7 +5020,7 @@ function openWatch(id) {
       const r = await api("/sessions/" + id + "/watch", { method: "POST", body: JSON.stringify({ every_min: every, note, by: "operator" }) });
       s.watch_every_min = r.every_min;
       s.watch = { ...(s.watch || {}), active: true, every_min: r.every_min, note, looking: false, last: s.watch?.last || null, next_due: new Date(Date.now() + r.every_min * 60000).toISOString() };
-      toast(w ? "watch updated" : `Robert is watching · first look in ${everyWord(r.every_min)}`);
+      toast(w ? "watch updated" : rn(`Robert is watching · first look in ${everyWord(r.every_min)}`));
     } catch (err) { toast(err.message); }
     render();
   };
@@ -5569,8 +5574,8 @@ qs("#h-more").onclick = () => {
   const m = qs("#menu-stage");
   m.innerHTML =
     (s.live ? `<button data-k="done">${s.goal_done_at ? "↩ Not done after all" : "✓ Goal reached"}</button>` : "") +
-    (s.live ? `<button data-k="robert">${s.robert ? "🤖 Robert drives this · on" : "🤖 Let Robert drive this"}</button>` : "") +
-    (s.live ? `<button data-k="watch">${s.watch?.active ? "👁 Robert's watch…" : "👁 Have Robert watch it…"}</button>` : "") +
+    (s.live ? `<button data-k="robert">${esc(rn(s.robert ? "🤖 Robert drives this · on" : "🤖 Let Robert drive this"))}</button>` : "") +
+    (s.live ? `<button data-k="watch">${esc(rn(s.watch?.active ? "👁 Robert's watch…" : "👁 Have Robert watch it…"))}</button>` : "") +
     `<button data-k="link">🔗 Copy reopen link</button>` +
     `<button data-k="font-">Font smaller <kbd>⌘−</kbd></button><button data-k="font+">Font bigger <kbd>⌘+</kbd></button>` +
     `<div class="sep"></div>` +
@@ -5622,8 +5627,8 @@ function sessionActions(id) {
     { label: "Open", run: () => select(s.id) },
     { label: s.goal_done_at ? "↩ Not done after all" : "✓ Goal reached", run: () => toggleDone(s.id) },
     { label: "✏️ Rename…", run: () => { const t = prompt("What is this terminal for?", title(s)); if (t != null && t.trim()) saveGoal(s.id, t.trim()); } },
-    { label: s.robert ? "🤖 Robert drives this · on" : "🤖 Let Robert drive this", run: () => toggleRobert(s.id) },
-    { label: s.watch?.active ? "👁 Robert's watch…" : "👁 Have Robert watch it…", run: () => openWatch(s.id) },
+    { label: rn(s.robert ? "🤖 Robert drives this · on" : "🤖 Let Robert drive this"), run: () => toggleRobert(s.id) },
+    { label: rn(s.watch?.active ? "👁 Robert's watch…" : "👁 Have Robert watch it…"), run: () => openWatch(s.id) },
     ...(s.role !== "lead" && !s.lead_id && s.workspace_id ? [{ label: "◆ Promote to Lead", armed: "◆ Restart as Lead? click again", run: () => promoteLead(s.id) }] : []),
     { label: "🔗 Copy reopen link", run: link },
     ...(s.cwd ? [{ label: "📁 Copy folder path", run: () => copyText(s.cwd, "path") }] : []),
@@ -6072,7 +6077,7 @@ function followRow(j) {
 // /asks hands options back as the stored JSON text, /decisions as an array.
 const askOptions = (a) => { if (Array.isArray(a.options)) return a.options; try { const v = JSON.parse(a.options || "[]"); return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
 function askRow(a) {
-  const who = a.for_operator ? "for you" : a.route === "lead" ? "its Lead has it" : "Robert has it";
+  const who = a.for_operator ? "for you" : a.route === "lead" ? "its Lead has it" : rn("Robert has it");
   const opts = askOptions(a).map((o) => `<button type="button" data-laans="${esc(a.id)}" data-v="${esc(o)}">${esc(clip(o, 60))}</button>`).join("");
   return `<div class="lp-row" data-lsel="${esc(a.session_id || "")}"><span class="lp-ico">?</span>`
     + `<div><div class="lp-t">${esc(clip(a.question, 300))}</div>`
@@ -6802,7 +6807,7 @@ function renderJobList() {
   if (J.view === "runs") return renderFeed(host);
   if (J.view === "upcoming") return renderUpcoming(host);
   const list = visibleJobs().sort(SORTS[J.sort]?.[1] || SORTS.health[1]);
-  if (!J.jobs.length) { host.innerHTML = `<div class="jv-empty"><b>No jobs yet.</b><br>A job is agent work that runs without you — on a schedule, once, on a webhook, or by hand.<br><button class="btn primary" data-a="new" style="margin-top:14px">+ New job</button> or ask Robert.</div>`; return; }
+  if (!J.jobs.length) { host.innerHTML = `<div class="jv-empty"><b>No jobs yet.</b><br>A job is agent work that runs without you — on a schedule, once, on a webhook, or by hand.<br><button class="btn primary" data-a="new" style="margin-top:14px">+ New job</button> or ask ${rnH()}.</div>`; return; }
   if (!list.length) { host.innerHTML = `<div class="jv-empty">Nothing matches${J.q ? ` “${esc(J.q)}”` : ""}. <button class="btn ghost" data-a="clear">Clear filters</button></div>`; return; }
   const allChecked = list.every((j) => J.checked.has(j.id));
   const sortBtn = (k, l) => `<button data-sort="${k}" class="${J.sort === k ? "on" : ""}">${l}</button>`;
@@ -6918,7 +6923,7 @@ function renderDrawer() {
     (isNew ? "" : `<div class="jv-ds"><div><span class="k">Success</span><span class="v ${rate == null ? "" : rate >= 95 ? "good" : rate < 80 ? "bad" : ""}">${rate == null ? "—" : rate + "%"}</span></div><div><span class="k">Runs · ${J.win === 1 ? "24h" : J.win + "d"}</span><span class="v">${st.runs}</span></div><div><span class="k">Avg run</span><span class="v">${fmtDur(st.avg_sec)}</span></div><div><span class="k">Spend</span><span class="v">${money(st.cost)}</span></div><div><span class="k">Last success</span><span class="v">${st.last_success_at ? esc(age(st.last_success_at)) + " ago" : "never"}</span></div></div>`) +
     `<div class="jv-dt">${isNew ? "" : tab("runs", "Runs" + (J.runs.length ? " · " + J.runs.length : ""))}${tab("settings", "Settings")}${isNew ? "" : tab("triggers", "Triggers" + (J.triggers.length ? " · " + J.triggers.length : ""))}</div>` +
     `<div class="jv-db">${J.dtab === "runs" && !isNew ? (J.run ? runDetailHtml(j) : runsHtml(j)) : J.dtab === "triggers" && !isNew ? triggersHtml(j) : settingsHtml(j)}</div>` +
-    (J.dtab === "settings" || isNew ? `<div class="jv-df"><span class="hint" style="font-size:12.5px;color:var(--faint)">${isNew ? "Robert can set these up too — just ask him." : "created " + esc(age(j.created_at)) + " ago · edited " + esc(age(j.updated_at)) + " ago"}</span><span class="sp"></span><button class="btn" data-a="cancel">${isNew ? "Cancel" : "Revert"}</button><button class="btn primary" data-a="save">${isNew ? "Create" : "Save"}</button></div>` : "");
+    (J.dtab === "settings" || isNew ? `<div class="jv-df"><span class="hint" style="font-size:12.5px;color:var(--faint)">${isNew ? esc(rn("Robert can set these up too — just ask.")) : "created " + esc(age(j.created_at)) + " ago · edited " + esc(age(j.updated_at)) + " ago"}</span><span class="sp"></span><button class="btn" data-a="cancel">${isNew ? "Cancel" : "Revert"}</button><button class="btn primary" data-a="save">${isNew ? "Create" : "Save"}</button></div>` : "");
   if (J.dtab === "settings" || isNew) {
     const sync = () => { const t = qs('[name="trigger_type"]', host).value; for (const el of qsa("[data-for]", host)) el.style.display = el.dataset.for.split(" ").includes(t) ? "" : "none"; };
     sync();
@@ -6929,7 +6934,7 @@ function renderDrawer() {
 function settingsHtml(j) {
   const localDT = j.run_at ? new Date(new Date(j.run_at).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "";
   return `<div class="pane" data-pane="overview"><div class="jv-sec">When</div>` +
-      `<div class="cols"><label class="f"><span>Runs</span><select name="trigger_type">${opt("cron", j.trigger_type, "on a schedule")}${opt("once", j.trigger_type, "once, at a time")}${opt("manual", j.trigger_type, "by hand / Robert")}${opt("webhook", j.trigger_type, "on a webhook")}</select></label>` +
+      `<div class="cols"><label class="f"><span>Runs</span><select name="trigger_type">${opt("cron", j.trigger_type, "on a schedule")}${opt("once", j.trigger_type, "once, at a time")}${opt("manual", j.trigger_type, rn("by hand / Robert"))}${opt("webhook", j.trigger_type, "on a webhook")}</select></label>` +
       `<label class="f" data-for="cron"><span>Preset</span><select name="preset">${CRON_PRESETS.map(([x, l]) => opt(x, j.cron_expr, l)).join("")}<option value=""${CRON_PRESETS.some(([x]) => x === j.cron_expr) ? "" : " selected"}>custom</option></select></label>` +
       `<label class="f" data-for="cron"><span>Cron <span class="hint">min hour day month weekday</span></span><input name="cron_expr" value="${esc(j.cron_expr || "")}" placeholder="0 9 * * 1-5"></label>` +
       `<label class="f" data-for="cron"><span>Timezone</span><input name="timezone" value="${esc(j.timezone || TZ)}"></label>` +
@@ -7464,6 +7469,8 @@ async function saveSetting(key, value) {
     const i = ST.data.settings.findIndex((v) => v.key === key);
     if (r.setting && i >= 0) ST.data.settings[i] = r.setting;
     if (key.startsWith("ws.") || key === "robert.model") load();
+    // Renamed here: every label on this page says the new name now; the page's groups follow on reload.
+    if (key === "assistant.name" && r.setting) { AssistantName.set(String(r.setting.value)); return loadSettings(); }
   } catch (e) {
     toast(errMsg(e));
   }
@@ -7840,7 +7847,7 @@ function briefOf(tab) { return tab === "robert" ? { body: B.memory, when: null }
 function renderBriefs() {
   const tabs = qs("#brief-tabs");
   tabs.innerHTML = B.rows.map((r) => `<button data-tab="${r.workspace_id}" class="${B.tab === r.workspace_id ? "on" : ""}${r.empty ? " empty" : ""}" title="${r.empty ? "not written yet" : "updated " + age(r.updated_at) + " ago"}">${esc(r.name)}</button>`).join("") +
-    (LOCK ? "" : `<button data-tab="robert" class="${B.tab === "robert" ? "on" : ""}" title="Robert's own memory of you">Robert's memory</button>`);
+    (LOCK ? "" : `<button data-tab="robert" class="${B.tab === "robert" ? "on" : ""}" title="${rnH()}'s own memory of you">${rnH()}'s memory</button>`);
   for (const b of qsa("button", tabs)) b.onclick = async () => { if (B.dirty) await saveBrief(); B.tab = b.dataset.tab; renderBriefs(); };
   const cur = briefOf(B.tab);
   qs("#brief-body").value = cur.body; B.dirty = false;
@@ -7851,7 +7858,7 @@ async function saveBrief() {
   try {
     if (B.tab === "robert") { await api("/agents/robert/memory", { method: "PUT", body: JSON.stringify({ body }) }); B.memory = body; }
     else { const n = await api("/workspaces/" + B.tab + "/brief", { method: "PUT", body: JSON.stringify({ body }) }); const r = B.rows.find((x) => x.workspace_id === B.tab); if (r) { r.body = body; r.updated_at = n.updated_at; r.empty = false; } }
-    B.dirty = false; toast("saved — Robert reads it on his next turn");
+    B.dirty = false; toast(rn("saved — Robert reads it on the next turn"));
   } catch (e) { toast("save failed: " + errMsg(e)); }
 }
 qs("#brief-body").addEventListener("input", () => { B.dirty = true; });
@@ -7987,7 +7994,8 @@ function chatFull(full, andOpen = true) {
   try { localStorage.setItem("desk-chat-full", full ? "1" : "0"); } catch {}
   const b = qs("#chat-full");
   b.textContent = full ? "⤡" : "⤢";
-  b.title = full ? "Back to docked — the terminal returns (⌘⇧K)" : "Full screen — Robert takes the stage (⌘⇧K)";
+  b.dataset.anTitle = full ? "Back to docked — the terminal returns (⌘⇧K)" : "Full screen — Robert takes the stage (⌘⇧K)";
+  b.title = rn(b.dataset.anTitle);
   if (full && andOpen && !chatIsOpen()) chatOpen(true);
   DeskCockpit.wake();
   OV.log.scrollTop = OV.log.scrollHeight;
@@ -8017,7 +8025,7 @@ qs("#chat-model").onchange = async () => {
   const model = qs("#chat-model").value;
   try {
     await api("/agent/model", { method: "POST", body: JSON.stringify({ model }) });
-    toast("Robert → " + model);
+    toast(rn("Robert → ") + model);
   } catch (e) { toast(e.message); loadRobertModel(); }
 };
 qs("#chat-new").onclick = async () => {
@@ -8323,8 +8331,8 @@ function paintSteps(box) {
   const span = first ? hms(first.at).slice(0, 5) + (took ? " · " + took : "") : "";
   const lbl = STEP_LABEL[box.dataset.label] ? " · " + STEP_LABEL[box.dataset.label] : "";
   qs(".sh", box).innerHTML = (live ? `<span class="dot working"></span>` : `<span class="chev">›</span>`)
-    + (live ? `<span>Robert is working${lbl} · <span class="n">${lis.length} step${lis.length === 1 ? "" : "s"}</span></span><time>${esc(hms(first?.at || "").slice(0, 5))}</time>` : "")
-    + (live ? "" : `<span>Robert${lbl} · <span class="n">${acts ? `${acts} action${acts === 1 ? "" : "s"}` : `${lis.length} look${lis.length === 1 ? "" : "s"}`}</span>${acts && lis.length > acts ? ` · ${lis.length - acts} look${lis.length - acts === 1 ? "" : "s"}` : ""}</span><time title="${esc(first ? new Date(first.at).toLocaleString() : "")}">${esc(span)}</time>`);
+    + (live ? `<span>${rnH()} is working${lbl} · <span class="n">${lis.length} step${lis.length === 1 ? "" : "s"}</span></span><time>${esc(hms(first?.at || "").slice(0, 5))}</time>` : "")
+    + (live ? "" : `<span>${rnH()}${lbl} · <span class="n">${acts ? `${acts} action${acts === 1 ? "" : "s"}` : `${lis.length} look${lis.length === 1 ? "" : "s"}`}</span>${acts && lis.length > acts ? ` · ${lis.length - acts} look${lis.length - acts === 1 ? "" : "s"}` : ""}</span><time title="${esc(first ? new Date(first.at).toLocaleString() : "")}">${esc(span)}</time>`);
   const hide = live ? 0 : Math.max(0, lis.length - STEPS_SHOWN);
   lis.forEach((l, i) => l.classList.toggle("old", i < hide));
   let more = qs(".more", box);
@@ -8451,8 +8459,9 @@ const VAD = { start: 0.025, hold: 0.012, speech: 0.04, endMs: 800, minSpeechMs: 
 // this; short answers and commands are never held, a barge never joins.
 const JOIN = { ms: 1500, minLoudMs: 800, minWords: 3 };
 // Whisper writes the rioplatense «colgá» as "colgar" — and as "colgada".
-const HANG_UP = /^ (hang up|end (the )?call|disconnect|colgar|colga|colgada|colgado|colgalo|cuelga|corta|cortar|cortala|chau robert|bye robert) $/;
-const STOP_TALKING = /^ (stop|para|parar|detente|basta|silencio|stop robert|para robert) $/;
+// "Chau <name>" / "para <name>": the name the assistant was given, and Robert, always (static/assistant-name.js).
+const HANG_UP = AssistantName.command("hang up|end (the )?call|disconnect|colgar|colga|colgada|colgado|colgalo|cuelga|corta|cortar|cortala", "chau|bye");
+const STOP_TALKING = AssistantName.command("stop|para|parar|detente|basta|silencio", "stop|para");
 // Whisper's stock phantoms on breath and room noise — never a command.
 const HEARD_NOISE = /^(\[.*\]|\(.*\)|\*.*\*|thank you\.?|thanks for watching.*|you\.?|bye\.?|gracias( por ver.*)?\.?|subt[ií]tulos.*|amara\.org.*|[.…,!? ]+)$/i;
 const vcAuth = () => (TOKEN ? { "x-mc-admin": TOKEN } : {});
@@ -8894,8 +8903,8 @@ function vcState() {
     listening: es ? "Te escucho" : "Listening",
     hearing: es ? "Te escucho…" : "Hearing you…",
     transcribing: es ? "Entendido…" : "Got it…",
-    thinking: es ? "Robert está en eso" : "Robert is on it",
-    speaking: "Robert",
+    thinking: rn(es ? "Robert está en eso" : "Robert is on it"),
+    speaking: rn("Robert"),
   }[st];
   if (st === "listening") qs("#v-sub").textContent = es ? "decí «colgar» para terminar" : "say “hang up” to end";
   else if (st !== "speaking" && st !== "thinking") qs("#v-sub").textContent = "";
@@ -8934,7 +8943,7 @@ const BUS_TOPICS = [
   "ask.created", "ask.answered",
   "artifact.created", "artifact.updated", "artifact.event",
   "service.changed", "service.alarm", "alert.raised",
-  "inbox.updated",
+  "inbox.updated", "settings.changed",
 ].join(",");
 function connectBus() {
   if (!TOKEN) return;
@@ -8955,6 +8964,8 @@ function connectBus() {
     }
     if (e.topic === "host.online" || e.topic === "host.offline" || e.topic === "host.updated" || e.topic === "host.inventory") return loadHostsSoon();
     if (e.topic === "inbox.updated") return loadInboxSoon();
+    // Renamed from another page (the welcome in another tab, ⚙ Settings elsewhere): say the new name here too.
+    if (e.topic === "settings.changed") { if (e.key === "assistant.name") AssistantName.refresh(); return; }
     if (e.topic === "session.activity") {
       const s = byId(e.session_id);
       if (!s || s.state === "done" || s.state === "blocked") return;
@@ -9343,7 +9354,7 @@ function renderHosts() {
     return `<span class="ck ${g.auth === "yes" ? "ok" : g.auth === "no" ? "no" : "unk"}" title="${esc(tip)}">gh login${g.dir === "default" ? "" : " " + esc(g.dir.split("/").pop())}</span>`;
   }).join("");
   const meta = h.is_brain
-    ? "The brain — the daemon, the Desk and Robert run here."
+    ? rn("The brain — the daemon, the Desk and Robert run here.")
     : [h.platform, h.version ? "chronos " + h.version + (h.commit ? " @ " + h.commit.slice(0, 7) : "") : "", h.link ? (h.link.via === "lan" ? "on this network" : "through the tunnel") : "", ck.veto.length ? "vetoes " + ck.veto.join(", ") : ""].filter(Boolean).join(" · ");
   const takes = h.status !== "draining" && h.status !== "disabled";
   qs("#hmain").innerHTML = `
@@ -9603,15 +9614,15 @@ addEventListener("hashchange", openFromHash);
 (() => {
   let frame = null;
   const btn = document.createElement("button");
-  btn.className = "icon"; btn.id = "btn-robert-full"; btn.title = "Robert, full screen (⌘⇧R)"; btn.textContent = "💬";
+  btn.className = "icon"; btn.id = "btn-robert-full"; btn.dataset.an = "title"; btn.title = "Robert, full screen (⌘⇧R)"; AssistantName.apply(btn); btn.textContent = "💬";
   qs("#btn-robert").before(btn);
   const close = () => { if (frame) { frame.remove(); frame = null; } };
   const open = () => {
     if (frame || qs("dialog[open]")) return;
-    if (LOCK) return toast("Robert's full screen is hidden while the Desk shows one client");
+    if (LOCK) return toast(rn("Robert's full screen is hidden while the Desk shows one client"));
     if (VC.on) vcStop(); // one call at a time: the front has its own
     frame = document.createElement("iframe");
-    frame.src = "/phone"; frame.title = "Robert"; frame.allow = "microphone; autoplay";
+    frame.src = "/phone"; frame.title = rn("Robert"); frame.allow = "microphone; autoplay";
     frame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;z-index:9999;background:var(--bg)";
     frame.addEventListener("load", () => frame?.contentWindow?.focus());
     document.body.appendChild(frame);
@@ -9626,5 +9637,6 @@ addEventListener("hashchange", openFromHash);
   }, true);
 })();
 </script>
+<script src="/desk-welcome.js"></script>
 </body>
 </html>

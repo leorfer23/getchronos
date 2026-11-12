@@ -7,6 +7,7 @@ import { CONFIG } from "./config.js";
 import { sessions, workspaces } from "./store.js";
 import type { DeskPrompt } from "./desk-prompt.js";
 import { REPO_ROOT } from "./repo-root.js";
+import { assistantName } from "./settings.js";
 
 // Web Push for the phone (static/phone.html + static/sw.js): a terminal flipping to needs-you, an
 // agent reporting itself blocked, or Robert answering, reaches the phone as a notification with the
@@ -227,7 +228,7 @@ export function startPush(deps: Deps): () => void {
       const scope = e.ws ? wsName(e.ws) : null;
       await broadcast({
         kind: "robert",
-        title: "Robert" + (scope ? " · " + scope : ""),
+        title: assistantName() + (scope ? " · " + scope : ""),
         body: e.reply.replace(/\s+/g, " ").slice(0, 180),
         tag: "robert:" + (e.ws || "all"), url: "/phone#robert" + (e.ws ? "=" + e.ws : ""),
         needs: needsCount(deps.activity, blocked), at: new Date(now()).toISOString(),

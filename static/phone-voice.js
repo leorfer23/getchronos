@@ -605,8 +605,19 @@
       paint();
     });
   }
-  var HANG_UP = /^ (hang up|end (the )?call|disconnect|colgar|colga|colgada|colgado|colgalo|cuelga|corta|cortar|cortala|chau robert|bye robert) $/;
-  var STOP_TALKING = /^ (stop|para|parar|pará|detente|basta|stop robert|para robert|silencio) $/;
+  // "Chau <name>" / "para <name>": the name the operator gave his assistant, and Robert always. Looked
+  // up when heard (static/assistant-name.js may load after this file, and a rename lands mid-call).
+  function nameCommand(w, lead) {
+    var fixed = new RegExp("^ (" + w + "|(?:" + lead + ") robert) $"), named = null;
+    return { test: function (n) {
+      var AN = root.AssistantName;
+      if (!AN) return fixed.test(n);
+      named = named || AN.command(w, lead);
+      return named.test(n);
+    } };
+  }
+  var HANG_UP = nameCommand("hang up|end (the )?call|disconnect|colgar|colga|colgada|colgado|colgalo|cuelga|corta|cortar|cortala", "chau|bye");
+  var STOP_TALKING = nameCommand("stop|para|parar|pará|detente|basta|silencio", "stop|para");
   /** A word that acts by itself (hang up, stop, cancel): never held back to be joined to anything. */
   function isCommand(text) { var n = norm(text); return HANG_UP.test(n) || STOP_TALKING.test(n) || isStop(text); }
   function heard(text, meta) {

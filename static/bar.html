@@ -82,18 +82,22 @@
     <button id="cap-x" title="Drop the capture (⌫ on an empty line)">✕</button>
   </div>
   <div id="row">
-    <textarea id="q" rows="1" placeholder="Ask Robert…" spellcheck="false"></textarea>
+    <textarea id="q" rows="1" placeholder="Ask Robert…" spellcheck="false" data-an="placeholder"></textarea>
     <button id="mic" title="Talk (press the hotkey again)"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 10.5a2.5 2.5 0 0 0 2.5-2.5V3.5a2.5 2.5 0 0 0-5 0V8A2.5 2.5 0 0 0 8 10.5Zm4.25-2.75a.75.75 0 0 0-1.5 0 2.75 2.75 0 0 1-5.5 0 .75.75 0 0 0-1.5 0 4.25 4.25 0 0 0 3.5 4.18V13.5H5.5a.75.75 0 0 0 0 1.5h5a.75.75 0 0 0 0-1.5H8.75v-1.57a4.25 4.25 0 0 0 3.5-4.18Z"/></svg></button>
   </div>
   <div id="pills" hidden></div>
   <div id="foot"><span id="ws"></span><span id="why"></span><span id="hint"></span><button id="lang"></button></div>
   <div id="out" hidden></div>
 </div>
+<script src="/assistant-name.js"></script>
 <script>
 "use strict";
 const TOKEN = window.__MC_TOKEN__ || (() => { try { return localStorage.getItem("mc-token"); } catch { return null; } })();
 const CLIENT = "bar-" + Math.random().toString(36).slice(2, 12);
 const $ = (s) => document.querySelector(s);
+// The name the operator gave his assistant (static/assistant-name.js) — text only; HTML gets it escaped.
+const rn = (s) => AssistantName.say(s);
+const rnH = () => AssistantName.get().replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const q = $("#q");
 const AUTO = "__auto__";
 
@@ -167,7 +171,7 @@ function reset() {
 
 function renderCapture() {
   const cap = $("#cap");
-  if (!hasCapture()) { cap.hidden = true; q.placeholder = "Ask Robert…"; fit(); return; }
+  if (!hasCapture()) { cap.hidden = true; q.placeholder = rn("Ask Robert…"); fit(); return; }
   cap.hidden = false;
   const th = $("#thumb");
   if (S.file && /^image\//.test(S.file.mime || "")) { th.src = "data:" + S.file.mime + ";base64," + S.file.b64; th.hidden = false; }
@@ -205,8 +209,8 @@ function renderFoot() {
     : w && r && r.ws && r.ws.id === w.id && r.key ? "from " + (r.keys.find((k) => k.key === r.key)?.label || r.key) : "";
   const tab = "<kbd>tab</kbd> workspace";
   hint.innerHTML = hasCapture()
-    ? (w ? `<kbd>↵</kbd> new terminal · <kbd>⌘↵</kbd> ask Robert · ${tab}` : `${tab} · then <kbd>↵</kbd>`)
-    : `<kbd>↵</kbd> ask Robert · <kbd>⌘↵</kbd> new terminal · ${tab}`;
+    ? (w ? `<kbd>↵</kbd> new terminal · <kbd>⌘↵</kbd> ask ${rnH()} · ${tab}` : `${tab} · then <kbd>↵</kbd>`)
+    : `<kbd>↵</kbd> ask ${rnH()} · <kbd>⌘↵</kbd> new terminal · ${tab}`;
   $("#lang").textContent = S.lang.toUpperCase();
   renderPills();
   fit();
@@ -326,7 +330,7 @@ async function askRobert(text, spoken, forced) {
   if (pick !== undefined) { body.ws = pick; body.route = false; }
   else if (S.route && S.route.ws) body.context_ws = S.route.ws.id;
   if (spoken) body.voice = true;
-  show("who", "Robert · thinking…");
+  show("who", rn("Robert · thinking…"));
   try {
     if (S.file) body.attachments = [{ id: (await upload("/agent/attach", S.file)).id }];
     const r = await api("/agent", { method: "POST", body: JSON.stringify(body) });
@@ -337,7 +341,7 @@ async function askRobert(text, spoken, forced) {
     replayEarly();
     q.value = ""; autosize();
   } catch (e) {
-    show("err", "Robert did not get it: " + e.message);
+    show("err", rn("Robert did not get it: ") + e.message);
   } finally { sending = false; }
 }
 function whoLine(wsId) {
@@ -347,7 +351,7 @@ function whoLine(wsId) {
   out.innerHTML = "";
   const who = document.createElement("div");
   who.className = "who";
-  who.textContent = "Robert" + (w ? " · " + w.name : "") + " · working…";
+  who.textContent = rn("Robert") + (w ? " · " + w.name : "") + " · working…";
   const body = document.createElement("div");
   body.id = "reply";
   out.append(who, body);

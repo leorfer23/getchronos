@@ -12,7 +12,7 @@
  * because "nothing changed" is a watch you stop trusting, and the whole point is that he asked to
  * be told.
  */
-import { settingOn } from "./settings.js";
+import { assistantName, settingOn } from "./settings.js";
 import { bus } from "./bus.js";
 import { getAgent } from "./agent-lifecycle.js";
 import { OP_PREFIX } from "./operational-prefix.js";
@@ -254,13 +254,13 @@ export async function runWatch(s: Session, final = false): Promise<void> {
     console.warn("[desk-watch] robert turn failed", e?.message ?? e);
     // Never swallow a watch: he asked to hear every interval, so a failed turn reports the raw state
     // rather than nothing. Silence would read as "all fine".
-    body = `(couldn't reach Robert for this check) state ${d.state}${d.quiet_for_min ? `, silent ${d.quiet_for_min}m` : ""}.`;
+    body = `(couldn't reach ${assistantName()} for this check) state ${d.state}${d.quiet_for_min ? `, silent ${d.quiet_for_min}m` : ""}.`;
     failed = true;
   } finally {
     looking.delete(s.id);
   }
   if (!body) {
-    body = `(Robert had nothing to say) state ${d.state}.`;
+    body = `(${assistantName()} had nothing to say) state ${d.state}.`;
     failed = true;
   }
   sessions.addWatchReport(s.id, { state: d.state, body, final, failed });

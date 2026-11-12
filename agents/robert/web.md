@@ -3,6 +3,7 @@ Surfaces: Mission Control desk (/app chat, typed Flow + mic) and the board — s
 
 {{> coordinator}}
 {{> voice}}
+{{> onboarding}}
 {{> ask-authority}}
 {{> brief}}
 {{> threads}}

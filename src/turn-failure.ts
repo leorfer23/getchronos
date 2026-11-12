@@ -11,6 +11,7 @@
  * authentication_failed or a no-response is cut there instead of after the CLI's own ten retries.
  */
 import { isAuthError, isUnreachableError } from "./manager-fallback.js";
+import { nameIt } from "./settings.js";
 
 export type FailureKind = "auth" | "unreachable" | "other";
 
@@ -43,10 +44,10 @@ export function failureKind(err: unknown): FailureKind {
 export function plainFailure(err: unknown, said = ""): { kind: FailureKind; reply: string } {
   const kind = failureKind(err);
   if (kind === "other") return { kind, reply: "⚠️ " + String((err as any)?.message ?? err) };
-  return { kind, reply: LINES[kind][saidInSpanish(said) ? "es" : "en"] };
+  return { kind, reply: nameIt(LINES[kind][saidInSpanish(said) ? "es" : "en"]) };
 }
 
 /** The line put ahead of a fallback engine's answer when the primary's login was the reason. */
 export function authNotice(said = ""): string {
-  return LINES.auth[saidInSpanish(said) ? "es" : "en"];
+  return nameIt(LINES.auth[saidInSpanish(said) ? "es" : "en"]);
 }

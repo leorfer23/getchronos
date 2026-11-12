@@ -44,7 +44,7 @@ import { bus } from "./bus.js";
 import { chat, workspaces } from "./store.js";
 import { requests, type RequestRow } from "./store/requests.js";
 import { closeRequest, ledgerText, markVoiceTurn, openRequest, queueView } from "./ledger.js";
-import { setting, settingOn } from "./settings.js";
+import { assistantName, assistantNameLine, setting, settingOn } from "./settings.js";
 import { noteHelperCall } from "./helper-spend.js";
 import { GOAL_KINDS } from "./validation.js";
 import { plainFailure } from "./turn-failure.js";
@@ -142,6 +142,9 @@ What you never do:
 - You never approve, merge, deploy or send anything, and you never ask a project's Robert to. Approvals are his, one item at a time, on his queue: when something waits for him, say what it is in one sentence and tell him to say "veamos" to go through it.
 - You never claim work is done because someone said so: say what the ledger shows ("dice que está listo, falta la verificación").
 - One project's matters stay in that project: one § line per project, and never another project's details in a request.`;
+
+/** What the front is told: the name the operator gave him first (nothing while he is Robert), then the fixed part. */
+export const talkerSystem = (): string => assistantNameLine() + TALKER_SYSTEM;
 
 const clip = (s: unknown, n: number) => {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
@@ -357,6 +360,8 @@ type CliTalker = {
   fresh: boolean;
   turns: number;
   warmed: Promise<void> | null;
+  /** The name its prompt was baked with: a rename rebuilds it on the next turn. */
+  name: string;
 };
 let cliTalker: CliTalker | null = null;
 const CLI_RECYCLE_TURNS = 20;
@@ -373,7 +378,7 @@ function talkerHome(): string {
  * no tools, no MCP, no skills/commands, no session on disk, the profile's output style/CLAUDE.md/
  * rules/auto memory off, thinking off, low effort. Exported so a test pins what the talker spawns with.
  */
-export function cliTalkerArgs(profileDir: string, system = TALKER_SYSTEM): string[] {
+export function cliTalkerArgs(profileDir: string, system = talkerSystem()): string[] {
   const settings = {
     outputStyle: "default",
     alwaysThinkingEnabled: false,
@@ -391,20 +396,23 @@ export function cliTalkerArgs(profileDir: string, system = TALKER_SYSTEM): strin
 }
 
 async function cliManager(): Promise<CliTalker> {
+  if (cliTalker && cliTalker.name !== assistantName()) resetTalker();
   if (cliTalker) return cliTalker;
   const { WarmManager } = await import("./telegram/agent.js");
   const { CONFIG } = await import("./config.js");
   const profileDir = CONFIG.profiles[CONFIG.agent.profile] ?? CONFIG.profiles.claude;
   const model = String(setting("voice.talker_cli_model") || DEFAULT_CLI_MODEL);
+  const name = assistantName();
+  const system = talkerSystem();
   const m = new WarmManager({
-    system: TALKER_SYSTEM,
+    system,
     model,
     profileDir,
     turnTimeoutMs: 30_000,
     maxTurns: CLI_RECYCLE_TURNS + 1,
     cwd: talkerHome(),
     sandbox: "guard",
-    customArgs: cliTalkerArgs(profileDir),
+    customArgs: cliTalkerArgs(profileDir, system),
     extraEnv: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
   });
   let warm = false;
@@ -416,6 +424,7 @@ async function cliManager(): Promise<CliTalker> {
     fresh: true,
     turns: 0,
     warmed: null,
+    name,
   };
   // A throwaway first turn: the CLI only finishes booting (and opens its connection) on its first
   // message, so this is what makes his first real sentence a warm one.
@@ -456,7 +465,7 @@ export function requestBody(cred: TalkerCred, messages: unknown[]): Record<strin
     model: cred.model,
     max_tokens: 1200,
     stream: true,
-    system: [{ type: "text", text: TALKER_SYSTEM, cache_control: { type: "ephemeral" } }],
+    system: [{ type: "text", text: talkerSystem(), cache_control: { type: "ephemeral" } }],
     messages,
     ...thinkingFor(cred.model),
   };

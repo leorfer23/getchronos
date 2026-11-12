@@ -43,6 +43,11 @@ export interface SettingDef {
   column?: keyof Workspace & string;
   /** level "global": a kv key some older code already reads (web.model). */
   kvKey?: string;
+  /**
+   * A rule past the type (the assistant's name): gets the coerced value, returns it cleaned, or
+   * throws with a message fit for the Desk. Every write goes through it — the ⚙ page and any route.
+   */
+  check?: (v: SettingValue) => SettingValue;
   onChange?: (workspaceId: string | null) => void;
 }
 
@@ -135,6 +140,16 @@ export const settingOn = (key: string, workspaceId?: string | null): boolean => 
 
 /** Coerce and check a value from the wire. Throws with a message fit for the Desk. */
 export function coerceSetting(d: SettingDef, raw: unknown): SettingValue {
+  const v = coerceType(d, raw);
+  if (v === null || !d.check) return v;
+  try {
+    return d.check(v);
+  } catch (e: any) {
+    throw new Error(`${d.label}: ${e?.message ?? e}`);
+  }
+}
+
+function coerceType(d: SettingDef, raw: unknown): SettingValue {
   if (raw === null && d.nullable) return null;
   switch (d.type) {
     case "bool":
@@ -231,12 +246,72 @@ export function settingsView(workspaceId?: string | null): SettingView[] {
       const inherited = ws && d.level === "both" ? resolveSetting(d.key, null).value : d.default(ws);
       // A per-workspace kv setting can be reset to its default like any override; a column cannot.
       const level: SettingLevel = d.level === "ws" && !d.column ? "both" : d.level;
+      // The page says the name the operator gave him ("Ada works on his own"); keys stay robert.*.
       return {
-        key: d.key, group: d.group, label: d.label, help: d.help, type: d.type, level,
+        key: d.key, group: nameIt(d.group), label: nameIt(d.label), help: nameIt(d.help), type: d.type, level,
         options: d.options?.(), env: d.env, min: d.min, max: d.max, nullable: d.nullable,
         value, source, inherited,
       };
     });
+}
+
+/** The page's group headings, in order — the "Robert" group under the name he was given. */
+export const settingGroups = (): string[] => GROUPS.map(nameIt);
+
+// ───────────────────────────── the assistant's name ─────────────────────────────
+// The operator names his assistant (the Desk's first-run welcome, or ⚙ Settings). It is a DISPLAY
+// name: what every surface shows and says, and what he answers to. Ids never move — agents/robert/,
+// robert-* modules, /api/robert/*, robert.* settings keys, `mc ask-robert`, MC_AGENT_NAME=robert —
+// so nothing stored or scripted breaks on a rename. Read at the moment a string is built, like every
+// setting here, so a rename lands on the next string with no restart.
+
+export const DEFAULT_ASSISTANT_NAME = "Robert";
+
+/**
+ * The name as stored: 1–24 letters (any script, accents included), digits, spaces and . - '. Narrow on
+ * purpose — it is spliced into prompts, notifications and page text, so it can carry no markup, no
+ * newline and no instruction. Throws with a message fit for the Desk.
+ */
+export function cleanAssistantName(raw: unknown): string {
+  if (typeof raw !== "string") throw new Error("a name, in letters");
+  // A Mac's smart quotes turn the apostrophe in "D'Arcy" into ’ as it is typed. Runs of spaces fold to
+  // one; a newline or a tab is not a space, so it stays in and is refused below.
+  const s = raw.normalize("NFC").replace(/[\u2018\u2019\u02bc]/g, "'").replace(/\u00a0/g, " ").replace(/ {2,}/g, " ").trim();
+  if (!s) throw new Error("it can't be empty");
+  if ([...s].length > 24) throw new Error("24 characters at most");
+  if (!/^[\p{L}\p{M}\p{N} .'-]+$/u.test(s)) throw new Error("letters, digits, spaces and . - ' only");
+  if (!/[\p{L}\p{N}]/u.test(s)) throw new Error("it needs at least one letter");
+  return s;
+}
+
+/** What the operator calls his assistant right now ("Robert" until he names him). */
+export function assistantName(): string {
+  const v = setting("assistant.name");
+  return typeof v === "string" && v.trim() ? v : DEFAULT_ASSISTANT_NAME;
+}
+
+/**
+ * A user-facing string that says "Robert", with the chosen name in its place. Whole word, capital R
+ * only: "robert" in ids, keys and commands is never touched. The identity while he is still Robert.
+ */
+export function nameIt(text: string): string {
+  const n = assistantName();
+  return n === DEFAULT_ASSISTANT_NAME ? text : text.replace(/\bRobert\b/g, () => n);
+}
+
+/**
+ * The line a renamed assistant's prompts open with, so he answers to his name and never calls himself
+ * Robert to the operator. Empty while he is Robert: the default prompt stays byte-for-byte what it was.
+ */
+export function assistantNameLine(): string {
+  const n = assistantName();
+  if (n === DEFAULT_ASSISTANT_NAME) return "";
+  return (
+    `YOUR NAME — ${n}. The operator chose it: it is the only name he sees or hears for you. Introduce ` +
+    `yourself, sign and refer to yourself as ${n}, and answer to it. "Robert" in these instructions, in ` +
+    `messages from the daemon and in ids (agents/robert, /api/robert/*, mc ask-robert, --on robert) is ` +
+    `this same role's internal name — it means you. Never call yourself Robert to him, and never rename those ids.\n\n`
+  );
 }
 
 // ───────────────────────────── the settings ─────────────────────────────
@@ -255,6 +330,14 @@ defineSetting({
   label: "Inbox: only open what has work",
   help: "A quick first pass reads each item before its terminal opens. Thanks, FYIs, shared links and repeats of a live terminal close in the Inbox log instead (Reopen there opens one). Off: every item opens.",
   default: () => process.env.CHRONOS_INBOX_TRIAGE !== "0",
+});
+// First in his group, so it is the first thing the page shows under his name.
+defineSetting({
+  key: "assistant.name", group: "Robert", level: "global", type: "string",
+  label: "Name",
+  help: "What your assistant is called — on the Desk, the phone, out loud and on Telegram.",
+  default: () => DEFAULT_ASSISTANT_NAME,
+  check: (v) => cleanAssistantName(v),
 });
 defineSetting({
   key: "robert.enabled", group: "Robert", level: "both", type: "bool",

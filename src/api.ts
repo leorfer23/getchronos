@@ -1,5 +1,5 @@
 import express from "express";
-import { GROUPS as SETTING_GROUPS, setting, settingOn, settingsView, writeSetting } from "./settings.js";
+import { setting, settingGroups, settingOn, settingsView, writeSetting } from "./settings.js";
 import { claudeWall } from "./usage-meter.js";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -83,6 +83,7 @@ import { frontTakes } from "./agent-route.js";
 import { noteVoiceTrace, voiceTraces } from "./voice-trace.js";
 import { mountLedgerRoutes } from "./ledger-routes.js";
 import { mountExecutorRoutes } from "./executor-routes.js";
+import { assistantRoutes } from "./assistant-routes.js";
 import { robertGateFor } from "./robert-scope.js";
 import { isShipTerminal } from "./ship-guard.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
@@ -3102,6 +3103,7 @@ export function startServer() {
   // Pairing: a one-time code that signs a browser in without copying the token (src/pair.ts).
   api.use(pairRoutes());
   api.use(phoneRoutes(requireAdmin));
+  api.use(assistantRoutes(requireAdmin));
 
   // Every live terminal whose goal is ticked, closed in one call — Desk / phone / Telegram ✅ only.
   // Robert and Leads never hit this door (operatorMayCloseTerminal); a Lead has its own scoped one.
@@ -5007,7 +5009,7 @@ export function startServer() {
     const account = ws ? { profile: path.basename(ws.config_dir), wall: claudeWall(ws.config_dir) } : null;
     res.json({
       workspace_id: ws?.id ?? null,
-      groups: SETTING_GROUPS,
+      groups: settingGroups(),
       account,
       workspaces: workspaces.list().filter((w) => !w.archived).map((w) => ({ id: w.id, slug: w.slug, name: w.name })),
       settings: settingsView(ws?.id ?? null),

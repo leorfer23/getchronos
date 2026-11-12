@@ -20,7 +20,7 @@
  * What he may answer and what he must hand up is NOT here: `agents/_blocks/terminal-prompts.md` owns
  * that policy, exactly as ask-authority.md owns it for asks. Two copies is how one goes stale.
  */
-import { settingOn } from "./settings.js";
+import { assistantName, settingOn } from "./settings.js";
 import { createHash } from "node:crypto";
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
@@ -267,7 +267,7 @@ export async function sweepTerminalPrompts(nowMs = Date.now()): Promise<void> {
         continue;
       }
       done(t, nowMs);
-      await escalatePrompt(s!, cur!, "Robert answered and it didn't land");
+      await escalatePrompt(s!, cur!, `${assistantName()} answered and it didn't land`);
       continue;
     }
     // The daemon cannot see him escalating in his own words (that is a chat message, not a row), so
@@ -275,7 +275,7 @@ export async function sweepTerminalPrompts(nowMs = Date.now()): Promise<void> {
     // buttons — which beats the alternative this feature exists to remove: nobody getting it at all.
     if (nowMs - t.queued_at >= deadlineMs) {
       done(t, nowMs);
-      await escalatePrompt(s!, cur!, `no call from Robert within ${CONFIG.terminalPromptDeadlineMin}m — over to you`);
+      await escalatePrompt(s!, cur!, `no call from ${assistantName()} within ${CONFIG.terminalPromptDeadlineMin}m — over to you`);
     }
   }
   // Both maps are keyed by things that end (a prompt, a terminal), so they are pruned by their own
