@@ -69,8 +69,9 @@ test("only the operator's own token mints: a Robert's derived credential, a wron
     // The read-only one never gets past tokenlessGate (no writes at all); the others reach pair.ts.
     assert.match(r.json.error, /Robert can't make a sign-in link|read-only Robert/);
   }
-  assert.equal((await call("POST", "/pair", { ...json, "x-mc-admin": "nope" }, {})).status, 403);
-  assert.equal((await call("POST", "/pair", json, {})).status, 403);
+  // A wrong admin token is no identity at all: refused at the tokenless gate (deny is the default), before pair.ts.
+  assert.equal((await call("POST", "/pair", { ...json, "x-mc-admin": "nope" }, {})).status, 401);
+  assert.equal((await call("POST", "/pair", json, {})).status, 401);
   assert.equal((await call("POST", "/pair", { ...json, "x-mc-workspace-token": workspaces.get(ws.id)!.token }, {})).status, 403);
 });
 
@@ -88,8 +89,11 @@ test("redeeming needs no token even when tokenless requests are refused everywhe
 });
 
 test("the setup routes are mounted behind the admin gate", async () => {
-  assert.equal((await call("GET", "/setup/status", { ...json, "x-mc-admin": "nope" })).status, 403);
-  assert.equal((await call("POST", "/setup/install/claude", json, {})).status, 403);
+  // No identity → the tokenless gate (401); a workspace token is an identity, but not the operator (403).
+  assert.equal((await call("GET", "/setup/status", { ...json, "x-mc-admin": "nope" })).status, 401);
+  assert.equal((await call("POST", "/setup/install/claude", json, {})).status, 401);
+  const ws = workspaces.create({ slug: `setup-${Date.now()}`, name: "Acme", config_dir: fs.mkdtempSync(path.join(os.tmpdir(), "setup-cfg-")) } as any);
+  assert.equal((await call("POST", "/setup/install/claude", { ...json, "x-mc-workspace-token": workspaces.get(ws.id)!.token }, {})).status, 403);
   assert.equal((await call("POST", "/setup/smoke/nope", admin, {})).status, 404);
 });
 
