@@ -4,6 +4,10 @@ The assistant runs your agents the way a lead runs a team. He is called **Robert
 another name. He plans, opens terminals, unblocks, checks quality and tells you what matters. He does
 not write the code himself — agents do that.
 
+He runs Chronos himself — projects, terminals, tickets, jobs, memory, briefs, settings. Work inside a project
+(code, research, writing) goes to an agent terminal with your request, and he tells you which in one line.
+⚙ Settings → Robert → **What Robert does himself**.
+
 ## Talk to him
 
 - **Desk:** 🤖 or ⌘K opens his chat. Type in plain words. ⌘⇧K puts him full screen.

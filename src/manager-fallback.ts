@@ -240,6 +240,8 @@ export type ManagerFallbackTurnOpts = {
   /** The primary's walls, carried to the fallback engine (a project's Robert: telegram/agent.ts robertSandbox). */
   addDirs?: string[];
   denyDirs?: string[];
+  /** Read-only to it, look-only form (Robert answering, robert-hands.ts) — an engine swap never widens what he may write. */
+  readonlyDirs?: string[];
   /** The env the fallback starts from. Absent → the daemon's own (the fleet-wide Robert, executives). */
   baseEnv?: NodeJS.ProcessEnv;
   onDelta?: (t: string, kind: "text" | "thinking" | "tool" | "tool_done") => void;
@@ -275,13 +277,13 @@ export function capabilityGap(
  * ensureCursorNoSend; exported for tests.
  */
 export function fallbackLaunch(
-  opts: Pick<ManagerFallbackTurnOpts, "sandbox" | "addDirs" | "denyDirs" | "baseEnv" | "extraEnv" | "wsId">,
+  opts: Pick<ManagerFallbackTurnOpts, "sandbox" | "addDirs" | "denyDirs" | "readonlyDirs" | "baseEnv" | "extraEnv" | "wsId">,
   backendName: string,
   spec: { cmd: string; args: string[]; env?: Record<string, string> },
   cwd: string,
   profileDir: string,
 ): { cmd: string; cmdArgs: string[]; env: NodeJS.ProcessEnv } {
-  const { cmd, cmdArgs } = sandboxWrap(opts.sandbox ?? "guard", cwd, opts.addDirs ?? [], profileDir, opts.denyDirs ?? [], spec.cmd, spec.args);
+  const { cmd, cmdArgs } = sandboxWrap(opts.sandbox ?? "guard", cwd, opts.addDirs ?? [], profileDir, opts.denyDirs ?? [], spec.cmd, spec.args, false, opts.readonlyDirs ?? [], [], { readonlyWorktrees: false });
   // Workspace vars / secrets_file (CURSOR_API_KEY) — Robert's extraEnv only carries CHRONOS_ADMIN
   // + MC_*, and the daemon's own env only has what .secrets loaded. Without this, a cursor step on the
   // fallback chain died with "Authentication required… set CURSOR_API_KEY" even when the workspace
@@ -455,6 +457,7 @@ export type WithProviderFallbackOpts = {
   sandbox?: SandboxMode;
   addDirs?: string[];
   denyDirs?: string[];
+  readonlyDirs?: string[];
   baseEnv?: NodeJS.ProcessEnv;
   onDelta?: ManagerFallbackTurnOpts["onDelta"];
   timeoutMs?: number;
@@ -517,6 +520,7 @@ export async function withProviderFallback(opts: WithProviderFallbackOpts): Prom
       sandbox: opts.sandbox,
       addDirs: opts.addDirs,
       denyDirs: opts.denyDirs,
+      readonlyDirs: opts.readonlyDirs,
       baseEnv: opts.baseEnv,
       onDelta: opts.onDelta,
       timeoutMs: opts.timeoutMs,

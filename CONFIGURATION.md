@@ -292,6 +292,7 @@ point Chronos at a repo you care about:
 | `CHRONOS_ROBERT_DRIVE_GRACE_SEC` | 90 | how long a finished turn must stay idle before he hears about it (declared stops use at most 45s, waiting-on-Robert 20s) |
 | `CHRONOS_ROBERT_DRIVE_PER_TERMINAL_HOUR` / `CHRONOS_ROBERT_DRIVE_PER_HOUR` | 4 / 30 | rolling-hour caps per terminal and daemon-wide |
 | `CHRONOS_ROBERT_DRIVE_MAX_AGE_H` | 12 | a stop older than this when first seen is a parked terminal, not news |
+| `CHRONOS_ROBERT_HANDS` | `answers` | what he does himself in chat (⚙ Settings → Robert, per project too). `answers`: he runs Chronos (any number of API / `mc` calls); work inside a project goes to an agent terminal — the fifth call outside Chronos (files, searches, shell, the web) in a chat turn hands it to one; every project's folders are read-only to him and he has only his declared built-in tools (`src/robert-hands.ts`). `anything`: the old behaviour |
 | `CHRONOS_LEAD_DRIVE_GRACE_SEC` | `15` | a Lead's worker reaches its Lead this fast (`LEADS.md`). Only ever LOWERS the grace above — a Lead sits in `mc lead wait`, so Robert's 90s is dead air per worker turn |
 | `CHRONOS_LEAD_DIGEST_DEBOUNCE_SEC` / `CHRONOS_LEAD_DIGEST_MAX_WAIT_SEC` | 5 / 20 | a Lead that is NOT pulling its inbox gets one typed digest per burst: wait this long for siblings, never hold the oldest longer than this |
 | `CHRONOS_LEAD_DRIVE_PER_WORKER_HOUR` / `CHRONOS_LEAD_DRIVE_PER_LEAD_HOUR` | 20 / 120 | rolling-hour caps on reaching a Lead, tracked apart from Robert's. Over them, the stop becomes Robert's |

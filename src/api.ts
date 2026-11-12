@@ -85,6 +85,7 @@ import { mountLedgerRoutes } from "./ledger-routes.js";
 import { mountExecutorRoutes } from "./executor-routes.js";
 import { assistantRoutes } from "./assistant-routes.js";
 import { robertGateFor } from "./robert-scope.js";
+import { homeWorkspace } from "./robert-hands.js";
 import { isShipTerminal } from "./ship-guard.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
@@ -717,6 +718,14 @@ export function startServer() {
       const wall = spawnWallRefusal(scope.ws, req.body ?? {});
       if (wall) return res.status(404).json({ error: wall });
       if (req.body) delete req.body.agentSessionId; // a raw CLI transcript id has no workspace to check
+    }
+    // The fleet-wide Robert opening a terminal for no project — on a new install there is none yet:
+    // it opens in his home project (robert-hands.ts homeWorkspace, created on first need) rather than
+    // as an unscoped terminal in $HOME that no project's walls hold. Read-write only: a read-only
+    // credential never creates a project.
+    if (scope.fleet && scope.robert === "rw" && !req.body?.workspace_id && !req.body?.ticket_id && !req.body?.resumeId) {
+      const home = homeWorkspace({ create: true });
+      if (home.ws) req.body = { ...req.body, workspace_id: home.ws.id };
     }
     const lead = leadScope(req);
     // No nesting (LEADS.md): a Lead is Robert's deputy for one goal, not a spawner of other Leads.
@@ -5318,7 +5327,8 @@ export function startServer() {
                 bus.publish({ topic: "agent.delta", text: t, kind, ws, client, turn: turnId });
               },
               runWs,
-              { voice, turn: turnId },
+              // chat: his own words — the turn robert.hands budgets (robert-hands.ts).
+              { voice, turn: turnId, chat: { words: text, spoken: voice } },
             );
         const row = chat.add(text, reply || "", "web", ws, steps, shown, quote, engine, timing());
         chat.prune(2000);

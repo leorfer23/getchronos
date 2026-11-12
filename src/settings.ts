@@ -339,6 +339,16 @@ defineSetting({
   default: () => DEFAULT_ASSISTANT_NAME,
   check: (v) => cleanAssistantName(v),
 });
+// What he does himself when you talk to him: he runs Chronos, agents do the work (src/robert-hands.ts
+// holds him to it in code: his sandbox, and a budget on work outside Chronos that opens the terminal
+// for him). Unlike the switches below, this one is about the chat itself.
+defineSetting({
+  key: "robert.hands", group: "Robert", level: "both", type: "enum", env: "CHRONOS_ROBERT_HANDS",
+  label: "What Robert does himself",
+  help: "answers: Robert runs Chronos (projects, terminals, tickets, jobs, memory, briefs, settings); work inside a project — code, research, writing — goes to an agent terminal. He still answers a question about a project when a few lookups settle it; past four calls outside Chronos, it goes to a terminal with your request and he tells you which in one line. Your projects' folders are read-only to him. anything: he may also do the work himself in the chat, as before.",
+  options: () => ["answers", "anything"],
+  default: () => (process.env.CHRONOS_ROBERT_HANDS === "anything" ? "anything" : "answers"),
+});
 defineSetting({
   key: "robert.enabled", group: "Robert", level: "both", type: "bool",
   label: "Robert works on his own",
