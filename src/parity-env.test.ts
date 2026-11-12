@@ -7,11 +7,13 @@
  */
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
   applyMerge,
+  claudeConfigLock,
   claudeGlobalConfig,
   claudeHomeEnv,
   claudeHomeVerdict,
@@ -25,6 +27,7 @@ import {
   readParityState,
   sameDef,
   switchClaudeHome,
+  updateClaudeConfig,
   withClaudeHome,
 } from "./parity-env.js";
 
@@ -229,6 +232,70 @@ test("the backends spawn with what parity-env decides (HOME pointed at a fixture
     process.env.HOME = prevHome;
     fs.rmSync(state, { force: true });
   }
+});
+
+test("writes go through claude's own lock: Chronos waits briefly, builds on what claude saved meanwhile, never steals the lock", async () => {
+  const f = fixture({ own: { numStartups: 1 } });
+  const lock = claudeConfigLock(f.ownFile);
+  assert.equal(lock, `${f.ownFile}.lock`, "the directory claude's proper-lockfile takes");
+  // claude holds the lock, saves its own change, lets go — while Chronos is waiting for it.
+  const saved = path.join(f.home, "claude-save.json");
+  fs.writeFileSync(saved, JSON.stringify({ numStartups: 2, mcpServers: { added: { command: "c" } } }));
+  fs.mkdirSync(lock);
+  const claude = spawn("/bin/sh", ["-c", `sleep 0.05; cp "${saved}" "${f.ownFile}"; rmdir "${lock}"`], { stdio: "ignore" });
+  const r = updateClaudeConfig(f.ownFile, (cur) => ({ ...cur, chronos: true }), [50, 100, 200, 400, 800, 1600]);
+  await new Promise((res) => claude.on("exit", res));
+  assert.equal(r, "written");
+  const got = f.read(f.ownFile);
+  assert.equal(got.numStartups, 2, "built on claude's save, not on what was there before it");
+  assert.deepEqual(got.mcpServers, { added: { command: "c" } });
+  assert.equal(got.chronos, true);
+  assert.equal(fs.existsSync(lock), false, "released");
+  // Held past the short waits: nothing written, and the holder's lock is left where it is.
+  fs.mkdirSync(lock);
+  const before = fs.readFileSync(f.ownFile, "utf8");
+  assert.equal(updateClaudeConfig(f.ownFile, (cur) => ({ ...cur, again: true }), [5, 5]), "busy");
+  assert.equal(fs.readFileSync(f.ownFile, "utf8"), before);
+  assert.equal(fs.existsSync(lock), true, "never removes a lock it did not make");
+  // The switch says why it could not copy, and records nothing.
+  fs.writeFileSync(f.legacyFile, JSON.stringify({ mcpServers: { fff: FFF } }));
+  const s = switchClaudeHome("fix", f.opts);
+  assert.equal(s.ok, false);
+  assert.match(s.error ?? "", /claude is saving it right now/);
+  assert.equal(claudeOwnHome(f.dir, f.opts), false);
+  fs.rmdirSync(lock);
+});
+
+test("trust under a held lock is skipped with a warning, the file untouched; an already-trusted folder never takes the lock", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "parity-trust-"));
+  homes.push(home);
+  const cfgDir = path.join(home, ".claude-acme");
+  fs.mkdirSync(cfgDir);
+  const file = path.join(cfgDir, ".claude.json");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "parity-trust-cwd-"));
+  homes.push(cwd);
+  fs.writeFileSync(file, JSON.stringify({ projects: {} }));
+  const { ensureTrustedCwd, trustKeys } = await import("./claude-trust.js");
+  fs.mkdirSync(claudeConfigLock(file));
+  const warn = console.warn;
+  const warned: string[] = [];
+  console.warn = (...a: unknown[]) => { warned.push(a.join(" ")); };
+  try {
+    assert.equal(ensureTrustedCwd(cfgDir, cwd), "skipped");
+  } finally {
+    console.warn = warn;
+  }
+  assert.ok(warned.some((w) => /its lock is held/.test(w)), warned.join("\n"));
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { projects: {} });
+  fs.rmdirSync(claudeConfigLock(file));
+  assert.equal(ensureTrustedCwd(cfgDir, cwd), "added");
+  fs.mkdirSync(claudeConfigLock(file));
+  try {
+    assert.equal(ensureTrustedCwd(cfgDir, cwd), "already", "answered from a plain read while claude holds the lock");
+  } finally {
+    fs.rmdirSync(claudeConfigLock(file));
+  }
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).projects[trustKeys(cwd)[0]].hasTrustDialogAccepted, true);
 });
 
 test("an inherited CLAUDE_CONFIG_DIR is dropped from the daemon's env", () => {

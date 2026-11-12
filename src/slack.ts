@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { CONFIG } from "./config.js";
 import { workspaces, repos, jobs } from "./store.js";
 import { childEnv } from "./child-env.js";
-import { claudeGlobalConfig, claudeOwnHome, sameDef, withClaudeHome, writeJsonAtomic } from "./parity-env.js";
+import { claudeGlobalConfig, claudeOwnHome, sameDef, updateClaudeConfig, withClaudeHome } from "./parity-env.js";
 import { reloadSchedules } from "./scheduler.js";
 import type { Workspace } from "./types.js";
 
@@ -68,25 +68,30 @@ export function installSlackMcp(ws: Workspace): void {
 /**
  * The same entry in the person's OWN `~/.claude.json`, which their terminal claude reads too: merge-only.
  * A `slack` server of theirs (another Slack MCP, another app) is never replaced, and disabling Slack
- * removes only the entry Chronos wrote. A file that is there but does not parse is left alone.
+ * removes only the entry Chronos wrote. A file that is there but does not parse is left alone, and the
+ * write goes through claude's own lock (parity-env.ts updateClaudeConfig): their session's changes stay.
  */
 function installSlackInOwnConfig(ws: Workspace, file: string): void {
-  let cfg: any = {};
-  if (fs.existsSync(file)) {
-    try { cfg = JSON.parse(fs.readFileSync(file, "utf8")); } catch { console.warn(`[slack] ${file} is not valid JSON — Slack MCP not touched`); return; }
-    if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) return;
-  }
-  const prev = cfg.mcpServers?.[MCP_NAME];
-  const ours = !!prev && sameDef(prev, SERVER_SPEC);
-  if (!slackEnabled(ws)) {
-    if (ours) { delete cfg.mcpServers[MCP_NAME]; writeJsonAtomic(file, cfg); }
-    return;
-  }
-  if (ours) return;
-  if (prev) { console.warn(`[slack] ${file} already has its own "${MCP_NAME}" MCP server — left as it is for ${ws.slug}`); return; }
-  (cfg.mcpServers ??= {})[MCP_NAME] = { ...SERVER_SPEC };
-  writeJsonAtomic(file, cfg);
-  console.log(`[slack] installed Slack MCP (official, OAuth) for ${ws.slug} → ${file}`);
+  const enabled = slackEnabled(ws);
+  let theirs = false;
+  const r = updateClaudeConfig(file, (cur) => {
+    const cfg: any = cur ?? {};
+    const prev = cfg.mcpServers?.[MCP_NAME];
+    const ours = !!prev && sameDef(prev, SERVER_SPEC);
+    theirs = !!prev && !ours;
+    if (!enabled) {
+      if (!ours) return null;
+      delete cfg.mcpServers[MCP_NAME];
+      return cfg;
+    }
+    if (prev) return null;
+    (cfg.mcpServers ??= {})[MCP_NAME] = { ...SERVER_SPEC };
+    return cfg;
+  });
+  if (r === "broken") console.warn(`[slack] ${file} is not valid JSON — Slack MCP not touched`);
+  else if (r === "busy") console.warn(`[slack] claude is saving ${file} right now (its lock is held) — Slack MCP for ${ws.slug} left for the next start`);
+  else if (enabled && theirs) console.warn(`[slack] ${file} already has its own "${MCP_NAME}" MCP server — left as it is for ${ws.slug}`);
+  else if (enabled && r === "written") console.log(`[slack] installed Slack MCP (official, OAuth) for ${ws.slug} → ${file}`);
 }
 
 export function installAllSlackMcp(): void {

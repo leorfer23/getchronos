@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { claudeGlobalConfig } from "./parity-env.js";
+import { claudeGlobalConfig, readJsonFile, updateClaudeConfig } from "./parity-env.js";
 
 /**
  * Pre-accept claude's "Do you trust the files in this folder?" dialog for `cwd` in the profile at
@@ -21,26 +21,32 @@ import { claudeGlobalConfig } from "./parity-env.js";
  */
 export function ensureTrustedCwd(configDir: string, cwd: string): "already" | "added" | "skipped" {
   const file = claudeGlobalConfig(configDir);
-  let state: any;
-  try { state = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return "skipped"; }
-  if (!state || typeof state !== "object" || Array.isArray(state)) return "skipped";
-  const projects = (state.projects && typeof state.projects === "object") ? state.projects : (state.projects = {});
   const keys = trustKeys(cwd);
-  const trusted = (k: string) => { const c = projects[k]; return !!c && typeof c === "object" && c.hasTrustDialogAccepted === true; };
-  if (keys.every(trusted)) return "already";
-  for (const k of keys) {
-    const cur = projects[k];
-    projects[k] = {
-      allowedTools: [], mcpContextUris: [], mcpServers: {}, enabledMcpjsonServers: [], disabledMcpjsonServers: [],
-      ...(cur && typeof cur === "object" ? cur : {}),
-      hasTrustDialogAccepted: true,
-    };
-  }
-  // Atomic replace: claude rewrites this file itself, and a half-written one would lose the login.
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, file);
-  return "added";
+  const trusted = (state: any, k: string) => { const c = state?.projects?.[k]; return !!c && typeof c === "object" && c.hasTrustDialogAccepted === true; };
+  // Most spawns land in a folder trusted long ago: answered from a plain read, no lock taken.
+  const seen = readJsonFile(file);
+  if (!seen || typeof seen !== "object" || Array.isArray(seen)) return "skipped";
+  if (keys.every((k) => trusted(seen, k))) return "already";
+  // The write goes through claude's own lock (parity-env.ts updateClaudeConfig): this file is also the
+  // person's own ~/.claude.json, saved by their terminal sessions — a change one makes meanwhile is kept.
+  let verdict: "already" | "added" | "skipped" = "skipped";
+  const r = updateClaudeConfig(file, (state: any) => {
+    if (!state) return null; // gone meanwhile: a brand-new login, left alone
+    if (keys.every((k) => trusted(state, k))) { verdict = "already"; return null; }
+    const projects = (state.projects && typeof state.projects === "object") ? state.projects : (state.projects = {});
+    for (const k of keys) {
+      const cur = projects[k];
+      projects[k] = {
+        allowedTools: [], mcpContextUris: [], mcpServers: {}, enabledMcpjsonServers: [], disabledMcpjsonServers: [],
+        ...(cur && typeof cur === "object" ? cur : {}),
+        hasTrustDialogAccepted: true,
+      };
+    }
+    verdict = "added";
+    return state;
+  });
+  if (r === "busy") console.warn(`[trust] claude is saving ${file} right now (its lock is held) — ${cwd} not pre-trusted this time`);
+  return r === "written" ? "added" : r === "unchanged" ? verdict : "skipped";
 }
 
 /**

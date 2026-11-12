@@ -161,6 +161,65 @@ export function writeJsonAtomic(file: string, obj: unknown): void {
   fs.renameSync(tmp, file);
 }
 
+/**
+ * claude's own lock on a global config file — read from the 2.1.322 binary, which bundles proper-lockfile:
+ * every save calls `lock(file, { lockfilePath: \`${file}.lock\` })`, i.e. the DIRECTORY `<file>.lock` made
+ * with mkdir (its exit-time save takes the same one with lockSync). Holding it, claude compares the
+ * file's mtime and size with its last read and re-reads before applying its change, so a write made under
+ * the same lock is merged into its next save rather than overwritten. A holder refreshes the lock's mtime
+ * every 5 s; one older than 10 s is stale to claude, which clears it itself.
+ */
+export const claudeConfigLock = (file: string): string => `${file}.lock`;
+
+/** Waits between tries while claude holds the lock — 630 ms in all: never hold up boot or a spawn for it. */
+const CONFIG_LOCK_WAITS_MS = [10, 20, 40, 80, 160, 320];
+const sleepSync = (ms: number) => void Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+export type ConfigUpdate = "written" | "unchanged" | "busy" | "broken";
+
+/**
+ * Read-modify-write a claude global config under claude's own lock, so a change a running claude session
+ * saves in the same instant is not lost — the person's real `~/.claude.json` is written by their own
+ * sessions while Chronos adds trust, fff or a server to it. `mutate` gets the file as it is NOW (null when
+ * missing) and returns what to write, or null for "no change"; it must be a pure function of its input.
+ * Still held after the short waits → "busy" and nothing written: the caller skips with a warning and tries
+ * again next time. A lock Chronos did not make is never removed, stale or not.
+ */
+export function updateClaudeConfig(file: string, mutate: (cur: GlobalCfg | null) => GlobalCfg | null, waits: number[] = CONFIG_LOCK_WAITS_MS): ConfigUpdate {
+  const dir = path.dirname(file);
+  if (!fs.existsSync(dir)) {
+    // No directory: no file and no lock to take. Only make it when there is something to write.
+    if (mutate(null) === null) return "unchanged";
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  const lock = claudeConfigLock(file);
+  let held = false;
+  for (let i = 0; i <= waits.length && !held; i++) {
+    if (i) sleepSync(waits[i - 1]);
+    try {
+      fs.mkdirSync(lock);
+      held = true;
+    } catch (e: any) {
+      if (e?.code !== "EEXIST") throw e;
+    }
+  }
+  if (!held) return "busy";
+  try {
+    let cur: GlobalCfg | null = null;
+    if (fs.existsSync(file)) {
+      cur = readJsonFile(file);
+      // There but not a JSON object (half-written, hand-broken): never rewrite someone's config from nothing.
+      if (!cur || typeof cur !== "object" || Array.isArray(cur)) return "broken";
+    }
+    const next = mutate(cur);
+    if (next === null) return "unchanged";
+    writeJsonAtomic(file, next);
+    return "written";
+  } finally {
+    try { fs.rmdirSync(lock); } catch {}
+  }
+}
+
 const sortKeys = (v: unknown): unknown =>
   Array.isArray(v)
     ? v.map(sortKeys)
@@ -233,38 +292,40 @@ export function planMerge(from: GlobalCfg | null, to: GlobalCfg | null): MergePl
 }
 
 /**
- * Apply a plan's copies to `file`, merge-only: other keys untouched, nothing deleted, a same-named entry
- * never replaced (re-checked against the file as it is NOW, not as planned). Verified by reading back.
+ * Apply a plan's copies to `file`, merge-only, under claude's own lock (updateClaudeConfig): other keys
+ * untouched, nothing deleted, a same-named entry never replaced (re-checked against the file as it is
+ * under the lock, not as planned). Verified by reading back. `reason` says why nothing could be written.
  */
-export function applyMerge(items: MergeItem[], file: string): { copied: string[]; failed: string[]; conflicts: string[] } {
+export function applyMerge(items: MergeItem[], file: string): { copied: string[]; failed: string[]; conflicts: string[]; reason?: "busy" | "broken" } {
   const out = { copied: [] as string[], failed: [] as string[], conflicts: [] as string[] };
   if (!items.length) return out;
-  const cur = readJsonFile(file);
-  // There but not a JSON object (half-written, hand-broken): never rewrite someone's config from nothing.
-  const broken = cur === null ? fs.existsSync(file) : typeof cur !== "object" || Array.isArray(cur);
-  if (broken) return { ...out, failed: items.map(refLabel) };
-  const cfg: GlobalCfg = cur ?? {};
-  const todo: MergeItem[] = [];
-  for (const it of items) {
-    const bucket = it.project ? cfg.projects?.[it.project]?.mcpServers : cfg.mcpServers;
-    const prev = bucket?.[it.name];
-    if (prev && !sameDef(prev, it.def)) out.conflicts.push(refLabel(it));
-    else if (!prev) todo.push(it);
+  let todo: MergeItem[] = [];
+  let r: ConfigUpdate;
+  try {
+    r = updateClaudeConfig(file, (cur) => {
+      const cfg: GlobalCfg = cur ?? {};
+      out.conflicts = [];
+      todo = [];
+      for (const it of items) {
+        const bucket = it.project ? cfg.projects?.[it.project]?.mcpServers : cfg.mcpServers;
+        const prev = bucket?.[it.name];
+        if (prev && !sameDef(prev, it.def)) out.conflicts.push(refLabel(it));
+        else if (!prev) todo.push(it);
+      }
+      if (!todo.length) return null;
+      for (const it of todo) {
+        if (it.project) {
+          cfg.projects ??= {};
+          const p = (cfg.projects[it.project] ??= { allowedTools: [], mcpContextUris: [], mcpServers: {}, enabledMcpjsonServers: [], disabledMcpjsonServers: [] });
+          (p.mcpServers ??= {})[it.name] = it.def;
+        } else (cfg.mcpServers ??= {})[it.name] = it.def;
+      }
+      return cfg;
+    });
+  } catch {
+    return { ...out, failed: items.map(refLabel) };
   }
-  for (const it of todo) {
-    if (it.project) {
-      cfg.projects ??= {};
-      const p = (cfg.projects[it.project] ??= { allowedTools: [], mcpContextUris: [], mcpServers: {}, enabledMcpjsonServers: [], disabledMcpjsonServers: [] });
-      (p.mcpServers ??= {})[it.name] = it.def;
-    } else (cfg.mcpServers ??= {})[it.name] = it.def;
-  }
-  if (todo.length) {
-    try {
-      writeJsonAtomic(file, cfg);
-    } catch {
-      return { ...out, failed: todo.map(refLabel) };
-    }
-  }
+  if (r === "busy" || r === "broken") return { copied: [], failed: items.map(refLabel), conflicts: [], reason: r };
   const back: GlobalCfg = readJsonFile(file) ?? {};
   for (const it of todo) {
     const got = it.project ? back.projects?.[it.project]?.mcpServers?.[it.name] : back.mcpServers?.[it.name];
@@ -331,7 +392,10 @@ export function switchClaudeHome(via: "auto" | "fix", o: HomeOpts = {}): SwitchR
   if (v.mode === "own") return { ok: true, copied: [], conflicts: [], signIn: [] };
   const r = applyMerge(v.plan.copy, v.ownFile);
   const conflicts = [...v.plan.conflicts.map(refLabel), ...r.conflicts];
-  if (r.failed.length) return { ok: false, copied: r.copied, conflicts, signIn: v.signIn, error: `could not copy ${r.failed.join(", ")} into ${v.ownFile}` };
+  if (r.failed.length) {
+    const why = r.reason === "busy" ? ` — claude is saving it right now (${claudeConfigLock(v.ownFile)} is held); try again` : r.reason === "broken" ? " — it is not valid JSON" : "";
+    return { ok: false, copied: r.copied, conflicts, signIn: v.signIn, error: `could not copy ${r.failed.join(", ")} into ${v.ownFile}${why}` };
+  }
   writeParityState({ ...readParityState(o), claude: { mode: "own", since: new Date().toISOString(), via, copied: r.copied, conflicts } }, o);
   return { ok: true, copied: r.copied, conflicts, signIn: v.signIn };
 }

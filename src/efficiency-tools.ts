@@ -15,7 +15,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { childEnv } from "./child-env.js";
 import { CONFIG } from "./config.js";
-import { claudeGlobalConfig, claudeOwnHome, writeJsonAtomic } from "./parity-env.js";
+import { claudeGlobalConfig, claudeOwnHome, updateClaudeConfig } from "./parity-env.js";
 import { workspaces } from "./store.js";
 
 const FFF_NAME = "fff";
@@ -149,31 +149,33 @@ const oursFff = (prev: any) => !!prev && typeof prev.command === "string" && /(^
 
 /**
  * The same registration in the person's OWN `~/.claude.json`, which their terminal claude reads too — so
- * merge-only: an `fff` of theirs is never replaced or removed (only one Chronos wrote), and a file that
- * is there but does not parse is left alone rather than rewritten from nothing.
+ * merge-only: an `fff` of theirs is never replaced or removed (only one Chronos wrote), a file that is
+ * there but does not parse is left alone rather than rewritten from nothing, and the write goes through
+ * claude's own lock (parity-env.ts updateClaudeConfig) so a change their session saves meanwhile is kept.
  */
 function installFffInOwnConfig(file: string, bin: string | null, wrapper: string | null): "written" | "noop" | "removed" | "skipped" {
-  let cfg: any = {};
-  if (fs.existsSync(file)) {
-    try { cfg = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return "skipped"; }
-    if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) return "skipped";
-  }
-  const prev = cfg.mcpServers?.[FFF_NAME];
-  if (!bin) {
-    if (!oursFff(prev)) return "skipped";
-    delete cfg.mcpServers[FFF_NAME];
-    writeJsonAtomic(file, cfg);
-    return "removed";
-  }
-  const next = { type: "stdio", ...fffCommand(bin, wrapper) };
-  if (sameCommand(prev, next)) return "noop";
-  if (prev && !oursFff(prev)) {
-    console.warn(`[efficiency] ${file} already has its own "${FFF_NAME}" MCP server — left as it is`);
-    return "skipped";
-  }
-  (cfg.mcpServers ??= {})[FFF_NAME] = next;
-  writeJsonAtomic(file, cfg);
-  return "written";
+  let result: "written" | "noop" | "removed" | "skipped" = "noop";
+  let theirs = false;
+  const r = updateClaudeConfig(file, (cur) => {
+    const cfg: any = cur ?? {};
+    const prev = cfg.mcpServers?.[FFF_NAME];
+    theirs = false;
+    if (!bin) {
+      if (!oursFff(prev)) { result = "skipped"; return null; }
+      delete cfg.mcpServers[FFF_NAME];
+      result = "removed";
+      return cfg;
+    }
+    const next = { type: "stdio", ...fffCommand(bin, wrapper) };
+    if (sameCommand(prev, next)) { result = "noop"; return null; }
+    if (prev && !oursFff(prev)) { theirs = true; result = "skipped"; return null; }
+    (cfg.mcpServers ??= {})[FFF_NAME] = next;
+    result = "written";
+    return cfg;
+  });
+  if (theirs) console.warn(`[efficiency] ${file} already has its own "${FFF_NAME}" MCP server — left as it is`);
+  if (r === "busy") console.warn(`[efficiency] claude is saving ${file} right now (its lock is held) — fff left for the next start`);
+  return r === "busy" || r === "broken" ? "skipped" : result;
 }
 
 /**

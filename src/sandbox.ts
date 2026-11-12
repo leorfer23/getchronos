@@ -84,13 +84,15 @@ const q = (p: string) => `"${p.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
  * claude never writes `~/.claude.json` in place: it takes a `.lock` beside it and renames a temp file
  * over it, so allowing the file alone is not enough. Checked with sandbox-exec on claude 2.1.322: a
  * strict-style profile granting only the file failed `claude mcp add-json` with "was not saved to
- * ~/.claude.json"; granting this prefix let it through. It only matters for a default profile running
- * on the person's own home (parity-env.ts) — a named profile's global config sits inside its own dir.
+ * ~/.claude.json"; granting this prefix let it through. Granted only to the operator's own (default)
+ * profile, which runs on that file (parity-env.ts). "deny" is the other half: every other profile is
+ * refused the file and everything beside it, read and write — a client's agent that could write there
+ * would add a server to every one of the operator's own sessions, and a lock left there stalls them.
  */
-export function claudeJsonSiblingsRule(home: string): string {
+export function claudeJsonSiblingsRule(home: string, action: "allow" | "deny" = "allow"): string {
   if (home.includes('"')) return "";
   const re = home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return `(allow file-write* (regex #"^${re}/\\.claude\\.json"))`;
+  return `(${action} ${action === "allow" ? "file-write*" : "file-read* file-write*"} (regex #"^${re}/\\.claude\\.json"))`;
 }
 
 // One SBPL rule covering both a dir (subpath) and an exact file (literal) for each path.
@@ -184,10 +186,14 @@ export function buildProfile(
   // includes his own CLI homes, which it runs on (parity-env.ts) — re-granted here because a client
   // workspace's deny list names them (store/workspaces.ts) and a walled client account can be routed
   // onto this profile (profile-route.ts).
+  const ownHome = isDefaultClaudeDir(configDir);
   const own = [
     cwd, ...addDirs, configDir,
-    ...(isDefaultClaudeDir(configDir) ? [ownClaudeConfig(), path.join(defaultClaudeDir(), "backups"), ownCodexHome()] : []),
+    ...(ownHome ? [ownClaudeConfig(), path.join(defaultClaudeDir(), "backups"), ownCodexHome()] : []),
   ].filter(Boolean) as string[];
+  // Any other profile: the operator's ~/.claude.json and what claude puts beside it, after every re-grant
+  // (so not even a cwd of $HOME opens it). Only a workspace's explicit sandbox_allow, later still, can.
+  const notOurConfig = ownHome ? "" : claudeJsonSiblingsRule(home, "deny");
   // Static protected project dirs + dynamic per-workspace isolation deny (other workspaces' roots).
   // `own` is re-granted after, so a job scoped INTO its own repo still works.
   const projectDeny = [...projectDirs, ...denyDirs].filter((d) => !own.includes(d));
@@ -206,6 +212,7 @@ export function buildProfile(
       rule("allow", "file-read*", own),
       rule("allow", "file-write*", own),
       ...reDeny,
+      notOurConfig,
       ...readonlyRules(readonlyDirs, addDirs),
       rule("deny", "file-read*", secrets),
       rule("deny", "file-write*", secrets),
@@ -221,11 +228,12 @@ export function buildProfile(
   }
 
   // strict: confine writes to cwd/add_dirs (+ Claude's own support dirs); read-only elsewhere.
+  // ~/.claude.json is NOT here: the operator's own profile has it in `own` (with the siblings rule below),
+  // and no other profile may write it.
   const writeDirs = [
     ...own,
     configDir,
     `${home}/.claude`,
-    `${home}/.claude.json`,
     `${home}/.grok`, // grok CLI session/memory state (shared login; no per-workspace config dir)
     `${home}/.config/opencode`, // opencode config (provider/gateway) + auth
     `${home}/.local/share/opencode`, // opencode auth.json + session store (shared; no per-ws config dir)
@@ -241,11 +249,17 @@ export function buildProfile(
     "(allow default)",
     '(deny file-write* (subpath "/"))',
     rule("allow", "file-write*", writeDirs),
-    claudeJsonSiblingsRule(home),
+    ownHome ? claudeJsonSiblingsRule(home) : "",
+    // Another workspace's places are write-denied as in guard — the grants above are broad (~/.claude,
+    // the temp dirs) and a client's deny list names the operator's own CLI homes — then the session's
+    // own places re-granted, as guard does.
+    rule("deny", "file-write*", projectDeny),
+    rule("allow", "file-write*", own),
     ...readonlyRules(readonlyDirs, addDirs),
     rule("deny", "file-read*", projectDeny),
     rule("allow", "file-read*", [...own, ...readonlyDirs]),
     ...reDeny,
+    notOurConfig,
     rule("deny", "file-read*", secrets),
     rule("deny", "file-write*", secrets),
     // Same re-grant as guard, last for the same reason. Without it a strict workspace could never
