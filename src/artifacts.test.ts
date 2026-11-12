@@ -83,9 +83,16 @@ test("frame context cannot close the <script> it rides in", () => {
 });
 
 test("Origin: null never gets the tokenless loopback pass", () => {
-  assert.deepEqual(callerScope(fakeReq({}, {})), { ws: null }, "a bare local call is still the operator");
-  assert.equal(callerScope(fakeReq({}, { origin: "null" })), null);
-  assert.deepEqual(callerScope(fakeReq({}, { origin: "null", ...ADMIN() })), { ws: null }, "the admin token still works");
+  // The pass only exists under the opt-in `log` rollout mode (deny, the default, gives it to no one).
+  const prev = process.env.CHRONOS_TOKENLESS;
+  process.env.CHRONOS_TOKENLESS = "log";
+  try {
+    assert.deepEqual(callerScope(fakeReq({}, {})), { ws: null }, "a bare local call is still the operator");
+    assert.equal(callerScope(fakeReq({}, { origin: "null" })), null);
+    assert.deepEqual(callerScope(fakeReq({}, { origin: "null", ...ADMIN() })), { ws: null }, "the admin token still works");
+  } finally {
+    if (prev === undefined) delete process.env.CHRONOS_TOKENLESS; else process.env.CHRONOS_TOKENLESS = prev;
+  }
 });
 
 // ── pages and versions ─────────────────────────────────────────────────────────────────────────

@@ -63,6 +63,19 @@ CHRONOS_SANDBOX_DEFAULT=guard  # off | guard | strict
 working directory, everything else is denied. `strict` adds a network lockdown. `off` is for when
 you have decided, deliberately, that this run needs the whole machine.
 
+Every API call has to say who is calling: the admin token (the Desk, your `mc`, Robert's derived
+credential) or a workspace token (each agent's own). A call with neither is refused:
+
+```bash
+CHRONOS_TOKENLESS=deny  # deny (default) | log | allow
+```
+
+Leave it on `deny`. The daemon only listens on localhost, but localhost is not only you: every local
+process can reach it, and a tunnel (`tailscale serve`, `cloudflared`) replays your phone's requests
+there too. Under `log` a tokenless call is let through and recorded (`GET /api/authz/tokenless` lists
+who made one); `allow` is the old behaviour. Both hand anything that can reach the port the power to
+start an agent with permissions skipped.
+
 The deny list has a portable baseline (`~/.ssh`, `~/.aws`, `~/.config/gcloud`, `~/.config/gws`,
 `~/.kube`, the admin token, the database, the CA private keys, browser profiles). **Two things are
 machine-specific and have no sensible default**, so set them:
@@ -857,6 +870,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_TG_PROPOSAL_TTL_MS` | `24` | `src/config.ts` |
 | `CHRONOS_TG_TOKEN` | `""` | `src/config.ts` |
 | `CHRONOS_TIMEOUT` | `3600` | `src/config.ts` |
+| `CHRONOS_TOKENLESS` | `"deny"` (unknown values deny too) | `src/config.ts`, `src/authz.ts` |
 | `CHRONOS_TRANSCRIBE_MODEL` | — | `src/transcribe.ts` |
 | `CHRONOS_TRANSCRIBE_URL` | — | `src/telegram.test.ts` |
 | `CHRONOS_TRANSCRIBE_FINAL_URL` | `http://127.0.0.1:7781/inference`; `off` = no second engine | `src/transcribe.ts` |

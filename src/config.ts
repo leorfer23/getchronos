@@ -263,8 +263,12 @@ export const CONFIG = {
   worklog: (process.env.CHRONOS_WORKLOG ?? "1") !== "0",
   // How many "## Recently" lines a brief keeps. Older ones roll off — the ledger still has them.
   briefRecentlyMax: Number(process.env.CHRONOS_BRIEF_RECENTLY_MAX ?? 12),
-  // Requests with no token (authz.ts tokenlessGate): allow | log | deny. `log` records every caller.
-  tokenlessMode: process.env.CHRONOS_TOKENLESS ?? "log",
+  // Requests with no token (authz.ts tokenlessGate): allow | log | deny. `deny` by default: under `log`
+  // a tokenless loopback caller was still let through, and loopback is not only this Mac's own tools —
+  // a tunnel (`tailscale serve`, cloudflared) replays the phone's requests there too, so `log` let any
+  // local process (or anyone a tunnel admits) create a job or open a terminal with permissions skipped.
+  // `log` stays available for a migration: it records every caller (GET /api/authz/tokenless).
+  tokenlessMode: process.env.CHRONOS_TOKENLESS ?? "deny",
   // POST /tickets/:id/push-comment refuses (no-send.ts): no agent posts comments. Tests flip it.
   noSendComments: process.env.CHRONOS_NO_SEND_COMMENTS !== "0",
   // How many open "## Next" items a brief keeps. The oldest roll off — every one is still in the

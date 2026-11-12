@@ -9,6 +9,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { randomUUID } from "node:crypto";
 import express from "express";
+import { CONFIG } from "./config.js";
 import { workspaces } from "./store.js";
 import { checkScope } from "./authz.js";
 import { wsRefs, wsByIdOrSlug } from "./ws-ref.js";
@@ -33,14 +34,16 @@ const server = http.createServer(app).listen(0);
 after(() => server.close());
 const base = () => `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
 
+// No token = the operator, who sends the admin token.
+const who = (token?: string): Record<string, string> => (token ? { "x-mc-workspace-token": token } : { "x-mc-admin": CONFIG.adminToken });
 const get = async (p: string, token?: string) => {
-  const r = await fetch(base() + p, { headers: token ? { "x-mc-workspace-token": token } : {} });
+  const r = await fetch(base() + p, { headers: who(token) });
   return { status: r.status, body: await r.json() };
 };
 const post = async (p: string, body: unknown, token?: string) => {
   const r = await fetch(base() + p, {
     method: "POST",
-    headers: { "content-type": "application/json", ...(token ? { "x-mc-workspace-token": token } : {}) },
+    headers: { "content-type": "application/json", ...who(token) },
     body: JSON.stringify(body),
   });
   return { status: r.status, body: await r.json() };

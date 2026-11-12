@@ -221,7 +221,7 @@ test("API: another workspace can't read, file, dismiss, snooze or dispatch; a wo
   r = fakeRes(); routes.addRoute(fakeReq({ id: a.id }, TOK(b.id), { body }), r);
   assert.equal(r.statusCode, 404);
   r = fakeRes(); routes.addRoute(fakeReq({ id: a.id }, {}, { body }), r);
-  assert.equal(r.statusCode, 403, "a tokenless loopback caller is not the operator");
+  assert.equal(r.statusCode, 401, "a tokenless loopback caller is not the operator (unidentified: deny is the default)");
 
   for (const fn of [routes.dismissRoute, routes.snoozeRoute] as const) {
     r = fakeRes(); fn(fakeReq({ id: item.id }, TOK(b.id), { body: { until: "2h" } }), r);
