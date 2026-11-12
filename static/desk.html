@@ -5847,8 +5847,15 @@ qs("#quick").addEventListener("submit", (e) => {
   const ship = qs("#q-ship").dataset.ship;
   if (ship && ship !== "ask") body.ship = ship;
   quickClose();
-  if (!goal) return spawn(body);
-  spawn({ ...body, goal, ...(lead ? { role: "lead" } : {}) });
+  // A refused open puts the line back exactly as he typed it — never cost the operator his words.
+  const restore = () => {
+    quickOpen(lead);
+    qs("#q-ws").value = wsId; quickSyncCli();
+    if (ship) quickShip(ship);
+    const g = qs("#q-goal"); g.value = goal; g.focus(); g.select();
+  };
+  if (!goal) return spawn(body, null, restore);
+  spawn({ ...body, goal, ...(lead ? { role: "lead" } : {}) }, null, restore);
 });
 qs("#q-goal").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); quickClose(); } });
 qs("#q-more").onclick = () => { const wsId = qs("#q-ws").value, ship = qs("#q-ship").dataset.ship; quickClose(); openNew(wsId); qs("#f-ship").value = ship || "ask"; };
@@ -5869,16 +5876,20 @@ function pendingRow(body) {
 }
 qs("#f-cancel").onclick = () => dlg.close("cancel");
 // One door for every spawn; the new terminal lands on the stage.
-async function spawn(body, onOpened) {
+// onFailed runs only when the daemon refused the open — the caller puts back what was typed.
+async function spawn(body, onOpened, onFailed) {
   const ph = pendingRow(body);
+  let s;
   try {
-    const s = await api("/sessions", { method: "POST", body: JSON.stringify({ role: "human", cols: 100, rows: 30, ...body }) });
+    s = await api("/sessions", { method: "POST", body: JSON.stringify({ role: "human", cols: 100, rows: 30, ...body }) });
+  } catch (err) { ph.remove(); renderRail(); toast("open failed: " + err.message); onFailed?.(); return; }
+  try {
     onOpened?.();
     await load();
     ph.remove();
     if (s?.id && byId(s.id)) select(s.id);
     if (s?.duplicate_of) toast(s.duplicate_of.warning);
-  } catch (err) { ph.remove(); renderRail(); toast("open failed: " + err.message); }
+  } catch (err) { ph.remove(); renderRail(); toast(err.message); }
 }
 // Close every terminal whose goal is ticked: they are done, and the rail is for what is not.
 async function closeDone() {
@@ -5950,7 +5961,8 @@ qs("#form-new").addEventListener("submit", async (e) => {
   };
   const cwd = f.get("cwd");
   if (cwd) body.cwd = cwd;
-  await spawn(body, () => e.target.reset());
+  // The form is only reset once the terminal is open; a refusal reopens it with everything still in it.
+  await spawn(body, () => e.target.reset(), () => { if (!dlg.open) dlg.showModal(); });
 });
 
 // ── the day's log ────────────────────────────────────────────────────────────────────────────
