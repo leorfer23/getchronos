@@ -273,3 +273,62 @@ test("its CSS and the Desk's chip: theme tokens only, no literal colour, no anim
     assert.doesNotMatch(block, /animation|transition|@keyframes/, `${name}: no motion`);
   }
 });
+
+// ── a slash command's answer: the terminal's own frame (the Desk's Talk peek, the phone's sheet) ──
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+test("a line its CLI runs itself is a command; a path, prose or a bare slash is not", () => {
+  for (const t of ["/status", "/doctor", " /compact keep the plan ", "/model sonnet", "/frontend:component x"]) assert.equal(SC.isCommandLine(t), true, t);
+  for (const t of ["", "status", "/Users/leo/a.png is the screenshot", "fix /status", "/ alone", "//x"]) assert.equal(SC.isCommandLine(t), false, t);
+});
+
+test("the peek shows the bottom of the frame: trailing blanks off, at most 60 lines", () => {
+  assert.equal(L.peekText(["Status  ", "", "Esc to cancel", "", ""]), "Status\n\nEsc to cancel");
+  assert.equal(L.peekText(null), "");
+  const many = Array.from({ length: 80 }, (_, i) => "l" + i);
+  assert.equal(L.peekText(many).split("\n").length, 60);
+  assert.equal(L.peekText(many, 3), "l77\nl78\nl79");
+});
+
+test("watchScreen: a frame only when it moved; a key looks again at once; a terminal that ended stops it", async () => {
+  const calls: string[] = [];
+  const frames: string[][] = [];
+  let seq = 4, gone = false, ended = 0;
+  const fetcher = async (url: string) => {
+    calls.push(url);
+    if (gone) return { screens: [], gone: ["t1"] };
+    const since = Number(/since=t1:(-?\d+)$/.exec(url)![1]);
+    return since === seq ? { screens: [], gone: [] } : { screens: [{ id: "t1", seq, cols: 80, rows: 3, lines: ["Status", "Esc to cancel"] }], gone: [] };
+  };
+  const w = SC.watchScreen("t1", fetcher, { onFrame: (l: string[]) => frames.push(plain(l)), onGone: () => ended++ }, () => false);
+  await wait(40);
+  assert.equal(frames.length, 1);
+  assert.deepEqual(frames[0], ["Status", "Esc to cancel"]);
+  assert.match(calls[0], /^\/desk\/screens\?ids=t1&since=t1:-1$/, "the first ask always gets the frame");
+  w.soon(); await wait(220);
+  assert.equal(frames.length, 1, "an unchanged frame is not handed over again");
+  assert.match(calls.at(-1)!, /since=t1:4$/);
+  seq = 5; w.soon(); await wait(220);
+  assert.equal(frames.length, 2, "a moved frame is");
+  gone = true; w.soon(); await wait(220);
+  assert.equal(ended, 1);
+  const n = calls.length;
+  await wait(700);
+  assert.equal(calls.length, n, "nothing more is asked once the terminal ended");
+  w.stop();
+});
+
+test("watchScreen: a hidden page does not ask, and stop() ends it", async () => {
+  let calls = 0;
+  const hidden = SC.watchScreen("t2", async () => { calls++; return { screens: [], gone: [] }; }, {}, () => true);
+  await wait(60);
+  assert.equal(calls, 0, "hidden: no request");
+  hidden.stop();
+  const w = SC.watchScreen("t3", async () => { calls++; return { screens: [], gone: [] }; }, {}, () => false);
+  await wait(40);
+  w.stop();
+  const n = calls;
+  await wait(700);
+  assert.equal(calls, n, "stopped: no request");
+  assert.ok(n >= 1);
+});

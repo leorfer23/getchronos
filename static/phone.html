@@ -13,7 +13,7 @@
 <link rel="icon" href="/phone-icon.png">
 <link rel="apple-touch-icon" href="/phone-icon-512.png">
 <title data-an="text">Robert</title>
-<meta name="chronos-build" content="2026-11-13a">
+<meta name="chronos-build" content="2026-11-13b">
 <style>
   :root {
     --bg:#0C0F0B; --surface:#151A16; --surface-2:#1E2520; --raised:#262E28; --ink:#E9EFEA; --muted:#98A59D;
@@ -458,6 +458,10 @@
   .sheet .grab-zone { padding:6px 0 4px; margin:-12px -18px 0; cursor:grab; }
   .sheet .x { position:absolute; top:14px; right:14px; width:44px; height:44px; border-radius:50%; background:var(--surface-2); font-size:20px; display:flex; align-items:center; justify-content:center; color:var(--muted); }
   .sheet h3 { margin:0 0 14px; font-size:22px; font-weight:800; padding-right:48px; }
+  /* A slash command's answer, as its terminal draws it (peekSheet). */
+  .pk-pre { margin:0 0 12px; padding:10px; max-height:52vh; overflow:auto; white-space:pre; background:var(--bg); border:1px solid var(--line); border-radius:10px; font:11px/1.35 ui-monospace,"Roboto Mono",Menlo,monospace; color:var(--ink); }
+  .pk-keys { display:flex; gap:8px; }
+  .pk-keys button { flex:1; padding:12px 0; border-radius:12px; border:1px solid var(--line); background:var(--surface-2); color:var(--ink); font-size:16px; font-weight:600; }
   .field { margin-bottom:14px; }
   .field label { display:block; font-size:13px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
   .field input, .field textarea, .field select { width:100%; min-height:52px; border-radius:14px; border:1px solid var(--line); background:var(--bg); padding:12px 14px; font-size:17px; outline:none; -webkit-appearance:none; appearance:none; }
@@ -1262,6 +1266,22 @@ function cmdsSheet(s) {
     fcomposer.focus(); fcomposer.setSelectionRange(r.caret, r.caret);
   });
 }
+// What a slash command answered with, as its terminal draws it — /status, /doctor, /usage open a dialog
+// there and write nothing the story could show. Live (SlashComplete.watchScreen), with the keys a dialog needs.
+function peekSheet(id, cmd) {
+  let w = null;
+  const keys = [["esc", "Esc"], ["up", "↑"], ["down", "↓"], ["tab", "⇥"], ["enter", "⏎"]];
+  const b = sheet(`<h3 class="mono" style="font-size:18px">${esc(cmd.slice(0, 80))}</h3><p class="pk-s" style="color:var(--muted);font-size:14px;margin:0 0 10px">waiting for the terminal…</p><pre class="pk-pre"></pre><div class="pk-keys">${keys.map(([k, l]) => `<button data-k="${k}" aria-label="${k}">${l}</button>`).join("")}</div>`, () => w?.stop());
+  const pre = qs(".pk-pre", b), st = qs(".pk-s", b);
+  w = SlashComplete.watchScreen(id, api, {
+    onFrame: (lines) => { pre.textContent = SlashComplete.peekText(lines); pre.scrollTop = pre.scrollHeight; st.textContent = "its terminal shows — the keys go to it"; },
+    onGone: () => { st.textContent = "the terminal ended"; },
+  });
+  qs(".pk-keys", b).onclick = (e) => {
+    const k = e.target.closest("[data-k]"); if (!k) return;
+    fx.tap(); input(id, { key: k.dataset.k }).catch(() => {}); w.soon();
+  };
+}
 async function reopen(id) {
   try { await api("/sessions/" + id + "/resume", { method: "POST", body: JSON.stringify({ cols: 100, rows: 30 }) }); fx.success(); toast("reopened"); await load(); openFocus(id); }
   catch (err) { fx.fail(); toast("couldn't reopen: " + err.message); }
@@ -1770,7 +1790,10 @@ function sendFocusComposer() {
   const id = F.id;
   fx.send();
   fcomposer.value = ""; fcomposer.style.height = ""; fcomposer.blur();
-  input(id, { text: v, enter: true }).then(() => advance(id, "sent"), () => {
+  // A slash command answers in the terminal itself (a dialog, a grid, a picker), never in the transcript:
+  // stay on this terminal and show what it draws (peekSheet) instead of moving on.
+  const cmd = !!window.SlashComplete?.isCommandLine(v);
+  input(id, { text: v, enter: true }).then(() => (cmd ? peekSheet(id, v) : advance(id, "sent")), () => {
     // Not sent (input() already said why): the words go back in the box, never lost.
     if (F.id === id && !fcomposer.value) { fcomposer.value = v; fcomposer.dispatchEvent(new Event("input")); }
   });

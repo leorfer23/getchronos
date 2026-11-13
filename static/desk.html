@@ -636,6 +636,14 @@
   .tk.live .n { flex:none; color:var(--faint); cursor:pointer; }
   .tk.live .n:hover { color:var(--accent); }
   .tk.wait { align-self:flex-end; margin-top:-8px; font-size:12.5px; color:var(--faint); }
+  /* A slash command's answer, as its terminal draws it (peekHtml): the frame, live, and the keys a dialog needs. */
+  .tk.peek { align-self:stretch; border:1px solid var(--line); border-radius:10px; background:var(--bg); overflow:hidden; }
+  .tk.peek .pk-h { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:6px 8px 6px 12px; border-bottom:1px solid var(--line); font-size:12.5px; color:var(--muted); }
+  .tk.peek .pk-h b { font:600 13px ui-monospace,Menlo,monospace; color:var(--ink); }
+  .tk.peek .pk-h .sp { flex:1; }
+  .tk.peek .pk-h button { border:1px solid var(--line); background:var(--surface); color:var(--ink); border-radius:7px; padding:2px 9px; font:inherit; font-size:12.5px; cursor:pointer; min-height:0; }
+  .tk.peek .pk-h button:hover { border-color:var(--accent); }
+  .tk.peek pre { margin:0; padding:8px 12px; max-height:min(56vh,520px); overflow:auto; white-space:pre; font:12px/1.35 ui-monospace,Menlo,monospace; color:var(--ink); }
   .tk-earlier { align-self:center; padding:0; }
   .tk-topic { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:650; color:var(--ink); }
   .fx-talk .ta-show + .ta-show { margin-top:10px; }
@@ -2687,6 +2695,7 @@ function setMode(m) {
   const prev = S.mode;
   if (m === "term" && (byId(S.active)?.focus_only || byId(S.active)?.cloud_agent_id)) m = "focus";
   S.mode = m === "term" ? "term" : m === "fleet" ? "fleet" : "focus";
+  if (S.mode !== "focus") peekClose(true); // the terminal itself is on screen now, or the board
   if (prev !== "fleet") S.preFleet = prev;
   localStorage.setItem("desk-mode", S.mode);
   document.body.classList.toggle("mode-term", S.mode === "term");
@@ -3225,6 +3234,7 @@ function talkNow(s, items) {
 const actsWord = (g) => (g.acts.length ? foldActs(g.acts.map((a) => a.text)) : "") + (g.errs ? `${g.acts.length ? " · " : ""}${g.errs} failed` : "");
 function focusTalk(s) {
   if (T.id !== s.id) Object.assign(T, { id: s.id, all: false, open: new Set(), pending: null, follow: false, sig: "", shows: "" });
+  if (T.peek && T.peek.id !== s.id) peekClose(true);
   T.shows = "";
   if (F.id !== s.id) return "";
   const items = talkThread(s);
@@ -3240,7 +3250,7 @@ function focusTalk(s) {
     + `<span class="sp"></span>`
     + (chat && s.live ? `<button type="button" class="fx-exp" data-ftask title="Ask it to turn this into a task: a goal, a finish line, a hand-off">Make it a task</button>` : "")
     + (chat ? "" : expBtn("talk")) + `</div>`;
-  if (!items.length && !T.pending && !now)
+  if (!items.length && !T.pending && !T.peek && !now)
     return s.live ? `<section class="fx fx-talk">${top}<div class="fx-body"><div class="fx-wait">Nothing said yet — what you type below shows here, with its answer under it.</div></div></section>` : "";
   const shown = T.all || items.length <= TALK_MAX ? items : items.slice(-TALK_MAX);
   const when = (at) => (at ? `<time>${esc(TermCompanion.hhmm(at))}</time>` : `<time></time>`);
@@ -3264,6 +3274,7 @@ function focusTalk(s) {
       : now?.at ? `queued — it reads this when “${clip(now.text, 70)}” ends` : now ? "sent — it reads this in a moment…" : "sent — waiting for its answer…";
     rows.push(`<div class="tk you">${`<div class="b">${esc(clip(youSaid(T.pending.text), 4000))}</div>`}<time>${esc(TermCompanion.hhmm(T.pending.at))}</time></div><div class="tk wait">${esc(why)}</div>`);
   }
+  if (T.peek?.id === s.id) rows.push(peekHtml(T.peek));
   if (now) {
     const last = items[items.length - 1];
     const n = last?.k === "acts" ? last.acts.length : 0;
@@ -3297,15 +3308,62 @@ function talkSend(s, text, by) {
   if (!s?.live || !text) return;
   // A slash command is the CLI's own verb, typed as a line of its own with Enter — the way the daemon
   // types `/compact` and `/model` itself (cache-keeper.ts) — never as a "send now" mid-turn message.
-  const now = sendsNow(s) && !/^\/[\w.:@+-]+(\s|$)/.test(text);
+  const cmd = !!window.SlashComplete?.isCommandLine(text);
+  const now = sendsNow(s) && !cmd;
   const sent = answer(s.id, { text, enter: true, ...(now ? { now: true } : {}), ...(by ? { by } : {}) });
   if (S.mode === "focus") {
     if (T.id !== s.id) Object.assign(T, { id: s.id, all: false, open: new Set(), shows: "" });
-    Object.assign(T, { pending: { text, at: Date.now(), now }, follow: true, sig: "" });
+    // Its answer is drawn in the terminal, not written to the transcript: Talk shows the terminal (peekOpen).
+    if (cmd) { T.pending = null; peekOpen(s, text); }
+    else { peekClose(true); Object.assign(T, { pending: { text, at: Date.now(), now } }); }
+    Object.assign(T, { follow: true, sig: "" });
     renderStory();
   }
   // A refused line is not "you said": it leaves Talk, and the caller puts it back in the composer.
-  return sent.then((ok) => { if (!ok && T.pending?.text === text) { T.pending = null; renderStory(); } return ok; });
+  return sent.then((ok) => {
+    if (!ok && T.pending?.text === text) { T.pending = null; renderStory(); }
+    if (!ok && T.peek?.cmd === text) peekClose();
+    return ok;
+  });
+}
+// A slash command sent from Focus. Most answer in the terminal itself — a dialog (/status, /doctor,
+// /usage), a grid (/context), a picker — and write nothing to the transcript Talk reads, so the line sat
+// on "waiting for its answer" while the dialog in the terminal waited for Esc. Instead Talk shows that
+// terminal's own frame under the command, live (SlashComplete.watchScreen ← /api/desk/screens), with the
+// keys a dialog needs; while it is open an empty composer passes ⏎ ⎋ ↑ ↓ to the terminal as well.
+const PEEK_KEYS = [["esc", "Esc", "Close the dialog (Esc)"], ["up", "↑", "Up"], ["down", "↓", "Down"], ["tab", "⇥", "Next tab (Tab)"], ["enter", "⏎", "Choose (Enter)"]];
+function peekOpen(s, cmd) {
+  peekClose(true);
+  const p = { id: s.id, cmd, lines: null };
+  p.w = SlashComplete.watchScreen(s.id, api, {
+    onFrame: (lines) => { if (T.peek === p) { p.lines = lines; peekPaint(); } },
+    onGone: () => { if (T.peek === p) peekClose(); },
+  });
+  T.peek = p;
+  syncSayHint();
+}
+function peekClose(quiet) {
+  const p = T.peek; if (!p) return;
+  p.w?.stop(); T.peek = null;
+  syncSayHint();
+  if (!quiet) renderStory();
+}
+function peeking() { return !!(T.peek && T.peek.id === S.active && S.mode === "focus"); }
+function peekHtml(p) {
+  return `<div class="tk peek"><div class="pk-h"><b>${esc(clip(p.cmd, 80))}</b><span class="pk-s">${p.lines ? "its terminal shows" : "waiting for the terminal…"}</span><span class="sp"></span>`
+    + PEEK_KEYS.map(([k, l, t]) => `<button type="button" data-pkkey="${k}" title="${esc(t)} — sent to the terminal">${l}</button>`).join("")
+    + `<button type="button" data-fterm title="The whole terminal">Terminal</button><button type="button" data-pkx title="Close this (the terminal keeps whatever it shows)">×</button></div>`
+    + `<pre>${esc(SlashComplete.peekText(p.lines))}</pre></div>`;
+}
+// A new frame: only the <pre> changes, so the board is not repainted twice a second.
+function peekPaint() {
+  if (!peeking()) return;
+  let pre = qs("#story .tk.peek pre");
+  if (!pre) { renderStory(); pre = qs("#story .tk.peek pre"); if (!pre) return; }
+  pre.textContent = SlashComplete.peekText(T.peek.lines);
+  pre.scrollTop = pre.scrollHeight;
+  const st = qs("#story .tk.peek .pk-s"); if (st) st.textContent = "its terminal shows";
+  talkFollow();
 }
 // "¿Cómo venimos?" (2026-10-30): one click asks the agent where it stands. It goes like any line
 // from the board — send-now while it works, so it answers in Talk without waiting its step out — and
@@ -3685,6 +3743,9 @@ qs("#story").addEventListener("click", (e) => {
   const s = S.active && byId(S.active); if (!s) return;
   const a = e.target.closest("[data-aans]"); if (a) return answerAskFromFocus(s, a.dataset.aans, a.dataset.v);
   const dq = e.target.closest("[data-dopt]"); if (dq) return answerDialog(s, Number(dq.dataset.dopt), null);
+  const pk = e.target.closest("[data-pkkey]");
+  if (pk && T.peek) { input(T.peek.id, { key: pk.dataset.pkkey }); T.peek.w?.soon(); return focusSay(); }
+  if (e.target.closest("[data-pkx]")) { peekClose(); return focusSay(); }
   if (e.target.closest("a")) return;
   const ta = e.target.closest("[data-tacts]"); if (ta && !String(window.getSelection?.() || "")) { const k = ta.dataset.tacts; if (!T.open.delete(k)) T.open.add(k); return renderStory(); }
   if (e.target.closest("[data-tall]")) { T.all = !T.all; return renderStory(); }
@@ -4548,11 +4609,17 @@ say.addEventListener("input", () => { say.style.height = "auto"; say.style.heigh
 // interrupt, a menu pick — so the keyboard never has to leave the composer for the common moves.
 const SAY_KEYS = { Enter: "enter", Escape: "esc", ArrowUp: "up", ArrowDown: "down" };
 function focusSay() { if (qs("#composer").classList.contains("live")) say.focus(); }
-function syncSayHint() { say.placeholder = S.mode === "term" ? "Type to the terminal… (⏎ send · empty ⏎ ⎋ ↑ ↓ pass through · / commands)" : "Tell the agent… (⏎ send · ⇧⏎ newline · / commands)"; }
+function syncSayHint() {
+  const box = document.getElementById("say"); if (!box) return; // peekOpen/Close can run before `say` exists
+  box.placeholder = S.mode === "term" ? "Type to the terminal… (⏎ send · empty ⏎ ⎋ ↑ ↓ pass through · / commands)"
+    : peeking() ? "Tell the agent… (empty ⏎ ⎋ ↑ ↓ go to the terminal above · / commands)"
+    : "Tell the agent… (⏎ send · ⇧⏎ newline · / commands)";
+}
 syncSayHint();
 say.addEventListener("keydown", (e) => {
-  if (S.mode === "term" && !say.value && S.active && SAY_KEYS[e.key] && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+  if ((S.mode === "term" || peeking()) && !say.value && S.active && SAY_KEYS[e.key] && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault(); e.stopPropagation();
+    if (S.mode !== "term") T.peek?.w?.soon();
     return input(S.active, { key: SAY_KEYS[e.key] });
   }
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); qs("#composer").requestSubmit(); }
