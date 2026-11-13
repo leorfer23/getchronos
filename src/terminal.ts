@@ -1762,6 +1762,12 @@ export function isLive(id: string): boolean {
   return live.has(id);
 }
 
+/** The homes a live terminal was spawned with — a walled account may have routed it to a sibling login. */
+export function liveHomes(id: string): { configDir: string; cursorConfigDir?: string } | null {
+  const e = live.get(id);
+  return e ? { configDir: e.focusCtx.configDir, cursorConfigDir: e.focusCtx.cursorConfigDir } : null;
+}
+
 // Where a workspace's cursor-agent keeps its chats: the CURSOR_CONFIG_DIR its secrets_file hands the CLI,
 // or undefined for the operator's default ~/.cursor.
 function workspaceCursorDir(ws: Workspace | null | undefined): string | undefined {

@@ -137,6 +137,11 @@ function sharedExtra(dir: string, raw: string[]): string[] {
   return out;
 }
 
+/** CLAUDE_HOME_SHARED plus the extras, relative to `dir` (~/.claude): what another profile may read of it. */
+export function claudeSharedDirs(dir: string, extra: string[] = CONFIG.sandbox.claudeShared): string[] {
+  return [...CLAUDE_HOME_SHARED, ...sharedExtra(dir, extra)];
+}
+
 /** Is `rel` — a path inside ~/.claude, relative to it — something an agent on another profile may read? */
 export function claudeHomeShared(rel: string, extra: string[] = CONFIG.sandbox.claudeShared, h = home): boolean {
   const parts = path.normalize(rel).split(path.sep).filter(Boolean);

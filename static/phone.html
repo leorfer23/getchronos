@@ -13,7 +13,7 @@
 <link rel="icon" href="/phone-icon.png">
 <link rel="apple-touch-icon" href="/phone-icon-512.png">
 <title data-an="text">Robert</title>
-<meta name="chronos-build" content="2026-11-10a">
+<meta name="chronos-build" content="2026-11-13a">
 <style>
   :root {
     --bg:#0C0F0B; --surface:#151A16; --surface-2:#1E2520; --raised:#262E28; --ink:#E9EFEA; --muted:#98A59D;
@@ -610,6 +610,7 @@
 <script src="/ask-card.js"></script>
 <script src="/artifact-view.js"></script>
 <script src="/chat-reply.js"></script>
+<script src="/slash-complete.js"></script>
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
 <script src="/voice-alerts.js"></script>
@@ -1217,6 +1218,7 @@ function moreSheet(id = S.current) {
   const b = sheet(`<h3 style="font-size:18px;margin-bottom:4px">${esc(goalTitle(s))}</h3><p style="color:var(--muted);font-size:14px;margin:0 0 14px">${esc(ubits)}</p><div class="menu">
     ${s.live && s.goal ? `<button data-a="done"><span class="i">${s.goal_done_at ? "↺" : "✓"}</span>${s.goal_done_at ? "Goal not done" : "Goal done"}</button>` : ""}
     ${s.live ? `<button data-a="goal"><span class="i">✎</span>${s.goal ? "Edit goal" : "Set goal"}</button>` : ""}
+    ${s.live && window.SlashComplete ? `<button data-a="cmds"><span class="i">/</span>Model &amp; commands</button>` : ""}
     ${s.live ? `<button data-a="kill" class="danger"><span class="i">■</span>Kill terminal</button>` : `<button data-a="reopen"><span class="i">▶</span>Reopen</button>`}
     <button class="cancel" data-a="x">Cancel</button></div>`);
   qs(".menu", b).onclick = async (e) => {
@@ -1224,6 +1226,7 @@ function moreSheet(id = S.current) {
     if (a === "x") return closeSheet();
     if (a === "done") { closeSheet(); await api("/sessions/" + s.id, { method: "PATCH", body: JSON.stringify({ goal_done: !s.goal_done_at }) }).catch((err) => toast(err.message)); return load(); }
     if (a === "goal") return goalSheet(s);
+    if (a === "cmds") return cmdsSheet(s);
     if (a === "kill") { fx.warn(); return confirmSheet("Kill this terminal?", "Kill", async () => { await api("/sessions/" + s.id + "/kill", { method: "POST" }); fx.warn(); toast("killed"); await load(); if (S.current === s.id) showTerms(); }); }
     if (a === "reopen") { closeSheet(); return reopen(s.id); }
   };
@@ -1237,6 +1240,27 @@ function goalSheet(s) {
     try { await api("/sessions/" + s.id, { method: "PATCH", body: JSON.stringify({ goal: goal || null, goal_source: "human" }) }); closeSheet(); await load(); }
     catch (err) { toast(err.message); }
   };
+}
+// This terminal's model and account, and what `/` in the composer lists (static/slash-complete.js): tap a
+// skill or a command and it goes into the composer; a model goes in as the CLI's own switch, to send.
+const cmdsOf = (id) => api("/sessions/" + id + "/commands");
+function cmdsSheet(s) {
+  const paint = (d, error) => { const el = qs("#cmds-body"); if (el) el.innerHTML = SlashComplete.panelHtml(d, { draft: !SlashComplete.placeModel(fcomposer.value, "/model"), error }); };
+  const b = sheet(`<h3>Model &amp; commands</h3><div id="cmds-body"></div>`);
+  const known = SlashComplete.cached(s.id);
+  paint(known);
+  SlashComplete.load(s.id, cmdsOf).then((d) => paint(d), (e) => { if (!known) paint(null, "Couldn't load this terminal's commands — " + e.message); });
+  qs("#cmds-body", b).addEventListener("click", (e) => {
+    const ins = e.target.closest("[data-ins]"), mod = e.target.closest("[data-model]");
+    if (!ins && !mod) return;
+    const r = ins ? SlashComplete.placeAtStart(fcomposer.value, ins.dataset.ins) : SlashComplete.placeModel(fcomposer.value, mod.dataset.model);
+    if (!r) return toast("send or clear the draft first — a model switch goes on its own line");
+    fx.tap(); closeSheet();
+    if (F.id !== s.id) openFocus(s.id);
+    fcomposer.value = r.value;
+    fcomposer.dispatchEvent(new Event("input"));
+    fcomposer.focus(); fcomposer.setSelectionRange(r.caret, r.caret);
+  });
 }
 async function reopen(id) {
   try { await api("/sessions/" + id + "/resume", { method: "POST", body: JSON.stringify({ cols: 100, rows: 30 }) }); fx.success(); toast("reopened"); await load(); openFocus(id); }
@@ -1737,6 +1761,8 @@ qs("#f-back").onclick = () => { fx.tap(); if (S.back === "v-terms") showTerms();
 qs("#f-more").onclick = () => { fx.tap(); moreSheet(F.id); };
 const fcomposer = qs("#f-composer");
 const SAY_MAX = 20000; // keep in step with SessionInputSchema.text (src/validation.ts)
+// `/` at the start of the composer: this terminal's CLI commands, skills, commands and plugin commands.
+window.SlashComplete?.attach(fcomposer, { session: () => (F.id && byId(F.id)?.live ? F.id : null), fetch: cmdsOf });
 function sendFocusComposer() {
   const v = fcomposer.value.trim(); if (!v) return;
   // Over the daemon's cap: say so and keep the text (it used to be cleared and the refusal swallowed).

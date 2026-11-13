@@ -733,6 +733,16 @@
   .composer textarea { flex:1; min-width:0; padding:10px 13px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--ink);
     font-size:17px; line-height:1.45; font-family:inherit; resize:none; max-height:40vh; }
   .composer textarea:focus { outline:0; border-color:var(--accent); }
+  /* ── the composer's chip: the terminal's model; open, what `/` lists (static/slash-complete.js) ── */
+  .cmdchip { flex:none; align-self:flex-end; height:47px; max-width:9.5em; padding:0 10px 0 12px; border-radius:10px; border:1px solid var(--line);
+    background:var(--bg); color:var(--muted); font-size:14.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cmdchip::after { content:"▾"; margin-left:6px; color:var(--faint); font-size:11px; }
+  .cmdchip:hover, .cmdchip.on { border-color:var(--accent); color:var(--ink); }
+  .cmdchip:empty { display:none; }
+  #composer > .slashc { left:14px; right:auto; width:min(620px, calc(100% - 28px)); }
+  .cmdpop { position:fixed; z-index:60; display:none; width:min(440px, calc(100vw - 32px)); max-height:min(62vh, 560px); overflow-y:auto;
+    background:var(--surface); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); padding:10px 10px 8px; }
+  .cmdpop.on { display:block; }
 
   /* ── the companion: what this terminal is, beside what it is printing ───────────────────────── */
   /* A layer of Terminal mode only. The operator lives in the raw output and loses the thread: the
@@ -1722,7 +1732,8 @@
     <div class="ticker" id="ticker" hidden></div>
     <div class="sbar" id="sbar"></div>
     <div class="askbar" id="askbar" hidden></div>
-    <form class="composer" id="composer"><textarea id="say" rows="1" placeholder="Tell the agent… (⏎ send · ⇧⏎ newline)"></textarea><button class="btn primary">Send</button></form>
+    <form class="composer" id="composer"><button type="button" class="cmdchip" id="say-cmds" title="This terminal: model, account, skills, commands, plugins, MCP — or type / in the composer" aria-haspopup="true"></button><textarea id="say" rows="1" placeholder="Tell the agent… (⏎ send · ⇧⏎ newline · / commands)"></textarea><button class="btn primary">Send</button></form>
+    <div class="cmdpop" id="say-cmds-pop" role="dialog" aria-label="This terminal's model and commands"></div>
   </section>
 
   <aside class="chat" id="chat">
@@ -2181,6 +2192,7 @@
 <script src="/desk-cockpit.js"></script>
 <script src="/desk-phone.js"></script>
 <script src="/tag-complete.js"></script>
+<script src="/slash-complete.js"></script>
 <script src="/chat-reply.js"></script>
 <script src="/vendor/xterm-addon-webgl.js"></script>
 <script src="/vendor/marked.min.js"></script>
@@ -2694,7 +2706,7 @@ function renderStage() {
   if (!s) {
     document.body.classList.add("no-terms");
     document.body.classList.remove("focus-only");
-    qs("#story").innerHTML = ""; qs("#sbar").innerHTML = ""; qs("#composer").classList.remove("live");
+    qs("#story").innerHTML = ""; qs("#sbar").innerHTML = ""; qs("#composer").classList.remove("live"); syncCmdChip(null);
     stage.style.setProperty("--ws", "transparent");
     // Nothing on stage and widgets registered: open the board rather than an empty stage. ONCE —
     // pick another view from here and it stays picked until a terminal comes and goes again, so
@@ -2727,7 +2739,7 @@ function renderStage() {
   // clickable only while that Lead is still on the rail.
   if (s.role === "lead") bits.push(`◆ Lead${s.workers ? ` · ${s.workers} worker${s.workers === 1 ? "" : "s"}` : ""}`);
   if (s.lead_id) bits.push(`<button type="button" class="bit-lead" data-lead="${esc(s.lead_id)}">↳ Lead ${esc(s.lead_id.slice(0, 8))}</button>`);
-  bits.push(esc([s.backend.replace("-code", ""), s.model].filter(Boolean).join(" ")));
+  bits.push(esc([s.backend.replace("-code", ""), modelNow(s)].filter(Boolean).join(" ")));
   const ho = hostOf(s);
   if (ho) bits.push(ho.off && s.live ? `<span style="color:var(--warn)" title="Its computer is offline — the terminal keeps running there">${esc(ho.name)} offline</span>` : `<span title="${esc(s.placement ? "Placed here: " + s.placement : "Runs on this computer")}">on ${esc(ho.name)}</span>`);
   if (s.goals_total > 1) bits.push(`<span title="this terminal was given ${s.goals_total} goals — it is on number ${Math.min(s.goals_done + 1, s.goals_total)}">🎯 ${s.goals_done}/${s.goals_total}</span>`);
@@ -2753,6 +2765,7 @@ function renderStage() {
   renderStory();
   renderBar();
   qs("#composer").classList.toggle("live", !!s.live);
+  syncCmdChip(s);
   qs("#h-mic").hidden = !s.live && !DICT.rec;
   const off = qs("#term-off");
   off.hidden = !!s.live;
@@ -3282,7 +3295,9 @@ function talkFollow() {
 const sendsNow = (s) => s.backend === "claude-code" && phaseOf(s) === "working";
 function talkSend(s, text, by) {
   if (!s?.live || !text) return;
-  const now = sendsNow(s);
+  // A slash command is the CLI's own verb, typed as a line of its own with Enter — the way the daemon
+  // types `/compact` and `/model` itself (cache-keeper.ts) — never as a "send now" mid-turn message.
+  const now = sendsNow(s) && !/^\/[\w.:@+-]+(\s|$)/.test(text);
   const sent = answer(s.id, { text, enter: true, ...(now ? { now: true } : {}), ...(by ? { by } : {}) });
   if (S.mode === "focus") {
     if (T.id !== s.id) Object.assign(T, { id: s.id, all: false, open: new Set(), shows: "" });
@@ -4533,7 +4548,7 @@ say.addEventListener("input", () => { say.style.height = "auto"; say.style.heigh
 // interrupt, a menu pick — so the keyboard never has to leave the composer for the common moves.
 const SAY_KEYS = { Enter: "enter", Escape: "esc", ArrowUp: "up", ArrowDown: "down" };
 function focusSay() { if (qs("#composer").classList.contains("live")) say.focus(); }
-function syncSayHint() { say.placeholder = S.mode === "term" ? "Type to the terminal… (⏎ send · empty ⏎ ⎋ ↑ ↓ pass through)" : "Tell the agent… (⏎ send · ⇧⏎ newline)"; }
+function syncSayHint() { say.placeholder = S.mode === "term" ? "Type to the terminal… (⏎ send · empty ⏎ ⎋ ↑ ↓ pass through · / commands)" : "Tell the agent… (⏎ send · ⇧⏎ newline · / commands)"; }
 syncSayHint();
 say.addEventListener("keydown", (e) => {
   if (S.mode === "term" && !say.value && S.active && SAY_KEYS[e.key] && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -4557,6 +4572,60 @@ qs("#composer").addEventListener("submit", async (e) => {
   draftSet(id, text);
   if (S.active === id && !say.value) { say.value = text; say.dispatchEvent(new Event("input")); }
 });
+
+// `/` in the composer: the terminal's own CLI commands, then the skills, commands and plugin commands its
+// session loads (static/slash-complete.js ← GET /api/sessions/:id/commands). Focus and Terminal mode
+// alike: the list takes ⏎ ⇥ ↑ ↓ ⎋ only while it is open, and it opens only on a composer that starts with
+// "/" — never on the empty one whose ⏎ ⎋ ↑ ↓ go straight to the terminal.
+const cmdsOf = (id) => api("/sessions/" + id + "/commands");
+window.SlashComplete?.attach(say, { session: () => (S.active && byId(S.active)?.live ? S.active : null), fetch: cmdsOf });
+// The chip beside it: the model the terminal is on now — the last one its transcript answered with, so a
+// `/model` switch shows — and, open, everything `/` lists, to browse; a row goes into the composer.
+const CP = { id: null };
+const cmdChip = qs("#say-cmds"), cmdPop = qs("#say-cmds-pop");
+const modelNow = (s) => {
+  const fam = s.backend === "claude-code" ? /\b(opus|sonnet|haiku|fable)\b/i.exec((s.usage?.models || []).at(-1) || "")?.[1] : null;
+  return fam ? fam.toLowerCase() : s.model || null;
+};
+function syncCmdChip(s) {
+  const m = s ? modelNow(s) || s.backend.replace("-code", "") : "";
+  if (cmdChip.textContent !== m) cmdChip.textContent = m;
+  if (CP.id && CP.id !== s?.id) cmdPopClose();
+}
+function cmdPopClose() { CP.id = null; cmdPop.classList.remove("on"); cmdChip.classList.remove("on"); }
+function cmdPopPaint(d, error) {
+  const s = CP.id && byId(CP.id);
+  const view = d && s ? { ...d, model: modelNow(s) } : d;
+  cmdPop.innerHTML = SlashComplete.panelHtml(view, { draft: !SlashComplete.placeModel(say.value, "/model"), error });
+}
+function cmdPopOpen() {
+  const s = S.active && byId(S.active);
+  if (!s || !window.SlashComplete) return;
+  CP.id = s.id;
+  const r = cmdChip.getBoundingClientRect(), w = Math.min(440, innerWidth - 32);
+  cmdPop.style.left = Math.max(16, Math.min(r.left, innerWidth - 16 - w)) + "px";
+  cmdPop.style.bottom = Math.max(16, innerHeight - r.top + 8) + "px";
+  cmdPop.classList.add("on"); cmdChip.classList.add("on");
+  const known = SlashComplete.cached(s.id);
+  cmdPopPaint(known);
+  SlashComplete.load(s.id, cmdsOf).then(
+    (d) => { if (CP.id === s.id) cmdPopPaint(d); },
+    (e) => { if (CP.id === s.id && !known) cmdPopPaint(null, "Couldn't load this terminal's commands — " + e.message); },
+  );
+}
+cmdChip.onclick = () => (CP.id ? cmdPopClose() : cmdPopOpen());
+cmdPop.addEventListener("click", (e) => {
+  const ins = e.target.closest("[data-ins]"), mod = e.target.closest("[data-model]");
+  if (!ins && !mod) return;
+  const r = ins ? SlashComplete.placeAtStart(say.value, ins.dataset.ins) : SlashComplete.placeModel(say.value, mod.dataset.model);
+  if (!r) return toast("send or clear the draft first — a model switch goes on its own line");
+  cmdPopClose();
+  say.value = r.value; say.focus(); say.setSelectionRange(r.caret, r.caret);
+  say.dispatchEvent(new Event("input"));
+});
+document.addEventListener("pointerdown", (e) => { if (CP.id && !cmdPop.contains(e.target) && !cmdChip.contains(e.target)) cmdPopClose(); }, true);
+document.addEventListener("keydown", (e) => { if (CP.id && e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); cmdPopClose(); focusSay(); } }, true);
+addEventListener("resize", () => { if (CP.id) cmdPopClose(); });
 
 // ── dropping a file on a terminal ────────────────────────────────────────────────────────────
 // Drag a file out of Finder onto the stage and the agent gets its PATH — which is the only thing
