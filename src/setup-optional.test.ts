@@ -117,6 +117,18 @@ test("GET /api/setup/optional is the operator's: a workspace token or none is re
   assert.equal(m.calendar.status, "off");
   assert.equal(m.failover.status, "off", "the test grok has no login here and cursor has no key");
   assert.equal(j.summary.total, 12);
+
+  // Setup and the welcome show this list right after the assistant is named: the words say that name.
+  const name = (n: string) => fetch(`${base}/assistant`, { method: "PUT", headers: { "x-mc-admin": CONFIG.adminToken, "content-type": "application/json" }, body: JSON.stringify({ name: n }) });
+  assert.equal((await name("Ada")).status, 200);
+  try {
+    const named = await (await fetch(`${base}/setup/optional`, { headers: { "x-mc-admin": CONFIG.adminToken } })).json();
+    const words = JSON.stringify(named.items.map((i: any) => [i.label, i.why, i.default ?? ""]));
+    assert.match(words, /A nicer voice for Ada/);
+    assert.doesNotMatch(words, /\bRobert\b/);
+  } finally {
+    await name("Robert");
+  }
 });
 
 test("the mic on a Mac without whisper: 501 with the command, the same for partials, one log line in all", async () => {

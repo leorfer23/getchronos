@@ -165,7 +165,7 @@ export const CONFIG = {
   opencodeBin: process.env.CHRONOS_OPENCODE_BIN ?? "opencode",
   gwsBin: process.env.CHRONOS_GWS_BIN ?? "gws",
   icalBin: process.env.CHRONOS_ICAL_BIN ?? "/opt/homebrew/bin/ical",
-  maxConcurrent: Number(process.env.CHRONOS_MAX_CONCURRENT ?? 0), // 0 = unlimited; per-workspace max_concurrent (Spaces tab) is the real control
+  maxConcurrent: Number(process.env.CHRONOS_MAX_CONCURRENT ?? 0), // 0 = unlimited; per-workspace max_concurrent (⚙ Settings → Limits) is the real control
   // Max concurrent LIVE terminal sessions per workspace (fork-bomb guard for agent-spawned terminals).
   maxSessionsPerWorkspace: Number(process.env.CHRONOS_MAX_WS_SESSIONS ?? 6),
   // Scheduling priority every agent CLI (Desk pty + headless run) is spawned at, so the Desk webview
@@ -256,7 +256,7 @@ export const CONFIG = {
   },
   // Connector sync history: keep at most this many rows.
   connectorSyncRetain: Number(process.env.CHRONOS_CONNECTOR_SYNC_RETAIN ?? 2000),
-  dailyBudgetUsd: Number(process.env.CHRONOS_DAILY_BUDGET ?? 0), // 0 = no global cap; per-workspace daily_budget_usd (Spaces tab) is the control
+  dailyBudgetUsd: Number(process.env.CHRONOS_DAILY_BUDGET ?? 0), // 0 = no global cap; per-workspace daily_budget_usd (⚙ Settings → Limits) is the control
   // Auto-memory: on session end, distill durable learnings into the workspace's learnings memo (0/false = off).
   autoMemory: (process.env.CHRONOS_AUTO_MEMORY ?? "1") !== "0",
   // Worklog (src/worklog.ts): every finished terminal/run is summarized into the workspace's

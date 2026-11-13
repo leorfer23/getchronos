@@ -17,7 +17,9 @@ Nothing crosses from one project into another: not a prompt, a file, a memo or a
 
 ## Create one
 
-- **First time:** the first-run welcome creates your first project from a repo on disk.
+- **First time:** the first-run welcome creates your first project from a folder on disk. A git repo
+  gets pull requests (or local commits when it has no remote); a plain folder is where its terminals
+  open.
 - **Later:** ask the assistant — "create a project acme with the repo at ~/code/acme, PRs to main".
 - **From a shell on the daemon's Mac:**
   ```bash
@@ -39,7 +41,12 @@ A repo belongs to one project and carries its delivery rules:
 
 A **profile** is a CLI config directory: its own login, settings, skills and MCP servers.
 
-- `~/.claude` is always there as `claude`.
+- `~/.claude` is always there as `claude` — the default. Its agents run on **your own** Claude Code and
+  Codex setup: the same MCP servers, plugins, skills and login as the `claude` / `codex` you run in a
+  terminal ("same tools as your own Claude / ChatGPT"). On an install whose agents already signed in
+  to an MCP server through their own Claude Code copy, Chronos keeps that copy until you choose the
+  switch — the welcome's agents step offers it (`npm run setup` says so too) and names the servers you
+  sign in to once more (`claude mcp login <name>`). Once switched it never flips back on its own.
 - Every `~/.claude-<name>` folder shows up as `claude-<name>`. Log in once inside it:
   `CLAUDE_CONFIG_DIR=~/.claude-acme claude`.
 - Pin one on the project. That pin beats every default, so the project's work is billed to that
@@ -64,5 +71,5 @@ can expire after N hours. Agents see the names with `mc vars`, never the values 
 ---
 
 **Under the hood:** `src/store/workspaces.ts` · isolation `src/child-env.ts`, `src/sandbox.ts` ·
-profiles `src/config.ts` · settings `src/settings.ts` · `mc ws` / `mc repo` in `scripts/mc` ·
+profiles `src/config.ts`, your own setup `src/parity-env.ts`, `src/parity.ts` · settings `src/settings.ts` · `mc ws` / `mc repo` in `scripts/mc` ·
 gate commands `src/gates.ts` · [MISSION-CONTROL.md §2–3](../../MISSION-CONTROL.md).

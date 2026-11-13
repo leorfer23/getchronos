@@ -26,11 +26,21 @@ stops, and puts what needs you in one place.
    ```bash
    curl -fsSL https://raw.githubusercontent.com/leorfer23/getchronos/main/install.sh | bash
    ```
-   It clones to `~/chronos`, installs, and runs setup. Then `npm run desk` (from `~/chronos`) opens the
-   Desk in your browser, already signed in.
-2. **Welcome.** A short first-run welcome names your assistant ("Robert" unless you pick another
-   name), checks which agent CLIs are installed and logged in, creates your first project from a
-   repo on disk, and offers to pair your phone.
+   It clones to `~/chronos` and runs `npm run setup`, which starts Chronos (and again at every login)
+   and, after one yes, installs Claude Code if it is missing (and any CLI whose app you already use —
+   ChatGPT, Cursor), signs you in in your browser, tries each agent CLI with one tiny prompt, and opens the Desk signed in — the **Chronos** app (it lands in `~/Applications`), or a
+   browser tab on a Mac without Apple's developer tools. Lines that start with `HUMAN STEP:` are yours
+   to do. Running setup again is safe. To have an agent do the install, give it
+   [INSTALL.md](../../INSTALL.md) (it runs setup with `--yes --json`).
+
+   Back to the Desk later: open the Chronos app, or `npm run desk` in `~/chronos` for a browser tab,
+   already signed in (it uses a one-time code, never your admin token in a URL).
+2. **Welcome.** One card, one step at a time, every step skippable: **name your assistant**
+   ("Robert" unless you pick another), **your agents** (each CLI with Test, Sign in or Install, and
+   whether agents get the same tools as your own Claude / ChatGPT), **your first project** (a folder —
+   usually a git repo), **your phone** (optional), and **meet** the assistant. The last card also
+   folds away a line of *Optional extras* — a nicer voice, speech-to-text, Telegram, your calendar… —
+   each with the one thing that turns it on. `npm run setup` prints the same list.
 3. **Open a terminal with a goal.** Press **+ Terminal** (or `N`). Pick the project and the CLI, type
    what you want done ("fix the flaky login test and open a PR"), press ⏎. A card appears on the rail.
 4. **Watch Focus.** Open the card. **Focus** shows the goal and its "done when" checks, a progress bar,
@@ -53,8 +63,9 @@ Next: [Terminals](terminals.md) for the Desk in detail, or [The assistant](assis
 - **macOS for the sandbox.** The agent sandbox is macOS Seatbelt. The daemon runs elsewhere, but agents
   there run unsandboxed (and the daemon says so).
 - **Not CI.** It drives agent CLIs, not build pipelines.
-- **You bring the CLIs.** Chronos drives Claude Code, Codex, Cursor, Grok and opencode with your own
-  logins. It adds no fee; it tracks what each run cost.
+- **You bring the subscriptions.** Chronos drives Claude Code, Codex, Cursor, Grok and opencode on your
+  own logins (setup installs and signs in the missing ones). It adds no fee; it tracks what each run
+  cost.
 
 ---
 

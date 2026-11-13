@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { refreshProfiles } from "../config.js";
+import { grokSignedIn } from "../backends/grok-auth.js";
 import { detectOriginUrl } from "../repo-git.js";
 import { machineLoad, readVitals, swapPctOf } from "../machine.js";
 import { REPO_ROOT } from "../repo-root.js";
@@ -77,7 +78,7 @@ export async function probeClis(names: readonly string[] = CLI_NAMES): Promise<C
  * Is this CLI logged in here? Installed is not enough: the first real host had grok installed and never
  * logged in, and placement would have sent it grok terminals that die on a login screen. Only cheap,
  * local signals — never a model call:
- *  - grok: its own auth file exists (what `grok` login writes).
+ *  - grok: its credentials file holds a sign-in grok can still use (src/backends/grok-auth.ts).
  *  - cursor-agent: CURSOR_API_KEY in this process's env, else `cursor-agent status`. Run from the host's
  *    LaunchAgent that reads the login keychain; from an SSH shell the keychain is locked and the answer
  *    is "unknown", never "no".
@@ -87,7 +88,7 @@ export async function probeClis(names: readonly string[] = CLI_NAMES): Promise<C
 export async function cliAuth(name: string, bin: string, env: NodeJS.ProcessEnv = process.env, home = os.homedir()): Promise<CliInfo["auth"]> {
   switch (name) {
     case "grok":
-      return fs.existsSync(path.join(env.GROK_HOME || path.join(home, ".grok"), "auth.json")) ? "yes" : "no";
+      return grokSignedIn(env, home) ? "yes" : "no";
     case "cursor-agent": {
       if (env.CURSOR_API_KEY) return "yes";
       const out = await new Promise<string>((resolve) =>

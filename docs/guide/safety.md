@@ -41,6 +41,11 @@ daemon warns about it at every boot.
 - Shared vars (🔑) can expire after N hours; an expired one is deleted.
 - **No agent sends anything** — no email, Slack message, comment or review. Send tools are removed
   from every agent CLI; agents leave drafts.
+- **Every API call names its caller.** A request to the daemon with no token is refused (only health,
+  the push key, webhooks with their own secret and the one-time sign-in code are open). `CHRONOS_TOKENLESS=log`
+  lets them through but records each one; `GET /api/authz/tokenless` lists who called.
+- **The assistant cannot edit your projects.** Their folders are read-only to him; work goes to an
+  agent terminal (see [The assistant](assistant.md)).
 
 ## Spend
 

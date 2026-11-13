@@ -133,3 +133,34 @@ test("the hello is instant and short, says the name, and its chips are real mess
   assert.equal(c[3].href, "/guide");
   assert.ok(c.slice(0, 3).every((x: any) => x.say && !x.href));
 });
+
+test("optional extras: one folded line on the last step — only what isn't on, each how-to with its command as code", async () => {
+  const { optionalUpgrades } = await import("./setup-optional.js");
+  const bare = {
+    appleSilicon: true, voice: "missing", uv: true, hearing: "missing", hearingFinal: "missing", cloudKey: false, finalEngine: "accurate",
+    telegram: false, desktopNotify: true, phone: false, calendars: 0, failoverChain: ["grok"], failoverReady: [],
+    gh: "missing", fff: false, rtk: false, browser: false, logDir: "/Users/operator/getchronos", phoneGuide: true,
+  } as const;
+  const items = optionalUpgrades({ ...bare, failoverChain: [...bare.failoverChain], failoverReady: [] });
+  const x = plain(W.extrasList({ items, summary: { on: 0, total: items.length } }));
+  assert.equal(x.total, 12);
+  assert.equal(x.todo.length, 12, "a plain Mac: every extra is one you can add");
+  assert.equal(W.extrasList({ items: items.map((i) => ({ ...i, status: "on" })) }), null, "all on: no line at all");
+  assert.equal(W.extrasList(null), null, "an older daemon (404) or an error: no line");
+  assert.equal(W.extrasList({ error: "boom" }), null);
+  const one = plain(W.extrasList({ items: [{ ...items[0], status: "on" }, items[1]] }));
+  assert.deepEqual(one, { on: 1, total: 2, todo: [{ id: items[1].id, label: items[1].label, how: items[1].how }] });
+
+  const how = Object.fromEntries(items.map((i) => [i.id, plain(W.extraHow(i.how))]));
+  assert.deepEqual(how.hearing, { lead: "In the Chronos folder:", cmd: "bash scripts/install-whisper.sh", tail: "", link: "" });
+  assert.deepEqual(how.github, { lead: "", cmd: "brew install gh && gh auth login", tail: "", link: "" });
+  assert.deepEqual(how.rtk, { lead: "", cmd: "brew install rtk", tail: "then restart Chronos", link: "" });
+  assert.equal(how.browser.cmd, items.find((i) => i.id === "browser")!.how, "the whole npx line");
+  assert.deepEqual(how.phone, { lead: "", cmd: "", tail: "Tailscale: a few minutes, no domain needed", link: "/guide/phone" });
+  assert.deepEqual(how.calendar, { lead: "", cmd: 'POST /api/calendars {"name":"Work","ics_url":"<your calendar\'s private ICS link>"}', tail: "Google, iCloud and Outlook all give one", link: "" });
+  assert.equal(how.telegram.lead, items.find((i) => i.id === "telegram")!.how, "words stay words");
+  for (const [id, h] of Object.entries(how) as [string, any][]) {
+    assert.ok(h.lead || h.cmd || h.link, `${id}: something to read`);
+    assert.ok(!/^(brew|bash|npm|npx|gh) /.test(h.lead), `${id}: a command is never left as prose`);
+  }
+});

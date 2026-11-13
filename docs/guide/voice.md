@@ -26,6 +26,9 @@ tells you this command instead of failing.
 **Speaking** works out of the box with macOS `say`. On Apple Silicon, `bash scripts/install-tts.sh`
 adds a local neural voice; `say` stays the fallback.
 
+Both are free and stay on the Mac. Which of them this Mac has: `npm run setup` (its *Optional* lines)
+or the welcome's *Optional extras*.
+
 ## Tune it
 
 ⚙ Settings → **Voice**:

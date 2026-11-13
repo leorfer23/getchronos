@@ -18,7 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 // @ts-ignore — plain .mjs scripts, no types
-import { APP_LABEL, SetupError, cliChecks, ensureApp, ensureDaemon, launchdOwner, parseArgs, planActions, runSetup } from "../scripts/setup.mjs";
+import { APP_LABEL, SetupError, cliChecks, ensureApp, ensureDaemon, launchdOwner, optionalLines, parseArgs, planActions, runSetup } from "../scripts/setup.mjs";
 // @ts-ignore
 import { DeskError, mintDeskUrl, openInBrowser, readToken } from "../scripts/open-desk.mjs";
 
@@ -49,7 +49,7 @@ type Call = { cmd: string; args: string[]; env?: Record<string, string> };
 type Answer = { code: number | null; stdout?: string; stderr?: string };
 
 /** The injected world. `answer` decides each command; health flips up when `up()` says so. */
-function world(o: { repo?: string; home?: string; platform?: string; up?: () => boolean; answer?: (c: Call) => Answer | undefined; status?: () => unknown; interactive?: boolean; token?: string; healthBody?: (mine: boolean) => unknown } = {}) {
+function world(o: { repo?: string; home?: string; platform?: string; up?: () => boolean; answer?: (c: Call) => Answer | undefined; status?: () => unknown; optional?: () => { status: number; body: unknown }; interactive?: boolean; token?: string; healthBody?: (mine: boolean) => unknown } = {}) {
   const calls: Call[] = [];
   const api: string[] = [];
   let clock = 0;
@@ -82,6 +82,7 @@ function world(o: { repo?: string; home?: string; platform?: string; up?: () => 
       if (p === "/api/health") return res(200, o.healthBody ? o.healthBody(mine) : mine ? { ok: true, operational: {} } : { ok: true });
       if (!mine) return res(403, { error: "admin token required (x-mc-admin)" });
       if (p.startsWith("/api/setup/status")) return res(200, o.status?.() ?? { daemon: { ok: true }, projects: 0, clis: [] });
+      if (p === "/api/setup/optional" && o.optional) { const r = o.optional(); return res(r.status, r.body); }
       if (p.startsWith("/api/setup/smoke/")) return res(200, { ok: true, ms: 2300, reply: "OK" });
       if (p.startsWith("/api/setup/install/")) return res(200, { ok: true, log_tail: "installed" });
       if (p.startsWith("/api/setup/login/")) return res(200, { ok: true });
@@ -285,6 +286,31 @@ test("run: one CLI ready → exit 0, the Desk opened signed in, and a --json rep
   assert.deepEqual(JSON.parse(w.out()), report, "stdout is the report and nothing else");
   assert.match(w.err(), /Not installing or signing in: there's no terminal to ask in\. To do it: npm run setup -- --yes/);
   assert.ok(w.api.includes("POST /api/setup/smoke/codex") && !w.api.some((a) => a.includes("/setup/install/")), "no terminal, no --yes: nothing installed");
+});
+
+test("run: the optional extras that aren't on, one line each with the one thing to do — quiet when all are on, never a failure", async () => {
+  const item = (id: string, status: string, how: string) => ({ id, label: `Label ${id}`, why: "why", status, how, ...(status === "default" ? { default: "the free one" } : {}) });
+  const items = [item("voice", "default", "In the Chronos folder: bash scripts/install-tts.sh"), item("hearing", "off", "In the Chronos folder: bash scripts/install-whisper.sh"), item("github", "on", "gh auth login")];
+  const ready = () => status([cli("codex", { authDetail: "ChatGPT account" })]);
+
+  const w = world({ platform: "linux", status: ready, optional: () => ({ status: 200, body: { items, summary: { on: 1, total: 3 } } }) });
+  const { exitCode, report } = await runSetup(parseArgs(["--json", "--no-open"], {}), w.d);
+  assert.equal(exitCode, 0);
+  assert.match(w.err(), /\n  Optional — 1 of 3 on; none is needed to start:\n    · Label voice — In the Chronos folder: bash scripts\/install-tts\.sh\n    · Label hearing — In the Chronos folder: bash scripts\/install-whisper\.sh\n/);
+  assert.doesNotMatch(w.err(), /Label github/, "an extra that is on is not listed");
+  assert.deepEqual(report.optional, { on: 1, total: 3, items: items.map(({ why, ...i }) => i) }, "--json carries the whole list, with each status");
+  assert.ok(!report.checks.some((c: any) => /optional/i.test(c.id) && !c.ok), "never a ✗");
+
+  const allOn = items.map((i) => ({ ...i, status: "on" }));
+  assert.deepEqual(optionalLines({ on: 3, total: 3, items: allOn }), [], "everything on: nothing said");
+
+  for (const broken of [{ status: 500, body: { error: "boom" } }, { status: 404, body: { error: "not found" } }]) {
+    const w2 = world({ platform: "linux", status: ready, optional: () => broken });
+    const r2 = await runSetup(parseArgs(["--json", "--no-open"], {}), w2.d);
+    assert.equal(r2.exitCode, 0, `a ${broken.status} from the list never fails setup`);
+    assert.equal(r2.report.optional, null);
+    assert.doesNotMatch(w2.err(), /Optional/);
+  }
 });
 
 test("run: nothing ready only because there was no terminal to ask → exit 2 and the exact flag", async () => {

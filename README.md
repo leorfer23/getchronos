@@ -60,15 +60,17 @@ one interface, so a cheap model can grade a ticket and an expensive one can buil
 
 ## Quickstart
 
-Requires Node 22+, macOS (the sandbox is Seatbelt), and at least one agent CLI installed and logged
-in — Claude Code, Codex, Cursor, Grok or opencode.
+Requires Node 22–26, git and macOS (the sandbox is Seatbelt). Setup installs Claude Code if it is missing
+and signs you in; Codex, Cursor, Grok and opencode work too.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/leorfer23/getchronos/main/install.sh | bash
 ```
 
-That clones into `~/chronos`, runs `npm ci` and `npm run setup`. Already cloned? Run
-`npm ci && npm run setup` in your checkout.
+That clones into `~/chronos`, runs `npm ci` and `npm run setup`: Chronos starts (and again at every
+login), missing agent CLIs are installed and signed in (in your browser), each one answers a test
+prompt, and the Desk opens signed in — the Chronos app in `~/Applications`, or a browser tab. Already
+cloned? Run `npm ci && npm run setup` in your checkout; running it again is safe.
 
 **Or let your agent do it.** Paste this into Claude Code, Codex or Cursor:
 
@@ -79,8 +81,9 @@ Install Chronos on this Mac by following https://github.com/leorfer23/getchronos
 [INSTALL.md](INSTALL.md) is written for that agent: the exact commands, how to check it worked, what to
 hand back to you (signing in to Claude or ChatGPT in the browser is yours to click), and what not to touch.
 
-Then `npm run desk` opens the Desk in your browser, already signed in (if the daemon is not running,
-it tells you how to start it). No configuration file, no database to create, no account.
+Later, `npm run desk` opens the Desk in your browser, already signed in (if the daemon is not running,
+it tells you how to start it). A first-run welcome names your assistant, checks your agents and makes
+your first project. No configuration file, no database to create, no account.
 
 **New here? Read [the guide](docs/guide/README.md)** — start with
 [Why Chronos, not plain terminals](docs/guide/why-chronos.md) (2 minutes, with a 5-minute first
@@ -330,7 +333,7 @@ offered under that name.
 | | |
 |---|---|
 | **Desk** (`/desk`) | the main one — live terminals as a wall of cards, each a real PTY |
-| **Phone** (`/phone`) | a PWA behind your own authenticating tunnel ([Cloudflare setup](./CONFIGURATION.md#4-optional-reach-it-from-your-phone)); triage from bed |
+| **Phone** (`/phone`) | a PWA over HTTPS — Tailscale in about a minute ([the guide](docs/guide/phone.md)), or your own Cloudflare tunnel; triage from bed |
 | **Telegram** | control + notifications with no inbound port, via long-polling |
 | **`mc` CLI** | what agents themselves use: `mc steps`, `mc ask`, `mc review`, `mc learn` |
 | **REST + WebSocket** | everything above is a client of this |

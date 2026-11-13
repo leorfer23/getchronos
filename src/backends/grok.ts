@@ -1,20 +1,10 @@
 import { execFile } from "node:child_process";
 import { grokDenyArgs } from "../no-send.js";
-import { promisify } from "node:util";
 import { CONFIG } from "../config.js";
+import { grokSignedIn } from "./grok-auth.js";
 import { pricedOrEstimate } from "../pricing.js";
 import type { Job } from "../types.js";
 import { jsonLine, type AgentBackend, type NormalizedEvent, type OneShotOpts, type RateLimit, type RunResult, type SpawnSpec } from "./types.js";
-
-const pexec = promisify(execFile);
-
-/** `grok models` output → signed in / not / can't tell ("You are logged in with grok.com." vs "You are not authenticated."). */
-export function grokAuthFrom(out: string): boolean | null {
-  const t = out.replace(/\x1b\[[0-9;]*m/g, "");
-  if (/not (authenticated|logged in|signed in)/i.test(t)) return false;
-  if (/(logged|signed) in (with|as|to)|authenticated (with|as)/i.test(t)) return true;
-  return null;
-}
 
 // xAI Grok CLI (`grok`), headless streaming-json mode.
 //
@@ -147,15 +137,10 @@ export const grokBackend: AgentBackend = {
     return null;
   },
 
-  // `grok models` says which it is in its first line — and exits 0 either way (grok 1.0.70: "You are
-  // not authenticated." still lists the models), so the exit code alone called every grok signed in.
+  // grok's credentials file, by grok's own rule (grok-auth.ts) — not `grok models`, whose words call a
+  // session signed out once its 6-hour access token runs out, although the next call refreshes it.
   async checkAuth(): Promise<boolean> {
-    try {
-      const { stdout, stderr } = await pexec(CONFIG.grokBin, ["models"], { timeout: 15000 });
-      return grokAuthFrom(`${stdout}\n${stderr}`) !== false;
-    } catch {
-      return false;
-    }
+    return grokSignedIn();
   },
 
   // `grok login` runs a browser/OAuth flow. It wants a TTY, so a headless spawn may not complete —

@@ -495,6 +495,8 @@ test("ready = installed and not signed out: grok needs its auth file; the boot p
     assert.equal(backendInstalled("grok"), true);
     assert.equal(backendReady("grok", { GROK_HOME: home }), false, "installed, never logged in: a stand-in would open on a login screen");
     fs.writeFileSync(path.join(home, "auth.json"), "{}");
+    assert.equal(backendReady("grok", { GROK_HOME: home }), false, "an auth file with no sign-in in it");
+    fs.writeFileSync(path.join(home, "auth.json"), JSON.stringify({ "https://auth.x.ai::c": { key: "dummy", refresh_token: "dummy" } }));
     assert.equal(backendReady("grok", { GROK_HOME: home }), true);
     assert.equal(backendReady("mock"), true, "no login signal → installed is enough");
     assert.equal(backendReady("no-such-backend"), false);

@@ -6,6 +6,7 @@ import { cursorBackend } from "./cursor.js";
 import { cursorCloudBackend, isGitHubRemote } from "./cursor-cloud.js";
 import { codexBackend } from "./codex.js";
 import { grokBackend } from "./grok.js";
+import { grokSignedIn } from "./grok-auth.js";
 import { opencodeBackend } from "./opencode.js";
 import { openaiApiBackend } from "./openai-api.js";
 import { mockBackend } from "./mock.js";
@@ -176,13 +177,13 @@ export function backendInstalled(name: string | null | undefined): boolean {
 
 /**
  * Installed AND not known to be logged out — what a failover may hand a walled turn to. Only cheap,
- * local signals, never a spawn (this runs inside a wall, on the daemon's event loop): grok's own auth
- * file, the one `grok login` writes and the same rule a host reports its CLIs by (src/hostd/inventory.ts).
+ * local signals, never a spawn (this runs inside a wall, on the daemon's event loop): grok's sign-in by
+ * its own credentials file (grok-auth.ts — the one rule the setup check and a host's inventory use too).
  * A CLI with no such signal counts as ready once installed; cursor's key rule stays with its callers,
  * which know the workspace whose key it would use.
  */
 export function backendReady(name: string | null | undefined, env: NodeJS.ProcessEnv = process.env, home = os.homedir()): boolean {
   if (!backendInstalled(name)) return false;
-  if (getBackend(name).name === "grok") return fs.existsSync(path.join(env.GROK_HOME || path.join(home, ".grok"), "auth.json"));
+  if (getBackend(name).name === "grok") return grokSignedIn(env, home);
   return true;
 }

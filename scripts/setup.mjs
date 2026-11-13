@@ -8,7 +8,8 @@
 //   3. asks Chronos which agent CLIs are installed and signed in, the way its agents will run them
 //      (GET /api/setup/status, src/setup-check.ts) — offers to install the missing ones and sign in
 //   4. tries each signed-in CLI with one tiny real prompt, all at once (POST /api/setup/smoke/:id)
-//   5. prints a checklist: ✓ or ✗ per line, and one command to paste under every ✗
+//   5. prints a checklist: ✓ or ✗ per line, and one command to paste under every ✗ — then, quietly, the
+//      optional extras this Mac doesn't have yet, one line each (GET /api/setup/optional)
 //   6. opens the Desk: the Chronos app when this Mac can build it, else the browser, signed in
 //
 // Flags:
@@ -397,6 +398,31 @@ async function parityCheck(ctx) {
   return { id: "parity", ok: report.ok !== false, info: report.ok !== false ? false : true, line: [head, ...detail].join("\n      "), fix: null };
 }
 
+// ── OPTIONAL ──────────────────────────────────────────────────────────────────────────────────────────
+// What this Mac could add (GET /api/setup/optional, src/setup-optional.ts): a nicer voice, speech-to-text,
+// Telegram, the phone… None is needed to start. Informational like parity: it never fails setup, and an
+// older daemon without the route (or any error) prints nothing.
+async function optionalExtras(ctx) {
+  let r;
+  try {
+    r = await api(ctx, "GET", "/setup/optional", 15_000);
+  } catch {
+    return null;
+  }
+  const items = (Array.isArray(r?.items) ? r.items : [])
+    .filter((i) => i && typeof i.id === "string" && typeof i.label === "string" && typeof i.how === "string")
+    .map((i) => ({ id: i.id, label: i.label, status: i.status, how: i.how, ...(i.default ? { default: i.default } : {}), ...(i.note ? { note: i.note } : {}) }));
+  if (!items.length) return null;
+  return { on: items.filter((i) => i.status === "on").length, total: items.length, items };
+}
+
+/** One line per extra that isn't on, with its one command or where to turn it on; nothing when all are on. */
+export function optionalLines(o) {
+  const todo = (o?.items ?? []).filter((i) => i.status !== "on");
+  if (!todo.length) return [];
+  return [`Optional — ${o.on} of ${o.total} on; none is needed to start:`, ...todo.map((i) => `  · ${i.label} — ${i.how}`)];
+}
+
 /** The whole run. Returns the exit code and the report --json prints; never calls process.exit. */
 export async function runSetup(opts, d = realDeps()) {
   const t0 = d.now();
@@ -410,6 +436,7 @@ export async function runSetup(opts, d = realDeps()) {
   let daemon = { ok: false, how: null };
   let desk = { opened: null, reopen: "npm run desk" };
   let skipped = false;
+  let optional = null;
   let exitCode = 1;
 
   say("Setting up Chronos");
@@ -444,6 +471,9 @@ export async function runSetup(opts, d = realDeps()) {
     const ready = checks.some((c) => c.ready);
     if (!ready) add({ id: "agents", ok: false, line: "No agent CLI is ready yet — Chronos needs at least one to do any work", fix: skipped ? "npm run setup -- --yes" : checks.find((c) => !c.ok && c.fix && c.id !== "error")?.fix ?? "npm run setup" });
     exitCode = ready ? 0 : skipped ? 2 : 1;
+
+    optional = await optionalExtras(ctx);
+    for (const l of optionalLines(optional)) say(`  ${l}`);
 
     // Last: the Desk itself.
     if (opts.open) {
@@ -484,6 +514,7 @@ export async function runSetup(opts, d = realDeps()) {
     daemon: { ok: daemon.ok, how: daemon.how, url: `http://localhost:${port}` },
     checks: checks.map((c) => ({ id: c.id, ok: c.ok, ...(c.info ? { info: true } : {}), line: c.line, fix: c.fix ?? null })),
     human_steps: humanSteps,
+    optional,
     desk,
   };
   if (opts.json) d.out.write(JSON.stringify(report, null, 2) + "\n");
