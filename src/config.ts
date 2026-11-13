@@ -775,6 +775,10 @@ export const CONFIG = {
       ? process.env.CHRONOS_PROTECTED_DIRS.split(":")
       : []),
       ...splitPaths(process.env.CHRONOS_PROTECTED_DIRS_EXTRA)],
+    // What an agent on a client's profile may READ of the operator's own ~/.claude beyond the built-in
+    // instructions and extensions (sandbox.ts → CLAUDE_HOME_SHARED): his own scripts a client profile's
+    // MCP servers or hooks run from there. `:`-separated, relative to ~/.claude. Never writable.
+    claudeShared: splitPaths(process.env.CHRONOS_CLAUDE_SHARED_EXTRA),
   },
   // Per-workspace outbound network policy (egress firewall). A proxy per opted-in workspace
   // audits/blocks agent egress; `enforce` mode also locks direct outbound via Seatbelt → no bypass.

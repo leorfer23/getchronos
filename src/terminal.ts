@@ -920,7 +920,8 @@ export async function openSession(
     // Credential stores this client is trusted with (Globex ↔ ~/.config/gcloud, so `bq` can auth).
     // Empty for every workspace that hasn't been given one explicitly.
     const allowSecrets = workspaceSandboxAllow(ws?.sandbox_allow);
-    const sandboxed = sandboxWrap(mode, cwd, repoDirs, configDir, denyDirs, backend.bin(), iArgs, egressLocked(opts.workspace_id), sharedCheckouts, allowSecrets);
+    // pinnedDir: on a sibling login, a workspace pinned to the operator's profile keeps his Claude home.
+    const sandboxed = sandboxWrap(mode, cwd, repoDirs, configDir, denyDirs, backend.bin(), iArgs, egressLocked(opts.workspace_id), sharedCheckouts, allowSecrets, { pinnedDir });
     // …and `nice` OUTSIDE the sandbox wrapper: this CLI and everything it forks (vitest, tsc, its own
     // subagents) run below the Desk webview and the daemon. One wrap for every way a terminal is
     // opened — fresh, reopened, resumed, or a failover stand-in — since they all land here.

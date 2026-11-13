@@ -107,3 +107,35 @@ test("one credential file with two projects' sections is found; one project's al
   assert.deepEqual(f[0].workspaces.sort(), ["acme", "globex"]);
   assert.ok(!JSON.stringify(f).includes("AKIAEXAMPLE") && !JSON.stringify(f).includes("shh"));
 });
+
+test("a project's profile that runs something in ~/.claude its sandbox hides is found; the shared part is not", () => {
+  write(".claude/hooks/guard.sh", "#!/bin/sh\n");
+  write(".claude/launch-mcp.sh", "#!/bin/sh\n");
+  write(".claude/RULES.md", "rules");
+  write(".claude-acme/settings.json", JSON.stringify({
+    hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "$HOME/.claude/hooks/guard.sh" }] }] },
+    claudeMdExcludes: ["~/.claude/RULES.md"],
+  }));
+  write(".claude-acme/.claude.json", JSON.stringify({ mcpServers: { chrome: { command: `${home}/.claude/launch-mcp.sh`, env: { TOKEN: "never-printed" } } } }));
+  fs.symlinkSync(path.join(home, ".claude", "skills", "acme-db"), path.join(dir(".claude-acme", "skills"), "acme-db"));
+  const f = auditProfiles(input()).filter((x) => x.check === "walled-claude-path");
+  assert.equal(f.length, 1, JSON.stringify(f));
+  assert.equal(f[0].path, path.join(home, ".claude", "launch-mcp.sh"));
+  assert.deepEqual(f[0].workspaces, ["acme"]);
+  assert.match(f[0].detail, /\.claude\.json → mcpServers\.chrome\.command/);
+  assert.match(f[0].fix, /CHRONOS_CLAUDE_SHARED_EXTRA/);
+  assert.ok(!JSON.stringify(f).includes("never-printed"));
+  // Shared by the operator → no longer a finding.
+  assert.deepEqual(auditProfiles(input({ claudeShared: ["launch-mcp.sh"] })).filter((x) => x.check === "walled-claude-path"), []);
+});
+
+test("a link from a project's profile into a walled part of ~/.claude is found; the default profile is never judged", () => {
+  write(".claude/plugins/installed_plugins.json", "{}");
+  fs.symlinkSync(path.join(home, ".claude", "plugins"), path.join(home, ".claude-globex", "plugins"));
+  write(".claude/settings.json", JSON.stringify({ statusLine: { command: "~/.claude/statusline.sh" } }));
+  const f = auditProfiles(input()).filter((x) => x.check === "walled-claude-path");
+  assert.equal(f.length, 1, JSON.stringify(f));
+  assert.equal(f[0].path, path.join(home, ".claude", "plugins"));
+  assert.match(f[0].detail, /the link plugins/);
+  assert.deepEqual(f[0].workspaces, ["globex"]);
+});

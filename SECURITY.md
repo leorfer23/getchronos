@@ -38,9 +38,24 @@ tokens, terminal output) — is sealed: denied after every re-grant, including a
 `sandbox_allow`, because agents run as the same user and file modes do not stop them
 ([HOSTS.md → Security](./HOSTS.md#security)).
 
+An agent on a client's profile (any Claude config dir other than the default `~/.claude`) is walled
+off from the operator's own CLI homes in guard and strict alike: it writes nothing in `~/.claude` — its
+`settings.json` hooks, skills, commands and CLAUDE.md run inside every one of the operator's own
+sessions, so a write there would be code execution across the workspace boundary — nor in
+`~/.claude.json` or `~/.codex`; and of `~/.claude` it reads only the instructions and extensions client
+profiles link in (top-level `*.md`, `rules`, `skills`, `commands`, `agents`, `output-styles`,
+`workflows`, `hooks`) plus what `CHRONOS_CLAUDE_SHARED_EXTRA` names, never settings, transcripts,
+prompt history, file snapshots, plugins or logins. Files behind links in `~/.claude` (a dotfiles
+`settings.json`, a skill kept in `~/.agents/skills`) are walled by their real path too, one level
+deep. The wall comes after every re-grant — a cwd of `$HOME`, an add-dir, a read-only tier — except a
+workspace's `sandbox_allow`: naming a path in it there is the one way to reopen it, read AND write.
+The operator's own profile keeps all of it, as does a workspace pinned to it that a usage wall moved to
+a sibling login.
+
 **What the sandbox does not decide** is how you set the machine up around it: a profile whose
 `skills` dir is a link to another profile's, a client's plugin marketplace installed in a second
-profile, a key exported in `~/.zshrc`, one `~/.aws/credentials` for two projects.
+profile, a key exported in `~/.zshrc`, one `~/.aws/credentials` for two projects — or the other way
+round, a client profile whose hook or MCP server runs a script in `~/.claude` the wall above hides.
 `GET /api/isolation/audit` (admin) lists those — names and paths, never values — with what to change
 (`src/profile-audit.ts`). It reports; it does not fix.
 

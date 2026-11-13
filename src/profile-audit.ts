@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { claudeHomeShared } from "./sandbox.js";
 
 /**
  * What the machine shares between projects that no sandbox rule decides.
@@ -16,11 +17,15 @@ import path from "node:path";
  *                         from that shell inherits it, whichever project it belongs to.
  *  - `mixed-store`        one credential file (`~/.aws/credentials`, `~/.aws/config`) holds entries
  *                         named after more than one project.
+ *  - `walled-claude-path` the other way round: a project's profile relies on something in the
+ *                         operator's own `~/.claude` that its agents cannot read there (sandbox.ts
+ *                         claudeHomeWall) — a hook script, an MCP server's launcher, a link. It fails
+ *                         inside every sandboxed session, quietly.
  *
  * Read-only, names only: it never returns a value from an rc file or a credential file. It finds;
  * it does not fix — each finding says what to change.
  */
-export type AuditCheck = "shared-dir" | "shared-marketplace" | "shell-export" | "mixed-store";
+export type AuditCheck = "shared-dir" | "shared-marketplace" | "shell-export" | "mixed-store" | "walled-claude-path";
 
 export interface AuditFinding {
   check: AuditCheck;
@@ -40,6 +45,8 @@ export interface AuditInput {
   workspaces: Array<{ slug: string; config_dir: string | null }>;
   /** Marketplaces any profile may carry. Defaults to the official one + `CHRONOS_SHARED_MARKETPLACES`. */
   sharedMarketplaces?: string[];
+  /** CHRONOS_CLAUDE_SHARED_EXTRA, as the sandbox reads it (config.ts). */
+  claudeShared?: string[];
 }
 
 const SHARED_DIRS = ["skills", "commands", "agents", "hooks", "plugins", "output-styles"];
@@ -160,5 +167,55 @@ export function auditProfiles(input: AuditInput): AuditFinding[] {
     });
   }
 
+  // 5. A project's profile (not the default one) pointing into ~/.claude at something the sandbox hides
+  //    from it: a path in its settings / .claude.json (a hook, an MCP server's command or args), or a
+  //    link at its top level or one level into its shared dirs. The path and where it is named, never
+  //    the value around it.
+  const claudeDir = real(defaultDir);
+  if (claudeDir) {
+    const homes = [...new Set([home, real(home) ?? home])].map(escapeRe).join("|");
+    const ref = new RegExp(`(?:~|\\$HOME|\\$\\{HOME\\}|${homes})/\\.claude/([^\\s"'\`:;,)]+)`, "g");
+    for (const dir of profiles) {
+      const mine = owners.get(dir) ?? [];
+      if (dir === claudeDir || !mine.length) continue;
+      const found = new Map<string, string>(); // path inside ~/.claude → where the profile names it
+      const note = (rel: string, where: string) => {
+        if (rel.startsWith("..") || found.has(rel) || claudeHomeShared(rel, input.claudeShared, home)) return;
+        found.set(rel, where);
+      };
+      for (const f of ["settings.json", "settings.local.json", ".claude.json"]) {
+        let cfg: unknown;
+        try { cfg = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")); } catch { continue; }
+        walkStrings(cfg, [], (keys, s) => { for (const m of s.matchAll(ref)) note(path.normalize(m[1]), `${f} → ${keys.join(".")}`); });
+      }
+      for (const sub of ["", ...SHARED_DIRS]) {
+        let names: string[];
+        try { names = fs.readdirSync(path.join(dir, sub)); } catch { continue; }
+        for (const n of names) {
+          const p = path.join(dir, sub, n);
+          try { if (!fs.lstatSync(p).isSymbolicLink()) continue; } catch { continue; }
+          const target = real(p);
+          if (target && inside(target, claudeDir) && target !== claudeDir) note(path.relative(claudeDir, target), `the link ${path.join(sub, n)}`);
+        }
+      }
+      for (const [rel, where] of found) {
+        out.push({
+          check: "walled-claude-path", path: path.join(defaultDir, rel), workspaces: mine,
+          detail: `${where} in ${dir} uses ~/.claude/${rel}, which agents on this profile cannot read: it fails in every sandboxed session.`,
+          fix: `If ${mine.join(", ")} may read it, add ${rel.split(path.sep)[0]} to CHRONOS_CLAUDE_SHARED_EXTRA (read-only, never writable); otherwise give ${dir} its own copy.`,
+        });
+      }
+    }
+  }
+
   return out;
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Every string in a parsed JSON value, with the keys that lead to it (array items as `[]`). */
+function walkStrings(v: unknown, keys: string[], on: (keys: string[], s: string) => void): void {
+  if (typeof v === "string") on(keys, v);
+  else if (Array.isArray(v)) for (const x of v) walkStrings(x, [...keys, "[]"], on);
+  else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walkStrings(x, [...keys, k], on);
 }

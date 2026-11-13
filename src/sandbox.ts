@@ -91,8 +91,120 @@ const q = (p: string) => `"${p.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
  */
 export function claudeJsonSiblingsRule(home: string, action: "allow" | "deny" = "allow"): string {
   if (home.includes('"')) return "";
-  const re = home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return `(${action} ${action === "allow" ? "file-write*" : "file-read* file-write*"} (regex #"^${re}/\\.claude\\.json"))`;
+  return `(${action} ${action === "allow" ? "file-write*" : "file-read* file-write*"} (regex #"^${reEscape(home)}/\\.claude\\.json"))`;
+}
+
+const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// A path and, when a link sits anywhere on it, where it really is: Seatbelt matches the resolved one.
+const withReal = (p: string): string[] => {
+  try {
+    const r = fs.realpathSync(p);
+    return r === p ? [p] : [p, r];
+  } catch {
+    return [p];
+  }
+};
+
+/**
+ * What an agent on another profile may still READ of the operator's own Claude home: the instructions
+ * and extensions he writes, which a client profile takes from it — its `CLAUDE.md`, `skills/<name>` and
+ * `commands` are often links into `~/.claude`, and its settings can run a hook script kept in
+ * `~/.claude/hooks`. Top-level `*.md` files (CLAUDE.md and the files it imports) are allowed by a rule
+ * of their own. The dirs are the user-level ones Claude Code documents for config a person writes
+ * (https://code.claude.com/docs/en/claude-directory), plus `hooks`, which profile-audit.ts already
+ * knows profiles share. Deliberately absent: `settings.json` (the hooks of every one of his sessions,
+ * and env that can carry a token), `plugins` (claude writes it as it runs, and it can hold a client's
+ * private marketplace), `agent-memory`, and everything claude records as he works — transcripts, prompt
+ * history, file snapshots, pastes, logins. CHRONOS_CLAUDE_SHARED_EXTRA (config.ts) adds his own: a
+ * launcher script a client's MCP server runs, say.
+ */
+export const CLAUDE_HOME_SHARED = ["rules", "skills", "commands", "agents", "output-styles", "workflows", "hooks"];
+
+const warnedExtra = new Set<string>();
+/** CHRONOS_CLAUDE_SHARED_EXTRA as paths relative to `dir` (~/.claude); one outside it is dropped. */
+function sharedExtra(dir: string, raw: string[]): string[] {
+  const out: string[] = [];
+  for (const entry of raw) {
+    const abs = entry.startsWith("~/") ? path.join(path.dirname(dir), entry.slice(2)) : path.resolve(dir, entry);
+    const rel = path.relative(dir, abs);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      if (!warnedExtra.has(entry)) console.warn(`[sandbox] CHRONOS_CLAUDE_SHARED_EXTRA entry is not inside ${dir}, ignoring: ${entry}`);
+      warnedExtra.add(entry);
+      continue;
+    }
+    out.push(rel);
+  }
+  return out;
+}
+
+/** Is `rel` — a path inside ~/.claude, relative to it — something an agent on another profile may read? */
+export function claudeHomeShared(rel: string, extra: string[] = CONFIG.sandbox.claudeShared, h = home): boolean {
+  const parts = path.normalize(rel).split(path.sep).filter(Boolean);
+  if (!parts.length || parts[0] === "..") return false;
+  if (parts.length === 1 && parts[0].endsWith(".md")) return true;
+  if (CLAUDE_HOME_SHARED.includes(parts[0])) return true;
+  const r = parts.join("/");
+  return sharedExtra(path.join(h, ".claude"), extra).some((e) => r === e || r.startsWith(`${e}/`));
+}
+
+/**
+ * Where ~/.claude reaches through symlinks. Seatbelt matches resolved paths, so a `settings.json` or
+ * `hooks` linked in from a dotfiles repo, or a skill linked in from `~/.agents/skills`, is not under
+ * `~/.claude` to the kernel: walled only by its own path, or the agent edits the same file through it.
+ * Top-level entries and one level into the shared dirs, where per-entry links live: a private entry's
+ * target loses read and write, a shared one's write. A target that holds $HOME or one of the agent's own
+ * places is left alone — a link to ~ must not deny the agent everything.
+ */
+function claudeHomeLinks(dir: string, roots: string[], extra: string[], own: string[], h: string): { private: string[]; shared: string[] } {
+  const out = { private: new Set<string>(), shared: new Set<string>() };
+  const take = (link: string, shared: boolean) => {
+    let t: string;
+    try {
+      t = fs.realpathSync(link);
+    } catch {
+      return; // dangling: nothing behind it to protect
+    }
+    if (roots.some((r) => t === r || inside(t, r))) return; // still inside: the dir's own rules decide
+    if (t === "/" || t === h || inside(h, t) || own.some((o) => o === t || inside(o, t))) return;
+    (shared ? out.shared : out.private).add(t);
+  };
+  const links = (d: string) => {
+    try {
+      return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isSymbolicLink());
+    } catch {
+      return [];
+    }
+  };
+  for (const e of links(dir)) take(path.join(dir, e.name), claudeHomeShared(e.name, extra, h));
+  for (const s of [...CLAUDE_HOME_SHARED, ...sharedExtra(dir, extra)]) for (const e of links(path.join(dir, s))) take(path.join(dir, s, e.name), true);
+  return { private: [...out.private], shared: [...out.shared] };
+}
+
+/**
+ * The operator's own CLI homes as an agent that is not his sees them (buildProfile decides who is).
+ * `~/.claude` holds what runs inside every one of his sessions — settings.json hooks, skills, commands,
+ * CLAUDE.md — so a write there is code execution across the workspace boundary; and his transcripts,
+ * prompt history, file snapshots and pastes, so a read there is another workspace's data. Such an agent
+ * gets no write anywhere in it, and reads only CLAUDE_HOME_SHARED (+ top-level `*.md` + the extras);
+ * `~/.codex` (his ChatGPT login) not at all. Resolving a path THROUGH ~/.claude — realpath(3), Node's
+ * realpathSync, both of which a client profile's links into it need — stats the dir itself, so that
+ * one metadata read stays; listing it does not.
+ */
+function claudeHomeWall(own: string[], o: { home?: string; extra?: string[] } = {}): string[] {
+  const h = o.home ?? home;
+  const extra = o.extra ?? CONFIG.sandbox.claudeShared;
+  const dir = path.join(h, ".claude");
+  const roots = withReal(dir);
+  const shared = [...new Set(roots.flatMap((r) => [...CLAUDE_HOME_SHARED, ...sharedExtra(dir, extra)].flatMap((s) => withReal(path.join(r, s)))))];
+  const links = claudeHomeLinks(dir, roots, extra, own, h);
+  return [
+    rule("deny", "file-read* file-write*", [...roots, ...withReal(path.join(h, ".codex"))]),
+    rule("deny", "file-read* file-write*", links.private),
+    `(allow file-read-metadata ${roots.map((r) => `(literal ${q(r)})`).join(" ")})`,
+    rule("allow", "file-read*", shared),
+    ...roots.filter((r) => !r.includes('"')).map((r) => `(allow file-read* (regex #"^${reEscape(r)}/[^/]+\\.md$"))`),
+    rule("deny", "file-write*", links.shared),
+  ];
 }
 
 // One SBPL rule covering both a dir (subpath) and an exact file (literal) for each path.
@@ -158,8 +270,16 @@ function readonlyRules(readonlyDirs: string[], granted: string[], worktrees = tr
   return [rule("deny", "file-write*", readonlyDirs), rule("allow", "file-write*", regrant), rule("deny", "file-write*", sealed)];
 }
 
-/** How the read-only tier treats a checkout: a terminal's (worktrees beside it stay writable) or a look-only one. */
-export type ReadonlyOpts = { readonlyWorktrees?: boolean };
+export type ProfileOpts = {
+  /** How the read-only tier treats a checkout: a terminal's (worktrees beside it stay writable) or a look-only one. */
+  readonlyWorktrees?: boolean;
+  /**
+   * The profile the spawn's workspace is pinned to, when it runs on another one: a walled account handed
+   * to its sibling login (profile-route.ts). One pinned to the operator's own profile keeps his Claude
+   * home there. Absent = the profile it runs on decides, which never widens anything.
+   */
+  pinnedDir?: string | null;
+};
 
 // Build an SBPL profile string for a job, or null for passthrough (off / unsupported platform).
 export function buildProfile(
@@ -176,7 +296,7 @@ export function buildProfile(
   // Secrets paths THIS workspace is trusted with, re-granted after the global deny. Always from
   // `workspaceSandboxAllow()`, never straight from a request body — see that function.
   allowSecrets: string[] = [],
-  ro: ReadonlyOpts = {}
+  ro: ProfileOpts = {}
 ): string | null {
   if (mode === "off" || !sandboxAvailable()) {
     // Egress enforce still wants a kernel wall even when filesystem sandboxing is "off": emit a
@@ -203,6 +323,13 @@ export function buildProfile(
   // Any other profile: the operator's ~/.claude.json and what claude puts beside it, after every re-grant
   // (so not even a cwd of $HOME opens it). Only a workspace's explicit sandbox_allow, later still, can.
   const notOurConfig = ownHome ? "" : claudeJsonSiblingsRule(home, "deny");
+  // …and the rest of his CLI homes (claudeHomeWall), at the same place and with the same escape hatch:
+  // a sandbox_allow naming a path in them reopens that path, read AND write. Every spawn that is not his
+  // gets it — one on another profile, unless its workspace is pinned to his: a walled account routed to
+  // its sibling login is still his workspace's, and a sibling kept in parity by linking his files into
+  // it (settings, transcripts) only works with them.
+  const theirs = !ownHome && !isDefaultClaudeDir(ro.pinnedDir);
+  const homeWall = theirs ? claudeHomeWall(own) : [];
   // Static protected project dirs + dynamic per-workspace isolation deny (other workspaces' roots).
   // `own` is re-granted after, so a job scoped INTO its own repo still works.
   const projectDeny = [...projectDirs, ...denyDirs].filter((d) => !own.includes(d));
@@ -226,8 +353,10 @@ export function buildProfile(
       rule("allow", "file-write*", own),
       ...reDeny,
       ...roRules,
-      // After the read-only walls too: nothing re-grants another profile's view of ~/.claude.json.
+      // After the read-only walls too: nothing re-grants another profile's view of ~/.claude.json,
+      // ~/.claude or ~/.codex — not a cwd of $HOME, an add-dir, or a read-only tier's re-grant.
       notOurConfig,
+      ...homeWall,
       rule("deny", "file-read*", secrets),
       rule("deny", "file-write*", secrets),
       // LAST, so it re-grants a secrets path this workspace is explicitly trusted with. Deliberately
@@ -243,11 +372,12 @@ export function buildProfile(
 
   // strict: confine writes to cwd/add_dirs (+ Claude's own support dirs); read-only elsewhere.
   // ~/.claude.json is NOT here: the operator's own profile has it in `own` (with the siblings rule below),
-  // and no other profile may write it.
+  // and no other profile may write it. ~/.claude only for his own spawns (on his profile it is configDir
+  // already; a sibling login of his links into it) — it used to be granted to every profile.
   const writeDirs = [
     ...own,
     configDir,
-    `${home}/.claude`,
+    ...(theirs ? [] : [defaultClaudeDir()]),
     `${home}/.grok`, // grok CLI session/memory state (shared login; no per-workspace config dir)
     `${home}/.config/opencode`, // opencode config (provider/gateway) + auth
     `${home}/.local/share/opencode`, // opencode auth.json + session store (shared; no per-ws config dir)
@@ -264,9 +394,9 @@ export function buildProfile(
     '(deny file-write* (subpath "/"))',
     rule("allow", "file-write*", writeDirs),
     ownHome ? claudeJsonSiblingsRule(home) : "",
-    // Another workspace's places are write-denied as in guard — the grants above are broad (~/.claude,
-    // the temp dirs) and a client's deny list names the operator's own CLI homes — then the session's
-    // own places re-granted, as guard does.
+    // Another workspace's places are write-denied as in guard — the grants above are broad (the temp
+    // dirs, ~/.claude for the operator's own spawns) and a client's deny list names the operator's own
+    // CLI homes — then the session's own places re-granted, as guard does.
     rule("deny", "file-write*", projectDeny),
     rule("allow", "file-write*", own),
     ...roRules,
@@ -274,6 +404,7 @@ export function buildProfile(
     rule("allow", "file-read*", [...own, ...readonlyDirs]),
     ...reDeny,
     notOurConfig,
+    ...homeWall,
     rule("deny", "file-read*", secrets),
     rule("deny", "file-write*", secrets),
     // Same re-grant as guard, last for the same reason. Without it a strict workspace could never
@@ -297,7 +428,7 @@ export function sandboxWrap(
   lockEgress = false,
   readonlyDirs: string[] = [],
   allowSecrets: string[] = [],
-  ro: ReadonlyOpts = {}
+  ro: ProfileOpts = {}
 ): { cmd: string; cmdArgs: string[] } {
   const profile = buildProfile(mode, cwd, addDirs, configDir, denyDirs, lockEgress, readonlyDirs, allowSecrets, ro);
   if (!profile) {
