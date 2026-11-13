@@ -221,6 +221,7 @@ import { PlacementError } from "./hosts/candidates.js";
 import { hostBriefRoutes } from "./hosts/brief.js";
 import { phoneOwnerGate, phoneUpgradeGate } from "./phone-gate.js";
 import { phoneRoutes } from "./phone-routes.js";
+import { sessionCommandRoutes } from "./session-command-routes.js";
 import { kv } from "./store/kv.js";
 import { noteClaudeStatusline, usageSnapshot } from "./usage-meter.js";
 import { defaultQuickActions, QUICK_ACTIONS_KV, type QuickAction } from "./quick-actions.js";
@@ -3117,6 +3118,7 @@ export function startServer() {
   api.use(assistantRoutes(requireAdmin));
   api.use(parityRoutes(requireAdmin));
   api.use(setupOptionalRoutes(requireAdmin));
+  api.use(sessionCommandRoutes()); // `/` in a terminal's composer: its CLI's commands, skills, plugins (src/session-commands.ts)
 
   // Every live terminal whose goal is ticked, closed in one call — Desk / phone / Telegram ✅ only.
   // Robert and Leads never hit this door (operatorMayCloseTerminal); a Lead has its own scoped one.

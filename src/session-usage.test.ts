@@ -49,6 +49,17 @@ test("turns count prompts, not tool results, and not a subagent's own conversati
   assert.deepEqual(u.models, ["claude-sonnet-5"]);
 });
 
+test("models: one entry each, the one the terminal is on now last — a /model switch and back moves it", () => {
+  const { id } = mkSessionWithTranscript([
+    prompt("start"),
+    assistant({ input_tokens: 1, output_tokens: 1 }, "claude-opus-5-5"),
+    assistant({ input_tokens: 1, output_tokens: 1 }, "claude-sonnet-5"),
+    assistant({ input_tokens: 1, output_tokens: 1 }, "claude-opus-5-5"),
+    assistant({ input_tokens: 1, output_tokens: 1 }, "claude-opus-5-5"),
+  ]);
+  assert.deepEqual(sessionUsage(id)!.models, ["claude-sonnet-5", "claude-opus-5-5"]);
+});
+
 test("cost comes from the CLI's own running total, and a growing file is read incrementally", () => {
   const { id, file } = mkSessionWithTranscript([
     prompt("start"),

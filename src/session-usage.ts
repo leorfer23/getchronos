@@ -154,7 +154,8 @@ function absorb(a: Acc, line: string) {
   if (d.type === "assistant") {
     const u = d.message?.usage;
     const model = d.message?.model;
-    if (model && model !== "<synthetic>" && !a.models.includes(model)) a.models.push(model);
+    // Most recent last: after a `/model` switch the last entry is the model the terminal is on now.
+    if (model && model !== "<synthetic>" && a.models[a.models.length - 1] !== model) a.models = [...a.models.filter((m) => m !== model), model];
     if (!u || model === "<synthetic>") return;
     // A message with thinking + text + a tool call is three lines carrying the same usage: count it once.
     const id = typeof d.message?.id === "string" ? d.message.id : null;
