@@ -17,7 +17,9 @@
  *   phone    window.ChronosPhone.open() when the phone dialog is on this page, else the guide page
  *            (/guide/phone); with neither, the optional step is skipped rather than a dead end.
  *   meet     a canned hello (no model wait), and chips that send REAL messages through the page's
- *            own composer (queueAsk) — so the first answer is the assistant's own.
+ *            own composer (queueAsk) — so the first answer is the assistant's own. Under them one quiet,
+ *            folded line: the optional extras this Mac doesn't have yet (GET /api/setup/optional,
+ *            src/setup-optional.ts), each with the one thing that turns it on; no line when all are on.
  * The page's globals (queueAsk, chatOpen, load, S, LOCK, booted) are only ever used when present.
  */
 (function (root) {
@@ -137,6 +139,30 @@
     ];
   }
 
+  /**
+   * GET /api/setup/optional → the folded line on the last step: the extras that aren't on, or null (all
+   * on, or nothing to read — an older daemon, an error). { on, total, todo: [{ id, label, how }] }.
+   */
+  function extrasList(j) {
+    var items = j && Array.isArray(j.items) ? j.items.filter(function (i) { return i && i.id && i.label && i.how; }) : [];
+    var todo = items.filter(function (i) { return i.status !== "on"; });
+    if (!todo.length) return null;
+    return { on: items.length - todo.length, total: items.length, todo: todo.map(function (i) { return { id: i.id, label: i.label, how: i.how }; }) };
+  }
+
+  /**
+   * One item's how-to, split so the part to paste is code and a guide page is a link:
+   * { lead, cmd, tail, link } — every part a plain string, "" when absent.
+   */
+  function extraHow(how) {
+    var h = String(how || ""), m;
+    if ((m = /^In the Chronos folder: (.+)$/.exec(h))) return { lead: "In the Chronos folder:", cmd: m[1], tail: "", link: "" };
+    if ((m = /^((?:brew|bash|npm|npx|gh|curl) [^,]+?)(?:, then (.+))?$/.exec(h))) return { lead: "", cmd: m[1], tail: m[2] ? "then " + m[2] : "", link: "" };
+    if ((m = /^((?:GET|POST|PUT) \/api\/\S+(?: \{.*\})?) — (.+)$/.exec(h))) return { lead: "", cmd: m[1], tail: m[2], link: "" };
+    if ((m = /^docs\/guide\/([a-z0-9-]+)\.md\b\s*(.*)$/.exec(h))) return { lead: "", cmd: "", tail: m[2].replace(/^\((.*)\)$/, "$1"), link: "/guide/" + m[1] };
+    return { lead: h, cmd: "", tail: "", link: "" };
+  }
+
   /** "Ada  O’Neil " → "Ada O'Neil": the server's own cleaning (settings.ts cleanAssistantName). */
   function cleanName(s) {
     return String(s || "").normalize("NFC").replace(/[\u2018\u2019\u02bc]/g, "'").replace(/\u00a0/g, " ").replace(/ {2,}/g, " ").trim();
@@ -144,7 +170,7 @@
 
   var pure = { STEPS: STEPS, shouldShow: shouldShow, slugify: slugify, baseName: baseName, cliState: cliState, cliRows: cliRows,
     cliLine: cliLine, preferredBackend: preferredBackend, parityLine: parityLine, plainError: plainError, intro: intro, chips: chips,
-    cleanName: cleanName };
+    cleanName: cleanName, extrasList: extrasList, extraHow: extraHow };
 
   if (!root.document || !root.fetch) { root.DeskWelcome = pure; return; }
 
@@ -187,6 +213,7 @@
     status: null, statusAt: 0, parity: null, more: false, busy: {}, result: {},
     folder: "", pname: "", project: null, creating: false,
     phoneOpened: false, phoneGuide: null,
+    extras: null, extrasOpen: false,
   };
 
   var CSS = [
@@ -234,6 +261,13 @@
     ".dw-chips { display:flex; flex-wrap:wrap; gap:8px; }",
     ".dw-chips button { border:1px solid var(--line); background:var(--surface); color:var(--ink); border-radius:999px; padding:6px 14px; font:inherit; font-size:14.5px; font-weight:600; cursor:pointer; }",
     ".dw-chips button:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }",
+    "#dlg-welcome .dw-x { border-top:1px solid var(--line); padding-top:10px; }",
+    "#dlg-welcome .dw-x > button { border:0; background:none; padding:0; font:inherit; font-size:13.5px; color:var(--muted); cursor:pointer; }",
+    "#dlg-welcome .dw-x > button:hover { color:var(--ink); }",
+    "#dlg-welcome .dw-x ul { list-style:none; margin:8px 0 0; padding:0; max-height:38vh; overflow:auto; display:flex; flex-direction:column; gap:9px; }",
+    "#dlg-welcome .dw-x li { font-size:13.5px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere; }",
+    "#dlg-welcome .dw-x li b { display:block; color:var(--ink); font-weight:600; font-size:14px; }",
+    "#dlg-welcome .dw-x code { font:12.5px ui-monospace,\"SF Mono\",Menlo,monospace; background:var(--surface-2); border-radius:6px; padding:1px 6px; color:var(--ink); }",
     ".dw-empty { margin:auto; max-width:440px; padding:24px 12px; display:flex; flex-direction:column; align-items:center; gap:10px; text-align:center; color:var(--muted); font-size:15.5px; line-height:1.5; }",
     ".dw-empty b { color:var(--ink); font-size:18px; font-weight:650; }",
     ".dw-empty .dw-chips { justify-content:center; margin-top:4px; }",
@@ -306,7 +340,8 @@
         title: "Meet " + AN.get(),
         sub: "",
         body: '<div class="dw-bub">' + lines.map(function (l) { return "<p>" + esc(l) + "</p>"; }).join("") + "</div>" +
-          '<div class="dw-chips">' + chips(W.project && W.project.slug).map(function (c, i) { return '<button type="button" data-chip="' + i + '">' + esc(c.label) + "</button>"; }).join("") + "</div>",
+          '<div class="dw-chips">' + chips(W.project && W.project.slug).map(function (c, i) { return '<button type="button" data-chip="' + i + '">' + esc(c.label) + "</button>"; }).join("") + "</div>" +
+          extrasHtml(),
         primary: { label: "Done" },
       };
     },
@@ -328,6 +363,26 @@
     else act = c.install ? b("Copy", "copy") : "";
     return '<div class="dw-cli ' + st + '"><span class="ic">' + (st === "ready" ? "✓" : "–") + '</span><span class="nm">' + esc(c.label || c.id) + "</span>" +
       '<span class="act">' + act + "</span>" + '<span class="' + subCls + '">' + esc(sub) + cmd + "</span></div>";
+  }
+
+  /** The folded line under the chips; open, one entry per extra with its how-to. Nothing when all are on. */
+  function extrasHtml() {
+    var x = extrasList(W.extras);
+    if (!x) return "";
+    var head = '<button type="button" data-act="extras" aria-expanded="' + (W.extrasOpen ? "true" : "false") + '">Optional extras — ' +
+      x.todo.length + " you can add later " + (W.extrasOpen ? "▾" : "▸") + "</button>";
+    if (!W.extrasOpen) return '<div class="dw-x">' + head + "</div>";
+    var li = x.todo.map(function (i) {
+      var h = extraHow(i.how);
+      var how = [
+        h.lead ? esc(h.lead) : "",
+        h.cmd ? "<code>" + esc(h.cmd) + "</code>" : "",
+        h.link ? '<a class="dw-link" href="' + esc(h.link) + '" target="_blank" rel="noopener">The guide →</a>' : "",
+        h.tail ? esc(h.tail) : "",
+      ].filter(Boolean).join(" ");
+      return "<li><b>" + esc(i.label) + "</b>" + how + "</li>";
+    }).join("");
+    return '<div class="dw-x">' + head + "<ul>" + li + "</ul></div>";
   }
 
   function parityHtml() {
@@ -368,7 +423,7 @@
     if (STEPS[step] === "phone" && !phoneDialog() && W.phoneGuide === false) step++;
     W.step = step; say(""); render();
     if (STEPS[step] === "agents" && !W.status) loadStatus(false);
-    if (STEPS[step] === "meet") markDone();
+    if (STEPS[step] === "meet") { markDone(); if (!W.extras) loadExtras(); }
   }
   function phoneDialog() { return !!(root.ChronosPhone && typeof root.ChronosPhone.open === "function"); }
   function next() { if (W.step < STEPS.length - 1) go(W.step + 1); else finish(); }
@@ -388,11 +443,21 @@
 
   function loadStatus(fresh) {
     W.statusAt = Date.now();
+    if (!W.extras) loadExtras();
     return Promise.all([call("GET", "/setup/status" + (fresh ? "?fresh=1" : "")), call("GET", "/setup/parity")]).then(function (rs) {
       var s = rs[0], p = rs[1];
       W.status = s.ok && s.json && Array.isArray(s.json.clis) && s.json.clis.length ? s.json : { unavailable: true };
       W.parity = p.ok ? p.json : null;
       if (W.open && STEPS[W.step] === "agents") render();
+    });
+  }
+
+  /** Asked once, early (the probes take up to a second); an error or a 404 just means no line. */
+  function loadExtras() {
+    W.extras = {};
+    return call("GET", "/setup/optional").then(function (r) {
+      W.extras = r.ok ? r.json : {};
+      if (W.open && STEPS[W.step] === "meet") render();
     });
   }
 
@@ -565,6 +630,12 @@
     if (act === "skipall") return finish();
     if (act === "skip") return next();
     if (act === "more") { W.more = true; return render(); }
+    if (act === "extras") {
+      W.extrasOpen = !W.extrasOpen; render();
+      var x = W.dlg.querySelector('[data-act="extras"]'); // render() focuses Done; stay on the toggle
+      if (x) x.focus();
+      return;
+    }
     if (act === "recheck") { W.result = {}; say("Checking again…"); render(); return loadStatus(true).then(function () { say(""); render(); }); }
     if (act === "parity") return bringTools();
     if (act === "test" || act === "install" || act === "signin" || act === "copy") return cliAct(act, t.getAttribute("data-id"));

@@ -17,7 +17,8 @@ import { workspaces } from "./store.js";
 import { installCli, loginCli, resolveBin, scrub, setupStatus, smokeCli, versionFrom, type CliStatus } from "./setup-check.js";
 import { claudeAuthFrom, claudeBackend } from "./backends/claude.js";
 import { codexBackend } from "./backends/codex.js";
-import { grokAuthFrom } from "./backends/grok.js";
+import { backendReady } from "./backends/index.js";
+import { grokEntries, grokSignedIn, signedInFrom } from "./backends/grok-auth.js";
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "setup-check-")));
 const bin = path.join(tmp, "bin");
@@ -28,6 +29,15 @@ const log = path.join(tmp, "calls.log");
 const flags = path.join(tmp, "flags");
 const flag = (name: string, on: boolean) => { fs.mkdirSync(flags, { recursive: true }); if (on) fs.writeFileSync(path.join(flags, name), "1"); else fs.rmSync(path.join(flags, name), { force: true }); };
 const EMAIL = "ops@acme.test";
+// grok's home is a temp dir too (GROK_HOME): its sign-in is read from auth.json there, never this machine's.
+const grokDir = path.join(tmp, "grok-home");
+const savedGrokHome = process.env.GROK_HOME;
+/** auth.json the way `grok login` leaves it — one entry per sign-in (values here are dummies). */
+const grokAuth = (e: Record<string, unknown> | null) => {
+  fs.mkdirSync(grokDir, { recursive: true });
+  if (e) fs.writeFileSync(path.join(grokDir, "auth.json"), JSON.stringify({ "https://auth.x.ai::client": { key: "dummy-access", user_id: "u1", email: EMAIL, ...e } }));
+  else fs.rmSync(path.join(grokDir, "auth.json"), { force: true });
+};
 
 const FAKE = `#!/usr/bin/env node
 const fs = require("fs"), path = require("path");
@@ -77,12 +87,15 @@ before(() => {
   for (const k of Object.keys(CONFIG.profiles)) delete CONFIG.profiles[k];
   Object.assign(CONFIG.profiles, { claude: profile, "claude-acme": other });
   (CONFIG as any).defaultProfile = "claude";
+  process.env.GROK_HOME = grokDir;
+  grokAuth(null);
 });
 after(() => {
   Object.assign(CONFIG, { claudeBin: saved.claude, codexBin: saved.codex, cursorBin: saved.cursor, grokBin: saved.grok, opencodeBin: saved.opencode });
   for (const k of Object.keys(CONFIG.profiles)) delete CONFIG.profiles[k];
   Object.assign(CONFIG.profiles, saved.profiles);
   (CONFIG as any).defaultProfile = saved.defaultProfile;
+  if (savedGrokHome === undefined) delete process.env.GROK_HOME; else process.env.GROK_HOME = savedGrokHome;
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -120,7 +133,7 @@ test("status asks each CLI the way an agent runs it: the profile dir as CLAUDE_C
   assert.ok(calls().filter((c) => c.name === "claude" && c.args[0] === "auth").every((c) => c.CLAUDE_CONFIG_DIR === profile || c.CLAUDE_CONFIG_DIR === other));
 
   assert.equal(row(s, "cursor-agent").loggedIn, true);
-  assert.equal(row(s, "grok").loggedIn, false, "grok models exits 0 when logged out — the words decide");
+  assert.equal(row(s, "grok").loggedIn, false, "no auth.json: signed out");
   assert.equal(row(s, "opencode").loggedIn, true);
   assert.equal(row(s, "opencode").authDetail, "2 providers signed in");
   assert.ok(!JSON.stringify(s).includes(EMAIL) && !JSON.stringify(s).includes("org-1234"), "no email, no org id");
@@ -284,12 +297,55 @@ test("parsers keep the answer and drop the account", () => {
   assert.deepEqual(claudeAuthFrom("Not logged in. Run claude auth login to authenticate."), { loggedIn: null, detail: null });
   assert.deepEqual(claudeAuthFrom(JSON.stringify({ loggedIn: "yes" })), { loggedIn: null, detail: null });
   assert.deepEqual(claudeAuthFrom(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "<script>" })), { loggedIn: true, detail: "claude.ai subscription" });
-  assert.equal(grokAuthFrom("You are logged in with grok.com.\n\nDefault model: grok-4.5"), true);
-  assert.equal(grokAuthFrom("You are not authenticated.\n\nDefault model: grok-4.6"), false);
-  assert.equal(grokAuthFrom("Available models: grok-4.5"), null);
   assert.equal(versionFrom("2.1.322 (Claude Code)"), "2.1.322");
   assert.equal(versionFrom("codex-cli 0.144.1"), "0.144.1");
   assert.equal(versionFrom("2026.11.05-86047df"), "2026.11.05-86047df");
   assert.equal(versionFrom("grok 1.0.70 (f50904eaee6c) [stable]"), "1.0.70");
   assert.equal(scrub(`\x1b[31mfailed for ${EMAIL}\x1b[0m\n  please retry`), "failed for <email> please retry");
+});
+
+test("grok: the setup check and the failover chain give ONE answer, from grok's credentials file — not from `grok models`", async () => {
+  const hour = 3600_000;
+  const iso = (ms: number) => new Date(Date.now() + ms).toISOString();
+  const both = async () => {
+    const s = await setupStatus({ fresh: true, appDirs: [tmp], platform: "darwin" });
+    return [row(s, "grok").loggedIn, backendReady("grok")];
+  };
+  try {
+    // The fake `grok models` always says "You are not authenticated." — what grok 1.0.70 prints for a
+    // session whose 6-hour access token ran out, while the same run refreshes it. Its words decide nothing.
+    grokAuth({ expires_at: iso(-hour), refresh_token: "dummy-refresh" });
+    assert.deepEqual(await both(), [true, true], "access token expired, refresh token there: grok refreshes on the next call");
+    assert.equal(row(await setupStatus({ fresh: true, appDirs: [tmp], platform: "darwin" }), "grok").authDetail, "grok.com account");
+    grokAuth({ expires_at: iso(hour) });
+    assert.deepEqual(await both(), [true, true], "unexpired access token");
+    grokAuth({ expires_at: iso(-hour) });
+    assert.deepEqual(await both(), [false, false], "expired and nothing to refresh it with: grok asks for a new sign-in");
+    fs.writeFileSync(path.join(grokDir, "auth.json"), "{}");
+    assert.deepEqual(await both(), [false, false], "an empty file (what an older check counted as signed in)");
+    grokAuth(null);
+    assert.deepEqual(await both(), [false, false], "no file");
+    assert.ok(!calls().some((c) => c.name === "grok" && c.args[0] === "models"), "never spawned to decide");
+  } finally {
+    grokAuth(null);
+  }
+});
+
+test("grok sign-in rule: presence and expiry only — nothing secret kept", () => {
+  const now = Date.parse("2026-11-13T12:00:00Z");
+  const e = grokEntries(JSON.stringify({ a: { key: "tok", refresh_token: "r", expires_at: "2026-11-13T06:00:00Z" }, b: { nokey: true }, c: "x" }));
+  assert.deepEqual(e, [{ refresh: true, expiresAt: Date.parse("2026-11-13T06:00:00Z") }]);
+  assert.equal(signedInFrom(e, now), true);
+  assert.equal(signedInFrom(grokEntries(JSON.stringify({ a: { key: "tok", expires_at: "2026-11-13T13:00:00Z" } })), now), true);
+  assert.equal(signedInFrom(grokEntries(JSON.stringify({ a: { key: "tok", expires_at: "2026-11-13T11:00:00Z", refresh_token: "" } })), now), false);
+  assert.equal(signedInFrom(grokEntries(JSON.stringify({ a: { key: "", refresh_token: "r" } })), now), false);
+  assert.deepEqual(grokEntries("not json"), []);
+  assert.deepEqual(grokEntries("[]"), []);
+  const home = fs.mkdtempSync(path.join(tmp, "grok-rule-"));
+  assert.equal(grokSignedIn({ GROK_HOME: path.join(home, "none") }, home), false);
+  fs.mkdirSync(path.join(home, ".grok"));
+  fs.writeFileSync(path.join(home, ".grok", "auth.json"), JSON.stringify({ a: { key: "tok", refresh_token: "r" } }));
+  assert.equal(grokSignedIn({}, home), true, "~/.grok when GROK_HOME is unset");
+  fs.writeFileSync(path.join(home, ".grok", "auth.json"), JSON.stringify({}));
+  assert.equal(grokSignedIn({}, home), false, "a rewrite (grok logout) is seen, not cached");
 });

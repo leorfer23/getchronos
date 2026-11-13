@@ -25,7 +25,7 @@ import { workspaces } from "./store.js";
 import { getBackend } from "./backends/index.js";
 import { claudeAuthStatus } from "./backends/claude.js";
 import { claudeHomeEnv, codexHomeEnv, withClaudeHome } from "./parity-env.js";
-import { grokAuthFrom } from "./backends/grok.js";
+import { grokSignedIn } from "./backends/grok-auth.js";
 import type { AgentBackend } from "./backends/types.js";
 import { resultText } from "./summarize.js";
 import { shellPath } from "../bin/host-core.mjs";
@@ -100,7 +100,7 @@ function killGroup(pid: number | undefined): void {
 }
 
 type Probe = { loggedIn: boolean | null; detail: string | null };
-type ProbeCtx = { bin: string; env: NodeJS.ProcessEnv; exec: Exec; dir: string; fresh: boolean };
+type ProbeCtx = { bin: string; env: NodeJS.ProcessEnv; exec: Exec; dir: string; fresh: boolean; home: string };
 
 type Def = {
   id: CliId;
@@ -204,9 +204,11 @@ const DEFS: Record<CliId, Def> = {
     installNeeds: ["curl", "bash"],
     loginArgs: ["login"],
     tryArgs: `-p "${SMOKE_PROMPT}"`,
+    // Its credentials file, by grok's own rule — the same check the failover chain uses (backendReady).
+    // Not `grok models`: that says "not authenticated" for a session whose 6-hour access token ran out
+    // but refreshes on the next call (src/backends/grok-auth.ts).
     auth: async (c) => {
-      const r = await c.exec(c.bin, ["models"], { env: c.env, timeoutMs: 15_000 });
-      const v = r.code === null ? null : grokAuthFrom(`${r.stdout}\n${r.stderr}`);
+      const v = grokSignedIn(process.env, c.home);
       return { loggedIn: v, detail: v ? "grok.com account" : null };
     },
   },
@@ -355,7 +357,7 @@ async function cliStatus(def: Def, d: Required<Omit<StatusDeps, "fresh">> & { fr
   if (!bin) return row;
   const [ver, auth] = await Promise.all([
     d.exec(bin, ["--version"], { env, timeoutMs: 5_000 }),
-    def.auth({ bin, env, exec: d.exec, dir, fresh: d.fresh }).catch((): Probe => ({ loggedIn: null, detail: null })),
+    def.auth({ bin, env, exec: d.exec, dir, fresh: d.fresh, home: d.home }).catch((): Probe => ({ loggedIn: null, detail: null })),
   ]);
   row.version = versionFrom(`${ver.stdout}\n${ver.stderr}`);
   row.loggedIn = auth.loggedIn;
@@ -540,7 +542,7 @@ export function loginCli(id: CliId, o: { pollMs?: number; timeoutMs?: number; ho
     if (!bin) return { ok: false, message: `${def.label} isn't installed yet` };
     const dir = defaultAgentDir();
     const env = agentEnv(def, dir, home);
-    const probe = async () => (await def.auth({ bin, env, exec: defaultExec, dir, fresh: true }).catch(() => ({ loggedIn: null, detail: null }))).loggedIn;
+    const probe = async () => (await def.auth({ bin, env, exec: defaultExec, dir, fresh: true, home }).catch(() => ({ loggedIn: null, detail: null }))).loggedIn;
     if ((await probe()) === true) return { ok: true, message: "already signed in" };
     const command = `${envPrefixFor(def, dir, home)}${shownBin(def.bin(), home)} ${def.loginArgs.join(" ")}`;
     let exited = false, exitCode: number | null = null;

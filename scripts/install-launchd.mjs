@@ -7,7 +7,7 @@
 //
 // Usage:
 //   npm run install:launchd            # daemon only
-//   npm run install:launchd -- --all   # daemon + whisper + cloudflared (skips ones not set up)
+//   npm run install:launchd -- --all   # every agent that is set up: whisper, tts, the app, cloudflared… (voice: docs/guide/voice.md)
 //   npm run install:launchd -- --print # render to stdout, install nothing
 //   npm run install:launchd -- --only sh.chronos.tts   # that one agent, nothing else restarted
 

@@ -4,9 +4,13 @@ The assistant runs your agents the way a lead runs a team. He is called **Robert
 another name. He plans, opens terminals, unblocks, checks quality and tells you what matters. He does
 not write the code himself — agents do that.
 
-He runs Chronos himself — projects, terminals, tickets, jobs, memory, briefs, settings. Work inside a project
-(code, research, writing) goes to an agent terminal with your request, and he tells you which in one line.
-⚙ Settings → Robert → **What Robert does himself**.
+**Robert runs Chronos, agents do the work.** He does the admin himself — projects, terminals,
+tickets, jobs, memory, briefs, settings — with as many Chronos calls as it takes. Work inside a project
+(code, research, writing) goes to an agent terminal. He still answers a question about a project when a
+few lookups settle it, but the fifth call outside Chronos in one turn (reading files, the web, a shell
+command) ends the turn: a terminal opens in that project with your request and what he found, and he
+names it in one line. Your projects' folders are read-only to him. The setting is ⚙ Settings → Robert →
+**What Robert does himself**: `answers` (the default) or `anything` (no limits, as before).
 
 ## Talk to him
 
@@ -70,12 +74,15 @@ changes how every agent in that project works or reports.
 
 ## Rename him
 
-The first-run welcome asks for a name. Change it later in ⚙ Settings, or with
-`PUT /api/assistant {"name": "…"}`. Only the name you see and hear changes.
+The first-run welcome asks for a name. Change it later in ⚙ Settings → Robert (the group carries his
+current name) → **Name**, or with `PUT /api/assistant {"name": "…"}`. Up to 24 letters, digits,
+spaces or `. - '`. Only the name you see and hear changes — on the Desk, the phone, out loud and on
+Telegram; ids and commands stay `robert`.
 
 ---
 
-**Under the hood:** persona `agents/robert/` + `agents/_blocks/` · one per project
+**Under the hood:** persona `agents/robert/` + `agents/_blocks/` · what he does himself
+`src/robert-hands.ts` · his name `src/assistant-routes.ts`, `src/settings.ts` · one per project
 `src/thread-router.ts` · wakes `src/robert-drive.ts`, `src/terminal-prompts.ts`, `src/robert-sweep.ts`, `src/robert-selfwake.ts`,
 `src/wake-queue.ts` · watches `src/watches.ts` · no-send `src/no-send.ts` · lessons `src/lessons.ts` ·
 ☀️ `src/startday.ts`, 🌙 `src/nextday.ts` · switches `src/settings.ts` ·

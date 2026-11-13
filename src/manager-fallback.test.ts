@@ -99,13 +99,16 @@ test("withProviderFallback: non-limit primary error propagates", async () => {
   assert.equal(isProviderLimited("t-fail"), false);
 });
 
+/** auth.json the way `grok login` leaves it (dummy values): a sign-in grok can refresh (backends/grok-auth.ts). */
+const GROK_SIGNED_IN = JSON.stringify({ "https://auth.x.ai::c": { key: "dummy", refresh_token: "dummy" } });
+
 /**
  * A grok this test controls — installed and signed in (its auth file) in a tmp dir — so no result
  * depends on whether the machine running the suite has grok, or a grok login. `body` is its script.
  */
 function fakeGrok(body = "cat >/dev/null 2>&1\necho 'chronos tests: fake grok failed' >&2\nexit 1"): { dir: string; restore: () => void } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mf-fake-grok-"));
-  fs.writeFileSync(path.join(dir, "auth.json"), "{}");
+  fs.writeFileSync(path.join(dir, "auth.json"), GROK_SIGNED_IN);
   fs.writeFileSync(path.join(dir, "grok"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   const saved = { bin: CONFIG.grokBin, home: process.env.GROK_HOME, backend: CONFIG.agent.fallbackBackend, chain: CONFIG.agent.fallbackChain };
   (CONFIG as any).grokBin = path.join(dir, "grok");
@@ -339,7 +342,7 @@ test("withProviderFallback: grok fails → the same turn runs on the next backen
   const swaps: string[] = [];
   // A grok that is installed and signed in (its auth file) but out of balance: it runs, and fails.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mf-grok-"));
-  fs.writeFileSync(path.join(dir, "auth.json"), "{}");
+  fs.writeFileSync(path.join(dir, "auth.json"), GROK_SIGNED_IN);
   fs.writeFileSync(path.join(dir, "grok"), "#!/bin/sh\ncat >/dev/null 2>&1\necho '402 Payment Required: usage balance exhausted' >&2\nexit 1\n", { mode: 0o755 });
   try {
     CONFIG.agent.fallbackBackend = "grok";
@@ -391,7 +394,7 @@ test("only engines this Mac can run: grok needs its binary and its login, cursor
     fs.writeFileSync(path.join(dir, "grok"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     (CONFIG as any).grokBin = path.join(dir, "grok");
     assert.equal(fallbackUsable("grok"), false, "installed but never signed in");
-    fs.writeFileSync(path.join(dir, "auth.json"), "{}");
+    fs.writeFileSync(path.join(dir, "auth.json"), GROK_SIGNED_IN);
     assert.equal(fallbackUsable("grok"), true);
     fs.writeFileSync(path.join(dir, "cursor-agent"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     (CONFIG as any).cursorBin = path.join(dir, "cursor-agent");

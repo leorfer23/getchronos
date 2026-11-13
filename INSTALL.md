@@ -69,6 +69,9 @@ The last thing setup prints (on stdout, with `--json`) is the report:
   "desk": { "opened": "app", "reopen": "Chronos is in your Applications folder" } }
 ```
 
+The report also carries `optional`: extras this Mac doesn't have yet (a nicer voice, speech-to-text,
+Telegram, the phone…), each with its `how`. None is needed — don't install them unless the person asks.
+
 Exit codes: **0** Chronos is running and at least one agent CLI works · **2** nothing could be
 installed or signed in because nobody could be asked — run again with `--yes` · **1** something else;
 each check with `"ok": false` carries its `fix`.

@@ -5,7 +5,8 @@ Short pages, one feature each. Start with the first one. The daemon also serves 
 
 ## Start here
 
-- [Why Chronos, not plain terminals](why-chronos.md) — what changes, and your first session in 5 minutes.
+- [Why Chronos, not plain terminals](why-chronos.md) — what changes, install, and your first session in 5 minutes.
+  Installing with an agent instead: [INSTALL.md](../../INSTALL.md).
 
 ## Every day
 
@@ -24,7 +25,7 @@ Short pages, one feature each. Start with the first one. The daemon also serves 
 
 ## Reach and safety
 
-- [Phone](phone.md) — pair your phone and triage from anywhere.
+- [Phone](phone.md) — your phone over Tailscale in about a minute; triage from anywhere.
 - [Voice](voice.md) — talk to the assistant out loud.
 - [More than one Mac](hosts.md) — run agents on every computer you own.
 - [Safety](safety.md) — sandbox, protected folders, budgets, the burn guard, credentials.

@@ -107,11 +107,13 @@ test("doctor checklist: a joined host with tools is all green; missing pieces sa
   assert.match(text, /✓ grok \(optional\)/, "a missing agent CLI is fine while another one exists");
 });
 
-test("cli auth: grok by its auth file; cursor-agent by key or `status` wording, a locked keychain is unknown", async () => {
+test("cli auth: grok by a usable sign-in in its auth file; cursor-agent by key or `status` wording, a locked keychain is unknown", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "inv-auth-"));
   assert.equal(await cliAuth("grok", "/x/grok", {}, home), "no");
   fs.mkdirSync(path.join(home, ".grok"));
   fs.writeFileSync(path.join(home, ".grok", "auth.json"), "{}");
+  assert.equal(await cliAuth("grok", "/x/grok", {}, home), "no", "a file with no sign-in in it");
+  fs.writeFileSync(path.join(home, ".grok", "auth.json"), JSON.stringify({ "https://auth.x.ai::c": { key: "dummy", refresh_token: "dummy" } }));
   assert.equal(await cliAuth("grok", "/x/grok", {}, home), "yes");
   assert.equal(await cliAuth("cursor-agent", "/nonexistent/cursor-agent", { CURSOR_API_KEY: "k" }, home), "yes");
   assert.equal(await cliAuth("claude", "/x/claude", {}, home), undefined);

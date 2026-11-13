@@ -46,7 +46,7 @@
 | **Ticket** | A unit of work as a `.md` file (frontmatter + body). DB row is the index. | `.md` file |
 | **Job** | A Chronos job: a dispatched agent task (cron / webhook / manual), optionally bound to a ticket + workspace + backend. | `jobs` row |
 | **Run** | One execution of a job (streamed events, cost, tokens, verdict). | `runs` / `run_events` |
-| **Backend** | Who runs it: `claude-code` \| `cursor-agent` \| `codex` \| `openai-api`. | per job/session |
+| **Backend** | Who runs it: `claude-code` \| `codex` \| `cursor-agent` \| `grok` \| `opencode` (local CLIs), `cursor-cloud` (Cursor's VMs), `openai-api` (one-shot only), `mock` (tests). See §4. | per job/session |
 | **Review** | Audit state of a finished build: pending → approved / changes_requested / merged. Carries the evidence-gate results and the change's risk tier. | `reviews` row |
 | **Session** | An interactive PTY terminal running an agent CLI, sandboxed to a workspace, AI-titled/summarized. | `sessions` row + live pty |
 | **Note / Memo** | Per-workspace markdown vault; notes flagged `context` auto-inject into every agent prompt. | `.md` + `notes` row |
@@ -117,10 +117,14 @@ event + `RunResult` shape, so search/review/cost work identically regardless of 
 
 | Registry key | Binary | State | Notes |
 |---|---|---|---|
-| `claude-code` (alias `claude`) | `claude` (`CHRONOS_CLAUDE_BIN`) | prod | `-p --output-format stream-json`, `--session-id`, resume, `--append-system-prompt`, `--max-budget-usd`, `CLAUDE_CONFIG_DIR`. |
+| `claude-code` (alias `claude`) | `claude` (`CHRONOS_CLAUDE_BIN`) | prod | `-p --output-format stream-json`, `--session-id`, resume, `--append-system-prompt`, `--max-budget-usd`. `CLAUDE_CONFIG_DIR` = a named profile's dir; the default profile runs on the person's own setup without it once switched (`src/parity-env.ts`). |
 | `cursor-agent` (alias `cursor`) | `cursor-agent` | wired | `-p --output-format stream-json --force`. No resume, no system-prompt channel (folded into prompt). `checkAuth`/`login` via `cursor-agent status`/`login`. Result schema mapped defensively — **needs a live run to confirm cost/token fields.** |
-| `codex` | `codex` (`CHRONOS_CODEX_BIN`) | **UNTESTED** | `codex exec … --json --dangerously-bypass-approvals-and-sandbox`, `CODEX_HOME`=configDir. Binary not installed; cost/tokens report **null** (item text + usage arrive in separate JSONL events, unmergeable in a stateless backend). |
+| `codex` | `codex` (`CHRONOS_CODEX_BIN`) | wired | `codex exec … --json --dangerously-bypass-approvals-and-sandbox`, resume via `codex exec resume`. Flags and events written from OpenAI's docs (see the header of `codex.ts`); `npm run setup` installs it, signs it in and sends it one test prompt. Tokens come from `turn.completed`, cost is **estimated** from them (codex reports no dollars). `CODEX_HOME` = a named profile's dir; the default profile runs on `~/.codex` (`src/parity-env.ts`). |
+| `grok` (alias `grok-cli`) | `grok` (`CHRONOS_GROK_BIN`, default `~/.grok/bin/grok`) | wired | `-p --output-format streaming-json --permission-mode bypassPermissions`, `--session-id`/`--resume`, `--rules` for the system channel. One `~/.grok` login for every workspace (no config-dir env). Signed in = its `auth.json` holds a usable sign-in (`src/backends/grok-auth.ts`); cost estimated from tokens. |
+| `opencode` | `opencode` (`CHRONOS_OPENCODE_BIN`) | wired | `opencode run <PROMPT> --format json --auto`. Runs keyless on opencode's free models; any provider in opencode's own config (or the shared AI Gateway key) adds more. |
+| `cursor-cloud` | — (Cursor's API) | wired | Cursor Cloud Agents on Cursor-hosted VMs (`CURSOR_API_KEY`). No local process: launch → SSE → PR. |
 | `openai-api` | `node` → `scripts/openai-oneshot.mjs` | one-shot only | Any OpenAI-compatible `/chat/completions` (`OPENAI_API_KEY`/`OPENAI_BASE_URL` from the ws secrets file). `buildArgs` **throws** — not dispatchable for builds; used for cheap internal LLM calls. |
+| `mock` | `node -e` | tests | A scripted stand-in driven by `!directives` in the goal (`src/backends/mock.ts`); zero tokens. |
 
 **`oneShot()` guardrails (`OneShotOpts`):** `allowedTools` + `maxBudgetUsd`, enforced by the claude
 backend. The verifier runs `Read,Bash` @ **$0.50**; the Telegram manager agent runs `Bash,Read` @
@@ -245,7 +249,14 @@ so an agent is never sent looking for Slack tools that aren't installed.
 
 **The workspace inbox — "something needs you"** (`src/inbox.ts`, `src/inbox-dispatch.ts`,
 `src/inbox-routes.ts`, table `inbox_items`, migration 138): one place per client for what came *to the
-operator*, as opposed to what the fleet found to do. Two feeds, neither of which ever starts work:
+operator*, as opposed to what the fleet found to do. Two feeds; neither one answers anyone. What turns
+a row into work is the dispatcher (`src/inbox-dispatch.ts`): the operator's Dispatch button, or — on by
+default — **auto-dispatch** (`src/inbox-autodispatch.ts`, setting `inbox.auto_dispatch` /
+`CHRONOS_INBOX_AUTODISPATCH=0` to turn it off): each new row with work in it opens its own Desk terminal
+in that client after 2 minutes (`CHRONOS_INBOX_AUTO_GRACE_SEC`=120), at most 3 at a time per workspace
+(`CHRONOS_INBOX_AUTO_PER_WS`). A quick first pass (`src/inbox-triage.ts`, setting `inbox.triage`)
+closes thanks, FYIs, shared links and repeats instead. The terminal investigates and asks the operator
+in the terminal before anything leaves Chronos.
 - **Slack** — the read-only `slack-triage:<slug>` job (haiku, business-hours cron, gated by
   `slack_config.triage`) files each new DM / @mention / self-note with `mc inbox add --source slack
   --kind dm|mention|self_note --title … --why … --actor … --url <permalink> --key <channel:ts>
@@ -665,8 +676,9 @@ before timed events.
 
 - **Notes / memos** (`notes.ts`): per-workspace markdown vault under `~/chronos/notes/<slug>/`. Notes
   flagged `context` (★) are concatenated (bounded 8k, guarded) into **every** agent's system prompt via
-  `agentContext`. Sessions auto-distill durable learnings into a `session-learnings` memo (opt-in
-  `CHRONOS_AUTO_MEMORY`, not context-flagged until the operator promotes it).
+  `agentContext`. Sessions auto-distill durable learnings into a `session-learnings` memo (on by
+  default — `CHRONOS_AUTO_MEMORY=0` or ⚙ Settings → Memory turns it off; not context-flagged until the
+  operator promotes it).
 - **Robert's brief + the worklog** (`briefs.ts`, `worklog.ts`): one standing page per workspace,
   `notes/<ws>/robert-brief.md` — what the project is, what the operator wants, how work is done there,
   then the two sections nothing but the daemon writes: **`## Recently`** (the last
@@ -867,8 +879,9 @@ activity + cost ledgers; Telegram control plane; backups, monitor and recovery c
 None of these has a build step. `marked` and `DOMPurify` are vendored under `static/vendor/`.
 
 **Remaining debt / caveats**
-- **`codex` backend is untested** — no binary installed; cost/tokens report null. (`cursor-agent`'s
-  result schema was live-verified; camelCase `usage` fields, no cost — subscription pricing.)
+- **`codex` backend: written from docs** — setup's one test prompt is the live check; cost is an
+  estimate from tokens. (`cursor-agent`'s result schema was live-verified; camelCase `usage` fields, no
+  cost — subscription pricing.)
 - **Native shells are Swift, not Tauri.** `desktop/app.swift` builds to `mc-app` (a normal
   resizable window; it takes the page as an argument — bare `mc-app` is the terminal wall (`/desk`), `mc-app /app`
   opens Chat/Tickets). It reads `.admin-token` itself and injects `window.__MC_TOKEN__`, which is what
