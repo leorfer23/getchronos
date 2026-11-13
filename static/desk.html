@@ -2614,12 +2614,25 @@ function repaintRow(id) {
 // The stage shows one terminal. A click swaps the story and the pty at once; walking the rail with
 // J/K or a swipe (opts.walk) swaps the story at once and the pty a beat later, so a walk does not open
 // a socket per step. The beat used to apply to every click, and was most of what a click cost.
+// What the composer holds per terminal, kept in this browser (2026-11-13: a long brief refused for its
+// length was cleared before the refusal and lost). Saved as you type, dropped once the daemon took it.
+const SAY_MAX = 20000; // keep in step with SessionInputSchema.text (src/validation.ts)
+const draftKey = (id) => "mc-draft:" + id;
+function draftGet(id) { try { return id ? localStorage.getItem(draftKey(id)) || "" : ""; } catch { return ""; } }
+function draftSet(id, v) { try { if (!id) return; if (v) localStorage.setItem(draftKey(id), v); else localStorage.removeItem(draftKey(id)); } catch {} }
+function swapDraft(prev, id) {
+  const box = document.getElementById("say"); if (!box || prev === id) return;
+  if (prev) draftSet(prev, box.value);
+  box.value = draftGet(id);
+  box.dispatchEvent(new Event("input"));
+}
 let mountT = 0;
 function select(id, opts = {}) {
   S.notifyCount.delete(id);
   const s = byId(id); if (!s) return;
   const prev = S.active;
   S.active = id; S.stickEnded = !s.live;
+  swapDraft(prev, id);
   // A Focus-only (or cloud) session has no live terminal to show — leave Terminal mode before the
   // pane would mount.
   if ((s.focus_only || s.cloud_agent_id) && S.mode === "term") setMode("focus");
@@ -3270,12 +3283,14 @@ const sendsNow = (s) => s.backend === "claude-code" && phaseOf(s) === "working";
 function talkSend(s, text, by) {
   if (!s?.live || !text) return;
   const now = sendsNow(s);
-  answer(s.id, { text, enter: true, ...(now ? { now: true } : {}), ...(by ? { by } : {}) });
+  const sent = answer(s.id, { text, enter: true, ...(now ? { now: true } : {}), ...(by ? { by } : {}) });
   if (S.mode === "focus") {
     if (T.id !== s.id) Object.assign(T, { id: s.id, all: false, open: new Set(), shows: "" });
     Object.assign(T, { pending: { text, at: Date.now(), now }, follow: true, sig: "" });
     renderStory();
   }
+  // A refused line is not "you said": it leaves Talk, and the caller puts it back in the composer.
+  return sent.then((ok) => { if (!ok && T.pending?.text === text) { T.pending = null; renderStory(); } return ok; });
 }
 // "¿Cómo venimos?" (2026-10-30): one click asks the agent where it stands. It goes like any line
 // from the board — send-now while it works, so it answers in Talk without waiting its step out — and
@@ -4513,7 +4528,7 @@ hGoal.onkeydown = (e) => { if (e.key === "Enter" || e.key === "Escape") { e.prev
 hGoal.onblur = () => S.active && saveGoal(S.active, hGoal.value.trim());
 // The composer: what you type goes through the daemon (typed, then Enter on its own tick).
 const say = qs("#say");
-say.addEventListener("input", () => { say.style.height = "auto"; say.style.height = Math.min(say.scrollHeight, window.innerHeight * 0.4) + "px"; });
+say.addEventListener("input", () => { say.style.height = "auto"; say.style.height = Math.min(say.scrollHeight, window.innerHeight * 0.4) + "px"; draftSet(S.active, say.value); });
 // Terminal mode, empty composer: ⏎ ⎋ ↑ ↓ go straight to the pty as keys — a "press enter", an
 // interrupt, a menu pick — so the keyboard never has to leave the composer for the common moves.
 const SAY_KEYS = { Enter: "enter", Escape: "esc", ArrowUp: "up", ArrowDown: "down" };
@@ -4527,13 +4542,20 @@ say.addEventListener("keydown", (e) => {
   }
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); qs("#composer").requestSubmit(); }
 });
-qs("#composer").addEventListener("submit", (e) => {
+qs("#composer").addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = say.value.trim(); if (!text || !S.active) return;
+  // Over the daemon's cap (SessionInputSchema): say so and keep every character where it is.
+  if (text.length > SAY_MAX) return toast(`Too long to send: ${text.length.toLocaleString()} of ${SAY_MAX.toLocaleString()} characters — it is still in the box`);
+  const id = S.active;
   say.value = ""; say.style.height = "auto";
-  const s = byId(S.active);
-  if (!s?.live) return answer(S.active, { text, enter: true });
-  talkSend(s, text);
+  const s = byId(id);
+  const ok = s?.live ? await talkSend(s, text) : await answer(id, { text, enter: true });
+  if (ok) return draftSet(id, "");
+  // Not sent: the words go back — into the box if you are still here and it is empty, and into this
+  // terminal's draft either way, so a reload or a walk to another terminal cannot take them.
+  draftSet(id, text);
+  if (S.active === id && !say.value) { say.value = text; say.dispatchEvent(new Event("input")); }
 });
 
 // ── dropping a file on a terminal ────────────────────────────────────────────────────────────
@@ -4910,11 +4932,11 @@ async function input(id, body) {
 const ANSWERED_MS = 8000;
 async function answer(id, body) {
   const s = byId(id);
-  if (!s || !s.live) return toast("that terminal is gone");
+  if (!s || !s.live) { toast("that terminal is gone"); return false; }
   S.answered.set(id, Date.now()); S.notifyCount.delete(id);
   renderCounts(); syncBadge();
-  try { await api("/sessions/" + id + "/input", { method: "POST", body: JSON.stringify({ by: "operator", ...body }) }); }
-  catch (e) { S.answered.delete(id); return toast(String(e.message).slice(0, 120)); }
+  try { await api("/sessions/" + id + "/input", { method: "POST", body: JSON.stringify({ by: "operator", ...body }) }); return true; }
+  catch (e) { S.answered.delete(id); toast(String(e.message).slice(0, 120)); return false; }
 }
 async function saveGoal(id, goal) {
   const s = byId(id);

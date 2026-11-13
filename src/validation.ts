@@ -228,7 +228,9 @@ export const SessionShowSchema = z.object({
 // one named keystroke, so callers never hand-roll escape sequences.
 export const SessionInputSchema = z
   .object({
-    text: z.string().max(4000).nullable().optional(),
+    // One line typed into a terminal. 20 000, not 4 000: the Desk/phone composer is where the operator
+    // writes a whole brief, and a refused line used to be a lost one (static/desk.html SAY_MAX matches).
+    text: z.string().max(20000).nullable().optional(),
     key: z.enum(["enter", "esc", "tab", "up", "down", "ctrl-c", "ctrl-d"]).nullable().optional(),
     // A short sequence ("down, down, enter" = the third option in a menu), spaced out server-side
     // so a TUI sees separate keystrokes. Counts as ONE input against the per-terminal cap.
