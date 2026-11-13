@@ -46,7 +46,9 @@ const id8 = (id: string) => id.slice(0, 8);
 export function parseVerdict(reply: string): { kind: "answer" | "escalate"; text: string } | null {
   const body = (reply || "").trim();
   if (!body) return null;
-  const m = /^\s*(ANSWER|ASK OPERATOR|ESCALATE)\s*:\s*([\s\S]+)$/i.exec(body);
+  // "ASK <who>:" in any spelling escalates: the prompt says ASK OPERATOR, but a session resumed from
+  // before the wording changed may still write the old token — it must not fall through as unparsed.
+  const m = /^\s*(ANSWER|ASK\s+[A-Za-z]+|ESCALATE)\s*:\s*([\s\S]+)$/i.exec(body);
   if (!m) return null;
   const text = m[2].trim();
   if (!text) return null;

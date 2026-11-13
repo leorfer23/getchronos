@@ -38,6 +38,8 @@ describe("parseVerdict", () => {
   test("reads both escalation spellings", () => {
     assert.deepEqual(parseVerdict("ASK OPERATOR: this touches prod"), { kind: "escalate", text: "this touches prod" });
     assert.deepEqual(parseVerdict("ESCALATE: needs his call"), { kind: "escalate", text: "needs his call" });
+    // A session resumed from before the token was renamed still escalates, whatever name it wrote.
+    assert.deepEqual(parseVerdict("ASK SAM: old wording"), { kind: "escalate", text: "old wording" });
   });
 
   test("is case- and whitespace-tolerant, and keeps the lines after the verdict", () => {
