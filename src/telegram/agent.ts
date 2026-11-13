@@ -850,7 +850,7 @@ export function spawnManager(opts: {
   const builtins = robertBuiltinTools(opts.wsId, MANAGER_TOOLS);
   if (claude && builtins) args.push("--tools", builtins);
 
-  const { cmd, cmdArgs } = sandboxWrap("guard", cwd, wall.addDirs ?? [], profileDir, wall.denyDirs ?? [], spec.cmd, args, false, wall.readonlyDirs ?? [], [], { readonlyWorktrees: false });
+  const { cmd, cmdArgs } = sandboxWrap("guard", cwd, wall.addDirs ?? [], profileDir, wall.denyDirs ?? [], spec.cmd, args, false, wall.readonlyDirs ?? [], [], { readonlyWorktrees: false, pinnedDir: wall.pinnedDir });
 
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, cmdArgs, {
@@ -1028,6 +1028,8 @@ type WarmOpts = {
   addDirs?: string[];
   /** Dirs it may read but never write, no worktree re-grants (Robert answering: robert-hands.ts). */
   readonlyDirs?: string[];
+  /** The profile his workspace is pinned to, when profileDir is a sibling login (robertSandbox). */
+  pinnedDir?: string;
   /** `claude --tools`: the built-in tool set itself, not just what is pre-approved (Robert answering). */
   builtinTools?: string | null;
   /** The env he starts from. Absent → the daemon's own (the fleet-wide Robert). A project's Robert
@@ -1134,7 +1136,7 @@ export class WarmManager {
     const cwd = this.opts.cwd || process.cwd();
     const { cmd, cmdArgs } = sandboxWrap(
       this.opts.sandbox ?? "guard", cwd, this.opts.addDirs ?? [], profileDir, this.opts.denyDirs ?? [], CONFIG.claudeBin, args,
-      false, this.opts.readonlyDirs ?? [], [], { readonlyWorktrees: false },
+      false, this.opts.readonlyDirs ?? [], [], { readonlyWorktrees: false, pinnedDir: this.opts.pinnedDir },
     );
     const child = spawn(cmd, cmdArgs, {
       cwd,
@@ -1380,11 +1382,14 @@ export const WAKE_SESSION_MAX_TURNS = 40;
 /** Whose conversation a Robert turn belongs to: the operator's own, or the background wake lane. */
 export type { RobertLane };
 // Workspace → its Claude profile dir; no workspace (or unknown id) → the operator's default.
+/** The profile a Robert is pinned to — his workspace's, or the operator's — before a wall moves him. */
+function robertPinnedDir(wsId?: string | null): string {
+  return (wsId ? workspaces.get(wsId)?.config_dir : null) || DEFAULT_PROFILE_DIR;
+}
 export function webProfileDir(wsId?: string | null): string {
-  const pinned = (wsId ? workspaces.get(wsId)?.config_dir : null) || DEFAULT_PROFILE_DIR;
   // A walled account hands Robert to its sibling login — the same pick a new terminal or job gets
   // (profile-route.ts). Without it he alone stayed on the capped account and fell to grok → cursor.
-  return routeConfigDir(pinned, wsId).dir;
+  return routeConfigDir(robertPinnedDir(wsId), wsId).dir;
 }
 // The cooldown a walled turn starts belongs to the ACCOUNT it ran on: a key without it kept the
 // sibling login idle until the capped one's cooldown ran out.
@@ -1670,17 +1675,18 @@ export const VOICE_TURN =
  * dir of his own — never the daemon's checkout, which holds every client), walled off from every
  * other workspace's repos, notes, tickets and Claude transcripts like any of his workspace's agents.
  */
-export function robertSandbox(wsId: string | null | undefined): { cwd?: string; addDirs?: string[]; denyDirs?: string[]; baseEnv?: NodeJS.ProcessEnv; readonlyDirs?: string[] } {
+export function robertSandbox(wsId: string | null | undefined): { cwd?: string; addDirs?: string[]; denyDirs?: string[]; baseEnv?: NodeJS.ProcessEnv; readonlyDirs?: string[]; pinnedDir: string } {
   // While he answers (setting robert.hands, robert-hands.ts): his project's places — every project's,
   // for the fleet-wide one, whose cwd is the daemon's own checkout — are read-only to him.
   const ro = robertReadonlyDirs(wsId ?? null);
-  const readonly = ro.length ? { readonlyDirs: ro } : {};
-  if (!wsId) return readonly;
+  // Whose Claude home he may use when a wall moves him to a sibling login (sandbox.ts ProfileOpts).
+  const base = { pinnedDir: robertPinnedDir(wsId), ...(ro.length ? { readonlyDirs: ro } : {}) };
+  if (!wsId) return base;
   const w = workspaces.get(wsId);
   let cwd = w?.default_dir && fs.existsSync(w.default_dir) ? w.default_dir : null;
   const home = robertHome(wsId);
   if (!cwd) cwd = home;
-  return { cwd, addDirs: [home], denyDirs: workspaces.isolationDenyDirs(wsId), baseEnv: childEnv(w), ...readonly };
+  return { cwd, addDirs: [home], denyDirs: workspaces.isolationDenyDirs(wsId), baseEnv: childEnv(w), ...base };
 }
 
 /** ~/.mc/robert/<slug>: a project's Robert's own dir — the files handed to his turns land here. */

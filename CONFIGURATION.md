@@ -111,6 +111,18 @@ CHRONOS_DEFAULT_PROFILE=claude                 # used only when a project pins n
 CHRONOS_PROFILES=work=/opt/shared/.claude-work # for directories that don't follow the convention
 ```
 
+Agents on a client's profile are walled off from your own `~/.claude` in guard and strict mode: they
+write nothing in it (its settings hooks and skills run in your own sessions), and read only the
+instructions and extensions a client profile links in — top-level `*.md`, `rules`, `skills`,
+`commands`, `agents`, `output-styles`, `workflows`, `hooks` ([SECURITY.md](./SECURITY.md)). A script
+of yours that a client profile's MCP server or hook runs from `~/.claude` has to be named, read-only:
+
+```bash
+CHRONOS_CLAUDE_SHARED_EXTRA=mcp-launcher.sh:mcp-wrappers   # relative to ~/.claude, colon-separated
+```
+
+`GET /api/isolation/audit` lists every such path a client profile names that the wall hides.
+
 ### 4. Optional: reach it from your phone
 
 The Phone surface (`/phone`) is a PWA. The daemon itself still only listens on localhost — Chronos
@@ -706,6 +718,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_CI_FIX_MAX` | `2` | `src/config.ts` |
 | `CHRONOS_CI_POLL_SEC` | `25` | `src/config.ts` |
 | `CHRONOS_CLAUDE_BIN` | `"claude"` | `src/config.ts` |
+| `CHRONOS_CLAUDE_SHARED_EXTRA` | — | `src/config.ts` |
 | `CHRONOS_CLIPBOARD` | — | `src/clipboard.ts` |
 | `CHRONOS_CLIPBOARD_MAX` | `100_000` | `src/clipboard.ts` |
 | `CHRONOS_CODEX_BIN` | `"codex"` | `src/config.ts` |

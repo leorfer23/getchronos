@@ -413,7 +413,8 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
     const allowSecrets = workspaceSandboxAllow(
       job.workspace_id ? (workspaces.get(job.workspace_id)?.sandbox_allow ?? null) : null,
     );
-    const sandboxed = sandboxWrap(sandboxMode, job.cwd, addDirs, profileDir, denyDirs, backend.bin(), args, egressLocked(job.workspace_id), readonlyDirs, allowSecrets);
+    // pinnedDir: on a sibling login, a workspace pinned to the operator's profile keeps his Claude home.
+    const sandboxed = sandboxWrap(sandboxMode, job.cwd, addDirs, profileDir, denyDirs, backend.bin(), args, egressLocked(job.workspace_id), readonlyDirs, allowSecrets, { pinnedDir });
     // Headless runs get the same `nice` a Desk terminal does (src/machine.ts): a dispatched build is
     // no less able to fork a full vitest pool, and the operator's UI outranks both.
     const { cmd, cmdArgs } = niceWrap(sandboxed.cmd, sandboxed.cmdArgs);

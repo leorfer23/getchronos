@@ -229,8 +229,10 @@ export const workspaces = {
     // The operator's own CLI homes belong to the workspaces on his default profile, which run on them
     // (parity-env.ts): his ~/.claude.json (every MCP server he has, with any credential written into
     // one), claude's backups of it, and his ~/.codex (his ChatGPT login). A workspace on a client's
-    // profile never reads them — its claude and codex use that profile's dir — so it is denied all three,
-    // as launcher-sandbox.ts denies them to a client CLI started by hand.
+    // profile never reads them — its claude and codex use that profile's dir — so it is denied all three.
+    // (Every spawn on a client's profile also gets sandbox.ts claudeHomeWall, which walls these and the
+    // rest of ~/.claude after every re-grant. A client account routed onto his profile runs on them, and
+    // buildProfile leaves them off the deny list then.)
     if (me?.config_dir && !isDefaultClaudeDir(me.config_dir)) {
       extra.push(ownClaudeConfig(), path.join(defaultClaudeDir(), "backups"), ownCodexHome());
     }

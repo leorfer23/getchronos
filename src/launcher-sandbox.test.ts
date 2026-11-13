@@ -57,6 +57,8 @@ describe("launcherProfile", () => {
     const p = launcherProfile(mine.id, ownCfg)!;
     assert.match(p, /\(deny file-read\*[^)]*globex-repo/);
     assert.ok(p.includes(`(subpath "${otherCfg}")`));
+    // …and the operator's own Claude home is walled as for every spawn on a client's profile (sandbox.ts).
+    assert.ok(p.includes(`(deny file-read* file-write* (subpath ${JSON.stringify(path.join(os.homedir(), ".claude"))})`), "the client CLI gets the ~/.claude wall");
   });
 
   test("the kernel enforces it: other client's repo and profile unreadable, own profile readable", { skip: noSandbox }, () => {
