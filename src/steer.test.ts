@@ -60,7 +60,7 @@ test("steer mode: goal over stdin, mid-run steer echoed by the child, per-turn r
   const runId = (r as any).run_id;
   assert.equal(runs.get(runId)!.status, "running");
 
-  assert.equal(steerRun(runId, "also bump the version", "leo"), true);
+  assert.equal(steerRun(runId, "also bump the version", "operator"), true);
   const done = await finished(runId);
   assert.equal(done.status, "success");
   assert.equal(done.cost_usd, 0.02); // claude reports cumulative usage per result; two turns ran
@@ -75,9 +75,9 @@ test("steerRun refuses runs that are not live-steerable", async () => {
   const job = mkJob("plain run"); // no workspace → no live_steer → classic buildArgs path
   const r = dispatch(job.id, "test");
   const runId = (r as any).run_id;
-  assert.equal(steerRun(runId, "nope", "leo"), false);
+  assert.equal(steerRun(runId, "nope", "operator"), false);
   await finished(runId);
-  assert.equal(steerRun("no-such-run", "nope", "leo"), false);
+  assert.equal(steerRun("no-such-run", "nope", "operator"), false);
 });
 
 test("sendMessage delivers live to a steer-mode run and marks the mailbox row delivered", async () => {
@@ -85,7 +85,7 @@ test("sendMessage delivers live to a steer-mode run and marks the mailbox row de
   const job = mkJob("work away\n!sleep: 500", { workspace_id: ws.id });
   const runId = (dispatch(job.id, "test") as any).run_id;
 
-  const out = sendMessage(runId, "change of plan", "leo");
+  const out = sendMessage(runId, "change of plan", "operator");
   assert.ok(out.ok);
   assert.equal(out.ok && out.steered, true);
   const row = db.prepare("SELECT delivered_to_run FROM run_messages WHERE id = ?").get(out.ok ? out.message.id : 0) as any;
@@ -99,7 +99,7 @@ test("sendMessage falls back to the mailbox when the run has ended", async () =>
   const runId = (dispatch(job.id, "test") as any).run_id;
   await finished(runId);
 
-  const out = sendMessage(runId, "too late for live delivery", "leo");
+  const out = sendMessage(runId, "too late for live delivery", "operator");
   assert.ok(out.ok);
   assert.equal(out.ok && out.steered, false);
   const row = db.prepare("SELECT delivered_to_run FROM run_messages WHERE id = ?").get(out.ok ? out.message.id : 0) as any;
@@ -113,7 +113,7 @@ test("a steer the run never answered is returned to the mailbox, not silently lo
   const job = mkJob("long work\n!sleep: 3000", { workspace_id: ws.id, timeout_sec: 1 });
   const runId = (dispatch(job.id, "test") as any).run_id;
 
-  const out = sendMessage(runId, "urgent change", "leo");
+  const out = sendMessage(runId, "urgent change", "operator");
   assert.ok(out.ok && out.steered, "steer accepted while the run was live");
   const id = out.ok ? out.message.id : 0;
   assert.equal((db.prepare("SELECT delivered_to_run d FROM run_messages WHERE id = ?").get(id) as any).d, runId);

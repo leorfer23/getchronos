@@ -33,7 +33,7 @@ const TOK = (wsId: string) => ({ "x-mc-workspace-token": workspaces.get(wsId)!.t
 function task(over: Partial<ExternalTask> = {}): ExternalTask {
   return {
     id: "ANA-1", title: "Fix the loader", url: "https://acme.atlassian.net/browse/ANA-1", status: "in_progress", statusRaw: "In Progress",
-    updated: "2026-09-24T10:00:00.000Z", description: null, priority: null, assignee: "Leo", assignee_ids: [ME], labels: [], due: null, comments: [],
+    updated: "2026-09-24T10:00:00.000Z", description: null, priority: null, assignee: "Ada", assignee_ids: [ME], labels: [], due: null, comments: [],
     ...over,
   };
 }

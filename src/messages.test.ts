@@ -76,7 +76,7 @@ test("deliverPending marks and returns oldest-first; a second call returns empty
 test("sendMessage resolves a ticket key (case-insensitive) and stores it ticket-scoped", () => {
   const ws = mkWs();
   const t = mkTicket(ws.id);
-  const out = sendMessage(t.key.toLowerCase(), "prioritize the 500 fix", "leo");
+  const out = sendMessage(t.key.toLowerCase(), "prioritize the 500 fix", "operator");
   assert.ok(out.ok);
   assert.equal(out.resolved.kind, "ticket");
   assert.equal(out.message.ticket_id, t.id);
@@ -87,7 +87,7 @@ test("sendMessage resolves a run by id8 and stores both run_id and the run's tic
   const ws = mkWs();
   const t = mkTicket(ws.id);
   const run = mkRun({ workspace_id: ws.id, ticket_id: t.id });
-  const out = sendMessage(run.id.slice(0, 8), "switch branches", "leo");
+  const out = sendMessage(run.id.slice(0, 8), "switch branches", "operator");
   assert.ok(out.ok);
   assert.equal(out.resolved.kind, "run");
   assert.equal(out.message.run_id, run.id);
@@ -95,7 +95,7 @@ test("sendMessage resolves a run by id8 and stores both run_id and the run's tic
 });
 
 test("sendMessage rejects an unresolvable target", () => {
-  const out = sendMessage("NOPE-999", "hi", "leo");
+  const out = sendMessage("NOPE-999", "hi", "operator");
   assert.equal(out.ok, false);
 });
 
@@ -103,16 +103,16 @@ test("sendMessage rejects an unresolvable target", () => {
 
 test("messagesNote is empty for no rows, and formats one line per message otherwise", () => {
   assert.equal(messagesNote([]), "");
-  const text = messagesNote([{ text: "prioritize the 500 fix", from_who: "leo", created_at: "2026-07-30T12:00:00Z" }]);
+  const text = messagesNote([{ text: "prioritize the 500 fix", from_who: "operator", created_at: "2026-07-30T12:00:00Z" }]);
   assert.match(text, /^## Operator messages \(delivered at spawn\)/);
-  assert.match(text, /- \[2026-07-30T12:00:00Z\] leo: prioritize the 500 fix/);
+  assert.match(text, /- \[2026-07-30T12:00:00Z\] operator: prioritize the 500 fix/);
   assert.match(text, /directives from the operator/);
 });
 
 test("spawn-injection seam: ticket-scoped undelivered messages get marked delivered via deliverPending", () => {
   const ws = mkWs();
   const t = mkTicket(ws.id);
-  messages.create({ ticket_id: t.id, text: "directive", from_who: "leo" });
+  messages.create({ ticket_id: t.id, text: "directive", from_who: "operator" });
   const freshRun = mkRun({ workspace_id: ws.id, ticket_id: t.id });
   // execute()'s real seam reads messages.undeliveredFor(null, ticket_id) directly (no run yet at
   // read time) — exercise that same store call + the delivery mark, same effect runner.ts produces.

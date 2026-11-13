@@ -37,6 +37,10 @@ must happen, ends with `§delegate <project> ids=… back=… kind=…` lines th
   `api`: the Messages API with `ANTHROPIC_API_KEY` / `CHRONOS_TALKER_API_KEY` or `AI_GATEWAY_API_KEY`
   in `.secrets`; without a key it stays on `cli`. A provider refusing the key falls back to today's path
   before he hears anything.
+- **Persona.** The shipped prompt is generic: it does not know who the operator is. Write that — who you
+  are, the languages you speak, how you want to be spoken to — in `local/talker-persona.md` (gitignored)
+  or the file `voice.talker_persona_file` / `CHRONOS_TALKER_PERSONA_FILE` names; it is appended after
+  the fixed prompt (clipped at 4,000 characters) and an edit rebuilds the warm process on its next turn.
 - **The walls (code, not prompt).** Reads across workspaces; writes into one only by delegating to that
   workspace's own Robert. What that Robert receives is built by `buildDelegation` from **the operator's
   own words** in this thread (and, with `back=`, his previous one or two) plus ledger ids **of that

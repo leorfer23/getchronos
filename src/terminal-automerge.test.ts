@@ -22,13 +22,13 @@ type View = { state: string; isDraft?: boolean; author?: string; createdAt?: str
 function fakeGh(views: Record<string, View>, calls: string[][]) {
   setGh(async (args) => {
     calls.push(args);
-    if (args[0] === "api") return "leo";
+    if (args[0] === "api") return "operator";
     if (args[0] === "pr" && args[1] === "merge") return "";
     const v = views[args[2]] ?? { state: "MERGED" }; // rows left open by earlier tests
     return JSON.stringify({
       state: v.state,
       isDraft: !!v.isDraft,
-      author: { login: v.author ?? "leo" },
+      author: { login: v.author ?? "operator" },
       createdAt: v.createdAt ?? new Date().toISOString(),
       statusCheckRollup: v.checks === undefined ? [{ status: "COMPLETED", conclusion: "SUCCESS" }] : v.checks,
     });
@@ -139,10 +139,10 @@ test("no auto-merge: records review, draft and title; no CI after the grace is r
   recordSessionPrs(s, [nocI, review]);
   const created = new Date(Date.now() + 60_000).toISOString();
   setGh(async (args) => {
-    if (args[0] === "api") return "leo";
+    if (args[0] === "api") return "operator";
     const u = args[2];
     return JSON.stringify({
-      state: "OPEN", isDraft: u === review, author: { login: "leo" }, createdAt: created, title: `t ${u.split("/").pop()}`,
+      state: "OPEN", isDraft: u === review, author: { login: "operator" }, createdAt: created, title: `t ${u.split("/").pop()}`,
       reviewDecision: u === review ? "CHANGES_REQUESTED" : "", mergeable: "MERGEABLE",
       statusCheckRollup: u === nocI ? [] : [{ status: "COMPLETED", conclusion: "SUCCESS" }],
     });

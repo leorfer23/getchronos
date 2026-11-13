@@ -359,7 +359,7 @@ test("never paused: a CLI root, a shell, an agent CLI, a kept process and anythi
     // A background Claude session (keep-list) with a vitest below it.
     P({ pid: 220, ppid: 200, pgid: 220, startMs: T0 + 2000, comm: "/opt/homebrew/bin/node", rssKb: 900 * MB }),
     P({ pid: 221, ppid: 220, pgid: 220, startMs: T0 + 9000, comm: "/opt/homebrew/bin/node", rssKb: 900 * MB }),
-    // Leo's own Chrome (protected), and a Chrome of another user.
+    // The operator's own Chrome (protected), and a Chrome of another user.
     P({ pid: 230, ppid: 200, pgid: 230, startMs: T0 + 9100, comm: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", rssKb: 900 * MB }),
     P({ pid: 240, ppid: 200, pgid: 240, startMs: T0 + 9200, uid: 0, comm: CHROME, rssKb: 900 * MB }),
     // A nested agent CLI and a dev server: not heavy.

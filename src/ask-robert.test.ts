@@ -36,8 +36,10 @@ describe("parseVerdict", () => {
   });
 
   test("reads both escalation spellings", () => {
-    assert.deepEqual(parseVerdict("ASK LEO: this touches prod"), { kind: "escalate", text: "this touches prod" });
+    assert.deepEqual(parseVerdict("ASK OPERATOR: this touches prod"), { kind: "escalate", text: "this touches prod" });
     assert.deepEqual(parseVerdict("ESCALATE: needs his call"), { kind: "escalate", text: "needs his call" });
+    // A session resumed from before the token was renamed still escalates, whatever name it wrote.
+    assert.deepEqual(parseVerdict("ASK SAM: old wording"), { kind: "escalate", text: "old wording" });
   });
 
   test("is case- and whitespace-tolerant, and keeps the lines after the verdict", () => {
@@ -66,7 +68,7 @@ describe("triagePrompt", () => {
   test("offers both paths, and tells him unsure means escalate", () => {
     const p = triagePrompt(ask(), false);
     assert.ok(p.includes("ANSWER:"));
-    assert.ok(p.includes("ASK LEO:"));
+    assert.ok(p.includes("ASK OPERATOR:"));
     assert.ok(p.includes("staging or prod schema?"));
     assert.ok(/not sure/i.test(p));
     assert.ok(/BLOCKED/.test(p));
@@ -76,7 +78,7 @@ describe("triagePrompt", () => {
     // Mirrors the hard gate in answerAsk: in an ask_policy:'escalate' workspace, offering him the
     // option at all would earn a rejected API call and a terminal waiting out the deadline instead.
     const p = triagePrompt(ask(), true);
-    assert.ok(p.includes("ASK LEO:"));
+    assert.ok(p.includes("ASK OPERATOR:"));
     assert.ok(!/^\s*ANSWER:/m.test(p));
     assert.ok(/REQUIRES a human answer/.test(p));
   });

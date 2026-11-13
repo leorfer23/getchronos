@@ -170,8 +170,8 @@ test("hostbar.swift --brain: compiles, and --print reads the real /api/hosts/bar
     db.prepare("UPDATE sessions SET host_id = ?, status = 'live', goal = ?, created_at = ? WHERE id = ?").run(host, goal, new Date(now - minsAgo * 60_000).toISOString(), s.id);
     return s.id;
   };
-  const working = [mk(LOCAL_HOST_ID, "open the rollback PR", "/Users/leo/src/app", 12), mk("h_m2", null, "/Users/m2/work/dbt", 65)];
-  for (let i = 0; i < 9; i++) mk(LOCAL_HOST_ID, `chore ${i}`, "/Users/leo/src/docs", 20 + i);
+  const working = [mk(LOCAL_HOST_ID, "open the rollback PR", "/Users/operator/src/app", 12), mk("h_m2", null, "/Users/m2/work/dbt", 65)];
+  for (let i = 0; i < 9; i++) mk(LOCAL_HOST_ID, `chore ${i}`, "/Users/operator/src/docs", 20 + i);
   mk("h_m5", "sweep logs", "/Users/m5/api", 3);
   let links = ["h_m2", "h_m5"];
   const activity: ActivityFn = (id) => working.includes(id) ? { live: true, quiet: false, last_out: now } : { live: true, quiet: true, last_out: now - 60_000 };

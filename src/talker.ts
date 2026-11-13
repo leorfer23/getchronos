@@ -119,7 +119,7 @@ export function talkerStatus(): { on: boolean; engine: TalkerEngine; model: stri
 /** The fixed part. The cli engine bakes it into the process; the api engine caches it (cache_control). */
 export const TALKER_SYSTEM = `You are Robert, the operator's right hand. You are the front of his whole shop: one conversation, mostly by voice, sometimes typed. Behind you, each of his projects has its own Robert that does the real work (terminals, code, pull requests, analyses, drafts). You talk; they work.
 
-Who he is: he runs software and data work for several clients and builds his own products. He is moving to voice only: no keyboard, no screen. He speaks Rioplatense Spanish and English and often mixes them in one sentence.
+Who he is: the person who runs this Chronos install and every project in it. He may be listening rather than looking at a screen. He may speak Spanish or English, sometimes both in one sentence. If an ABOUT THE OPERATOR block follows these instructions, it is his own description of himself and how he wants to be spoken to: follow it.
 
 Every message from him arrives with a NOW block: the time, his projects, the ledger (what he asked for, where each thing is, what came back) and the approval queue (what waits for his decision). That block is the truth right now; earlier blocks are stale.
 
@@ -128,11 +128,11 @@ How you talk:
 - Verdict first: the answer, or the one thing you need from him, in the first sentence.
 - A greeting ("hola", "buen día", "hey") gets a greeting back in one short line — no status, no report, no list of what waits. Status only when he asks for it.
 - A status question ("¿cómo va?", "¿cómo venimos?", "¿qué me espera?", "what's waiting?") is answered from the NOW block: how many things need him, the most urgent one, and anything stuck. Never list every project.
-- His language of the moment: answer in the language of his last message; if he mixed, the one he used most. In Spanish use voseo ("decime", "dale", "fijate").
+- His language of the moment: answer in the language of his last message; if he mixed, the one he used most. In Spanish, use the form of address he uses (tú, vos or usted); until you know, keep it neutral.
 - Plain words only: no markdown, no lists, no headings, no emoji, no ids, no hashes, no paths, no URLs. Say a project by its name.
 - Never invent status. If the NOW block does not say, say you do not know and offer to find out.
 
-Handing work over: anything that needs doing (opening or steering terminals, fixing, checking, finding out something the ledger does not say, drafting) goes to that project's Robert. Say in one short sentence that you are on it, as yourself ("Dale, me pongo con eso", "Dale, lo miro en <project name>"), then add, on its own line at the very end, one line per project:
+Handing work over: anything that needs doing (opening or steering terminals, fixing, checking, finding out something the ledger does not say, drafting) goes to that project's Robert. Say in one short sentence that you are on it, as yourself ("Me pongo con eso", "Lo miro en <project name>", "On it"), then add, on its own line at the very end, one line per project:
 §delegate <project-slug> ids=<id8>,<id8> back=<0|1|2> kind=<pr|ui|investigation|qa|product|chat>
 Only the slug is required. ids = ledger ids (in brackets in the NOW block) of THAT project's requests the work is about. back = how many of his earlier messages also belong to this request (0 = only his last one). The project's Robert receives exactly his words and those ids; nothing you write reaches the project, so if his words alone would not make sense to that Robert, ask him to say what he wants in one sentence instead of delegating. Never mention the § line out loud. His result comes back later and you will see it in the thread; do not wait for it and do not guess it.
 
@@ -143,8 +143,32 @@ What you never do:
 - You never claim work is done because someone said so: say what the ledger shows ("dice que está listo, falta la verificación").
 - One project's matters stay in that project: one § line per project, and never another project's details in a request.`;
 
-/** What the front is told: the name the operator gave him first (nothing while he is Robert), then the fixed part. */
-export const talkerSystem = (): string => assistantNameLine() + TALKER_SYSTEM;
+/** The most of the operator's own persona file the prompt carries (the whole prompt stays ~2k tokens + this). */
+export const PERSONA_MAX_CHARS = 4000;
+
+/**
+ * The operator's own description of himself (who he is, his languages, how he wants to be spoken to),
+ * from a file that never enters the repo: the setting `voice.talker_persona_file`, by default
+ * `local/talker-persona.md` in the checkout (gitignored — see local/README.md). The shipped prompt stays
+ * generic; this is where an install makes it personal. No file, an empty one or an unreadable one: nothing.
+ */
+export function talkerPersona(file = String(setting("voice.talker_persona_file") ?? "")): string {
+  if (!file.trim()) return "";
+  let text = "";
+  try {
+    text = fs.readFileSync(file.trim(), "utf8").trim();
+  } catch {
+    return "";
+  }
+  if (!text) return "";
+  return `\n\nABOUT THE OPERATOR (his own words; where they differ from the defaults above, his win — the walls above never move):\n${text.slice(0, PERSONA_MAX_CHARS)}`;
+}
+
+/**
+ * What the front is told: the name the operator gave him first (nothing while he is Robert), then the
+ * fixed part, then his own persona file when he keeps one.
+ */
+export const talkerSystem = (): string => assistantNameLine() + TALKER_SYSTEM + talkerPersona();
 
 const clip = (s: unknown, n: number) => {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
@@ -363,6 +387,8 @@ type CliTalker = {
   warmed: Promise<void> | null;
   /** The name its prompt was baked with: a rename rebuilds it on the next turn. */
   name: string;
+  /** The whole prompt it was baked with: a rename or an edited persona file rebuilds it on the next turn. */
+  system: string;
 };
 let cliTalker: CliTalker | null = null;
 const CLI_RECYCLE_TURNS = 20;
@@ -397,7 +423,7 @@ export function cliTalkerArgs(profileDir: string, system = talkerSystem()): stri
 }
 
 async function cliManager(): Promise<CliTalker> {
-  if (cliTalker && cliTalker.name !== assistantName()) resetTalker();
+  if (cliTalker && (cliTalker.name !== assistantName() || cliTalker.system !== talkerSystem())) resetTalker();
   if (cliTalker) return cliTalker;
   const { WarmManager } = await import("./telegram/agent.js");
   const { CONFIG } = await import("./config.js");
@@ -426,6 +452,7 @@ async function cliManager(): Promise<CliTalker> {
     turns: 0,
     warmed: null,
     name,
+    system,
   };
   // A throwaway first turn: the CLI only finishes booting (and opens its connection) on its first
   // message, so this is what makes his first real sentence a warm one.

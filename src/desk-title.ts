@@ -35,7 +35,7 @@ export function titleFromUnderstanding(text: string): string | null {
   // Drop the throat-clearing every model opens with, so the card reads as an objective.
   t = t
     .replace(
-      /^(?:the\s+(?:task|goal|ask|user('s)?\s+request)\s+is\s+to\s+|(?:i|we)\s+(?:need|have|am\s+asked|'m\s+asked)\s+to\s+|(?:i|we)\s+(?:will|should|am\s+going\s+to|'m\s+going\s+to)\s+|(?:you|leo)\s+want[s]?\s+me\s+to\s+|my\s+task\s+is\s+to\s+|let'?s\s+)/i,
+      /^(?:the\s+(?:task|goal|ask|user('s)?\s+request)\s+is\s+to\s+|(?:i|we)\s+(?:need|have|am\s+asked|'m\s+asked)\s+to\s+|(?:i|we)\s+(?:will|should|am\s+going\s+to|'m\s+going\s+to)\s+|(?:you|the\s+(?:operator|user))\s+want[s]?\s+me\s+to\s+|my\s+task\s+is\s+to\s+|let'?s\s+)/i,
       "",
     )
     .trim();

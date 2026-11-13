@@ -196,7 +196,7 @@ test("ask_policy 'escalate': a Lead's answer is refused exactly as Robert's is, 
   assert.equal(asks.get(ask.id)!.answer, null);
 
   // A human is never blocked by the policy — that is the whole point of it.
-  const human = await answerAsk(ask.id, "go ahead", "leo");
+  const human = await answerAsk(ask.id, "go ahead", "operator");
   assert.equal(human.ok, true);
   assert.equal(asks.get(ask.id)!.status, "answered");
 });
@@ -204,7 +204,7 @@ test("ask_policy 'escalate': a Lead's answer is refused exactly as Robert's is, 
 test("isAgentAnswer names the two agents that decide for the operator, and nothing else", () => {
   assert.equal(isAgentAnswer("robert"), true);
   assert.equal(isAgentAnswer("lead:abcdef01"), true);
-  for (const by of ["leo", "human", "telegram", "operator", "leader", "roberta"])
+  for (const by of ["ada", "human", "telegram", "operator", "leader", "roberta"])
     assert.equal(isAgentAnswer(by), false, by);
 });
 

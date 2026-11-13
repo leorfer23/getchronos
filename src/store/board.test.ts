@@ -8,7 +8,7 @@ beforeEach(() => {
 
 test("parseMentions: handles, dedup, and non-mentions", () => {
   assert.deepEqual(parseMentions("@robert can you look? cc @Ada and @robert again"), ["robert", "ada"]);
-  assert.deepEqual(parseMentions("email leo@example.com at @2pm"), []); // mid-word @ and @digit are not handles
+  assert.deepEqual(parseMentions("email ada@example.com at @2pm"), []); // mid-word @ and @digit are not handles
   assert.deepEqual(parseMentions("(@iris)"), ["iris"]);
   assert.deepEqual(parseMentions("no mentions here"), []);
 });

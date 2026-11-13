@@ -1165,12 +1165,12 @@ function deleteTicketModal(t) {
 }
 async function sendNote() {
   const input = $("note-input"); const text = input.value.trim(); if (!text) return;
-  try { await api("/tickets/" + curTicket + "/note", { method: "POST", body: { text, by: "leo" } }); input.value = ""; toast("Noted — lands in the worker's mailbox"); loadTicketDetail(); }
+  try { await api("/tickets/" + curTicket + "/note", { method: "POST", body: { text, by: "operator" } }); input.value = ""; toast("Noted — lands in the worker's mailbox"); loadTicketDetail(); }
   catch (e) { toast("note: " + e.message); }
 }
 async function answerAsk(id, btn) {
   const input = btn.closest(".ask-block").querySelector("input"); const answer = input.value.trim(); if (!answer) return;
-  try { await api("/asks/" + id + "/answer", { method: "POST", body: { answer, by: "leo" } }); toast("Answered — run resumes"); loadTickets(); loadTicketDetail(); }
+  try { await api("/asks/" + id + "/answer", { method: "POST", body: { answer, by: "operator" } }); toast("Answered — run resumes"); loadTickets(); loadTicketDetail(); }
   catch (e) { toast("answer: " + e.message); }
 }
 
@@ -1454,7 +1454,7 @@ function renderInboxDetail() {
     const send = (e) => submitting(e?.target?.tagName === "BUTTON" ? e.target : $("ib-send"), async () => {
       const answer = $("ib-answer").value.trim();
       if (!answer) throw new Error("Nothing to send");
-      await api("/asks/" + a.id + "/answer", { method: "POST", body: { answer, by: "leo" } });
+      await api("/asks/" + a.id + "/answer", { method: "POST", body: { answer, by: "operator" } });
       await decided("Answered — the run resumes");
     });
     $("ib-send").onclick = send;
@@ -1783,7 +1783,7 @@ function steerRunSheet(runId) {
     title: "Steer this run", label: "Message to the agent", confirm: "Send",
     hint: "Injected into the live run. Only works on a steer-mode run — otherwise nothing is delivered and you'll want `mc tell` instead.",
     run: async (text) => {
-      const r = await api("/runs/" + runId + "/steer", { method: "POST", body: { text, from: "leo" } });
+      const r = await api("/runs/" + runId + "/steer", { method: "POST", body: { text, from: "operator" } });
       toast(r?.ok ? "Sent to the run" : "Not steerable — nothing delivered (use mc tell)");
     },
   });

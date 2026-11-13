@@ -47,7 +47,7 @@ test("slackTeamFromTitle reads the team out of the Slack window title", () => {
 });
 
 test("chromeProfileFromTitle reads the profile off a Chrome window title", () => {
-  assert.equal(cap.chromeProfileFromTitle("New Tab - Google Chrome - Leo (Work)"), "Leo (Work)");
+  assert.equal(cap.chromeProfileFromTitle("New Tab - Google Chrome - Ada (Work)"), "Ada (Work)");
   assert.equal(cap.chromeProfileFromTitle("New Tab - Google Chrome"), null);
 });
 

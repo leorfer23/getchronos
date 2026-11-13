@@ -1,5 +1,5 @@
 /**
- * Focus's first and last card as data (Leo 2026-10-28): the finish line (`done_when`), what a
+ * Focus's first and last card as data (2026-10-28): the finish line (`done_when`), what a
  * terminal may do once green (`ship`, operator only), and the hand-off (`mc outcome`) he approves from.
  */
 import { test, beforeEach } from "node:test";
@@ -198,7 +198,7 @@ test("mc outcome refuses an ask it does not know, and mc ask-robert --operator g
   assert.match(r.stdout, /asked the operator/);
 });
 
-// ── checks ticked one by one, hand-offs kept, the board kept moving (Leo 2026-10-28) ────────────
+// ── checks ticked one by one, hand-offs kept, the board kept moving (2026-10-28) ────────────
 test("finish-line checks tick one by one, by number, and keep their ticks when the list is rewritten", () => {
   const s = sessions.create({ cwd: "/tmp", goal: "ship the board" });
   sessions.setFinish(s.id, { done_when: ["timeline gone", "npm test green", "screenshot"] });
@@ -333,7 +333,7 @@ test("mc hook claude PermissionRequest posts a tool ask naming the command; grok
   assert.deepEqual(posts[2], { event: "ask", question: "allow Bash?", options: ["yes", "no"], kind: "permission" });
 });
 
-// ── mc show: images on Focus mid-work (Leo 2026-10-28: an agent listed screenshot paths and opened Finder) ──
+// ── mc show: images on Focus mid-work (2026-10-28: an agent listed screenshot paths and opened Finder) ──
 
 test("a show keeps only images this terminal uploaded, rides the row, and the oldest fall off", () => {
   const s = sessions.create({ cwd: "/tmp" });

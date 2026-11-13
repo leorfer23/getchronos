@@ -30,7 +30,7 @@ const TOK = (wsId: string) => ({ "x-mc-workspace-token": workspaces.get(wsId)!.t
 function task(over: Partial<ExternalTask> = {}): ExternalTask {
   return {
     id: "ANA-1", title: "Fix the loader", url: null, status: "ready", statusRaw: "To Do", updated: null,
-    description: null, priority: null, assignee: "Leo", assignee_ids: [ME], labels: [], due: null, comments: [], ...over,
+    description: null, priority: null, assignee: "Ada", assignee_ids: [ME], labels: [], due: null, comments: [], ...over,
   };
 }
 let pull: ExternalTask[] = [];
@@ -63,11 +63,11 @@ test("trackerResolutions: closed task, reassigned, answered comment, superseded 
     task({ id: "ANA-1", status: "done", statusRaw: "Done" }),
     task({ id: "ANA-2", assignee_ids: ["acct-bob"] }),
     task({ id: "ANA-3", assignee_ids: ["acct-bob"], comments: [
-      { id: "c1", author: "Bob", author_id: "acct-bob", body: "@Leo?", created: null, mentions: [ME] },
-      { id: "c2", author: "Leo", author_id: ME, body: "yes", created: null },
+      { id: "c1", author: "Bob", author_id: "acct-bob", body: "@Ada?", created: null, mentions: [ME] },
+      { id: "c2", author: "Ada", author_id: ME, body: "yes", created: null },
     ] }),
     task({ id: "ANA-4", comments: [
-      { id: "c0", author: "Leo", author_id: ME, body: "earlier", created: null },
+      { id: "c0", author: "Ada", author_id: ME, body: "earlier", created: null },
       { id: "c1", author: "Ana", author_id: "acct-ana", body: "look?", created: null },
     ] }),
     task({ id: "ANA-5" }),
@@ -98,7 +98,7 @@ test("a comment he already answered in the same pull is never filed", () => {
   const prev = { v: 1 as const, tasks: { "ANA-1": { a: true, s: "To Do", c: [], seen: "2026-09-29T10:00:00Z" } } };
   const { items } = diffTracker(prev, [task({ comments: [
     { id: "c1", author: "Ana", author_id: "acct-ana", body: "can you look?", created: null },
-    { id: "c2", author: "Leo", author_id: ME, body: "on it", created: null },
+    { id: "c2", author: "Ada", author_id: ME, body: "on it", created: null },
     { id: "c3", author: "Ana", author_id: "acct-ana", body: "thanks! one more thing", created: null },
   ] })], ME, "jira");
   assert.deepEqual(items.map((i) => i.external_key), ["jira:ANA-1:comment:c3"]);

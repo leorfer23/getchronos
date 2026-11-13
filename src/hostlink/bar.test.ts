@@ -53,14 +53,14 @@ test("the fleet: the brain first, working = the brain's own pty activity for loc
   addHost("h_m2", "m2");
   addHost("h_m5", "m5", { lastSeen: new Date(T0 - 7 * 60_000).toISOString() });
   addHost("h_gone", "gone", { revoked: true });
-  const a = addSession({ goal: "open the rollback PR", cwd: "/Users/leo/src/app", worktree: "/Users/leo/src/.chronos-worktrees/app/ACM-12" });
-  const b = addSession({ title: "tidy the docs", cwd: "/Users/leo/src/docs" });
+  const a = addSession({ goal: "open the rollback PR", cwd: "/Users/operator/src/app", worktree: "/Users/operator/src/.chronos-worktrees/app/ACM-12" });
+  const b = addSession({ title: "tidy the docs", cwd: "/Users/operator/src/docs" });
   const c = addSession({ host: "h_m2", goal: "fix the dbt model", cwd: "/Users/m2/work/dbt", backend: "codex" });
   addSession({ host: "h_m5", cwd: "/Users/m5" });
   addSession({ cwd: "/x/ended", status: "ended" });
   addSession({ cwd: "/x/cloud", cloud: true });
   addSession({ host: "h_gone", cwd: "/x/revoked" });
-  const r = addRun({ name: "nightly-sweep", cwd: "/Users/leo/src/api" });
+  const r = addRun({ name: "nightly-sweep", cwd: "/Users/operator/src/api" });
   addRun({ name: "done-already", cwd: "/x", status: "success" });
 
   const bar = fleetBar(linkOf(["h_m2"]), activityOf([a, c], [b]), T0);

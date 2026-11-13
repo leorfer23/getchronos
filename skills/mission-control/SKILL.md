@@ -601,7 +601,7 @@ mc when script "python3 ~/bin/inbox_check.py --from ana@acme.com" --every 10m
 mc when check "Ana replied in the #data-eng thread about the schema change" --every 30m
                                             # only an agent can tell: a short read-only haiku probe with
                                             # this workspace's tools (Slack, email, Jira…) — costs tokens
-mc when manual --note "Leo signs the contract"   # nothing to watch: `mc when fire` or the timeout continues it
+mc when manual --note "the client signs the contract"   # nothing to watch: `mc when fire` or the timeout continues it
 mc when list                                # what is parked (--all for history) · mc when show <id8>
 mc when fire <id8> "evidence"               # it happened — continue that work now (any terminal of this client)
 mc when cancel <id8> "why"

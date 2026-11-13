@@ -7,10 +7,10 @@ import { brainOnlyPathsIn, brainPathsInProc, buildRemoteProcSpec, expandPathToke
 // a brain path. The prose a run acts on (goal, context) names brain paths all the time — the ticket
 // file, the worktree, the repo — and those are turned into tokens the host expands against its own.
 
-const HOME = "/Users/leo";
-const APP = "/Users/leo/Documents/GitHub/app";
-const LIB = "/Users/leo/Documents/GitHub/lib";
-const CHRONOS = "/Users/leo/chronos";
+const HOME = "/Users/operator";
+const APP = "/Users/operator/Documents/GitHub/app";
+const LIB = "/Users/operator/Documents/GitHub/lib";
+const CHRONOS = "/Users/operator/chronos";
 const WT = `${worktreeRootFor(APP)}/mc-acm-7`;
 
 const input = (over: Partial<ProcSpecInput> = {}): ProcSpecInput => ({
@@ -32,13 +32,13 @@ const input = (over: Partial<ProcSpecInput> = {}): ProcSpecInput => ({
   wsRepos: [
     { id: "r-app", git_remote: "git@github.com:acme/app.git", path: APP },
     { id: "r-lib", git_remote: "git@github.com:acme/lib.git", path: LIB },
-    { id: "r-local", git_remote: null, path: "/Users/leo/scratch" },
+    { id: "r-local", git_remote: null, path: "/Users/operator/scratch" },
   ],
   hostCwd: null,
   sandbox: { mode: "guard", allowRaw: [`${HOME}/.config/gcloud`, "/etc/hosts"], egressLocked: false },
   egress: null,
   env: {
-    PATH: "/Users/leo/.mc/bin:/usr/bin", HOME, MC_API: "http://localhost:7777/api",
+    PATH: "/Users/operator/.mc/bin:/usr/bin", HOME, MC_API: "http://localhost:7777/api",
     MC_WORKSPACE_TOKEN: "tok", GCLOUD_DIR: `${HOME}/.config/gcloud`, BRAIN_FILE: "/opt/chronos-data/tickets/acme/x",
     CLAUDE_CONFIG_DIR: `${HOME}/.claude-acme`,
   },

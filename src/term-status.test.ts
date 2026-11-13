@@ -189,7 +189,7 @@ test("an AskUserQuestion keeps its question when Claude's generic permission Not
   assert.equal(signalsOf(s.id).asking?.question, "Claude needs your permission to use Bash");
 });
 
-// Leo 2026-10-28: an agent asked for permission and Focus had no button to approve it. The menu was on
+// 2026-10-28: an agent asked for permission and Focus had no button to approve it. The menu was on
 // its screen, but the pending tool's ⏺ blinks every ~600ms, so the pty never went quiet and the
 // screen-read prompt never came; the Notification ~6s later said only "Claude needs your permission".
 test("claude's permission menu: decide while its menu is on screen, the menu rides the status, gone = over", () => {
@@ -362,7 +362,7 @@ test("grok: one marked block appended to config.toml, replaced in place, skipped
 
 // ── "done" is a tick, not a state ─────────────────────────────────────────────────────────────
 // The agent ticks the goal off, the operator says "one more thing", and the terminal is working
-// again — but `goal_done_at` is sticky, so every surface went on reading "done" (Leo, 2026-09-22).
+// again — but `goal_done_at` is sticky, so every surface went on reading "done" (2026-09-22).
 test("a ticked goal reads as review while nothing has happened since", () => {
   const r = resolve(base({ goalDoneAt: NOW - 5 * 60_000, quiet: true, result: "**Summary:** PR #7 is open." }));
   assert.equal(r.phase, "review");

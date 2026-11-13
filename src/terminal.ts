@@ -58,7 +58,7 @@ export { excludeChronosArtifacts, gitExcludePath, gitTrackedSync, insideGitRepo,
 
 // Standing instruction folded into every session (via system prompt where the CLI supports it, else the
 // seed): the operator reads Focus — goal + finish line + progress, decisions, hand-off — not the raw
-// output (Leo 2026-10-28). Each part is fed by an `mc` call the agent makes, so this says which, when.
+// output (2026-10-28). Each part is fed by an `mc` call the agent makes, so this says which, when.
 // Raw terminal stays one key away for detail.
 //
 // Keep this SHORT — it rides every turn. Card / worktree / heavy detail lives in the mission-control

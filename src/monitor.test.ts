@@ -392,7 +392,7 @@ test("maybeAskReminders: reminds once past the threshold, doesn't repeat immedia
   await maybeAskReminders();
   assert.equal(kv.get(`ask.reminded.${askId}`), firstMark);
 
-  asks.answer(askId, "yes", "leo");
+  asks.answer(askId, "yes", "operator");
   await maybeAskReminders(); // answered → asks.list({status:"open"}) no longer returns it; no-op, no throw
 });
 

@@ -66,7 +66,7 @@ test("parseWhen reads every kind with sensible defaults", () => {
   assert.equal(at.timeout_at, null, "a time needs no timeout");
   assert.equal(spec({ kind: "at", at: "2h" }).next_check_at, at.next_check_at, "bare durations read as from now");
 
-  const manual = spec({ kind: "manual", note: "Leo signs the contract" });
+  const manual = spec({ kind: "manual", note: "the client signs the contract" });
   assert.equal(manual.next_check_at, manual.timeout_at, "manual only wakes for its timeout");
   assert.equal(spec({ kind: "pr", target: PR, timeout: "6h" }).timeout_at, new Date(NOW + 6 * 3_600_000).toISOString());
 });
@@ -215,9 +215,9 @@ test("ask: met when answered, with the answer", async () => {
   const me = term();
   const a = asks.create({ session_id: me.id, workspace_id: ws.id, question: "Which bucket?", route: "operator" } as any);
   const c = await arm({ workspace_id: ws.id, session_id: me.id, spec: spec({ kind: "ask", target: a.id }), created_by: "x", round: 1 });
-  db.prepare("UPDATE asks SET status='answered', answer='the eu one', answered_by='leo' WHERE id=?").run(a.id);
+  db.prepare("UPDATE asks SET status='answered', answer='the eu one', answered_by='operator' WHERE id=?").run(a.id);
   evaluateEvent(continuations.get(c.id)!, NOW);
-  assert.match(continuations.get(c.id)!.evidence!, /leo answered "Which bucket\?": the eu one/);
+  assert.match(continuations.get(c.id)!.evidence!, /operator answered "Which bucket\?": the eu one/);
 });
 
 test("timeouts still continue the work — told it timed out and what was last seen", async () => {

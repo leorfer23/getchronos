@@ -1,5 +1,5 @@
 /**
- * The three things the operator reads on Focus (Leo 2026-10-28): the goal and how we will know it is
+ * The three things the operator reads on Focus (2026-10-28): the goal and how we will know it is
  * met, the decisions along the way, and the hand-off he approves from. This module owns the first and
  * the last as data:
  *
@@ -99,7 +99,7 @@ export function decodeOutcomes(raw: unknown): Outcome[] {
 export const MAX_EARLIER = 9;
 /**
  * A terminal can hand off more than once — the operator asks for changes, or gives it a follow-up — and
- * Focus keeps every hand-off, newest on top (Leo 2026-10-28). Not every filing is a new one, though: an
+ * Focus keeps every hand-off, newest on top (2026-10-28). Not every filing is a new one, though: an
  * agent re-files the same hand-off once it shipped it, or to fix a line. The rule, in order:
  *
  *   - no summary, only --shipped            → what it shipped goes on the hand-off on top
@@ -206,7 +206,7 @@ export function shotFile(sessionId: string, name: string): { path: string; mime:
 
 /**
  * The board going stale while the agent works: its progress bar and its checks are what the operator
- * reads, and an agent deep in a task forgets to move them (Leo 2026-10-28: "it is not regularly updating
+ * reads, and an agent deep in a task forgets to move them (2026-10-28: "it is not regularly updating
  * the checklist"). A Claude terminal's PostToolUse hook asks for this (throttled in the shell, see
  * term-hooks.ts) and hands the text back to the agent as context — a fact about its board, not an order.
  */

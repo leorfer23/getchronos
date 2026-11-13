@@ -46,19 +46,19 @@ test("harvest keeps only the operator's own comments, never what Chronos pushed"
   markPushed(pushed);
   const n = harvestComments(w, "jira", "acc-me", [
     task("ACM-1", [
-      { id: "1", author: "Leo", author_id: "acc-me", body: MINE, created: null },
-      { id: "2", author: "Leo", author_id: "acc-other", body: "A colleague who also happens to be called Leo.", created: null },
-      { id: "3", author: "Leo", author_id: "acc-me", body: pushed, created: null },
-      { id: "4", author: "Leo", author_id: "acc-me", body: "Shipped via Chronos: fix the thing\n\nPR: https://x", created: null },
-      { id: "5", author: "Leo", author_id: "acc-me", body: "ok", created: null },
+      { id: "1", author: "Ada", author_id: "acc-me", body: MINE, created: null },
+      { id: "2", author: "Ada", author_id: "acc-other", body: "A colleague who also happens to be called Ada.", created: null },
+      { id: "3", author: "Ada", author_id: "acc-me", body: pushed, created: null },
+      { id: "4", author: "Ada", author_id: "acc-me", body: "Shipped via Chronos: fix the thing\n\nPR: https://x", created: null },
+      { id: "5", author: "Ada", author_id: "acc-me", body: "ok", created: null },
     ]),
   ]);
   assert.equal(n, 1);
   const [s] = proseSamples.list(w.id);
   assert.equal(s.origin, "connector");
   assert.equal(s.ref, "jira:ACM-1#1");
-  assert.equal(harvestComments(w, "jira", "acc-me", [task("ACM-1", [{ id: "1", author: "Leo", author_id: "acc-me", body: MINE, created: null }])]), 0, "re-pull adds nothing");
-  assert.equal(harvestComments(w, "jira", null, [task("ACM-2", [{ author: "Leo", body: MINE + " again", created: null }])]), 0, "no identity → no harvest");
+  assert.equal(harvestComments(w, "jira", "acc-me", [task("ACM-1", [{ id: "1", author: "Ada", author_id: "acc-me", body: MINE, created: null }])]), 0, "re-pull adds nothing");
+  assert.equal(harvestComments(w, "jira", null, [task("ACM-2", [{ author: "Ada", body: MINE + " again", created: null }])]), 0, "no identity → no harvest");
 });
 
 test("samples stay inside their workspace", () => {

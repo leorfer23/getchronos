@@ -92,11 +92,11 @@ test("Kokoro answers first: its WAV is what /api/speak returns, with the languag
   const prev = process.env.CHRONOS_TTS_URL;
   process.env.CHRONOS_TTS_URL = s.url + "/";
   try {
-    const out = await speak("Hola, Leo.\nUI {\"op\":\"refresh\"}", "es");
+    const out = await speak("Hola, Ada.\nUI {\"op\":\"refresh\"}", "es");
     assert.equal(out.engine, "kokoro");
     assert.equal(out.mime, "audio/wav");
     assert.deepEqual(out.audio, WAV);
-    assert.deepEqual(s.seen[0], { path: "/speak", body: { text: "Hola, Leo.", lang: "es" } }, "sayable() ran first, one slash");
+    assert.deepEqual(s.seen[0], { path: "/speak", body: { text: "Hola, Ada.", lang: "es" } }, "sayable() ran first, one slash");
   } finally {
     s.close();
     if (prev === undefined) delete process.env.CHRONOS_TTS_URL; else process.env.CHRONOS_TTS_URL = prev;

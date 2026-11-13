@@ -42,9 +42,9 @@ test("listWidgets is name/title/topics only — never the reader itself", async 
 
 test("readWidget stamps the read and forwards the query string; unknown is null, not a throw", async () => {
   await withExample(async () => {
-    const out = await readWidget("example", { who: "leo" });
+    const out = await readWidget("example", { who: "ada" });
     assert.equal(out?.name, "example");
-    assert.deepEqual((out?.data as any).hello, "leo");
+    assert.deepEqual((out?.data as any).hello, "ada");
     assert.ok(!isNaN(Date.parse(out!.at)), "at is an ISO stamp");
     assert.equal(await readWidget("nope"), null);
   });

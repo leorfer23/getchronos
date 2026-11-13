@@ -12,6 +12,7 @@
  * lands on the next decision with no restart.
  */
 import { CONFIG } from "./config.js";
+import { inRepo } from "./repo-root.js";
 import { kv } from "./store/kv.js";
 import { workspaces } from "./store.js";
 import { bus } from "./bus.js";
@@ -487,6 +488,13 @@ defineSetting({
   label: "Front key (api)", help: "auto: an Anthropic key first, else the AI Gateway key.",
   options: () => ["auto", "anthropic", "gateway"],
   default: () => process.env.CHRONOS_TALKER_PROVIDER || "auto",
+});
+defineSetting({
+  key: "voice.talker_persona_file", group: "Voice", level: "global", type: "string", env: "CHRONOS_TALKER_PERSONA_FILE",
+  label: "Front persona file",
+  help: "A text file on this Mac that tells the front who you are, the languages you speak and how you want to be spoken to. Kept out of the repo; read on every turn. Empty: the generic persona. Default: local/talker-persona.md in the Chronos checkout (gitignored), when it exists.",
+  // A test run never picks up a persona file sitting in the checkout it runs from.
+  default: () => process.env.CHRONOS_TALKER_PERSONA_FILE ?? (process.env.CHRONOS_TEST === "1" ? "" : inRepo("local", "talker-persona.md")),
 });
 defineSetting({
   key: "voice.lang_pick", group: "Voice", level: "global", type: "bool",

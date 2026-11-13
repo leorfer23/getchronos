@@ -2,7 +2,7 @@
  * Hand a LIVE local Desk terminal off to Cursor Cloud, with all its context, so the work continues
  * on a Cursor-hosted VM instead of this Mac. Cursor can only start an agent from a GitHub ref, so a
  * handoff is: get the terminal's work onto a branch on GitHub, then dispatch a cloud run from it
- * with enough context to carry on (Leo's own idea — see docs/plans/2026-09-22-cursor-cloud-backend.md
+ * with enough context to carry on (the operator's own idea — see docs/plans/2026-09-22-cursor-cloud-backend.md
  * for the wider rollout this is PR 4 of).
  *
  * Two entry points, deliberately separate: `prepareHandoff` is pure inspection for the confirm card
@@ -34,7 +34,7 @@ async function git(cwd: string, args: string[], timeoutMs = 20_000): Promise<str
 // ---------------------------------------------------------------------------------------------
 // "Is this Chronos's own repo?" — Robert's first constraint. A chronos/handoff/* branch pushed to
 // a CLIENT's remote is client-facing; auto-offering the handoff there would be wrong. This must
-// stay a narrow allowlist, not "anything owned by leorfer23" — Leo hosts client work under his own
+// stay a narrow allowlist, not "anything owned by the repo's owner" — an operator may host client work under the same
 // GitHub account too, and owner-level matching would defeat the whole point of the check. Add a
 // repo here (one line) the day Chronos grows another mirror.
 const OWN_REPOS = new Set(["github.com/leorfer23/getchronos", "github.com/leorfer23/chronos"]);
@@ -93,7 +93,7 @@ async function pendingFiles(worktreePath: string): Promise<string[]> {
 }
 
 /**
- * Pure inspection — zero side effects. Everything the confirm card needs before Leo approves a
+ * Pure inspection — zero side effects. Everything the confirm card needs before the operator approves a
  * handoff, or a clear reason it cannot happen at all.
  */
 export async function prepareHandoff(sessionId: string): Promise<HandoffPlan> {
@@ -164,7 +164,7 @@ export async function prepareHandoff(sessionId: string): Promise<HandoffPlan> {
 // ---------------------------------------------------------------------------------------------
 
 export interface HandoffOpts {
-  /** Required (must be true) when prepareHandoff's plan.requiresConfirm is true — Leo's explicit yes for a non-Chronos remote. */
+  /** Required (must be true) when prepareHandoff's plan.requiresConfirm is true — the operator's explicit yes for a non-Chronos remote. */
   confirmNonOwnRemote?: boolean;
   /** Test seam: the registered backend name to dispatch under. Defaults to "cursor-cloud"; production callers should never set this. */
   backendName?: string;
