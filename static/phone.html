@@ -1736,12 +1736,18 @@ qs("#f-strip").addEventListener("click", (e) => {
 qs("#f-back").onclick = () => { fx.tap(); if (S.back === "v-terms") showTerms(); else showHome(); };
 qs("#f-more").onclick = () => { fx.tap(); moreSheet(F.id); };
 const fcomposer = qs("#f-composer");
+const SAY_MAX = 20000; // keep in step with SessionInputSchema.text (src/validation.ts)
 function sendFocusComposer() {
   const v = fcomposer.value.trim(); if (!v) return;
+  // Over the daemon's cap: say so and keep the text (it used to be cleared and the refusal swallowed).
+  if (v.length > SAY_MAX) { fx.fail(); return toast(`Too long to send: ${v.length.toLocaleString()} of ${SAY_MAX.toLocaleString()} characters — still in the box`); }
   const id = F.id;
-  fx.send(); input(id, { text: v, enter: true }).catch(() => {});
+  fx.send();
   fcomposer.value = ""; fcomposer.style.height = ""; fcomposer.blur();
-  advance(id, "sent");
+  input(id, { text: v, enter: true }).then(() => advance(id, "sent"), () => {
+    // Not sent (input() already said why): the words go back in the box, never lost.
+    if (F.id === id && !fcomposer.value) { fcomposer.value = v; fcomposer.dispatchEvent(new Event("input")); }
+  });
 }
 qs("#f-send").onclick = sendFocusComposer;
 fcomposer.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendFocusComposer(); } });
