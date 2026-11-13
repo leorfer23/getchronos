@@ -46,7 +46,7 @@ const id8 = (id: string) => id.slice(0, 8);
 export function parseVerdict(reply: string): { kind: "answer" | "escalate"; text: string } | null {
   const body = (reply || "").trim();
   if (!body) return null;
-  const m = /^\s*(ANSWER|ASK LEO|ESCALATE)\s*:\s*([\s\S]+)$/i.exec(body);
+  const m = /^\s*(ANSWER|ASK OPERATOR|ESCALATE)\s*:\s*([\s\S]+)$/i.exec(body);
   if (!m) return null;
   const text = m[2].trim();
   if (!text) return null;
@@ -86,12 +86,12 @@ export function triagePrompt(ask: Ask, escalateOnly: boolean): string {
     `\nApply WHEN YOU DECIDE AND WHEN YOU ASK from your instructions — it owns that line and this prompt does not ` +
     `restate it. Put your decision on the FIRST LINE in one of these two exact shapes:\n` +
     (escalateOnly
-      ? `  ASK LEO: <your recommended answer, in one line>\n` +
+      ? `  ASK OPERATOR: <your recommended answer, in one line>\n` +
         `This workspace REQUIRES a human answer to every ask — you may recommend, you may not decide. ` +
-        `Always use ASK LEO here, even when the answer is obvious.\n`
+        `Always use ASK OPERATOR here, even when the answer is obvious.\n`
       : `  ANSWER: <the answer the agent should act on>\n` +
-        `  ASK LEO: <why it needs him, and the answer you recommend>\n\n` +
-        `When you are not sure which side of that line this falls on, that IS the signal — use ASK LEO.\n`) +
+        `  ASK OPERATOR: <why it needs him, and the answer you recommend>\n\n` +
+        `When you are not sure which side of that line this falls on, that IS the signal — use ASK OPERATOR.\n`) +
     `\nNo preamble, no markdown. First line is the verdict; add at most one short line after it if ` +
     `the agent needs a reason to act well. Write the answer TO the agent — it is the one reading it.`
   );

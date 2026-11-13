@@ -5,7 +5,7 @@
  *
  *  - `touchable`: never pid ≤ 1, never the spawner (daemon / hostd) itself, never a live root (a
  *    running terminal's own CLI), never another user's process, never an executable under a
- *    protected prefix (Leo's own `/Applications/Google Chrome.app`). Ledger-owned is the caller's
+ *    protected prefix (the operator's own `/Applications/Google Chrome.app`). Ledger-owned is the caller's
  *    half: both callers only ever consider `ledger.entries`.
  *  - The KEEP-LIST (`isKept`, `keptBelow`): a process whose argv matches it — Claude Code's daemon /
  *    bg-pty-host / bg-spare, colima, gpg-agent… — is never touched, and neither is anything below it.

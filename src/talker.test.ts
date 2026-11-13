@@ -110,6 +110,30 @@ test("the front can only delegate: no approve/merge/send/deploy verb, no daemon 
   assert.ok(T.TALKER_SYSTEM.length < 9000, "the prompt stays ~2k tokens");
 });
 
+// ───────────────────────────── the operator's own persona ─────────────────────────────
+
+test("the shipped persona is generic; the operator's own lives in a file outside the repo and joins after the fixed part", () => {
+  assert.equal(T.talkerSystem(), T.TALKER_SYSTEM, "no file under test: the generic prompt, nothing more");
+  assert.equal(T.talkerPersona(""), "");
+  assert.equal(T.talkerPersona("/nonexistent/talker-persona.md"), "", "a missing file is not an error");
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR || "/tmp"), "talker-persona-"));
+  try {
+    const file = path.join(dir, "persona.md");
+    fs.writeFileSync(file, "   \n");
+    assert.equal(T.talkerPersona(file), "", "an empty file adds nothing");
+    fs.writeFileSync(file, "He builds boats in Lisbon and prefers Portuguese.\n" + "x".repeat(T.PERSONA_MAX_CHARS * 2));
+    writeSetting("voice.talker_persona_file", file);
+    const sys = T.talkerSystem();
+    assert.ok(sys.startsWith(T.TALKER_SYSTEM), "the fixed (cached) part stays first");
+    assert.match(sys, /ABOUT THE OPERATOR[^\n]*\nHe builds boats in Lisbon/);
+    assert.ok(sys.length <= T.TALKER_SYSTEM.length + T.PERSONA_MAX_CHARS + 200, "clipped");
+    const args = T.cliTalkerArgs("/tmp/prof");
+    assert.match(args[args.indexOf("--system-prompt") + 1], /He builds boats in Lisbon/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the spoken stream stops at the first §: delegate lines are never spoken or shown", () => {
   const out: string[] = [];
   const f = T.speakFilter((t) => out.push(t));

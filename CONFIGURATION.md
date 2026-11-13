@@ -449,6 +449,7 @@ The voice front (`src/talker.ts`, VOICE.md) — every knob is also a Desk settin
 | `CHRONOS_TALKER_CLI_MODEL` | `haiku` | Claude Code alias for the `cli` engine |
 | `CHRONOS_TALKER_API_MODEL` | `claude-haiku-5-5` | model id for the `api` engine (the gateway form is derived) |
 | `CHRONOS_TALKER_PROVIDER` | `auto` | `api` engine key: `auto` (Anthropic first, else gateway), `anthropic`, `gateway` |
+| `CHRONOS_TALKER_PERSONA_FILE` | `local/talker-persona.md` in the checkout, when it exists | setting `voice.talker_persona_file`. A text file that tells the front who you are, your languages and how to speak to you; appended after the generic prompt, read every turn, never in the repo (`local/` is gitignored) |
 | `CHRONOS_TALKER_API_KEY` | *(falls back to `ANTHROPIC_API_KEY`)* | Anthropic key for the `api` engine; `AI_GATEWAY_API_KEY` is used for `gateway`. Keys live in `.secrets`, never in a setting |
 | `CHRONOS_VOICE_FINAL_ENGINE` | `accurate` | setting `voice.final_engine`. `accurate` = a finished sentence goes to the second whisper (`sh.chronos.whisper-final`, a larger model on its own port) while the live words keep the fast one; one-word answers stay on the fast one; falls back to the fast one whenever the second is not running. `fast` = one engine for everything. `cloud` = the finished sentence goes to ElevenLabs Scribe first (**the audio of what you say on a call leaves the machine**; needs `ELEVENLABS_API_KEY`; see VOICE.md → Hearing in the cloud), then the same local chain on any failure |
 | `ELEVENLABS_API_KEY` | *(none)* | `.secrets` only. Used by `voice.final_engine = cloud` and nothing else; the daemon takes it out of its own environment at boot, so no spawned process inherits it. Missing with the setting on: sentences stay local, said once in the log and in `GET /api/voices` → `hearing.cloud` |
@@ -897,6 +898,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_TALKER_CLI_MODEL` | `haiku` | `src/settings.ts` |
 | `CHRONOS_TALKER_API_MODEL` | `claude-haiku-5-5` | `src/settings.ts` |
 | `CHRONOS_TALKER_PROVIDER` | `auto` | `src/settings.ts` |
+| `CHRONOS_TALKER_PERSONA_FILE` | `local/talker-persona.md` | `src/settings.ts` |
 | `CHRONOS_TALKER_API_KEY` | — | `src/talker.ts` |
 | `CHRONOS_WHISPER_MODEL` | — | `scripts/install-launchd.mjs` |
 | `CHRONOS_TG_CHAT_ID` | `""` | `src/config.ts` |

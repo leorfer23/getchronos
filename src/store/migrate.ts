@@ -2138,7 +2138,7 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
   {
     version: 148,
     name: "sessions.done_when / ship / outcome — the finish line, what it may do at the end, and its hand-off",
-    // Focus is three things (Leo 2026-10-28): the goal and how we will know it is met, the decisions
+    // Focus is three things (2026-10-28): the goal and how we will know it is met, the decisions
     // along the way, and the hand-off he approves from. `done_when` is the finish line as a JSON list
     // of checks the agent writes (`mc goal set --done-when`). `ship` is what the operator lets it do
     // once the work is green — ask | merge | deploy — and only the operator writes it. `outcome` is the
@@ -2165,8 +2165,8 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
   {
     version: 150,
     name: "sessions.shown — images a terminal put in front of the operator (`mc show`)",
-    // A terminal cannot display an image, and a path in its reply shows the operator nothing (Leo
-    // 2026-10-28: an agent listed screenshot paths and opened Finder). `mc show` uploads the bytes the
+    // A terminal cannot display an image, and a path in its reply shows the operator nothing
+    // (2026-10-28: an agent listed screenshot paths and opened Finder). `mc show` uploads the bytes the
     // way a hand-off's screenshots go up, and this keeps the list — caption, shot names, when — that
     // Focus draws inside Talk, under the reply it came with. JSON, oldest first, capped.
     up: (db) => db.exec(`ALTER TABLE sessions ADD COLUMN shown TEXT;`),

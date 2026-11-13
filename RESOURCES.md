@@ -124,7 +124,7 @@ wait for the next tick.
 **Never signalled:** pid ≤ 1; the spawner (daemon / hostd) and **its process group** (a headless run
 lives in the daemon's group — its group is never a target); a live root (a running terminal's own
 CLI); another user's process; any executable under a protected prefix — `/Applications/Google
-Chrome.app/` always (Leo's own browser, driven by the claude-in-chrome extension), plus
+Chrome.app/` always (the operator's own browser, driven by the claude-in-chrome extension), plus
 `CHRONOS_REAPER_PROTECT`; and **any process the ledger does not own**. Immediately before signalling,
 every target's start time is read again (`ps -o lstart -p`); a target whose start moved is skipped, and
 if the re-check itself fails nothing is signalled that tick.
@@ -235,7 +235,7 @@ nobody anything. Per workspace, while strained **and** over:
    warning, plus `(over budget, nothing heavy to slow)` logged once per episode. Considered and NOT done:
    `taskpolicy -b` / `-B` (PRIO_DARWIN_BG) *is* reversible unprivileged (measured: pri 4 → 31), but it
    clamps to the E-cores and throttles I/O — `machine.ts` rejected it for agents for that reason, and
-   Leo's decision was renice.
+   the operator's decision was renice.
 3. **Pause** — still over (past the 2 min) **and** memory pressure critical: SIGSTOP the workspace's
    **newest heavy process**, one per workspace per tick. Heavy = leak family (the reaper's), a node/bun/deno
    running a test runner, or a build tool (`tsc`, `esbuild`, `webpack`, `rollup`, `cargo`, `rustc`, `go`,
@@ -515,7 +515,7 @@ own pool and a local auth story first. A host older than this PR answers "unknow
 - **Later, not a dependency:** evaluate Lightpanda as the pool's engine (its claims are unverified).
 - **Out of scope:** the per-client logged-in agent Chromes (ports 9222-9225 via chrome-lazy-mcp — they
   hold Google Workspace logins per client and stay as they are). Cloudflare remote Browser Rendering
-  bindings are dropped (Leo's decision).
+  bindings are dropped (the operator's decision).
 
 ### Browser knobs
 
@@ -561,7 +561,7 @@ workspace and for the operator. So agents do not run the VPN client themselves; 
 ## Out of scope
 
 - Changing `~/.claude/bin/idle-reaper.py` (personal, not Chronos).
-- Reaping anything Chronos did not spawn: Leo's own shells, apps, his real Chrome, Robert's own
+- Reaping anything Chronos did not spawn: the operator's own shells, apps, his real Chrome, Robert's own
   manager processes (not roots), or processes that predate the daemon's last start.
 - Persisting the ledger across daemon restarts.
 - Env-var (`MC_SESSION`) tagging — proven useless for the leak that motivated this.

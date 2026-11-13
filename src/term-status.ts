@@ -105,7 +105,7 @@ export const REACHED_GRACE_MS = 60_000;
  *
  * `goal_done_at` is a TICK, not a state: at that moment the agent said it had finished. Then the
  * operator says "one more thing" and it is working again — but the tick is sticky, so every surface
- * went on reading "done" (Leo, 2026-09-22): the card and the board, the rail's done count and
+ * went on reading "done" (2026-09-22): the card and the board, the rail's done count and
  * therefore "close all done" (which would have killed live work), Robert's in-flight count, and the
  * watch that lifts itself once a goal is reached.
  *
@@ -258,7 +258,7 @@ export function resolve(inp: ResolveInput): Omit<TermStatus, "since"> {
     const names = [...tally].map(([l, c]) => (c > 1 ? `${l} ×${c}` : l));
     // Its turn is over: what runs now is in the BACKGROUND (a subagent, or a shell the CLI keeps — a CI
     // watch, a long test), and the agent is free to talk. "1 subagent: Wait for Jenkins" read as busy,
-    // and the operator waited instead of asking it something (Leo, 2026-10-28).
+    // and the operator waited instead of asking it something (2026-10-28).
     const what = names.length ? names.join(", ") : `${subs.length} task${subs.length === 1 ? "" : "s"}`;
     return out("waiting", `free to talk · in the background: ${what}`, { on: "subagents" });
   }

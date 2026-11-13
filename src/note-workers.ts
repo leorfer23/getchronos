@@ -25,7 +25,7 @@
  *  - never a note with a note-work run queued/running/paused (one worker per note, ever);
  *  - never past CHRONOS_NOTE_WORKERS in flight per client (the same knob is the cap);
  *  - never a note a worker already tried, until the note is edited after that attempt (updated_at >
- *    worker_at) or CHRONOS_NOTE_WORKER_RETRY_DAYS pass — a "needs Leo" note must not be re-run twice a
+ *    worker_at) or CHRONOS_NOTE_WORKER_RETRY_DAYS pass — a "needs the operator" note must not be re-run twice a
  *    day for nothing;
  *  - never a note with a follow-up pending (that agent owns the next look) or a card dated in the future.
  * dispatch() keeps its own guards (loop guard, burn brake, budgets, concurrency): an {error} or a

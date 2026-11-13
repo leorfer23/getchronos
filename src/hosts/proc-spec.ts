@@ -6,7 +6,7 @@ import { portableAllow, portableEnv } from "./spawn-spec.js";
 // HOSTS.md phase 5: a headless run on another computer. The ProcSpec is to `spawn_proc` what the
 // SpawnSpec is to `spawn_pty` — intent, not paths — with one difference the task allows: the run's
 // goal, system text and trigger context are PROSE the brain composes (tickets.ts, reviews.ts…), and
-// that prose names brain paths ("read the ticket at /Users/leo/…/repo/.mc/tickets/PER-7.md", "you are
+// that prose names brain paths ("read the ticket at /Users/operator/…/repo/.mc/tickets/PER-7.md", "you are
 // in a worktree at …"). Those are rewritten here into tokens the host expands against its OWN paths:
 //
 //   {{chronos:repo:<repo id>}}    → the host's checkout of that repo

@@ -16,6 +16,10 @@ local/
   com.example.job.plist  ← ignored
 ```
 
+One file here is read by the daemon if you create it: `local/talker-persona.md`, the voice
+front's persona — who you are, the languages you speak, how you want to be spoken to (see
+CONFIGURATION.md → `CHRONOS_TALKER_PERSONA_FILE`). The shipped persona is generic; yours stays here.
+
 Reference them from launchd with an absolute path, exactly as you would a tracked
 script. Nothing in `src/` may import from `local/` — the daemon must build and boot
 on a clean clone with this directory empty.

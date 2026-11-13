@@ -41,7 +41,7 @@ function task(over: Partial<ExternalTask> = {}): ExternalTask {
     updated: "2026-09-24T10:00:00.000Z",
     description: "The nightly loader drops rows.",
     priority: null,
-    assignee: "Leo",
+    assignee: "Ada",
     assignee_ids: [ME],
     labels: [],
     due: null,
@@ -116,7 +116,7 @@ test("push: only an urgent Slack DM or mention; tracker rows never", () => {
 
 test("first sync seeds silently — turning it on never floods", async () => {
   const ws = mkWs();
-  pull = [task({ comments: [{ id: "c1", author: "Ana", author_id: "acct-ana", body: "ping @Leo", created: null, mentions: [ME] }] }), task()];
+  pull = [task({ comments: [{ id: "c1", author: "Ana", author_id: "acct-ana", body: "ping @Ada", created: null, mentions: [ME] }] }), task()];
   await syncWorkspace(ws);
   assert.equal(rows(ws.id).length, 0);
   await syncWorkspace(ws);
@@ -137,11 +137,11 @@ test("assigned, mention, comment on his task, status move — and never his own 
 
   pull = [
     { ...mine, statusRaw: "In Review", comments: [
-      { id: "c11", author: "Leo", author_id: ME, body: "on it", created: null },
+      { id: "c11", author: "Ada", author_id: ME, body: "on it", created: null },
       { id: "c10", author: "Ana", author_id: "acct-ana", body: "can you look?", created: null },
     ] },
     { ...theirs, comments: [
-      { id: "c20", author: "Bob", author_id: "acct-bob", body: "cc @Leo need your call", created: null, mentions: [ME] },
+      { id: "c20", author: "Bob", author_id: "acct-bob", body: "cc @Ada need your call", created: null, mentions: [ME] },
       { id: "c21", author: "Bob", author_id: "acct-bob", body: "note to self", created: null },
     ] },
     { ...reassigned, assignee_ids: [ME] },

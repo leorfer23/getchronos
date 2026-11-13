@@ -183,7 +183,7 @@ test("setPlan (scout) grades complexity as 'scout' — but never overwrites a hu
   assert.equal(planned.complexity_source, "scout");
   assert.equal(planned.status, "planned");
 
-  const humanGraded = createTicket({ workspace_id: ws.id, title: "leo-graded ticket", complexity: "5" });
+  const humanGraded = createTicket({ workspace_id: ws.id, title: "operator-graded ticket", complexity: "5" });
   assert.equal(humanGraded.complexity_source, "human");
   const stillHuman = setPlan(humanGraded.id, "scout brief", { complexity: "2" })!;
   assert.equal(stillHuman.complexity, "5", "scout's grade must not overwrite the operator's");
@@ -200,7 +200,7 @@ test("gradeTicket: normal case grades 'grader' and logs a note", () => {
 
 test("gradeTicket: refuses to overwrite a human-set complexity — never throws, doesn't touch the value", () => {
   const ws = mkWs();
-  const t = createTicket({ workspace_id: ws.id, title: "leo already graded this", complexity: "1" });
+  const t = createTicket({ workspace_id: ws.id, title: "operator already graded this", complexity: "1" });
   assert.equal(t.complexity_source, "human");
 
   const result = gradeTicket(t.id, 5, "actually this looks architectural")!;

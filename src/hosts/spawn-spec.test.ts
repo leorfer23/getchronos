@@ -4,10 +4,10 @@ import { brainPathsIn, buildRemoteSpawnSpec, expandHomeRelative, homeRelative, p
 
 // A brain that looks like the operator's: a home, a chronos checkout, a client profile and repos
 // under it. Every one of those paths is something a host must never be handed.
-const BRAIN_HOME = "/Users/leo";
-const CHECKOUT = "/Users/leo/chronos";
-const PROFILE = "/Users/leo/.claude-globex";
-const REPO_PATH = "/Users/leo/Documents/GitHub/airflow";
+const BRAIN_HOME = "/Users/operator";
+const CHECKOUT = "/Users/operator/chronos";
+const PROFILE = "/Users/operator/.claude-globex";
+const REPO_PATH = "/Users/operator/Documents/GitHub/airflow";
 const ELSEWHERE = "/Volumes/data/chronos-state";
 
 const input = (over: Partial<RemoteSpecInput> = {}): RemoteSpecInput => ({
@@ -26,13 +26,13 @@ const input = (over: Partial<RemoteSpecInput> = {}): RemoteSpecInput => ({
   worktree: { branch: "mc/ana-12", base: "main" },
   resumeCwd: null,
   profile: "claude-globex",
-  sandbox: { mode: "guard", allowRaw: ["~/.config/gcloud", "/Users/leo/.aws", "/etc/passwd"], egressLocked: false },
+  sandbox: { mode: "guard", allowRaw: ["~/.config/gcloud", "/Users/operator/.aws", "/etc/passwd"], egressLocked: false },
   system: "## How to report your work",
   // What childEnv + backend.env + mcEnv + MC_* hand a LOCAL spawn — paths included, on purpose.
   env: {
-    PATH: "/Users/leo/.mc/bin:/usr/bin",
+    PATH: "/Users/operator/.mc/bin:/usr/bin",
     HOME: BRAIN_HOME,
-    USER: "leo",
+    USER: "operator",
     SHELL: "/bin/zsh",
     TMPDIR: "/var/folders/x/T/",
     LANG: "en_US.UTF-8",
@@ -41,11 +41,11 @@ const input = (over: Partial<RemoteSpecInput> = {}): RemoteSpecInput => ({
     MC_WORKSPACE_TOKEN: "tok",
     MC_SESSION: "sess-1",
     AI_GATEWAY_API_KEY: "gw-key",
-    GOOGLE_APPLICATION_CREDENTIALS: "/Users/leo/.config/gcloud/app.json",
-    CURSOR_CONFIG_DIR: "/Users/leo/.cursor-globex",
-    EXTRA_PATHS: "/Users/leo/bin:/opt/homebrew/bin",
+    GOOGLE_APPLICATION_CREDENTIALS: "/Users/operator/.config/gcloud/app.json",
+    CURSOR_CONFIG_DIR: "/Users/operator/.cursor-globex",
+    EXTRA_PATHS: "/Users/operator/bin:/opt/homebrew/bin",
     STATE_DIR: `${ELSEWHERE}/x`,
-    GIT_AUTHOR_NAME: "Leo",
+    GIT_AUTHOR_NAME: "Operator",
   },
   nice: 5,
   cols: 120,
@@ -72,7 +72,7 @@ test("the host supplies its own base env and MC_API; secrets, workspace and mc i
   assert.equal(spec.env.MC_WORKSPACE_TOKEN, "tok");
   assert.equal(spec.env.MC_SESSION, "sess-1");
   assert.equal(spec.env.AI_GATEWAY_API_KEY, "gw-key");
-  assert.equal(spec.env.GIT_AUTHOR_NAME, "Leo");
+  assert.equal(spec.env.GIT_AUTHOR_NAME, "Operator");
   // Home paths become ~/… and are flagged for the host to expand against ITS home.
   assert.equal(spec.env.GOOGLE_APPLICATION_CREDENTIALS, "~/.config/gcloud/app.json");
   assert.equal(spec.env.EXTRA_PATHS, "~/bin:/opt/homebrew/bin");
@@ -116,11 +116,11 @@ test("brainPathsIn finds a leak wherever it hides", () => {
 });
 
 test("homeRelative / profileNameFor", () => {
-  assert.deepEqual(homeRelative("/Users/leo", "/Users/leo"), { value: "~", changed: true });
-  assert.deepEqual(homeRelative("/Users/leonard/x", "/Users/leo"), { value: "/Users/leonard/x", changed: false }, "a sibling home is not ours");
-  const profiles = { claude: "/Users/leo/.claude", "claude-acme": "/Users/leo/.claude-acme", work: "/Volumes/w/.claude" };
-  assert.equal(profileNameFor("/Users/leo/.claude-acme", profiles, "claude"), "claude-acme");
+  assert.deepEqual(homeRelative("/Users/operator", "/Users/operator"), { value: "~", changed: true });
+  assert.deepEqual(homeRelative("/Users/operators/x", "/Users/operator"), { value: "/Users/operators/x", changed: false }, "a sibling home is not ours");
+  const profiles = { claude: "/Users/operator/.claude", "claude-acme": "/Users/operator/.claude-acme", work: "/Volumes/w/.claude" };
+  assert.equal(profileNameFor("/Users/operator/.claude-acme", profiles, "claude"), "claude-acme");
   assert.equal(profileNameFor("/Volumes/w/.claude/", profiles, "claude"), "work", "matched by dir, trailing slash ignored");
-  assert.equal(profileNameFor("/Users/leo/.claude-new", profiles, "claude"), "claude-new", "the discovery convention");
+  assert.equal(profileNameFor("/Users/operator/.claude-new", profiles, "claude"), "claude-new", "the discovery convention");
   assert.equal(profileNameFor(null, profiles, "claude"), "claude");
 });

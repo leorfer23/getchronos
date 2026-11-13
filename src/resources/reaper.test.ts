@@ -327,10 +327,10 @@ test("driver: idle (no roots, nothing owned) costs no ps at all; off mode never 
 
 // ───────────────────────────── shared daemons: left running, keep-list ─────────────────────────────
 
-const CLAUDE_BIN = "/Users/leo/.local/bin/claude";
+const CLAUDE_BIN = "/Users/operator/.local/bin/claude";
 const ARGV: Record<number, string> = {
-  300: `${CLAUDE_BIN} daemon run --json-path /Users/leo/.claude/daemon.json --log-file /Users/leo/.claude/daemon.log --origin transient`,
-  301: "claude bg-pty-host --bg-pty-host /tmp/cc-daemon-501/023e356f/pty/a2e80b7e.sock 87 36 -- /Users/leo/.local/share/claude/versions/2.1.287 --resume",
+  300: `${CLAUDE_BIN} daemon run --json-path /Users/operator/.claude/daemon.json --log-file /Users/operator/.claude/daemon.log --origin transient`,
+  301: "claude bg-pty-host --bg-pty-host /tmp/cc-daemon-501/023e356f/pty/a2e80b7e.sock 87 36 -- /Users/operator/.local/share/claude/versions/2.1.287 --resume",
   302: "claude bg-spare --bg-spare /tmp/cc-daemon-501/023e356f/spare/286947f7.claim.sock",
   240: "/bin/zsh -c npx vitest run",
   241: "node /r/node_modules/vitest/vitest.mjs run",
@@ -340,7 +340,7 @@ const ARGV: Record<number, string> = {
 test("keep-list: Claude Code's daemon and its bg hosts, colima, agents, watchman, fsmonitor, ollama", () => {
   const cfg = reaperConfigFromEnv({});
   for (const a of [ARGV[300], ARGV[301], ARGV[302],
-    "/Users/leo/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude --bg-pty-host /tmp/cc-daemon-501/x.sock 87 36 -- v --session-id abc --resume",
+    "/Users/operator/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude --bg-pty-host /tmp/cc-daemon-501/x.sock 87 36 -- v --session-id abc --resume",
     "/opt/homebrew/bin/limactl hostagent --pidfile /x", "/opt/homebrew/bin/colima daemon start default", "gpg-agent --homedir /x --daemon",
     "/usr/bin/ssh-agent -l", "/opt/homebrew/bin/watchman --foreground", "git fsmonitor--daemon run --detach", "/usr/local/bin/ollama serve"])
     assert.ok(isKept(a, cfg), a);
@@ -357,7 +357,7 @@ test("keep-list: Claude Code's daemon and its bg hosts, colima, agents, watchman
 function daemonScene() {
   const { w, r } = harness();
   const daemon = P({ pid: 300, ppid: 200, pgid: 300, startMs: T0 + 1000_000, comm: CLAUDE_BIN });
-  const ptyHost = P({ pid: 301, ppid: 300, pgid: 300, startMs: T0 + 2000_000, comm: "/Users/leo/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude" });
+  const ptyHost = P({ pid: 301, ppid: 300, pgid: 300, startMs: T0 + 2000_000, comm: "/Users/operator/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude" });
   const spare = P({ pid: 302, ppid: 301, pgid: 300, startMs: T0 + 3000_000, comm: CLAUDE_BIN });
   const shell = P({ pid: 240, ppid: 200, pgid: 240, startMs: T0 + 4000_000, comm: "/bin/zsh" });
   const vitest = P({ pid: 241, ppid: 240, pgid: 240, startMs: T0 + 5000_000, comm: "/opt/homebrew/bin/node" });
@@ -416,7 +416,7 @@ function attachedScene(cfg: Partial<ReaperConfig>, kids: Proc[], argv: Record<nu
 
 test("an ATTACHED `claude --bg-pty-host` survives rule 1 (keep-list), with the session it hosts; an ordinary attached leftover dies", async () => {
   const s = attachedScene({}, [
-    P({ pid: 301, ppid: 200, pgid: 301, startMs: T0 + 1000_000, comm: "/Users/leo/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude" }),
+    P({ pid: 301, ppid: 200, pgid: 301, startMs: T0 + 1000_000, comm: "/Users/operator/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude" }),
     P({ pid: 303, ppid: 301, pgid: 301, startMs: T0 + 2000_000, comm: "/bin/zsh" }),
     P({ pid: 304, ppid: 200, pgid: 304, startMs: T0 + 3000_000, comm: "/bin/sleep" }),
   ], { 301: ARGV[301] });
@@ -465,14 +465,14 @@ function bgSessionScene(argvOver: Record<number, string> = {}) {
   const { w, r } = harness();
   const procs = {
     daemon: P({ pid: 300, ppid: 200, pgid: 300, startMs: T0 + 10_000, comm: CLAUDE_BIN }),
-    host: P({ pid: 301, ppid: 300, pgid: 300, startMs: T0 + 20_000, comm: "/Users/leo/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude" }),
+    host: P({ pid: 301, ppid: 300, pgid: 300, startMs: T0 + 20_000, comm: "/Users/operator/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude" }),
     zsh: P({ pid: 310, ppid: 301, pgid: 310, startMs: T0 + 30_000, comm: "/bin/zsh" }),
     vitest: P({ pid: 311, ppid: 310, pgid: 310, startMs: T0 + 40_000, comm: "/opt/homebrew/bin/node" }),
     chrome: P({ pid: 312, ppid: 311, pgid: 312, startMs: T0 + 50_000, comm: "/c/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" }),
   };
   const argv: Record<number, string> = {
     300: ARGV[300],
-    301: "/Users/leo/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude --bg-pty-host /tmp/cc-daemon-501/x/pty/a.sock 87 36 -- /v --session-id abc --resume",
+    301: "/Users/operator/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude --bg-pty-host /tmp/cc-daemon-501/x/pty/a.sock 87 36 -- /v --session-id abc --resume",
     310: "/bin/zsh -c npx vitest run",
     311: "node /r/node_modules/vitest/vitest.mjs run",
     312: "/c/Google Chrome for Testing --headless --remote-debugging-port=0",

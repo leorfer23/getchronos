@@ -103,7 +103,7 @@ test("reconcile: adopt after a brain restart, re-attach after a blip, end + stic
 });
 
 test("a done goal survives the brain re-adopting its terminal and a glance at its card — only typing un-ticks it", async () => {
-  // Leo, 2026-10-04: `mc session done` went ✅, then the card was back on "your turn" and Robert was
+  // 2026-10-04: `mc session done` went ✅, then the card was back on "your turn" and Robert was
   // told nobody had said what's next. The tick stands only while last_in <= goal_done_at, and two
   // things bumped last_in with nobody typing.
   const s = row("/Users/a.smith/done");

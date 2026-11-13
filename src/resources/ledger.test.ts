@@ -14,8 +14,8 @@ const DAEMON = P({ pid: SELF, ppid: 1, comm: "/usr/local/bin/node" });
 test("parsePs: real darwin rows, comm with spaces kept whole, junk skipped", () => {
   const out = [
     "    1     0     1     0  10640   0.7 Thu Oct  1 21:59:06 2026     /sbin/launchd",
-    "52749     1 52749   501   6304   0.0 Fri Oct  2 16:52:02 2026     /Users/leo/Library/Caches/.wrangler/chrome/mac_arm-126.0.6478.182/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-    "52994 52749 52749   501    608  12.5 Fri Oct  2 16:52:05 2026     /Users/leo/x/Google Chrome for Testing Helper (Renderer).app/Contents/MacOS/Google Chrome for Testing Helper (Renderer)",
+    "52749     1 52749   501   6304   0.0 Fri Oct  2 16:52:02 2026     /Users/operator/Library/Caches/.wrangler/chrome/mac_arm-126.0.6478.182/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "52994 52749 52749   501    608  12.5 Fri Oct  2 16:52:05 2026     /Users/operator/x/Google Chrome for Testing Helper (Renderer).app/Contents/MacOS/Google Chrome for Testing Helper (Renderer)",
     "garbage line",
     "",
   ].join("\n");

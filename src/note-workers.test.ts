@@ -115,7 +115,7 @@ test("startNoteWorkers: top 3 get a headless run each, linked; a second fire nev
   assert.equal(d.calls.length, 3);
   // One finishes → one slot → the 4th note, never one of the three again.
   const r0 = jots.get(ns[0].id)!.worker_run_id!;
-  runs.patch(r0, { status: "success", summary: "NOTE-RESULT: blocked — needs Leo" });
+  runs.patch(r0, { status: "success", summary: "NOTE-RESULT: blocked — needs the operator" });
   assert.equal(finishWorker(jobFor(ns[0].id), runs.get(r0)!, NOW), "reported");
   const again = startNoteWorkers(ws, { dispatch: d.fn, nowMs: NOW });
   assert.deepEqual(again.map((o) => o.note), [ns[3].id.slice(0, 8)]);
@@ -174,7 +174,7 @@ test("the worker's goal: decide first, PR never merge, never message anyone, the
 test("parseVerdict: the last NOTE-RESULT line wins; dashes, markdown and a PR link", () => {
   assert.deepEqual(parseVerdict("did it\nNOTE-RESULT: done — PR opened https://github.com/acme/api/pull/42"),
     { verdict: "done", reason: "PR opened https://github.com/acme/api/pull/42", pr: "https://github.com/acme/api/pull/42" });
-  assert.equal(parseVerdict("NOTE-RESULT: blocked - needs Leo's call")!.reason, "needs Leo's call");
+  assert.equal(parseVerdict("NOTE-RESULT: blocked - needs the operator's call")!.reason, "needs the operator's call");
   assert.equal(parseVerdict("**NOTE-RESULT: dismissed** — superseded by ANA-9")!.verdict, "dismissed");
   assert.equal(parseVerdict("NOTE-RESULT: blocked — x\nNOTE-RESULT: done — y")!.verdict, "done");
   assert.equal(parseVerdict("note-result: DONE: merged")!.verdict, "done");
@@ -212,7 +212,7 @@ test("done/dismissed resolve the note — the operator's own too — with the re
 test("blocked / failed / no verdict keep the note open with a dated line, and count as an attempt", () => {
   const ws = mkWs();
   const cases: Array<[string, string | null, string | null, RegExp]> = [
-    ["success", "NOTE-RESULT: blocked — needs Leo to pick the vendor", null, /2026-10-02 worker .{8}: blocked — needs Leo to pick the vendor$/],
+    ["success", "NOTE-RESULT: blocked — needs the operator to pick the vendor", null, /2026-10-02 worker .{8}: blocked — needs the operator to pick the vendor$/],
     ["success", "I looked around.", null, /worker .{8}: no verdict$/],
     ["timeout", null, "timed out after 3600s\nstack", /worker .{8}: timeout — timed out after 3600s$/],
     ["success", null, null, /no verdict$/],

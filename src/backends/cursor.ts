@@ -29,7 +29,7 @@ export const cursorBackend: AgentBackend = {
     // (~/.cursor/cli-config.json `selectedModel`), independent of "auto" being its catalog default —
     // once a human picks a paid model in an interactive session that pin sticks for every subsequent
     // headless invocation too, silently burning paid usage instead of the account's auto allowance
-    // (2026-09-21: Leo's Pro+ hit its Sonnet cap this way while Chronos never asked for Sonnet).
+    // (2026-09-21: the operator's Pro+ plan hit its Sonnet cap this way while Chronos never asked for Sonnet).
     args.push("--model", job.model || "auto");
     return args;
   },

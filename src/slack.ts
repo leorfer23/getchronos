@@ -16,6 +16,9 @@ import type { Workspace } from "./types.js";
 // the profile's login (the keychain item on macOS). Isolation = the profile boundary (agents on another
 // profile never see this Slack). Admin must approve the Slack MCP integration in that Slack workspace
 // first. Docs: https://docs.slack.dev/ai/slack-mcp-server
+// The clientId is Slack's own published app for Claude Code, not an app of ours: Slack requires every MCP
+// client to hardcode a registered app id (docs above), and Slack ships this exact oauth block in its official
+// Claude Code plugin — https://github.com/slackapi/slack-skills-plugin/blob/main/.mcp.json. Keep it in sync with that file.
 const MCP_NAME = "slack";
 const SERVER_SPEC = {
   type: "http",

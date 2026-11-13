@@ -358,7 +358,7 @@ test("answerAsk: workspace ask_policy 'escalate' still accepts a human by (mc an
   const job = mkJob({ workspace_id: ws.id });
   const run = runs.create(job.id, "manual");
   runs.patch(run.id, { status: "running", started_at: new Date().toISOString() });
-  for (const by of ["human", "telegram", "leo"]) {
+  for (const by of ["human", "telegram", "operator"]) {
     const a = asks.create({ run_id: run.id, job_id: job.id, workspace_id: ws.id, question: `q-${by}` });
     const out = await answerAsk(a.id, "an answer", by);
     assert.ok(out.ok, `by:${by} must pass the escalate gate`);

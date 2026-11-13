@@ -66,29 +66,29 @@ function stubFetch(routes: Record<string, { status?: number; body?: any }>) {
 
 test("jira createTask assigns the new issue to the token's own user", async () => {
   const { calls, restore } = stubFetch({
-    "/myself": { body: { accountId: "acc-leo" } },
+    "/myself": { body: { accountId: "acc-ada" } },
     "/rest/api/3/issue/ANA-9/assignee": { body: {} },
     "/rest/api/3/issue": { body: { key: "ANA-9" } },
   });
   try {
     // fresh base per test so the module-level accountId cache can't mask a missing /myself call
-    const cfg = { base_url: "https://x1.atlassian.net", email: "leo@x", api_token: "t", project_key: "ANA" };
+    const cfg = { base_url: "https://x1.atlassian.net", email: "ada@x", api_token: "t", project_key: "ANA" };
     const out = await jira.createTask!(cfg, { title: "T", description: "D" });
     assert.equal(out.id, "ANA-9");
     const assign = calls.find((c) => c.method === "PUT" && c.url.endsWith("/assignee"));
     assert.ok(assign, "expected a PUT to the assignee endpoint");
-    assert.deepEqual(assign!.body, { accountId: "acc-leo" });
+    assert.deepEqual(assign!.body, { accountId: "acc-ada" });
   } finally { restore(); }
 });
 
 test("jira createTask still returns the issue when the assign call fails", async () => {
   const { restore } = stubFetch({
-    "/myself": { body: { accountId: "acc-leo" } },
+    "/myself": { body: { accountId: "acc-ada" } },
     "/assignee": { status: 403, body: { error: "nope" } },
     "/rest/api/3/issue": { body: { key: "ANA-10" } },
   });
   try {
-    const cfg = { base_url: "https://x2.atlassian.net", email: "leo@x", api_token: "t", project_key: "ANA" };
+    const cfg = { base_url: "https://x2.atlassian.net", email: "ada@x", api_token: "t", project_key: "ANA" };
     assert.equal((await jira.createTask!(cfg, { title: "T", description: "D" })).id, "ANA-10");
   } finally { restore(); }
 });
@@ -96,7 +96,7 @@ test("jira createTask still returns the issue when the assign call fails", async
 test("jira assignee_account_id overrides the /myself lookup", async () => {
   const { calls, restore } = stubFetch({ "/assignee": { body: {} }, "/rest/api/3/issue": { body: { key: "ANA-11" } } });
   try {
-    const cfg = { base_url: "https://x3.atlassian.net", email: "leo@x", api_token: "t", project_key: "ANA", assignee_account_id: "acc-other" };
+    const cfg = { base_url: "https://x3.atlassian.net", email: "ada@x", api_token: "t", project_key: "ANA", assignee_account_id: "acc-other" };
     await jira.createTask!(cfg, { title: "T", description: "D" });
     assert.equal(calls.some((c) => c.url.includes("/myself")), false);
     assert.deepEqual(calls.find((c) => c.url.endsWith("/assignee"))!.body, { accountId: "acc-other" });
@@ -121,7 +121,7 @@ test("jira pushStatus attaches the Hours Spent field when hours is given", async
     "/rest/api/3/field": { body: [{ id: "customfield_10042", name: "Hours Spent" }, { id: "customfield_1", name: "Story Points" }] },
   });
   try {
-    const cfg = { base_url: "https://x4.atlassian.net", email: "leo@x", api_token: "t" };
+    const cfg = { base_url: "https://x4.atlassian.net", email: "ada@x", api_token: "t" };
     await jira.pushStatus(cfg, "ANA-20", "Done", 8);
     const post = calls.find((c) => c.method === "POST" && c.url.includes("/transitions"));
     assert.deepEqual(post!.body, { transition: { id: "31" }, fields: { customfield_10042: 8 } });
@@ -133,7 +133,7 @@ test("jira pushStatus omits fields when no hours is passed", async () => {
     "/transitions": { body: { transitions: [{ id: "31", name: "Done", to: { name: "Done" } }] } },
   });
   try {
-    const cfg = { base_url: "https://x5.atlassian.net", email: "leo@x", api_token: "t" };
+    const cfg = { base_url: "https://x5.atlassian.net", email: "ada@x", api_token: "t" };
     await jira.pushStatus(cfg, "ANA-21", "Done");
     const post = calls.find((c) => c.method === "POST" && c.url.includes("/transitions"));
     assert.deepEqual(post!.body, { transition: { id: "31" } });
@@ -147,7 +147,7 @@ test("jira pushStatus falls back to no fields when the Hours Spent field can't b
     "/rest/api/3/field": { status: 500, body: {} },
   });
   try {
-    const cfg = { base_url: "https://x6.atlassian.net", email: "leo@x", api_token: "t" };
+    const cfg = { base_url: "https://x6.atlassian.net", email: "ada@x", api_token: "t" };
     await jira.pushStatus(cfg, "ANA-22", "Done", 5);
     const post = calls.find((c) => c.method === "POST" && c.url.includes("/transitions"));
     assert.deepEqual(post!.body, { transition: { id: "31" } });
@@ -159,7 +159,7 @@ test("jira pushStatus honors hours_field_id override without calling /field", as
     "/transitions": { body: { transitions: [{ id: "31", name: "Done", to: { name: "Done" } }] } },
   });
   try {
-    const cfg = { base_url: "https://x7.atlassian.net", email: "leo@x", api_token: "t", hours_field_id: "customfield_99" };
+    const cfg = { base_url: "https://x7.atlassian.net", email: "ada@x", api_token: "t", hours_field_id: "customfield_99" };
     await jira.pushStatus(cfg, "ANA-23", "Done", 3);
     const post = calls.find((c) => c.method === "POST" && c.url.includes("/transitions"));
     assert.deepEqual(post!.body, { transition: { id: "31" }, fields: { customfield_99: 3 } });

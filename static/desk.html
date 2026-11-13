@@ -388,7 +388,7 @@
   .fleet { position:absolute; inset:0; overflow-y:auto; padding:18px 22px 30px; display:none; }
   body.mode-fleet .fleet { display:block; }
   .fleet > * { max-width:1100px; margin:0 auto 12px; }
-  /* Focus has no footer bar (Leo, 2026-10-30: "estos botones NUNCA los uso"): answers live in the dock,
+  /* Focus has no footer bar (2026-10-30: "estos botones NUNCA los uso"): answers live in the dock,
      "¿Cómo venimos?" on the status strip, and Stop / Close / Next / Continue are E / X / J / C. Terminal
      mode keeps it — there it carries the menu answers beside the raw bytes. */
   body.mode-fleet .sbar, body.mode-focus .sbar { display:none; }
@@ -460,7 +460,7 @@
   .skel { background:linear-gradient(90deg, var(--surface-2), var(--line), var(--surface-2)); border-radius:6px; height:18px; margin:8px 0; opacity:.7; }
 
   /* ── Focus: status · goal · talk · hand-off · what needs you ──────────────────────────────────
-     Leo, 2026-10-28: the whole board in one view, full width, no scrolling to reach a button. Top: the
+     2026-10-28: the whole board in one view, full width, no scrolling to reach a button. Top: the
      status strip — what it is doing right now, always in the same place. Middle: three columns read
      left to right — the goal and its finish line, the talk, the hand-off(s); each scrolls inside and
      ⤢ expands it over the board (Esc / ⤡ back). Bottom: the dock — every answer, approval and ship
@@ -1017,7 +1017,7 @@
 
   /* Robert lives where every chat lives: a column on the right, closed until you ask (⌘K). */
   .chat { width:0; flex:none; border-left:1px solid var(--line); background:var(--surface); display:none; flex-direction:column; overflow:hidden; }
-  /* It is the daily driver (Leo 2026-09-25): about twice the old 460px, and the rail and the terminal
+  /* It is the daily driver (2026-09-25): about twice the old 460px, and the rail and the terminal
      give up the width. On a laptop it stops at half the window so the stage never vanishes. */
   body.chat-open .chat { display:flex; position:relative; width:var(--chat-w, clamp(460px, 52vw, 920px)); }
   body.chat-open:not(.chat-full) { --rail-w:clamp(240px, 18vw, 360px); }
@@ -2249,7 +2249,7 @@ const readJson = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ??
 const S = {
   workspaces: [], backends: [], sessions: [], jots: [], launches: [],
   active: null,                       // the terminal on the stage
-  // Focus is home (Leo, 2026-10-28: "I don't want to use terminal view anymore"). ⌘E still opens the
+  // Focus is home (2026-10-28: "I don't want to use terminal view anymore"). ⌘E still opens the
   // raw terminal for the moment you need it, but a reload never lands there.
   mode: localStorage.getItem("desk-mode") === "fleet" ? "fleet" : "focus",
   preFleet: "focus",                  // the view ⌘⇧F returns to when it leaves the board
@@ -2376,7 +2376,7 @@ function rank(s) {
 }
 // How long it has been in its current phase: "decide · 14m" is the number that matters.
 const phaseSince = (s) => (s.status?.since ? s.status.since : rank(s) <= 3 && s.last_out ? s.last_out : Date.parse(s.created_at));
-// The rail's order (Leo 2026-09-25): grouped by workspace so a client's terminals sit together, then
+// The rail's order (2026-09-25): grouped by workspace so a client's terminals sit together, then
 // oldest first inside the group — a row keeps its place instead of jumping every time its phase moves.
 // Terminals with no workspace go last.
 const railWs = (s) => (s.workspace_id ? wsName(s.workspace_id) : "");
@@ -2384,7 +2384,7 @@ function railOrder() {
   return S.sessions.filter((s) => s.live && !S.dismissed.has(s.id))
     .sort((a, b) => (!a.workspace_id - !b.workspace_id) || railWs(a).localeCompare(railWs(b)) || (a.workspace_id || "").localeCompare(b.workspace_id || "") || a.created_at.localeCompare(b.created_at));
 }
-// A Lead's workers fold under it (Leo 2026-09-18: sub agents must not bloat the rail). Folded is the
+// A Lead's workers fold under it (2026-09-18: sub agents must not bloat the rail). Folded is the
 // default; ▸ N unfolds one Lead. A worker that is blocked or deciding lifts its whole group to that
 // band and turns the fold red, so a wall behind a fold still surfaces.
 const URGENT = ["blocked", "decide"];
@@ -2834,7 +2834,7 @@ function tidyLinks(root) {
   }
 }
 // ── Focus: goal → decisions → talk → hand-off ────────────────────────────────────────────────
-// Four cards, read top down (Leo, 2026-10-28): what this terminal is for and how we will know it is
+// Four cards, read top down (2026-10-28): what this terminal is for and how we will know it is
 // done — with how far along it is, how long it has run, and whether it is printing right now — then
 // every decision it needs from you, then Talk (each line you sent it beside what it answered: a
 // question mid-run, a brainstorm), then the hand-off you approve the merge/deploy from. The agent
@@ -3141,7 +3141,7 @@ async function answerDialog(s, i, text) {
 // (left), in order, each with its time. What it did between two messages folds to one quiet line
 // ("3 commands · 2 edits", click to list them); while it works, what it is doing right now is the last
 // line, so Talk never sits silent over a busy agent. Images it `mc show`ed land where they arrived.
-// Leo, 2026-10-30: Talk has to be more present — "easier to read all my messages plus the talk from
+// 2026-10-30: Talk has to be more present — "easier to read all my messages plus the talk from
 // the model"; it used to keep only the answer after the last tool call and fold the rest away.
 const T = { id: null, all: false, open: new Set(), pending: null, follow: false, sig: "", shows: "" };
 const TALK_MAX = 80;
@@ -3264,7 +3264,7 @@ function talkFollow() {
 // A line to the agent from the board. While a Claude terminal is working, it goes as "send now"
 // (Claude Code's Ctrl+X Ctrl+S): whatever it is running — a long command, a subagent — moves to the
 // background and it reads your line in the same turn, instead of after that step ends (measured on
-// Claude Code 2.1.314: a question during a 100s command was answered in ~5s, not ~35s). Leo,
+// Claude Code 2.1.314: a question during a 100s command was answered in ~5s, not ~35s).
 // 2026-10-30: "agents never block the talk… it should run on the background so they can still answer".
 const sendsNow = (s) => s.backend === "claude-code" && phaseOf(s) === "working";
 function talkSend(s, text, by) {
@@ -3277,7 +3277,7 @@ function talkSend(s, text, by) {
     renderStory();
   }
 }
-// "¿Cómo venimos?" (Leo, 2026-10-30): one click asks the agent where it stands. It goes like any line
+// "¿Cómo venimos?" (2026-10-30): one click asks the agent where it stands. It goes like any line
 // from the board — send-now while it works, so it answers in Talk without waiting its step out — and
 // Talk shows it by its short name, not the whole instruction.
 const STATUS_ASK = "¿Cómo venimos?";
@@ -3293,7 +3293,7 @@ function askStatus(s) {
 }
 const TASK_LINE = "Let's turn this into a task: set the goal and its finish line with `mc goal set \"<outcome>\" --kind pr|investigation|qa --done-when \"<check>\"`, then work toward it and hand off with `mc outcome`.";
 
-// The status strip, expanded (Leo, 2026-10-30: "see live what it is doing, and by timestamp what it
+// The status strip, expanded (2026-10-30: "see live what it is doing, and by timestamp what it
 // was doing before"): every step of this terminal in order — what it ran or edited, what it said, what
 // you said, what failed, the phases this page watched it move through — stamped to the second, with
 // how long each step took and a running clock on the one it is on now. Newest at the bottom.
@@ -4445,7 +4445,7 @@ qs("#h-comp").onclick = () => {
   return C.min ? compToggle(false) : compMin(true);
 };
 
-// Answering a terminal keeps you on it. Leo, 2026-11-02: "when I answer a question in an agent chat,
+// Answering a terminal keeps you on it. 2026-11-02: "when I answer a question in an agent chat,
 // it reroutes me to another chat… no rerouting me" — an answer (an option, y/n, Continue) used to walk
 // the stage to the next terminal that needed you. The answered question leaves the screen at once so
 // it cannot be pressed twice; the daemon's next poll brings whatever the agent does next.
@@ -5997,7 +5997,7 @@ qs("#log-close").onclick = () => qs("#dlg-log").close();
 // Everything still open that the rail does not show as a live terminal asking: work parked on a
 // condition (`mc when` — src/continuations.ts), notes with a follow-up booked (jot-followup.ts),
 // questions nobody has answered (an ask outlives its terminal), and what runs on a clock (cron jobs,
-// folded). Leo, 2026-10-30: "super important to me to see what things are still open and need
+// folded). 2026-10-30: "super important to me to see what things are still open and need
 // follow-ups". Read from the routes those features already serve; the ⏰ count is the first three.
 const LOOPS = { waits: [], asks: [], jobs: [], busy: false, jobsOpen: false, arm: "", armT: 0 };
 const WAIT_ICON = { pr: "⇡", terminal: "▣", ask: "?", at: "⏰", script: "⚙", check: "👁", manual: "✋" };

@@ -1,6 +1,6 @@
 # Plan: Cursor Cloud Agents as a Chronos backend (`cursor-cloud`)
 
-Status: approved by Leo 2026-09-22 · PoC green · owner: agent picking this up
+Status: approved by the operator 2026-09-22 · PoC green · owner: agent picking this up
 PoC: `~/Documents/chronos-cloud-poc/poc.mjs` (launch → SSE → reconcile → PR) against https://github.com/leorfer23/chronos-cloud-poc/pull/1
 
 ## Goal
@@ -11,7 +11,7 @@ Two entry points:
 1. **Manual** — operator (or Robert) opens a "cloud" terminal from the Desk for a ticket/goal.
 2. **Job** — dispatcher sends a job to the cloud; Chronos records events, result, PR and cost exactly like a local run.
 
-Constraint from Leo: **no self-hosted compute** (no VPS, no Cloudflare workers/containers). Only what the provider hosts.
+Constraint from the operator: **no self-hosted compute** (no VPS, no Cloudflare workers/containers). Only what the provider hosts.
 Phase 1 scope: **GitHub repos with `delivery=pr`, code-only work, no secrets, no MCPs.** Access/secrets/MCP come later.
 
 ## The model: launch, sleep, reconcile

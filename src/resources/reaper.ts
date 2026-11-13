@@ -25,7 +25,7 @@
  * How a signal is aimed: at the process GROUP when the group's leader is owned by the same owner and
  * every member of the group is too (so Chrome's renderers go with their browser), otherwise at each
  * owned pid alone. Never: pid ≤ 1, the spawner itself or its group (a headless run shares the
- * daemon's group), a live root, another user's process, anything under a protected path (Leo's own
+ * daemon's group), a live root, another user's process, anything under a protected path (the operator's own
  * `/Applications/Google Chrome.app`, which the claude-in-chrome extension drives), or ANY process
  * the ledger does not own. Right before signalling, every target's start time is read again — a pid
  * recycled since the snapshot is skipped. At most `maxSignals` kill(2) calls per tick; the rest wait.

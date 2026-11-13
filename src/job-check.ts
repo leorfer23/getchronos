@@ -2,7 +2,7 @@
  * The 17:00 job check, one cron job per workspace (`job-check:<slug>`), run on that workspace's own
  * account like every job of the client.
  *
- * Leo asked for it 2026-11-02: "an official check at 5pm every day my time, for each workspace using each
+ * The operator asked for it 2026-11-02: "an official check at 5pm every day my time, for each workspace using each
  * workspace agent, that checks every job that would have run that day and makes sure all ran correctly.
  * If all good, nothing to do. If one failed, explore why it failed, fix, re-run and notify me."
  *
