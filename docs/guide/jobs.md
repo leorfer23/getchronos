@@ -50,8 +50,13 @@ involved. Red means: the last run failed, timed out or was refused; a scheduled 
 failed 3+ times that day.
 
 - All green: nothing happens.
-- Anything red: one terminal opens in that project to find the cause, fix it, re-run the job, and hand
-  off.
+- Anything red: you get one card listing what failed (Inbox → Stalled, Telegram if connected,
+  `mc recover`). Nothing re-runs until you approve it; approving opens one terminal in that project to
+  find the cause, fix it, re-run the job, and hand off. Leave it and nothing happens.
+
+⚙ Settings → Autonomy → *Daily job check fixes and re-runs failed jobs* skips the card: the terminal
+opens right away. It is off on a new install; an install that had projects before the setting existed
+keeps it on.
 
 Run it yourself any time: `mc job check`. Turn it off with `CHRONOS_JOB_CHECK=0`.
 

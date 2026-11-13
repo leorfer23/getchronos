@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { bus } from "./bus.js";
+import { CONFIG } from "./config.js";
+import { db, workspaces } from "./store.js";
 import {
+  _resetDayHeartbeat,
   agentsForTick,
   heartbeatKind,
   isSilenceReply,
@@ -9,6 +14,8 @@ import {
   parseHm,
   proposalAgentFor,
   runAgentHeartbeat,
+  runFleetHeartbeat,
+  startDayHeartbeat,
   standupPrompt,
   standupSince,
   workspaceTargets,
@@ -402,4 +409,70 @@ test("mail sweep: respects active hours unless forced", async () => {
   const night = new Date("2026-08-07T03:00:00");
   const r = await runMailSweep({ now: night, askFn: async () => "NOOP", deliverFn: async () => {} });
   assert.equal(r.skipped, "inactive-hours");
+});
+
+/** console.log lines while fn runs. */
+async function logged(fn: () => unknown): Promise<string[]> {
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (m?: unknown) => { lines.push(String(m)); };
+  try { await fn(); } finally { console.log = log; }
+  return lines;
+}
+
+test("no projects: the heartbeat is not armed — one boot line — and arms itself when the first project exists", async () => {
+  db.exec("DELETE FROM workspaces");
+  const was = CONFIG.dayHeartbeat.enabled;
+  (CONFIG.dayHeartbeat as any).enabled = true;
+  try {
+    let state = "";
+    const boot = await logged(() => { state = startDayHeartbeat(); });
+    assert.equal(state, "waiting");
+    assert.deepEqual(boot, ["[heartbeat] no projects yet — no check-ins or briefs; it starts by itself when the first project exists"]);
+    // Booting again (or any other caller) does not stack a second wait or a second line.
+    assert.deepEqual(await logged(() => { state = startDayHeartbeat(); }), []);
+    assert.equal(state, "waiting");
+    // A workspace change with still no project keeps waiting.
+    assert.deepEqual(await logged(() => bus.publish({ topic: "workspace.changed" })), []);
+
+    workspaces.create({ slug: "hb-" + randomUUID().slice(0, 8), name: "Acme", config_dir: `/tmp/mc-test/${randomUUID()}` } as any);
+    const armed = await logged(() => bus.publish({ topic: "workspace.changed" }));
+    assert.equal(armed.length, 1);
+    assert.match(armed[0], /^\[heartbeat\] fleet active \(/);
+    assert.equal(startDayHeartbeat(), "armed");
+    // Armed once: later workspace changes do not arm it again.
+    assert.deepEqual(await logged(() => bus.publish({ topic: "workspace.changed" })), []);
+  } finally {
+    _resetDayHeartbeat();
+    (CONFIG.dayHeartbeat as any).enabled = was;
+    db.exec("DELETE FROM workspaces");
+  }
+});
+
+test("with projects at boot the heartbeat arms at once, as before", async () => {
+  db.exec("DELETE FROM workspaces");
+  const was = CONFIG.dayHeartbeat.enabled;
+  (CONFIG.dayHeartbeat as any).enabled = true;
+  workspaces.create({ slug: "hb-" + randomUUID().slice(0, 8), name: "Acme", config_dir: `/tmp/mc-test/${randomUUID()}` } as any);
+  try {
+    let state = "";
+    const boot = await logged(() => { state = startDayHeartbeat(); });
+    assert.equal(state, "armed");
+    assert.equal(boot.length, 1);
+    assert.match(boot[0], /^\[heartbeat\] fleet active \(.*gate=/);
+  } finally {
+    _resetDayHeartbeat();
+    (CONFIG.dayHeartbeat as any).enabled = was;
+    db.exec("DELETE FROM workspaces");
+  }
+});
+
+test("a tick with no projects does nothing — no gate call, no bookend brief — even at the morning slot", async () => {
+  db.exec("DELETE FROM workspaces");
+  const morning = new Date(2026, 10, 13, 9, 0); // the window's first slot: a forced Robert brief
+  const hourly = new Date(2026, 10, 13, 14, 0);
+  for (const now of [morning, hourly]) {
+    const lines = await logged(() => runFleetHeartbeat({ now }));
+    assert.deepEqual(lines, ["[heartbeat] no projects — skip"]);
+  }
 });

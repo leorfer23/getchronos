@@ -11,9 +11,11 @@ import { db, jobs, kv, runs, workspaces } from "./store.js";
 import { CONFIG } from "./config.js";
 import { cronSkipReason, reloadSchedules } from "./scheduler.js";
 import {
-  JOB_CHECK_PREFIX, checkBrief, checkGoal, cronFires, ensureCheckJob, healthLine, healthRequest,
-  jobCheckDeps, jobHealth, openCheckTerminal, recordCheck,
+  AUTO_RERUN, JOB_CHECK_PREFIX, checkBrief, checkGoal, cronFires, ensureCheckJob, healthLine, healthRequest,
+  jobCheckDeps, jobHealth, openCheckTerminal, recordCheck, sayKeptDefaults,
 } from "./job-check.js";
+import { _resetSettingsCache, writeSetting } from "./settings.js";
+import { decideStall, listStalls } from "./recovery.js";
 import type { Job, RunStatus } from "./types.js";
 
 const TZ = "America/Argentina/Buenos_Aires";
@@ -47,7 +49,8 @@ const AT_FIRE = 8;
 
 let ws: ReturnType<typeof mkWs>;
 beforeEach(() => {
-  db.exec("DELETE FROM runs; DELETE FROM jobs; DELETE FROM workspaces; DELETE FROM kv WHERE key LIKE 'cron.skip.%' OR key LIKE 'jobcheck.%';");
+  db.exec("DELETE FROM runs; DELETE FROM jobs; DELETE FROM workspaces; DELETE FROM kv WHERE key LIKE 'cron.skip.%' OR key LIKE 'jobcheck.%' OR key LIKE 'settings:%' OR key LIKE 'recover.%' OR key LIKE 'defaults.%';");
+  _resetSettingsCache();
   ws = mkWs();
 });
 afterEach(() => { db.exec("DELETE FROM jobs"); reloadSchedules(); });
@@ -211,11 +214,13 @@ test("recordCheck: one zero-cost run per fire — success when green, failed wit
   assert.match(red.error!, /^1 red of 3 jobs, 9 runs in 24h: nightly-sync$/);
 });
 
-test("the cron gate: nothing scheduled → no row; green → a success row and no agent; red → a terminal", async () => {
+test("the cron gate with automatic re-runs on: nothing scheduled → no row; green → a success row and no agent; red → a terminal", async () => {
+  writeSetting(AUTO_RERUN, true);
   const check = jobs.create({ name: JOB_CHECK_PREFIX + ws.slug, goal: "g", cwd: "/tmp", workspace_id: ws.id, trigger_type: "manual" } as any);
   const opened: string[] = [];
-  const real = jobCheckDeps.open;
+  const real = jobCheckDeps.open, realAsk = jobCheckDeps.ask;
   jobCheckDeps.open = async (_jobId, runId) => { opened.push(runId); return { session_id: "s1" }; };
+  jobCheckDeps.ask = async () => { throw new Error("must not ask when re-runs are automatic"); };
   try {
     assert.equal(cronSkipReason(check), "no jobs ran or were due");
     assert.equal(runs.list(check.id).length, 0);
@@ -235,7 +240,106 @@ test("the cron gate: nothing scheduled → no row; green → a success row and n
     assert.match(cronSkipReason(check)!, /^1 red of 1 job.* — opening a terminal$/);
     assert.equal(opened.length, 1);
     assert.equal(opened[0], runs.list(check.id)[0].id, "the terminal is tied to the check's own row");
+  } finally { jobCheckDeps.open = real; jobCheckDeps.ask = realAsk; }
+});
+
+/** A client with one job whose latest run failed a minute ago (the gate reads the real clock). */
+function redClient(wsId: string, slug: string) {
+  const check = jobs.create({ name: JOB_CHECK_PREFIX + slug, goal: "g", cwd: "/tmp", workspace_id: wsId, trigger_type: "manual" } as any);
+  const j = mkJob(wsId, { name: "nightly-sync" });
+  db.prepare("UPDATE jobs SET cron_expr = '* * * * *' WHERE id = ?").run(j.id);
+  const bad = runs.create(j.id, "cron");
+  runs.patch(bad.id, { status: "failed", started_at: new Date(Date.now() - 60_000).toISOString(), error: "boom" });
+  return { check, job: j };
+}
+
+test("the cron gate by default (a new install): red re-runs nothing — it files a card and waits for a yes", async () => {
+  const { check } = redClient(ws.id, ws.slug);
+  const opened: string[] = [];
+  const real = jobCheckDeps.open;
+  jobCheckDeps.open = async (_jobId, runId, _h, deps) => { opened.push(`${runId}:${deps?.approved}`); return { session_id: "sess-abcdef12" }; };
+  try {
+    assert.match(cronSkipReason(check)!, /^1 red of 1 job.* — asking before re-running$/);
+    await new Promise((r) => setTimeout(r, 20)); // the ask is fire-and-forget from the gate
+    assert.equal(opened.length, 0, "no terminal, no re-run");
+    const rec = runs.list(check.id)[0];
+    assert.equal(rec.status, "failed");
+    assert.match(rec.summary!, /asked you before re-running anything/);
+
+    // The card: one recovery stall for the check's own run, already asked (the sweep will not ask twice).
+    const stall = listStalls().find((s) => s.id === `j:${rec.id.slice(0, 8)}`)!;
+    assert.ok(stall, "a recovery card for the check");
+    assert.equal(stall.kind, "job");
+    assert.equal(stall.workspace_id, ws.id);
+    assert.match(stall.line, /1 job did not run right: nightly-sync/);
+    assert.equal(kv.get(`recover.${stall.id}`), "asked");
+    assert.equal(listStalls(false).some((s) => s.id === stall.id), false);
+
+    // The operator's yes opens the fix-and-re-run terminal, told it was approved; the card is gone after.
+    const msg = await decideStall(stall.id, true);
+    assert.match(msg, /Opened terminal sess-abc to fix and re-run 1 job/);
+    assert.deepEqual(opened, [`${rec.id}:true`]);
+    assert.equal(listStalls().some((s) => s.id === stall.id), false);
+    assert.equal(kv.get(`jobcheck.ask.${rec.id}`), undefined);
   } finally { jobCheckDeps.open = real; }
+});
+
+test("a yes that could not start anything leaves the job check's card standing", async () => {
+  const { check } = redClient(ws.id, ws.slug);
+  const real = jobCheckDeps.open;
+  jobCheckDeps.open = async () => ({ error: "workspace gone" });
+  try {
+    cronSkipReason(check);
+    await new Promise((r) => setTimeout(r, 20));
+    const id = `j:${runs.list(check.id)[0].id.slice(0, 8)}`;
+    assert.match(await decideStall(id, true), /Couldn't start the fix: workspace gone/);
+    assert.ok(listStalls().some((s) => s.id === id), "still waiting on the operator");
+  } finally { jobCheckDeps.open = real; }
+});
+
+test("declining the job check's card leaves the jobs alone and never asks again", async () => {
+  const { check } = redClient(ws.id, ws.slug);
+  const real = jobCheckDeps.open;
+  let opened = 0;
+  jobCheckDeps.open = async () => { opened++; return { session_id: "s1" }; };
+  try {
+    cronSkipReason(check);
+    await new Promise((r) => setTimeout(r, 20));
+    const id = `j:${runs.list(check.id)[0].id.slice(0, 8)}`;
+    assert.match(await decideStall(id, false), /Left alone/);
+    assert.equal(opened, 0);
+    assert.equal(listStalls().some((s) => s.id === id), false);
+  } finally { jobCheckDeps.open = real; }
+});
+
+test("automatic re-runs per workspace: a workspace override beats the global value either way", async () => {
+  const { check } = redClient(ws.id, ws.slug);
+  const real = jobCheckDeps.open, realAsk = jobCheckDeps.ask;
+  const did: string[] = [];
+  jobCheckDeps.open = async () => { did.push("open"); return { session_id: "s1" }; };
+  jobCheckDeps.ask = async () => { did.push("ask"); return 1; };
+  try {
+    writeSetting(AUTO_RERUN, true);
+    writeSetting(AUTO_RERUN, false, ws.id);
+    assert.match(cronSkipReason(check)!, /asking before re-running$/);
+    writeSetting(AUTO_RERUN, false);
+    writeSetting(AUTO_RERUN, true, ws.id);
+    assert.match(cronSkipReason(check)!, /opening a terminal$/);
+    assert.deepEqual(did, ["ask", "open"]);
+  } finally { jobCheckDeps.open = real; jobCheckDeps.ask = realAsk; }
+});
+
+test("sayKeptDefaults: one boot line on an upgraded install, then never again; nothing on a new one", () => {
+  assert.equal(sayKeptDefaults(), null, "a new install: migration 160 wrote nothing");
+  kv.set("defaults.kept_at", new Date().toISOString());
+  const log = console.log;
+  const said: string[] = [];
+  console.log = (m?: unknown) => { said.push(String(m)); };
+  try {
+    assert.match(sayKeptDefaults()!, /existing install — kept as it was: the daily job check still fixes and re-runs/);
+    assert.equal(sayKeptDefaults(), null);
+  } finally { console.log = log; }
+  assert.equal(said.length, 1);
 });
 
 test("openCheckTerminal: the terminal carries the brief; refused → the check job runs headless with the list as context", async () => {

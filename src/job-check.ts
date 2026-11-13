@@ -10,13 +10,17 @@
  * the last 24 hours — the window ends at the fire, so one 17:00 → 17:00 day covers every fire once,
  * the evening ones too. A job is green when its latest run succeeded and its latest due fire has a run
  * (or a skip on purpose). Every fire records one zero-cost run on the check job, so the Jobs page shows
- * a strip of daily checks. All green ends there. Anything red opens a Desk terminal in that client —
- * he reads terminals and nothing else, so the terminal IS the notification — told to find the cause,
- * fix it, re-run, confirm the re-run is green and hand off. A terminal that cannot open (seat cap, busy
- * machine) falls back to the job's own headless run, which does the same work without asking him.
- *
- * This re-runs failed jobs without asking first — he asked for exactly that here. The recovery
- * supervisor (src/recovery.ts) keeps its approve-every-recovery rule for everything else.
+ * a strip of daily checks. All green ends there. What happens to red depends on one setting,
+ * `jobcheck.auto_rerun` (⚙ Settings → Autonomy, global + per workspace):
+ *  - off (a new install's default): nothing re-runs. The red list is filed as a recovery card
+ *    (src/recovery.ts, handle `j:<check run id8>`) — "nothing retries on its own" — and the operator's yes opens the
+ *    terminal below. Declining leaves the jobs as they are.
+ *  - on (pinned by migration 160 on an install that already had projects, so upgrading changes nothing):
+ *    red opens a Desk terminal in that client right away — the operator reads terminals and nothing else, so the
+ *    terminal IS the notification — told to find the cause, fix it, re-run, confirm the re-run is green
+ *    and hand off.
+ * A terminal that cannot open (seat cap, busy machine) falls back to the job's own headless run, which
+ * does the same work without asking.
  */
 import os from "node:os";
 import { Cron } from "croner";
@@ -27,11 +31,15 @@ import { lastCronSkip, registerCronGate, reloadSchedules } from "./scheduler.js"
 import { openSession } from "./terminal.js";
 import { baseJobName, isInternalJob } from "./job-name.js";
 import { FAILED_STATUSES } from "./jobs-board.js";
+import { askAboutStalls, jobCheckAskKey, listStalls } from "./recovery.js";
+import { settingOn } from "./settings.js";
 import type { Job, Run, RunStatus, Workspace } from "./types.js";
 
 export const JOB_CHECK_PREFIX = "job-check:";
 /** Who opened the terminal — the machine governor may refuse an agent open on a busy computer. */
 export const JOB_CHECK_BY = "job-check";
+/** On: red re-runs without asking (the old behaviour). Off: red waits on the operator's yes. See the header. */
+export const AUTO_RERUN = "jobcheck.auto_rerun";
 
 const LIVE: ReadonlySet<RunStatus> = new Set(["queued", "running"]);
 /**
@@ -225,10 +233,10 @@ function steps(mode: "terminal" | "headless"): string[] {
   ];
 }
 
-export function checkBrief(ws: Workspace, h: JobHealth, tz = CONFIG.slackTriageTz): string {
+export function checkBrief(ws: Workspace, h: JobHealth, tz = CONFIG.slackTriageTz, approved = false): string {
   const at = clock(tz);
   return [
-    `This terminal opened by itself: the daily job check for ${ws.name} found ${h.red.length} job${h.red.length === 1 ? "" : "s"} that did not run right ` +
+    `${approved ? "The operator said yes to this from the daily job check" : "This terminal opened by itself: the daily job check"} for ${ws.name} found ${h.red.length} job${h.red.length === 1 ? "" : "s"} that did not run right ` +
       `between ${at(h.since)} and ${at(h.until)} (${tz}). Your job: for each one, find out why, fix it, re-run it, and confirm the re-run is green.`,
     "",
     "## What is red",
@@ -278,7 +286,7 @@ export function recordCheck(jobId: string, h: JobHealth): Run {
  */
 export async function openCheckTerminal(
   jobId: string, checkRunId: string, h: JobHealth,
-  deps: { opener?: typeof openSession; run?: typeof dispatch } = {},
+  deps: { opener?: typeof openSession; run?: typeof dispatch; approved?: boolean } = {},
 ): Promise<{ session_id: string } | { run_id: string } | { error: string }> {
   const opener = deps.opener ?? openSession, run = deps.run ?? dispatch;
   const ws = workspaces.get(h.workspace_id);
@@ -290,7 +298,7 @@ export async function openCheckTerminal(
       goal: `Job check ${day}: ${h.red.length} red in ${ws.name} — find why, fix, re-run`.slice(0, 400),
       goal_kind: "investigation",
       goal_source: "human",
-      description: checkBrief(ws, h),
+      description: checkBrief(ws, h, CONFIG.slackTriageTz, deps.approved),
       backend: ws.default_backend ?? undefined,
       created_by: JOB_CHECK_BY,
       role: "human",
@@ -314,8 +322,41 @@ export function healthRequest(scope: { ws: string | null }, q: { ws?: unknown; h
   return { status: 200, body: jobHealth(ws, { hours: Number(q.hours) || undefined }) };
 }
 
-/** The seam tests swap so a red fire does not open a real terminal. */
-export const jobCheckDeps = { open: openCheckTerminal };
+/**
+ * Red with automatic re-runs off: keep the red list beside the check's own run and ask the operator now — the
+ * recovery card (Telegram, the board, Inbox → Stalled, `mc recover`). Nothing runs until the operator says yes.
+ */
+export async function fileCheckAsk(jobId: string, checkRunId: string, h: JobHealth): Promise<number> {
+  kv.set(jobCheckAskKey(checkRunId), JSON.stringify(h));
+  runs.patch(checkRunId, { summary: `${healthLine(h)} → asked you before re-running anything` });
+  const s = listStalls(false).find((x) => x.id === `j:${checkRunId.slice(0, 8)}`);
+  return s ? askAboutStalls([s]) : 0;
+}
+
+/**
+ * The operator's yes on a check's card (recovery.ts decideStall): the terminal that finds why, fixes and re-runs.
+ * `ok: false` leaves the card standing, so a yes that could not start anything can be given again.
+ */
+export async function approveCheckAsk(checkRunId8: string): Promise<{ ok: boolean; message: string }> {
+  const run = runs.findByIdPrefix(checkRunId8);
+  const raw = run ? kv.get(jobCheckAskKey(run.id)) : undefined;
+  if (!run || !raw) return { ok: false, message: `⚠️ Nothing waiting from the job check ${checkRunId8} — it may already be decided.` };
+  let h: JobHealth;
+  try { h = JSON.parse(raw) as JobHealth; } catch { return { ok: false, message: `⚠️ The job check ${checkRunId8} left an unreadable list — run \`mc job check\`.` }; }
+  const out = await jobCheckDeps.open(run.job_id, run.id, h, { approved: true });
+  if ("error" in out) return { ok: false, message: `⚠️ Couldn't start the fix: ${out.error}` };
+  kv.del(jobCheckAskKey(run.id));
+  const n = `${h.red.length} job${h.red.length === 1 ? "" : "s"}`;
+  return {
+    ok: true,
+    message: "session_id" in out
+      ? `▶️ Opened terminal ${out.session_id.slice(0, 8)} to fix and re-run ${n}.`
+      : `▶️ No terminal could open — run ${out.run_id.slice(0, 8)} fixes and re-runs ${n} instead.`,
+  };
+}
+
+/** The seam tests swap so a red fire does not open a real terminal (or post a real card). */
+export const jobCheckDeps = { open: openCheckTerminal, ask: fileCheckAsk };
 
 // The cron fire: the daemon checks, records the check, and only red starts any agent.
 registerCronGate(JOB_CHECK_PREFIX, (job) => {
@@ -325,6 +366,10 @@ registerCronGate(JOB_CHECK_PREFIX, (job) => {
   if (!h.jobs) return "no jobs ran or were due";
   const rec = recordCheck(job.id, h);
   if (!h.red.length) return healthLine(h);
+  if (!settingOn(AUTO_RERUN, job.workspace_id)) {
+    void jobCheckDeps.ask(job.id, rec.id, h).catch((e) => console.warn("[job-check] ask failed", e));
+    return `${healthLine(h)} — asking before re-running`;
+  }
   void jobCheckDeps.open(job.id, rec.id, h).catch((e) => console.warn("[job-check] open failed", e));
   return `${healthLine(h)} — opening a terminal`;
 });
@@ -355,7 +400,22 @@ export function ensureCheckJob(ws: Workspace, reload = true): void {
   if (reload) reloadSchedules();
 }
 
+/**
+ * The one boot line an upgraded install gets: migration 160 found projects and kept the job check's
+ * automatic re-runs on. Said once, then never again. Returns the line (or null) for tests.
+ */
+export function sayKeptDefaults(): string | null {
+  if (!kv.get("defaults.kept_at") || kv.get("defaults.kept_said")) return null;
+  kv.set("defaults.kept_said", new Date().toISOString());
+  const line =
+    "[defaults] existing install — kept as it was: the daily job check still fixes and re-runs failed jobs on its own " +
+    "(⚙ Settings → Autonomy → \"Daily job check fixes and re-runs failed jobs\"). New installs ask first.";
+  console.log(line);
+  return line;
+}
+
 export function ensureAllCheckJobs(): void {
+  sayKeptDefaults();
   if (!kv.get(ARMED_KEY)) kv.set(ARMED_KEY, new Date().toISOString());
   // Archived ones too, so an archived client's check job is removed rather than left firing.
   for (const ws of workspaces.list(true)) ensureCheckJob(ws, false);

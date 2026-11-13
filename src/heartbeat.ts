@@ -21,6 +21,10 @@ import { assistantName } from "./settings.js";
 //   5) silence tokens (NOOP / HEARTBEAT_OK) suppress delivery
 //
 // Morning/evening Robert briefs still force-wake (skip haiku) at the edges of the window.
+//
+// None of it runs while there are no projects: a fresh install has nothing to brief on, so the cron
+// is not even armed until the first workspace exists (startDayHeartbeat), and a tick that finds none
+// (all archived) does nothing — no gate call, no brief.
 
 // One live executive while Robert is the only executive. The union is kept (rather than collapsed to a bare string)
 // so every Record<FleetAgent, …> below still has to be exhaustive if another one is ever added back.
@@ -729,6 +733,11 @@ export async function runFleetHeartbeat(opts?: {
     console.log("[heartbeat] outside active hours — skip");
     return;
   }
+  // No projects, nothing to brief on: no gate call, no bookend. Asked-for runs (force) still go.
+  if (!force && !hasProjects()) {
+    console.log("[heartbeat] no projects — skip");
+    return;
+  }
   const kind = heartbeatKind(now.getHours(), now.getMinutes());
   const isBookend = kind === "morning" || kind === "evening";
 
@@ -886,22 +895,63 @@ export async function runMailSweep(opts?: {
   }
 }
 
-export function startDayHeartbeat(): void {
+const hasProjects = () => workspaces.list().length > 0;
+
+let heartbeatArmed = false;
+let waitingForProject: ((e: { topic: string }) => void) | null = null;
+
+/**
+ * Arm the fleet heartbeat — or, on an install with no projects yet, wait for the first one: one boot
+ * line, no cron, and every workspace change checks again until a project exists. Returns what it did.
+ */
+export function startDayHeartbeat(): "disabled" | "armed" | "waiting" {
   const cfg = CONFIG.dayHeartbeat;
   if (!cfg.enabled) {
     console.log("[heartbeat] disabled (CHRONOS_DAY_HEARTBEAT=0)");
-    return;
+    return "disabled";
   }
+  if (heartbeatArmed) return "armed";
+  if (!hasProjects()) {
+    if (!waitingForProject) {
+      console.log("[heartbeat] no projects yet — no check-ins or briefs; it starts by itself when the first project exists");
+      waitingForProject = (e) => {
+        if (e.topic !== "workspace.changed" || !hasProjects()) return;
+        bus.off("event", waitingForProject!);
+        waitingForProject = null;
+        armDayHeartbeat();
+      };
+      bus.on("event", waitingForProject);
+    }
+    return "waiting";
+  }
+  armDayHeartbeat();
+  return heartbeatArmed ? "armed" : "disabled";
+}
+
+/** Test seam: forget the armed cron and any wait, so startDayHeartbeat can be exercised again. */
+export function _resetDayHeartbeat(): void {
+  heartbeatCron?.stop();
+  heartbeatCron = null;
+  heartbeatArmed = false;
+  if (waitingForProject) bus.off("event", waitingForProject);
+  waitingForProject = null;
+}
+
+let heartbeatCron: Cron | null = null;
+
+function armDayHeartbeat(): void {
+  const cfg = CONFIG.dayHeartbeat;
   const opts: any = { name: "fleet-heartbeat" };
   if (cfg.tz) opts.timezone = cfg.tz;
   try {
-    new Cron(cfg.cron, opts, () => {
+    heartbeatCron = new Cron(cfg.cron, opts, () => {
       runFleetHeartbeat().catch((e) => console.error("[heartbeat]", e));
     });
   } catch (e) {
     console.error(`[heartbeat] bad cron "${cfg.cron}"`, e);
     return;
   }
+  heartbeatArmed = true;
   console.log(
     `[heartbeat] fleet active (${cfg.cron}; ${cfg.activeStart}–${cfg.activeEnd}` +
       `${cfg.tz ? " " + cfg.tz : " local"}; gate=${cfg.gateModel}` +

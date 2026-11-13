@@ -332,6 +332,15 @@ defineSetting({
   help: "A quick first pass reads each item before its terminal opens. Thanks, FYIs, shared links and repeats of a live terminal close in the Inbox log instead (Reopen there opens one). Off: every item opens.",
   default: () => process.env.CHRONOS_INBOX_TRIAGE !== "0",
 });
+// The daily job check (src/job-check.ts). Off by default on a new install: a failed job is reported and
+// waits for a yes before anything re-runs it (docs/guide/safety.md). Migration 160 pins it on for an
+// install that already had projects, so upgrading changes nothing there.
+defineSetting({
+  key: "jobcheck.auto_rerun", group: "Autonomy", level: "both", type: "bool", env: "CHRONOS_JOB_CHECK_AUTO_RERUN",
+  label: "Daily job check fixes and re-runs failed jobs",
+  help: "On: when the daily job check finds a failed job, a terminal opens right away to find why, fix it and re-run it — without asking. Off: the check tells you which jobs failed and asks first (Inbox → Stalled, Telegram, `mc recover`); your yes opens that terminal.",
+  default: () => process.env.CHRONOS_JOB_CHECK_AUTO_RERUN === "1",
+});
 // First in his group, so it is the first thing the page shows under his name.
 defineSetting({
   key: "assistant.name", group: "Robert", level: "global", type: "string",

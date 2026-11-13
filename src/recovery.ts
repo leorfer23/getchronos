@@ -15,9 +15,13 @@
  * Decisions live in kv (`recover.<id>` = asked | approved | declined) rather than a new table: the
  * run/ticket row IS the record of the work, this only records what the human said about it. A declined
  * stall is never raised again.
+ *
+ * The daily job check (src/job-check.ts) files its red list here too when it may not re-run failed jobs
+ * on its own (setting jobcheck.auto_rerun, off on a new install): the check's own failed run is the row,
+ * `jobcheck.ask.<run id>` holds what it found, and approving opens the terminal that fixes and re-runs.
  */
 import { CONFIG } from "./config.js";
-import { jobs, kv, runs, sessions, tickets, workspaces } from "./store.js";
+import { db, jobs, kv, runs, sessions, tickets, workspaces } from "./store.js";
 import { dispatch } from "./dispatcher.js";
 import { dispatchTicket } from "./tickets.js";
 import { notify } from "./telegram/api.js";
@@ -26,11 +30,11 @@ import { kb } from "./telegram/keyboards.js";
 import { postToBoard } from "./board.js";
 import { holdBucket } from "./hold-bucket.js";
 
-export type StallKind = "run" | "ticket";
+export type StallKind = "run" | "ticket" | "job";
 export type Decision = "asked" | "approved" | "declined";
 
 export interface Stall {
-  /** Stable, surface-safe handle: "r:<run id8>" or "t:<TICKET-KEY>". Fits Telegram's 64-byte callback_data. */
+  /** Stable, surface-safe handle: "r:<run id8>", "t:<TICKET-KEY>" or "j:<check run id8>". Fits Telegram's 64-byte callback_data. */
   id: string;
   kind: StallKind;
   /** One-line summary for a chat surface. Plain text — every surface can render it verbatim. */
@@ -49,6 +53,8 @@ export interface Stall {
 }
 
 const key = (id: string) => `recover.${id}`;
+/** What one fire of the daily job check found, kept while it waits on the operator's yes (src/job-check.ts writes it). */
+export const jobCheckAskKey = (checkRunId: string) => `jobcheck.ask.${checkRunId}`;
 const decisionOf = (id: string): Decision | null => (kv.get(key(id)) as Decision) ?? null;
 const record = (id: string, d: Decision) => kv.set(key(id), d);
 
@@ -165,6 +171,36 @@ export function listStalls(includeAsked = true): Stall[] {
     });
   }
 
+  // 3. A daily job check that found red jobs and asked before re-running them (src/job-check.ts). The
+  //    check's own failed run is the row; the kv entry beside it is the red list it found.
+  const checks = db.prepare(
+    `SELECT r.id, r.started_at, j.workspace_id FROM runs r JOIN jobs j ON j.id = r.job_id
+     WHERE j.name LIKE 'job-check:%' AND r.status = 'failed' AND r.started_at >= ? ORDER BY r.started_at DESC`,
+  ).all(hoursAgo(CONFIG.recoverWindowHours)) as { id: string; started_at: string; workspace_id: string | null }[];
+  for (const r of checks) {
+    const raw = kv.get(jobCheckAskKey(r.id));
+    if (!raw) continue;
+    const id = `j:${r.id.slice(0, 8)}`;
+    const d = decisionOf(id);
+    if (d === "approved" || d === "declined") continue;
+    if (d === "asked" && !includeAsked) continue;
+    let names: string[] = [];
+    try { names = ((JSON.parse(raw) as { red?: { job_name?: string }[] }).red ?? []).map((x) => String(x.job_name ?? "?")); } catch {}
+    const shown = names.slice(0, 4).join(", ") + (names.length > 4 ? ` +${names.length - 4} more` : "");
+    const hold = stallHold(id);
+    out.push({
+      id,
+      kind: "job",
+      ws: wsSlug(r.workspace_id),
+      workspace_id: r.workspace_id ?? null,
+      line: `🧪 Daily job check — ${names.length} job${names.length === 1 ? "" : "s"} did not run right: ${shown} · ${age(r.started_at)} ago · ${wsLabel(r.workspace_id)}`,
+      action: `open a terminal that finds why, fixes and re-runs ${names.length === 1 ? names[0] : "them"}`,
+      created_at: r.started_at,
+      hold_until: hold.until,
+      hold_reason: hold.reason,
+    });
+  }
+
   return out;
 }
 
@@ -196,9 +232,17 @@ export async function decideStall(handle: string, approve: boolean): Promise<str
   holdStall(s.id, null, null);
   if (!approve) {
     record(s.id, "declined");
+    if (s.kind === "job") { const r = runs.findByIdPrefix(s.id.slice(2)); if (r) kv.del(jobCheckAskKey(r.id)); }
     return `✕ Left alone: ${s.action}. Won't ask about ${s.id} again.`;
   }
   try {
+    if (s.kind === "job") {
+      // Lazy: job-check.ts imports this module, and it registers a cron gate when loaded.
+      const { approveCheckAsk } = await import("./job-check.js");
+      const out = await approveCheckAsk(s.id.slice(2));
+      if (out.ok) record(s.id, "approved");
+      return out.message;
+    }
     if (s.kind === "run") {
       const runId = s.id.slice(2);
       const r = runs.interruptedSince(hoursAgo(CONFIG.recoverWindowHours)).find((x) => x.id.startsWith(runId));
@@ -252,8 +296,14 @@ export async function sweepStalls(): Promise<number> {
   const fresh = listStalls(false).filter((s) => holdBucket(s) === "live");
   if (!fresh.length) return 0;
   const batch = fresh.slice(0, CONFIG.recoverMaxAsk);
-  const more = fresh.length - batch.length;
+  return askAboutStalls(batch, fresh.length - batch.length);
+}
 
+/**
+ * Ask about these stalls now: one card each, then one board post per workspace. The sweep calls it on
+ * its cadence; the job check calls it the moment it files its red list. Returns how many it asked about.
+ */
+export async function askAboutStalls(batch: Stall[], more = 0): Promise<number> {
   for (const s of batch) {
     record(s.id, "asked"); // before the send: a failed notify must not re-ask forever
     const card = stallCard(s);

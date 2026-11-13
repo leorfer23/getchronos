@@ -2525,6 +2525,30 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       CREATE INDEX IF NOT EXISTS idx_executor_log_ws ON executor_log(workspace_id, at);`),
   },
 
+  {
+    version: 160,
+    name: "new-install defaults — an install that already has projects keeps the job check's automatic re-runs",
+    // A new install's daily job check asks before re-running a failed job (setting jobcheck.auto_rerun,
+    // default off — src/settings.ts). An install upgrading into this already had it re-run on its own,
+    // so when any workspace exists the old behaviour is pinned as an explicit global override (never
+    // over one already written) and `defaults.kept_at` marks it, for the one boot line that says so
+    // (sayKeptDefaults, src/job-check.ts). No workspace = a new install: nothing is written.
+    up: (db) => {
+      if (!db.prepare("SELECT 1 FROM workspaces LIMIT 1").get()) return;
+      const row = db.prepare("SELECT value FROM kv WHERE key = 'settings:global'").get() as { value: string } | undefined;
+      let g: Record<string, unknown> = {};
+      try {
+        const j = row ? JSON.parse(row.value) : {};
+        if (j && typeof j === "object" && !Array.isArray(j)) g = j;
+      } catch {}
+      if ("jobcheck.auto_rerun" in g) return;
+      g["jobcheck.auto_rerun"] = true;
+      const put = db.prepare("INSERT INTO kv (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+      put.run("settings:global", JSON.stringify(g));
+      put.run("defaults.kept_at", new Date().toISOString());
+    },
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
