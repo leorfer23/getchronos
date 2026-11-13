@@ -2201,6 +2201,7 @@
 <script src="/desk-phone.js"></script>
 <script src="/tag-complete.js"></script>
 <script src="/slash-complete.js"></script>
+<script src="/fit-box.js"></script>
 <script src="/chat-reply.js"></script>
 <script src="/vendor/xterm-addon-webgl.js"></script>
 <script src="/vendor/marked.min.js"></script>
@@ -2706,6 +2707,7 @@ function setMode(m) {
   if (S.mode === "focus" && F.stale) renderStory();
   syncPane();
   compRender();
+  fitSay(); // the composer may have just come on screen (the board hides it)
   if (S.mode === "term") setTimeout(focusSay, 60);
   syncSayHint();
 }
@@ -2773,7 +2775,9 @@ function renderStage() {
   for (const b of qsa("#mode button")) b.classList.toggle("on", b.dataset.m === S.mode);
   renderStory();
   renderBar();
+  const compShown = qs("#composer").classList.contains("live");
   qs("#composer").classList.toggle("live", !!s.live);
+  if (s.live && !compShown) fitSay(); // on screen now: a draft put back while it was hidden gets its height
   syncCmdChip(s);
   qs("#h-mic").hidden = !s.live && !DICT.rec;
   const off = qs("#term-off");
@@ -4604,7 +4608,9 @@ hGoal.onkeydown = (e) => { if (e.key === "Enter" || e.key === "Escape") { e.prev
 hGoal.onblur = () => S.active && saveGoal(S.active, hGoal.value.trim());
 // The composer: what you type goes through the daemon (typed, then Enter on its own tick).
 const say = qs("#say");
-say.addEventListener("input", () => { say.style.height = "auto"; say.style.height = Math.min(say.scrollHeight, window.innerHeight * 0.4) + "px"; draftSet(S.active, say.value); });
+// Its height follows the text (static/fit-box.js) — never measured while hidden, where it reads 0.
+function fitSay() { window.fitBox?.(document.getElementById("say"), Math.round(innerHeight * 0.4)); }
+say.addEventListener("input", () => { fitSay(); draftSet(S.active, say.value); });
 // Terminal mode, empty composer: ⏎ ⎋ ↑ ↓ go straight to the pty as keys — a "press enter", an
 // interrupt, a menu pick — so the keyboard never has to leave the composer for the common moves.
 const SAY_KEYS = { Enter: "enter", Escape: "esc", ArrowUp: "up", ArrowDown: "down" };

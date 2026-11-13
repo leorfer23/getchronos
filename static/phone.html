@@ -13,7 +13,7 @@
 <link rel="icon" href="/phone-icon.png">
 <link rel="apple-touch-icon" href="/phone-icon-512.png">
 <title data-an="text">Robert</title>
-<meta name="chronos-build" content="2026-11-13b">
+<meta name="chronos-build" content="2026-11-13c">
 <style>
   :root {
     --bg:#0C0F0B; --surface:#151A16; --surface-2:#1E2520; --raised:#262E28; --ink:#E9EFEA; --muted:#98A59D;
@@ -615,6 +615,7 @@
 <script src="/artifact-view.js"></script>
 <script src="/chat-reply.js"></script>
 <script src="/slash-complete.js"></script>
+<script src="/fit-box.js"></script>
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
 <script src="/voice-alerts.js"></script>
@@ -1800,7 +1801,7 @@ function sendFocusComposer() {
 }
 qs("#f-send").onclick = sendFocusComposer;
 fcomposer.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendFocusComposer(); } });
-fcomposer.addEventListener("input", () => { fcomposer.style.height = ""; fcomposer.style.height = Math.min(140, fcomposer.scrollHeight) + "px"; });
+fcomposer.addEventListener("input", () => window.fitBox?.(fcomposer, 140)); // static/fit-box.js: never measured while hidden
 // Swipe left/right on the story → next/previous in the strip order (queue, then working).
 (() => {
   const el = qs("#f-scroll"); let x0 = 0, y0 = 0, t0 = 0;
