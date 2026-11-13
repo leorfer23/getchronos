@@ -316,3 +316,37 @@ test("migration 155: chat rows gain voice/asked_at/first_delta_at, NULL on exist
   assert.throws(() => db.prepare(`INSERT INTO chat_messages (you,reply,created_at,source,voice) VALUES ('x','y','z','web',2)`).run(), /CHECK/);
   db.close();
 });
+
+test("migration 160: a new install (no workspace) gets the new defaults; one with a workspace keeps the job check's automatic re-runs", () => {
+  const kvGet = (db: Database.Database, k: string) =>
+    (db.prepare("SELECT value FROM kv WHERE key = ?").get(k) as { value: string } | undefined)?.value;
+  const quiet = <T>(fn: () => T): T => { const log = console.log; console.log = () => {}; try { return fn(); } finally { console.log = log; } };
+
+  // Fresh DB, the path a brand-new install takes: every migration through migrate(), nothing pinned.
+  const fresh = new Database(":memory:");
+  quiet(() => migrate(fresh));
+  assert.equal(kvGet(fresh, "settings:global"), undefined);
+  assert.equal(kvGet(fresh, "defaults.kept_at"), undefined);
+  fresh.close();
+
+  // An install upgrading into 160 with a workspace and another global setting already written.
+  const ts = "2026-11-01T00:00:00.000Z";
+  const old = new Database(":memory:");
+  applyUpTo(old, 159);
+  old.prepare(`INSERT INTO workspaces (id,slug,name,config_dir,created_at,updated_at) VALUES ('ws1','acme','Acme','/tmp/acme',@ts,@ts)`).run({ ts });
+  old.prepare(`INSERT INTO kv (key,value) VALUES ('settings:global', '{"robert.sweep":false}')`).run();
+  quiet(() => migrate(old));
+  assert.deepEqual(JSON.parse(kvGet(old, "settings:global")!), { "robert.sweep": false, "jobcheck.auto_rerun": true });
+  assert.ok(kvGet(old, "defaults.kept_at"));
+  old.close();
+
+  // A choice already written is never overwritten (and nothing is said about it).
+  const chose = new Database(":memory:");
+  applyUpTo(chose, 159);
+  chose.prepare(`INSERT INTO workspaces (id,slug,name,config_dir,created_at,updated_at) VALUES ('ws1','acme','Acme','/tmp/acme',@ts,@ts)`).run({ ts });
+  chose.prepare(`INSERT INTO kv (key,value) VALUES ('settings:global', '{"jobcheck.auto_rerun":false}')`).run();
+  quiet(() => migrate(chose));
+  assert.deepEqual(JSON.parse(kvGet(chose, "settings:global")!), { "jobcheck.auto_rerun": false });
+  assert.equal(kvGet(chose, "defaults.kept_at"), undefined);
+  chose.close();
+});

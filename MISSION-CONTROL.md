@@ -293,10 +293,13 @@ with a `resolved_reason`, distinct from the operator's ✕ (`dismissed`).
   was blocked, killed or rate-limited past the auto-resume window; the latest due fire has no run and no
   recorded skip (missed) or was refused by `dispatch()`; the verifier rejected a success; or 3+ failures in
   the day. `fallback:<name>` clones count for their job; internal machinery is left out. Every fire leaves
-  one zero-cost run on the check job (the Jobs page strip). All green ends there; red opens a Desk terminal
-  in that client (created_by `job-check`) that finds the cause, fixes, re-runs (`mc job run` + `mc run watch`)
-  and hands off with `mc outcome`; a refused terminal falls back to the job's headless run with the list as
-  context. `mc job check [--json]` / `GET /api/jobs/health` (workspace token = own client). The scheduler
+  one zero-cost run on the check job (the Jobs page strip). All green ends there. Red, with setting
+  `jobcheck.auto_rerun` off (a new install's default): the red list is kept in `kv jobcheck.ask.<check run id>`
+  and filed as a recovery card (`j:<check run id8>`, src/recovery.ts) — nothing re-runs until the operator
+  approves. Red with it on (migration 160 pins it on for an install that already had workspaces), or on the
+  operator's yes: a Desk terminal in that client (created_by `job-check`) that finds the cause, fixes, re-runs (`mc job
+  run` + `mc run watch`) and hands off with `mc outcome`; a refused terminal falls back to the job's
+  headless run with the list as context. `mc job check [--json]` / `GET /api/jobs/health` (workspace token = own client). The scheduler
   now records the last fire per job that started no run (`kv cron.skip.<job id>`: gate | inflight | refused).
 `POST /api/inbox/:id/resolve {reason}` takes the row's own workspace token or admin; `reopen` is admin.
 The Desk orders each client's rows by rank (rows filed since the last ranking first), clients with the

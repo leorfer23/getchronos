@@ -78,6 +78,11 @@ caps ship off:
 A run that goes silent is checked for signs of life first. If there are none, you get one card to
 decide. Chronos never retries a failed run by itself.
 
+The same goes for the daily job check: a job that failed is reported on a card, and nothing re-runs it
+until you say yes. To let the check fix and re-run failed jobs without asking, turn on ⚙ Settings →
+Autonomy → *Daily job check fixes and re-runs failed jobs* (for every project, or one). An install that
+already had projects before this setting existed keeps it on, as it was — the boot log says so once.
+
 ## Sharp edges, on purpose
 
 - Ticket PRs with green CI **merge on their own** by default (`CHRONOS_AUTO_MERGE`).

@@ -332,11 +332,15 @@ point Chronos at a repo you care about:
 | `CHRONOS_TERMINAL_FAILOVER_MAX` | `3` | failover steps per terminal lineage (the original plus every stand-in) before it gives up and tells you |
 | `CHRONOS_TERMINAL_FAILOVER_TYPING_SEC` | `20` | someone typed into the terminal this recently → hold off, look again after |
 | `CHRONOS_RECOVER_SWEEP_MIN` | `30` | look for abandoned work this often |
+| `CHRONOS_JOB_CHECK` | on | the daily job check (`src/job-check.ts`); `0` removes the check jobs |
+| `CHRONOS_JOB_CHECK_CRON` | `0 17 * * *` | when it runs |
+| `CHRONOS_JOB_CHECK_AUTO_RERUN` | off | default of ⚙ Settings → *Daily job check fixes and re-runs failed jobs*. Off: a red check files a recovery card and waits for you. On: a terminal opens at once to fix and re-run. An install that had projects before this existed is pinned on (migration 160) |
 | `CHRONOS_RECOVER_MAX_ASK` | `3` | recovery cards open at once |
 | `CHRONOS_MONITOR_MIN` | `5` | general sweep cadence |
 | `CHRONOS_CI_POLL_SEC` | `25` | fast CI poll while a PR is open |
 
-Recovery never retries on its own. It files a card and waits for you — that is deliberate, and
+Recovery never retries on its own — and neither does the daily job check unless you turned on its
+automatic re-runs. It files a card and waits for you — that is deliberate, and
 `CHRONOS_RECOVER_MAX_ASK` is there so a bad night files three cards rather than forty.
 
 Quiet on its own is not a stall. Past `CHRONOS_STALL_MINUTES` the sweep looks for positive evidence
@@ -405,7 +409,7 @@ several are off already.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CHRONOS_DAY_HEARTBEAT` | on | periodic fleet check-in |
+| `CHRONOS_DAY_HEARTBEAT` | on | periodic fleet check-in. Not armed while there are no projects: it starts by itself when the first one exists |
 | `CHRONOS_DAY_HEARTBEAT_CRON` | `*/30 * * * *` | how often |
 | `CHRONOS_DAY_HEARTBEAT_START` / `_END` | `09:00` / `20:00` | active window |
 | `CHRONOS_DIGEST_HOUR` | `8` | daily digest hour. `-1` = off **and disables the nightly backup** |
