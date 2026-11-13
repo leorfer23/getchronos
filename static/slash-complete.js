@@ -129,6 +129,50 @@
   /** `/model {model}` → `/model sonnet`; a switch with no argument (it opens the CLI's own picker) is used as is. */
   const modelLine = (tpl, m) => (String(tpl).includes("{model}") ? String(tpl).replace("{model}", m) : String(tpl));
 
+  /** A line its CLI runs itself: `/name` first, then a space or nothing — not a path like /Users/x/a.png. */
+  const isCommandLine = (text) => /^\/[\w.:@+-]+(?:\s|$)/.test(String(text ?? "").trim());
+
+  /** A terminal frame (GET /api/desk/screens) as the peek shows it: trailing blanks off, the bottom `max` lines. */
+  function peekText(lines, max = 60) {
+    const l = (Array.isArray(lines) ? lines : []).map((x) => String(x ?? "").trimEnd());
+    while (l.length && !l[l.length - 1]) l.pop();
+    return l.slice(-max).join("\n");
+  }
+
+  /**
+   * Follow one terminal's frame — what a slash command answered with: a dialog (/status, /doctor), a grid
+   * (/context), a picker — which Claude Code and the other CLIs draw in the terminal and never write to
+   * the transcript Focus reads. GET /api/desk/screens returns a frame only when it moved past `seq`.
+   * Every 500 ms while it moves, every 2 s once still for 15 s, stopped after 10 min still; a hidden page
+   * waits. `soon()` (a key was just sent) looks again in a moment. `onGone` once the terminal is not live.
+   */
+  function watchScreen(id, fetcher, { onFrame, onGone } = {}, hidden = () => typeof document !== "undefined" && !!document.hidden) {
+    let seq = -1, changed = Date.now(), t = 0, stopped = false, busy = false, again = false;
+    const schedule = (ms) => { clearTimeout(t); t = setTimeout(tick, ms); };
+    async function tick() {
+      if (stopped || busy) return;
+      if (hidden()) return schedule(1500);
+      busy = true;
+      try {
+        const k = encodeURIComponent(id);
+        const r = await fetcher(`/desk/screens?ids=${k}&since=${k}:${seq}`);
+        if (!stopped && (r?.gone || []).includes(id)) { stopped = true; onGone?.(); }
+        const sc = (r?.screens || []).find((x) => x.id === id);
+        if (!stopped && sc) { seq = sc.seq; changed = Date.now(); onFrame?.(sc.lines || []); }
+      } catch {}
+      busy = false;
+      if (stopped) return;
+      if (again) { again = false; return schedule(120); }
+      const still = Date.now() - changed;
+      if (still < 600000) schedule(still < 15000 ? 500 : 2000);
+    }
+    tick();
+    return {
+      stop() { stopped = true; clearTimeout(t); },
+      soon() { if (stopped) return; changed = Date.now(); if (busy) again = true; else schedule(120); },
+    };
+  }
+
   const label = (it) => String(it.insert || "/" + it.name).trim();
 
   function rowsHtml(list, sel) {
@@ -286,6 +330,6 @@
     return { refresh, close, isOpen: () => !menu.hidden };
   }
 
-  const logic = { slashQuery, score, rank, keyAction, applyPick, placeAtStart, placeModel, modelLine, rowsHtml, panelHtml };
-  (typeof window !== "undefined" ? window : globalThis).SlashComplete = { attach, load, cached, panelHtml, placeAtStart, placeModel, modelLine, logic };
+  const logic = { slashQuery, score, rank, keyAction, applyPick, placeAtStart, placeModel, modelLine, rowsHtml, panelHtml, isCommandLine, peekText };
+  (typeof window !== "undefined" ? window : globalThis).SlashComplete = { attach, load, cached, panelHtml, placeAtStart, placeModel, modelLine, isCommandLine, peekText, watchScreen, logic };
 })();

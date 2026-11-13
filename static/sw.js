@@ -1,7 +1,7 @@
 /* Chronos phone service worker: push notifications with answer buttons, the app-icon badge, and an
  * offline shell so the page opens instantly and shows the last conversation while it reconnects.
  * Served at /sw.js with no-store (src/api.ts), scope "/". */
-const VERSION = "v17";
+const VERSION = "v18";
 const SHELL = "chronos-shell-" + VERSION;
 const SHELL_URLS = ["/phone", "/phone.html", "/phone.webmanifest", "/phone-icon.png", "/phone-icon-512.png",
   "/phone-voice.js", "/phone-deck.js", "/chat-reply.js", "/ask-card.js", "/artifact-view.js", "/slash-complete.js",
