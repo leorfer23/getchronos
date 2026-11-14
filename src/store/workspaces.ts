@@ -1,6 +1,6 @@
 import path from "node:path";
 import { worktreeRootFor } from "../worktree-core.js";
-import { inRepo, resolveNotesDir } from "../repo-root.js";
+import { inRepo, resolveCriticDir, resolveNotesDir } from "../repo-root.js";
 import { randomUUID, randomBytes } from "node:crypto";
 import { db } from "./db.js";
 import { now } from "./util.js";
@@ -203,14 +203,16 @@ export const workspaces = {
     // profile this workspace does not run on — a shared profile is this workspace's own too).
     const me = db.prepare(`SELECT config_dir FROM workspaces WHERE id = ?`).get(workspaceId) as { config_dir: string | null } | undefined;
     const others = db
-      .prepare(`SELECT slug, default_dir, config_dir FROM workspaces WHERE id != ?`)
-      .all(workspaceId) as Array<{ slug: string; default_dir: string | null; config_dir: string | null }>;
+      .prepare(`SELECT id, slug, default_dir, config_dir FROM workspaces WHERE id != ?`)
+      .all(workspaceId) as Array<{ id: string; slug: string; default_dir: string | null; config_dir: string | null }>;
     const notesRoot = resolveNotesDir();
     const ticketsRoot = inRepo("tickets");
+    const criticRoot = resolveCriticDir();
     const extra: string[] = [];
     for (const o of others) {
       if (o.default_dir) extra.push(o.default_dir);
-      extra.push(path.join(notesRoot, o.slug), path.join(ticketsRoot, o.slug));
+      // …and what the visual critic rendered of its pages (visual-critic.ts), kept under its id.
+      extra.push(path.join(notesRoot, o.slug), path.join(ticketsRoot, o.slug), path.join(criticRoot, o.id));
       if (o.config_dir && o.config_dir !== me?.config_dir) {
         extra.push(path.join(o.config_dir, "projects"), path.join(o.config_dir, "history.jsonl"));
       }

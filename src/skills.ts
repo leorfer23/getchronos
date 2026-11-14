@@ -1,4 +1,5 @@
 import { proseBlock } from "./prose.js";
+import { styleBlock } from "./house-style.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -179,12 +180,16 @@ export function skillIndexBlock(workspace_id: string): string {
 // rewritten from his writing and his `comms` corrections. The corrections themselves are not
 // injected as rows any more — they grew without bound and restated what the page says. Build and
 // review rules are injected at dispatch, where the ticket's own text can rank them.
+//
+// How its dashboards, reports and pages should look rides as ONE pointer line (house-style.ts):
+// the workspace's own style is behind `mc style`, read when the work is visual, never inlined here.
 export function agentContext(workspace_id: string, repo_id?: string | null): string {
   return [
     contextBlock(workspace_id, repo_id),
     memoryBlock(workspace_id),
     skillIndexBlock(workspace_id),
     proseBlock(workspace_id),
+    styleBlock(workspace_id),
     vpnPromptLine(workspaces.get(workspace_id)),
   ]
     .filter(Boolean)

@@ -289,6 +289,16 @@ code and evidence, never by the terminal's own claim.
   `POST /api/ledger/:id/verify` / `mc ledger verify <id>` — the operator's token only (a workspace token reads
   its own checks, never re-runs). Setting `verifier.enabled` (Safety) turns the automatic verifier off per
   workspace; the operator's re-run still works.
+- **Visual** (`src/visual-critic.ts`, `src/visual-capture.ts`, house style in `src/house-style.ts`). A hand-off whose
+  answer is a page, a dashboard or a document — every `mc artifact` page the terminal published, the links an analysis
+  hands off (code hosts and trackers are references), screenshots it attached that are not a UI before/after pair —
+  is rendered in the shared headless browser on a lease of that workspace (its egress proxy) at desktop and phone
+  width, sliced into screens, and judged by a read-only `review:critic-…` run against the bar and the workspace's
+  house style (`mc style`). `visual` is a non-required slot on answer items: absent when there was nothing to look
+  at, but a fail (fixes, or charts to **remove**) is a fail, told in the same two rounds. A page behind a login (or
+  an error page) is never guessed at: judged from what was attached, said so on the check, and with nothing
+  attached the terminal is asked for screenshots. Renders live in `~/.mc/critic/<workspace>/` (denied to every
+  other workspace); a page of another workspace named in a hand-off is never opened. Setting `verifier.critic`.
 
 ## Not yet
 
