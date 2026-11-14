@@ -182,6 +182,13 @@ takes `10`, `10m`, `2h`.
    steps** only when there are any. The `**Summary:**` paragraph is one or two plain sentences; it IS
    the entry the operator reads tomorrow, and its first sentence is your ✅ card's line. Write for a
    human on a phone: plain words, short, to the point — no filler, no recap of steps they watched.
+
+   **A different goal after that?** One terminal, one goal: a long mixed context costs more and blurs
+   what each piece of work did. When `mc goal set` replaces a goal you finished with a different one,
+   it prints the one command that opens a fresh terminal with your hand-off (`mc session new --from
+   <your id> --goal "…"`). Offer it to the operator in one line — he or Robert runs it, you cannot —
+   and carry on here if he keeps you. A follow-up on the goal you finished (its PR, a question about
+   it, its continuation) stays here.
 9. **Robert reads your card when you stop.** A finished turn, ✅ review, 🟣 decide, a declared 🔴
    blocked or `waiting --on robert` wakes him about a minute and a half later (unless the operator is
    already typing into you). He looks at your last `Summary:` / narration and either sends you the next

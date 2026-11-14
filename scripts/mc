@@ -378,14 +378,20 @@ const HELP = `mc — Mission Control backlog CLI
                  [--goal "what it's for"] [--kind pr|ui|investigation|qa|product|chat] [--description "the brief"]
                  (--goal repeats: --goal "open the PR" --goal "update the runbook" = one terminal,
                   two finish lines, worked in order)
-                 [--slice N]
+                 [--slice N] [--from <ID>]
                                      spawn another agent terminal (e.g. a helper on your ticket)
                                      --slice N (inside a Lead) links it to that slice of your board
                                      and marks the slice 'doing'
+                                     --from <ID>: a new goal after that terminal finished its own — opens
+                                     in its workspace and repo, seeded with its hand-off (shipped, links,
+                                     open items, its id)
   mc session attach <ID>             drive a live terminal from here (ctrl-] detaches, ctrl-C hits the agent)
   mc session focus <ID> [-n 20]      what that terminal is doing, in plain English (read-only)
   mc session send <ID> "text" [--no-enter]   type into that terminal and press enter (admin-gated,
                                      or a Lead's own credential — MC_LEAD_TOKEN — into its own workers)
+  mc session send <ID> "brief" --goal "<goal>"   NEW work, not a follow-up: if that terminal already
+                                     finished its goal and this is a different one, a fresh terminal opens
+                                     in the same workspace and repo with its hand-off instead
   mc session key <ID> enter|esc|tab|up|down|ctrl-c|ctrl-d   send one keystroke (esc interrupts a turn)
   mc session key <ID> down,down,enter  a sequence = one answer (the third option in a menu)
   mc lead new "<goal>" [--workspace ID] [--description "..."] [--backend b] [--model m] [--kind k]
@@ -1133,8 +1139,10 @@ function askCap(question) {
         : pos[1] === "clear" ? { goal: null, goal_source: "agent" }
         : { goal_done: true };
       const s2 = await req("PATCH", "/sessions/" + sid, body);
+      // `fresh`: the goal it replaced was already finished, and this is a different one — the daemon
+      // says how to offer the operator a fresh terminal for it (src/fresh-terminal.ts).
       if (pos[1] !== "done")
-        return console.log(`🎯 ${s2.goal ?? "(cleared)"}` + ((s2.done_when || []).length ? "\n" + checksText(s2) + "\n   (tick each one as it is met: mc goal check <N>)" : ""));
+        return console.log(`🎯 ${s2.goal ?? "(cleared)"}` + ((s2.done_when || []).length ? "\n" + checksText(s2) + "\n   (tick each one as it is met: mc goal check <N>)" : "") + (s2.fresh?.say ? "\n" + s2.fresh.say : ""));
       // With a queue behind it, a tick is a step, not the end: say which one is now on the card so
       // the agent keeps going instead of writing its Summary three goals early.
       const left = (s2.goals_total ?? 0) - (s2.goals_done ?? 0);
@@ -2440,9 +2448,19 @@ function askCap(question) {
         if (ws && ws !== own) die("ticket belongs to another workspace");
         ws = own;
       }
+      // `--from <id>`: a fresh terminal for a new goal, carrying that finished terminal's hand-off (what
+      // it shipped, links, open items, its id) — in its workspace and repo (src/fresh-terminal.ts).
+      let from = null;
+      if (opt.from && opt.from !== "true") {
+        const hits = (await req("GET", "/sessions")).filter((x) => x.id === opt.from || x.id.startsWith(opt.from));
+        if (!hits.length) die(`no terminal matching ${opt.from}`);
+        if (hits.length > 1) die(`${opt.from} matches ${hits.length} terminals — use more of the id`);
+        from = hits[0];
+      }
       const s = await req("POST", "/sessions", {
-        ticket_id: ticketId, workspace_id: ws || null, repo_id: repo || null,
-        backend: opt.backend, model: opt.model, role: opt.role || "worker",
+        ticket_id: ticketId, workspace_id: ws || null, repo_id: (from ? opt.repo : repo) || null,
+        ...(from ? { from: from.id } : {}),
+        backend: opt.backend, model: opt.model, role: opt.role || (from && from.role !== "worker" ? "human" : "worker"),
         cwd: opt.cwd, title: opt.title, goal: opt.goal,
         // Pin to another computer (HOSTS.md): a host id or its name. Unset = wherever it runs today.
         host_id: opt.host,
@@ -2464,7 +2482,7 @@ function askCap(question) {
         // presented that Lead's credential — the daemon reads it from the header, not from here.
         slice: opt.slice ? Number(opt.slice) : undefined,
       }, LEAD_HEADERS);
-      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})${placedOn(s)}${dupLine(s)}`);
+      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})${placedOn(s)}${from ? ` — with the hand-off from ${from.id.slice(0, 8)}` : ""}${dupLine(s)}`);
     }
     // A Lead (LEADS.md): Robert's deputy for one goal, in one workspace. Opened the same way as any
     // other terminal (POST /sessions, role "lead") — the daemon does the rest (its own lead_token,
@@ -2820,10 +2838,16 @@ function askCap(question) {
       const body =
         pos[1] === "key"
           ? keysBody((pos[3] || die("mc session key <ID> enter|esc|tab|up|down|ctrl-c|ctrl-d  (or a comma list)")).toLowerCase())
-          : { text: pos.slice(3).join(" ") || die('mc session send <ID> "<what to type>" [--no-enter]'), enter: !opt["no-enter"] };
+          : { text: pos.slice(3).join(" ") || die('mc session send <ID> "<what to type>" [--no-enter] [--goal "<new work: its goal>"]'), enter: !opt["no-enter"] };
       if (process.env.MC_AGENT_NAME || opt.by) body.by = opt.by || process.env.MC_AGENT_NAME;
-      await req("POST", "/sessions/" + s.id + "/input", body, handHeaders());
-      return console.log(`→ ${s.id.slice(0, 8)} ${body.keys ? body.keys.map((k) => `<${k}>`).join("") : body.key ? `<${body.key}>` : JSON.stringify(body.text)}`);
+      // `--goal`: this is NEW work, for this goal. If that terminal already finished its own, the daemon
+      // opens a fresh one in the same workspace and repo with a hand-off instead (src/fresh-terminal.ts).
+      if (pos[1] === "send" && opt.goal && opt.goal !== "true") body.goal = String(opt.goal);
+      const r = await req("POST", "/sessions/" + s.id + "/input", body, handHeaders());
+      if (r?.opened)
+        return console.log(`↪ ${s.id.slice(0, 8)} had finished its goal ("${String(r.from_goal || "").slice(0, 80)}") — opened ${r.opened.id.slice(0, 8)} in the same workspace and repo, with its hand-off: ${r.opened.goal || body.goal}`);
+      return console.log(`→ ${s.id.slice(0, 8)} ${body.keys ? body.keys.map((k) => `<${k}>`).join("") : body.key ? `<${body.key}>` : JSON.stringify(body.text)}` +
+        (r?.fresh_refused ? `\n  (it had finished its goal, but a fresh terminal was refused: ${r.fresh_refused} — typed here instead)` : ""));
     }
     // "down,down,enter" is one answer (the third option in a menu), sent as a spaced sequence.
     function keysBody(spec) {
