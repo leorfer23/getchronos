@@ -152,6 +152,7 @@ import { activeWorkspaceIds, askFleetFanout, askManagerWeb, handFilesTo, warmWeb
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurn, oneRobert, resolveVoiceAsk, setSticky, fansOut } from "./thread-router.js";
 import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type LeadEvent } from "./store.js";
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
+import { finishedGoal, freshHint, noteGoalSet, routeNewWork, sameGoal, withHandoff } from "./fresh-terminal.js";
 import { leadEventPayload, waitForLeadEvents } from "./robert-drive.js";
 import { fileReport, leadEventLines } from "./lead-report.js";
 import { leadMayAnswer, mayRouteToLead } from "./lead-asks.js";
@@ -713,6 +714,21 @@ export function startServer() {
         return res.status(403).json({ error: "workspace token does not match requested workspace" });
       req.body = { ...req.body, workspace_id: scope.ws };
     }
+    // `mc session new --from <id>`: a fresh terminal carrying a finished one's hand-off
+    // (src/fresh-terminal.ts). It opens in THAT terminal's workspace and nowhere else: a scoped caller
+    // only reaches its own workspace's terminals, and nobody — the operator included — carries a
+    // hand-off into another workspace.
+    if (req.body?.from) {
+      const prev = sessions.get(req.body.from);
+      if (!prev?.workspace_id || (scope.ws !== null && prev.workspace_id !== scope.ws))
+        return res.status(404).json({ error: "session not found in this workspace" });
+      if (req.body.workspace_id && req.body.workspace_id !== prev.workspace_id)
+        return res.status(400).json({ error: "a hand-off stays in its own workspace" });
+      const { from: _from, ...rest } = req.body;
+      req.body = withHandoff(rest, prev);
+      const wall = spawnWallRefusal(prev.workspace_id, req.body);
+      if (wall) return res.status(404).json({ error: wall });
+    }
     // The wall for anyone but the operator: everything the new terminal points at must be this
     // workspace's — a repo, a ticket, a session to revive, a directory. A Lead's worker used to open
     // with read/write in another client's checkout, or revive another workspace's ended session.
@@ -797,6 +813,11 @@ export function startServer() {
     const admin = tokenOk(req.get("x-mc-admin"), CONFIG.adminToken);
     if (ship !== undefined && !admin) return res.status(403).json({ error: "only the operator sets what a terminal may ship (x-mc-admin)" });
     const current = sessionGoals.current(s.id);
+    // Read before the write: is the goal being replaced one this terminal already finished? A different
+    // goal on the card starts new work (fresh-terminal.ts); a sharpening of the same one does not.
+    const newGoal = typeof goal === "string" && goal.trim() ? goal : null;
+    const finished = newGoal ? finishedGoal(s) : null;
+    if (newGoal && !sameGoal(newGoal, s.goal ?? s.spawn_goal)) noteGoalSet(s);
     if (goal !== undefined || goal_kind !== undefined) {
       if (current && goal !== null) {
         // Retitling the card retitles the goal it is showing, not some fourth copy of the words.
@@ -834,7 +855,11 @@ export function startServer() {
     if (ship !== undefined && (ship ?? "ask") !== (s.ship ?? "ask") && isLive(s.id) && !s.cloud_agent_id)
       sendInput(s.id, { text: shipLine(ship ?? "ask"), enter: true }, "operator");
     bus.publish({ topic: "session.updated", session_id: s.id });
-    res.json(sessions.get(s.id));
+    // A finished goal replaced by a different one (`mc goal set` after `mc goal done`): the agent hears
+    // that a fresh terminal would serve it better, and the one command that opens it with a hand-off.
+    // Words only — the operator typing into a finished terminal is his choice (src/fresh-terminal.ts).
+    const fresh = finished && newGoal && !sameGoal(newGoal, finished.goal) ? freshHint(s, finished, newGoal) : null;
+    res.json(fresh ? { ...sessions.get(s.id), fresh } : sessions.get(s.id));
   });
   // The hand-off (`mc outcome`): what the operator approves the merge/deploy from. Scoped like
   // /status — a terminal speaking about its own work. A correction replaces the one on top whole (a
@@ -961,6 +986,8 @@ export function startServer() {
       const out = body.replace
         ? setGoals(s.id, items, body.source ?? "human")
         : addGoals(s.id, items, body.source ?? "human");
+      // New goals on the card: whatever it finished before is no longer what it is on (fresh-terminal.ts).
+      if (items.length) noteGoalSet(s);
       bus.publish({ topic: "session.updated", session_id: s.id });
       res.status(201).json({ goals: out.goals, session: out.session });
     } catch (e: any) {
@@ -1053,7 +1080,7 @@ export function startServer() {
   // Type into a live terminal without holding its websocket. Admin-gated on purpose: a workspace
   // token is a client boundary, and driving another client's agent from inside a workspace would
   // walk straight through it. The Desk's quick actions and an overseeing agent both come through here.
-  api.post("/sessions/:id/input", validate(SessionInputSchema), (req, res) => {
+  api.post("/sessions/:id/input", validate(SessionInputSchema), async (req, res) => {
     // Admin token, checked here rather than via requireAdmin (declared further down this file) — OR
     // a live Lead typing into A TERMINAL IT OWNS (LEADS.md): the one thing a Lead may do that a plain
     // workspace token cannot, and the one thing a worker may never do to a peer.
@@ -1088,6 +1115,21 @@ export function startServer() {
     // A Robert credential never types as the operator, whatever its body says: the trail (and the
     // ledger) must be able to tell his keystrokes from the operator's own.
     const by = robert ? (req.body.by && req.body.by !== "operator" ? req.body.by : "robert") : req.body.by || "operator";
+    // NEW work, from a router that said what it is for, for a terminal whose goal is already finished:
+    // a fresh terminal in the same workspace and repo with a hand-off, rather than a second goal piled
+    // into this context (src/fresh-terminal.ts). A follow-up (no `goal`) is typed in, as is anything
+    // the operator types himself. A refused open (seat cap) falls through to typing, and says why.
+    let freshRefused: string | null = null;
+    if (req.body.goal && req.body.text) {
+      const routed = await routeNewWork(s, {
+        goal: req.body.goal,
+        text: req.body.text,
+        by: lead ? `lead:${lead.leadId.slice(0, 8)}` : by,
+        leadId: lead?.leadId ?? null,
+      });
+      if (routed && "opened" in routed) return res.status(201).json({ ok: true, from: s.id, from_goal: routed.from_goal, opened: routed.opened });
+      if (routed) freshRefused = routed.refused;
+    }
     const err = sendInput(req.params.id, req.body, by);
     if (err) return res.status(err.startsWith("rate limit") ? 429 : 409).json({ error: err });
     // His hand, counted for src/proactive-score.ts: the admin token with no other `by` (Desk composer,
@@ -1098,7 +1140,7 @@ export function startServer() {
     const submitted = req.body.enter !== false && (req.body.text || req.body.key === "enter" || req.body.keys?.includes("enter"));
     if (admin && (req.body.by || "operator") === "operator" && submitted)
       void operatorAnswered(s.id, req.body.text ?? "").catch((e) => console.warn("[ask-in-terminal]", e?.message ?? e));
-    res.json({ ok: true });
+    res.json(freshRefused ? { ok: true, fresh_refused: freshRefused } : { ok: true });
   });
   // A file dragged from Finder onto this terminal on the Desk (or an image pasted into it): raw
   // bytes in, an absolute path out, which the page then types in as a word. The handlers live in

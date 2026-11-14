@@ -49,6 +49,12 @@ export async function createRoute(req: Req, res: Res): Promise<void> {
   const b = req.body ?? {};
   const self = req.get("x-mc-session") || null;
   const sessionRef = b.session_id || self;
+  // The executives' hand: the operator, and a Robert with write rights. A project's Robert carries a
+  // credential scoped to his workspace (authz.ts robertToken), so `scope.ws` is set for him too —
+  // checkScope below still walls him into it — but he parks his terminals' work (`mc when … --for`)
+  // the way the operator does. Refused, he had no way to park a stopped terminal, and told it to block
+  // its turn in the foreground instead.
+  const executive = scope.ws === null || scope.robert === "rw";
 
   let session: Session | null = null;
   let workspace_id: string | null;
@@ -57,7 +63,7 @@ export async function createRoute(req: Req, res: Res): Promise<void> {
     if (!session) { res.status(404).json({ error: `no terminal matching ${sessionRef}` }); return; }
     if (!checkScope(req, res, session.workspace_id)) return;
     // A terminal parks its own work; parking someone else's is the executives' hand.
-    if (scope.ws !== null && session.id !== self) { res.status(403).json({ error: "a terminal parks only its own work — ask Robert to park another terminal's" }); return; }
+    if (!executive && session.id !== self) { res.status(403).json({ error: "a terminal parks only its own work — ask Robert to park another terminal's" }); return; }
     workspace_id = session.workspace_id;
   } else {
     const why = spawnRefusal(scope, leadScope(req));
@@ -86,13 +92,13 @@ export async function createRoute(req: Req, res: Res): Promise<void> {
   }
 
   const round = session ? continuations.firedFor(session.id) + 1 : 1;
-  if (scope.ws !== null) {
+  if (!executive) {
     const why = agentLimits(spec, { armed: session ? continuations.countArmed({ session_id: session.id }) : 0, round });
     if (why) { res.status(409).json({ error: why }); return; }
   }
-  const created_by = scope.ws !== null
+  const created_by = !executive
     ? `agent:${session?.agent_name || (session ? id8(session.id) : "terminal")}`
-    : (b.by?.trim() || "operator");
+    : (b.by?.trim() || (scope.robert ? "robert" : "operator"));
   try {
     const c = await arm({ workspace_id, session_id: session?.id ?? null, spec, created_by, round });
     res.status(201).json(c);

@@ -96,6 +96,9 @@ export const OpenSessionSchema = z.object({
   resumeAgent: z.boolean().optional(),
   /** Pin the terminal to a connected host (HOSTS.md phase 3), by id or name. Unset = the brain. */
   host_id: z.string().max(80).nullable().optional(),
+  /** `mc session new --from <id>`: open it with that finished terminal's hand-off, in its workspace
+   *  and repo (src/fresh-terminal.ts). Never another workspace's. */
+  from: id.optional(),
 });
 
 export const AgentNameSchema = z.object({
@@ -242,6 +245,10 @@ export const SessionInputSchema = z
     // background and it reads the line in the same turn (sendInput). Ignored by every other CLI.
     now: z.boolean().optional(),
     by: z.string().max(60).optional(),
+    // `mc session send --goal`: this text is NEW work, for this goal. A terminal whose goal is already
+    // finished gets a fresh terminal for it instead, with a hand-off (src/fresh-terminal.ts). Without
+    // it the text is a follow-up and is typed in.
+    goal: z.string().min(1).max(400).optional(),
   })
   .refine((b) => !!b.text || !!b.key || !!b.keys?.length, { message: "pass text, key or keys" });
 

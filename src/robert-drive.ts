@@ -213,7 +213,9 @@ export function driveSay(
 ): string {
   const head: Record<DriveKind, string> = {
     review: "a terminal says its GOAL IS DONE and is waiting for someone to check it.",
-    turn: "a terminal FINISHED ITS TURN and has been sitting idle — nobody has told it what's next.",
+    // A Claude terminal's Stop hook does not list the shells it left running, so one waiting on its own
+    // background task reads as this too — and that task wakes it when it exits (BACKGROUND WORK).
+    turn: "a terminal FINISHED ITS TURN and has been sitting idle — nobody has told it what's next. (Waiting on a task it started in the background? That task wakes it when it exits — see BACKGROUND WORK.)",
     decide: "a terminal is waiting on a DECISION and nobody has taken it.",
     blocked: "a terminal declared itself BLOCKED.",
     robert: "a terminal says it is WAITING ON YOU (Robert) — it declared `mc state waiting --on robert`.",
