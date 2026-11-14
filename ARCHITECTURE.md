@@ -133,7 +133,7 @@ claude -p "<goal / prompt>" \
 **Verified facts that shaped this:**
 - `-p` / `--print` runs non-interactively and **exits when the task completes** → "runs until the goal is done" is the natural behavior.
 - `stream-json` is newline-delimited JSON, one object per line; **does not** require `--verbose`.
-- **There is no `--max-turns`.** Bound runaway with `--max-budget-usd` **and** our own wall-clock watchdog (below).
+- **There is no `--max-turns`.** Bound runaway with `--max-budget-usd` **and** our own watchdog (below).
 - `--allowed-tools`/`--allowedTools` and `--disallowed-tools` both accepted; space- or comma-separated.
 - `--session-id <uuid>` makes a run addressable → enables resume/retry. `--resume`/`--continue`/`--fork-session` available for continuity jobs.
 - A bare spawn **inherits** `~/.claude` settings, skills, MCP servers. Use `--strict-mcp-config`/`--bare`/`--safe-mode` only when a job needs isolation.
@@ -170,7 +170,7 @@ trigger (cron | webhook | relay | telegram | manual)
   → Guardrails: concurrency slot free? daily $ budget ok? job enabled?  (else → blocked/deferred)
   → Runner spawns claude -p …            (status=running)
   → parse NDJSON → run_events + WS broadcast
-  → wall-clock watchdog: kill if > job.timeout_sec        (status=timeout)
+  → watchdog: kill if awake > job.timeout_sec            (status=timeout)
   → process exit:
         result.is_error=false → status=success
         non-zero / is_error    → status=failed
@@ -353,7 +353,7 @@ Autonomous + skip-permissions = real blast radius. Layered defense:
 | **Filesystem scope** | `cwd` + explicit `--add-dir`; deny tools like `Bash(rm *)`, `Bash(sudo *)` via `--disallowed-tools`. Optionally wrap in `sandbox-exec` (macOS Seatbelt) per job. |
 | **Tool scope** | Per-job `--allowed-tools` whitelist. Default deny-destructive. |
 | **Cost ceiling** | `--max-budget-usd` per run **+** a daily aggregate cap in `settings`; Dispatcher blocks new runs once the day's spend is hit. |
-| **Time ceiling** | Wall-clock watchdog → SIGTERM then SIGKILL at `timeout_sec` (compensates for missing `--max-turns`). |
+| **Time ceiling** | Watchdog → SIGTERM then SIGKILL at `timeout_sec` of awake time — sleep does not count (`src/awake-timeout.ts`); compensates for missing `--max-turns`. |
 | **Concurrency** | `max_concurrent` cap; excess runs queue. Prevents fork-bomb of claude processes. |
 | **Secrets** | Per-workspace `secrets_file` — a plaintext `KEY=VALUE` env file, mode `0600`, denied to every other workspace. `childEnv` (`src/child-env.ts`) builds each run's env from a fixed allowlist plus *only* that workspace's `secrets_file`, so one client's keys never leak into another's runs. Keychain is **not** used (Claude reads its own auth from the login keychain, but Chronos stores no secrets there). Mask in transcripts. |
 | **Shared vars** | The operator-facing half of the same idea: `workspace_vars` rows (Desk 🔑 panel, `mc vars`) merged into `childEnv` after the file, each with an optional expiry — "here's `X_TOKEN` for 12 hours". Values DO live in SQLite, which is why `dbPath`/`-wal`/`-shm` are in the sandbox secrets deny-list (they already held every workspace API token). Mutations are admin-gated; the one route that serves values (`GET /workspaces/:id/vars/export`) demands the admin token or that workspace's own token — never the tokenless-loopback pass every other read route allows. Expiry is enforced on read *and* deletes the row, so a lapsed credential stops existing. |
