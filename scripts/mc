@@ -331,6 +331,10 @@ const HELP = `mc — Mission Control backlog CLI
   mc dream undo <run> [--workspace ID]                    put the newest pass back — memos, inbox, archive, clocks
   mc dream run [--workspace ID|slug]                      dream now, outside the 13:00/22:00 slots (admin; no workspace = every active one)
   mc dream context [--run ID] | branch <slug> | apply [--dry-run] [--file F]   the dreamer's own loop (plan JSON on stdin)
+  mc retro [show] [--workspace ID]                        this week's self-retro: KPIs vs last week, the report, rules waiting on the operator
+  mc retro runs [--workspace ID]                          recent weekly retros
+  mc retro run [--workspace ID|slug]                      run the retro now (admin; no workspace = every one with it on)
+  mc retro context --run ID | apply [--file F]            the retro job's own loop (plan JSON on stdin)
   mc search "<query>" [--workspace ID] [--kind ticket|session|event|job|skill]
   mc ws list                         list projects  (alias: mc project list)
   mc ws create <slug>                scaffold a new project (identity capsule)
@@ -2264,6 +2268,57 @@ function askCap(question) {
         return console.log(`undone ${r.id.slice(0, 8)} — memory is back to how it was before that pass`);
       }
       die("dream: unknown subcommand " + sub + " (context|branch|apply|runs|undo|run)");
+    }
+    if (cmd === "retro") {
+      // The weekly self-retro (src/retro-pass.ts). show/runs read; context/apply are the retro job's own
+      // loop; run starts one now (admin — it may dispatch paid jobs). Approving a rule is the Desk's tap.
+      const sub = pos[1] || "show";
+      if (sub === "run") {
+        const r = await req("POST", "/retro/run", opt.workspace && opt.workspace !== "true" ? { workspace: opt.workspace } : {}, adminHeaders());
+        if (!r.started.length) return console.log("(no workspace has the weekly retro on)");
+        return console.log(r.started.map((s) => `${s.workspace}: ${s.error ? "✗ " + s.error : s.skipped ? "· " + s.skipped : "retro — run " + s.run.slice(0, 8)}`).join("\n"));
+      }
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (!wsId) die(`retro ${sub} needs --workspace or MC_WORKSPACE — a retro is workspace-walled`);
+      const base = "/workspaces/" + wsId + "/retro";
+      if (sub === "show") {
+        const v = await req("GET", base);
+        if (!v.run) return console.log("(no weekly retro yet in this workspace)");
+        const k = v.kpis || {}, p = v.last_week;
+        const was = (x) => (p ? ` (last week ${x ?? "–"})` : "");
+        const lines = [v.run.report || "",
+          "",
+          `KPIs: verifier ${k.rejection_rate ?? "–"}/hand-off${was(p && p.rejection_rate)} · repeat asks ${k.repeat_asks}${was(p && p.repeat_asks)} · infra ${k.infra}${was(p && p.infra)} · duplicates ${k.duplicates}${was(p && p.duplicates)}`];
+        if (v.pending.length) lines.push("", "Waiting on the operator (approve on the Desk — Fleet board, Weekly retro):", ...v.pending.map((x) => `  ${x.id.slice(0, 8)}  ${x.text}`));
+        return console.log(lines.join("\n"));
+      }
+      if (sub === "runs") {
+        const r = await req("GET", base + "/runs?limit=" + (Number(opt.limit) || 8));
+        if (!r.runs.length) return console.log("(no weekly retros yet in this workspace)");
+        return console.log(r.runs.map((x) => `${x.id.slice(0, 8)}  ${x.status.padEnd(10)} ${x.since.slice(0, 10)} → ${x.until.slice(0, 10)}  ${x.error || ""}`).join("\n"));
+      }
+      if (sub === "context") {
+        if (!opt.run || opt.run === "true") die("retro context needs --run <id> — the run named in your goal");
+        return console.log(JSON.stringify(await req("GET", base + "/context?run=" + encodeURIComponent(opt.run)), null, 2));
+      }
+      if (sub === "apply") {
+        // Read stdin to the end — a truncated plan must never parse.
+        const raw = opt.file && opt.file !== "true" ? fs.readFileSync(opt.file, "utf8")
+          : process.stdin.isTTY ? "" : await new Promise((ok) => { let d = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (c) => (d += c)); process.stdin.on("end", () => ok(d)); });
+        if (!raw.trim()) die("retro apply reads the plan (JSON) from stdin or --file");
+        let plan; try { plan = JSON.parse(raw); } catch (e) { die("retro apply: the plan is not valid JSON — " + e.message); }
+        const r = await fetch(API + base + "/apply", { method: "POST", headers: { "content-type": "application/json", ...WS_TOKEN_HEADERS }, body: JSON.stringify(plan) });
+        const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+        if (!r.ok) {
+          console.error(`retro apply refused (${r.status}) — fix every problem and resend:\n` + (j.problems?.length ? j.problems.map((p) => "- " + p).join("\n") : j.error));
+          process.exit(1);
+        }
+        const out = [`${j.proposed.length} proposal(s) waiting on the operator`];
+        for (const x of j.proposed) out.push(`  + ${x.text}`);
+        for (const x of j.skipped) out.push(`  · skipped "${x.text.slice(0, 100)}" — ${x.why}`);
+        return console.log(out.join("\n"));
+      }
+      die("retro: unknown subcommand " + sub + " (show|runs|run|context|apply)");
     }
     if (cmd === "memory" && pos[1] === "conflicts") {
       const wsId = opt.workspace || process.env.MC_WORKSPACE;

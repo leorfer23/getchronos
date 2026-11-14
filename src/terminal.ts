@@ -18,7 +18,8 @@ import { claimStaged, dropsBrief } from "./capture.js";
 import { ensureBypassAccepted, ensureTrustedCwd } from "./claude-trust.js";
 import { ensureGrokTrustedCwd, grokHome } from "./grok-trust.js";
 import { isEarlyDeath, reportEarlyDeath } from "./desk-incidents.js";
-import { inFlightAtRestart, lastActivityState, reviveSeedFor } from "./revive.js";
+import { inFlightAtRestart, lastActivityState, reviveSeedFor, REVIVE_NUDGE } from "./revive.js";
+import { kindOfBy, markInput, type InjectKind } from "./turn-source.js";
 import { childEnv } from "./child-env.js";
 import { sanitizeCwd } from "./spawn-guard.js";
 import { ensureTicketWorktree, cleanupWorktree, cleanupRemoteWorktree } from "./worktrees.js";
@@ -1071,6 +1072,9 @@ export async function openSession(
   if (seed) {
     // A revive's continue-nudge is not the terminal's first prompt: keep the one it was opened with.
     if (!opts.resumeId) sessions.setMeta(row.id, { first_prompt: seed });
+    // Typed by the daemon — the transcript will say the operator typed it (turn-source.ts).
+    const seedKind: InjectKind = !opts.resumeId ? "seed" : seed === REVIVE_NUDGE ? "revive" : openedBy === "continuation" ? "continuation" : "system";
+    markInput({ session_id: row.id, workspace_id: opts.workspace_id ?? null, kind: seedKind, by: openedBy, text: seed });
     // A remote host types it itself, next to the pty (it rode in the SpawnSpec).
     // (term-seed.ts: wait for the input box, then one paste and its own Enter.)
     if (!remote) typeSeed({ write: (d) => entry.pty.write(d), lastOut: () => entry.lastOut, modes: entry.modes, gone: () => live.get(row.id) !== entry, cooked: () => ttyCooked(entry.pty) }, seed, backend.name);
@@ -1580,11 +1584,16 @@ const operatorLines = new Map<string, number>();
 /** When the operator last typed a line into this terminal through the daemon, or null. */
 export const operatorSaidAt = (id: string): number | null => operatorLines.get(id) ?? null;
 
-/** Returns null on success, or a human-readable reason it did not happen. */
+/**
+ * Returns null on success, or a human-readable reason it did not happen. `kind` is who the line is
+ * really from (turn-source.ts), when the caller knows better than `by` — an approval tap or a daemon
+ * line typed under the operator's name, a Lead typing with no name of its own. Never from a request body.
+ */
 export function sendInput(
   id: string,
   req: { text?: string | null; key?: NamedKey | null; keys?: NamedKey[] | null; enter?: boolean; now?: boolean; machine?: boolean },
   by = "operator",
+  kind?: InjectKind,
 ): string | null {
   if (!live.has(id)) return "terminal is not live";
   if (!req.text && !req.key && !req.keys?.length) return "nothing to send — pass text, key or keys";
@@ -1594,6 +1603,8 @@ export function sendInput(
   // A line from the operator (not a menu key, not the daemon): the moment a later hand-off becomes a
   // follow-up rather than a correction (session-outcome.ts fileOutcome).
   if (by === "operator" && req.text) operatorLines.set(id, at);
+  // Its transcript will record this line as typed by the operator; the mark says who it really was.
+  if (req.text) markInput({ session_id: id, workspace_id: sessions.get(id)?.workspace_id ?? null, kind: kind ?? kindOfBy(by), by, text: req.text });
 
   if (req.key) writeTo(id, KEYS[req.key]);
   // A sequence is one answer ("down, down, enter" = the third option), spaced so a TUI reads
