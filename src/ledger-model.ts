@@ -72,6 +72,7 @@ export const CHECK_NAMES = [
   "tests", "regression", "pr_ready", "matches_request", "shots", "walkthrough",
   "queries", "crosscheck", "assumptions", "exercised", "repro_steps",
   "repro_before", "fixed_after", "post_deploy", "goal_test", "draft_bound",
+  "data_diff", "code_review",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
 /** `na` = the slot does not apply to this answer (an analysis that states no figures): never a pass, never missing. */
@@ -110,6 +111,9 @@ const TESTS: ExpectedCheck = { name: "tests", required: true, what: "the repo's 
 const PR_READY: ExpectedCheck = { name: "pr_ready", required: true, gate: true, what: "the PR exists, is open, mergeable and up to date with its base" };
 const MATCHES: ExpectedCheck = { name: "matches_request", required: true, gate: true, what: "a reader that did not write it says the change does what was asked" };
 const DRAFT_BOUND: ExpectedCheck = { name: "draft_bound", required: true, gate: true, what: "the words, recipient and channel he hears are the ones a yes is bound to" };
+/** Every PR, so the slot list is the same for all of them: `na` where it does not apply (not a data repo, no model changed). */
+const DATA_DIFF: ExpectedCheck = { name: "data_diff", required: true, what: "a data PR (models, SQL, transforms in a data repo): rows and key aggregates of each changed model before vs after over a bounded range, the commands, the model's own tests run, any large swing explained" };
+const CODE_REVIEW: ExpectedCheck = { name: "code_review", required: true, what: "an engine that did not write it read the full diff with the repo's review memory; each finding fixed or justified on the hand-off" };
 
 /**
  * A request's work type IS a terminal's goal kind (types.ts GoalKind) — one vocabulary, set where it
@@ -126,6 +130,8 @@ export const WORK: Record<GoalKind, WorkType> = {
       TESTS,
       { name: "regression", required: true, what: "the wider suite and the paths around the change still pass" },
       { name: "goal_test", required: true, what: "a test tied to the goal changed in the diff (fails before, passes after)" },
+      DATA_DIFF,
+      CODE_REVIEW,
       PR_READY,
       MATCHES,
     ],
@@ -140,6 +146,8 @@ export const WORK: Record<GoalKind, WorkType> = {
       { name: "regression", required: true, what: "the screens around the change still render and behave" },
       { name: "shots", required: true, gate: true, what: "before/after per screen, per viewport (meta: screen, viewport, side)" },
       { name: "walkthrough", required: true, what: "the user flow it changes, a recording or a shot per step" },
+      DATA_DIFF,
+      CODE_REVIEW,
       PR_READY,
       MATCHES,
     ],
@@ -179,6 +187,8 @@ export const WORK: Record<GoalKind, WorkType> = {
       { name: "repro_before", required: false, what: "a bug: the failure reproduced before the fix" },
       { name: "fixed_after", required: false, what: "a bug: the same steps passing after it" },
       { name: "post_deploy", required: true, what: "checked in production after the deploy" },
+      DATA_DIFF,
+      CODE_REVIEW,
       MATCHES,
     ],
   },

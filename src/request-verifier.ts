@@ -12,6 +12,12 @@
  *               matches_request  a second reader (another model than the writer), given his words and the goal:
  *                                "does this do what was asked, what could it break?" — a `review:` run, read-only,
  *                                no Bash, so it can neither write, post, nor park on an ask (CLAUDE.md gotcha 3)
+ *               code_review      an engine that did not write it reads the full diff once per head, with the repo's
+ *                                review memory and the operator's corrections; its findings go back as a round, each
+ *                                fixed or justified on the hand-off (src/code-review.ts, src/repo-memory.ts)
+ *               data_diff        a PR that changes models, SQL or transforms in a data repo: before/after rows and key
+ *                                aggregates, the commands, the model's tests run, big swings explained; `na`
+ *                                anywhere else (src/data-diff.ts)
  *   pr (backend) goal_test        a test changed in the diff; skip when it cannot be judged
  *   ui           shots            before/after per screen at phone and desktop width — none is a fail
  *                walkthrough      the flow shown step by step (`mc show`)
@@ -30,6 +36,7 @@
  */
 import fs from "node:fs";
 import os from "node:os";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { bus } from "./bus.js";
@@ -40,8 +47,12 @@ import { acquireSlot, beatSlot, niceWrap, releaseSlot } from "./machine.js";
 import { prBelongsTo, slugOfPr, slugOfRemote } from "./pr-ownership.js";
 import { sandboxWrap, workspaceSandboxAllow, type SandboxMode } from "./sandbox.js";
 import { clampSandbox } from "./spawn-guard.js";
-import { settingOn } from "./settings.js";
+import { setting, settingOn } from "./settings.js";
 import { jobs, kv, repos, runs, sessions, workspaces } from "./store.js";
+import { codeReviews, type CodeReviewRow } from "./store/review-memory.js";
+import { codeReviewPrompt, judgeCodeReview, mergeFindings, parseCodeReview, resolutionsIn, type Finding } from "./code-review.js";
+import { dataRepoOf, judgeDataDiff } from "./data-diff.js";
+import { operatorNotes, repoMemoryFor } from "./repo-memory.js";
 import { requests, type DecisionItem, type Deliverable, type RequestRow, type VerificationRow } from "./store/requests.js";
 import { FINAL_DELIVERABLE, draftHash, slotsFor, type CheckName, type Evidence } from "./ledger-model.js";
 import { itemReadiness } from "./ledger.js";
@@ -61,6 +72,8 @@ const one = (s: unknown, n: number) => {
 /** Who writes the checks (request_checks.ran_by). */
 export const RAN_BY = "verifier";
 const DIFF_CAP = 60_000;
+/** The code reviewer reads the whole diff up to this; past it, the rest from the files in its worktree. */
+const CODE_DIFF_CAP = 150_000;
 const OUTPUT_CAP = 4_000;
 /** Passes running at once, machine-wide. Each may hold a heavy slot and a reviewer run. */
 const MAX_ACTIVE = 2;
@@ -71,7 +84,7 @@ const SINCE_KEY = "verifier.since";
 
 // ───────────────────────────── what it reads the world through (injectable for tests) ─────────────────────────────
 
-export type PrRead = PrView & { files: string[] | null; ci: "pending" | "passing" | "failing" | null; failing: string[] };
+export type PrRead = PrView & { files: string[] | null; ci: "pending" | "passing" | "failing" | null; failing: string[]; passing?: string[] };
 export type ReviewRun = { text: string | null; run_id: string | null; status: string; error?: string | null };
 export type VerifierDeps = {
   /** gh pr view, read-only, with the daemon's read env for this workspace (child-env.ts ghReadEnv). */
@@ -85,8 +98,8 @@ export type VerifierDeps = {
   runGates(ws: Workspace, cwd: string, gates: Array<{ name: string; cmd: string }>): Promise<GateResult[]>;
   /** Run `fn` holding one of this machine's heavy slots (`mc heavy`), so a suite never starves live terminals. */
   heavy<T>(ws: Workspace, label: string, fn: () => Promise<T>): Promise<T>;
-  /** The second reader: a read-only `review:` run in the workspace. */
-  review(ws: Workspace, prompt: string, o: { cwd: string; backend: string; model: string; requestId: string }): Promise<ReviewRun>;
+  /** A reader: a read-only `review:` run in the workspace — the second reader (label verify) or the code reviewer (label code). */
+  review(ws: Workspace, prompt: string, o: { cwd: string; backend: string; model: string; requestId: string; label?: "verify" | "code" }): Promise<ReviewRun>;
   /** Type one line into the terminal. null = done, else why not. */
   tell(sessionId: string, text: string): Promise<string | null>;
   /** The draft's words as its hook carried them (draft-notify.ts, memory only). */
@@ -106,6 +119,7 @@ const realDeps: VerifierDeps = {
       headRefOid: v?.headRefOid ?? null, baseRefName: v?.baseRefName ?? null,
       files: Array.isArray(v?.files) ? v.files.map((f: any) => String(f?.path ?? "")).filter(Boolean) : null,
       ci: ciRollup(v?.statusCheckRollup), failing: checks.filter((c) => c.state === "failing").map((c) => c.name),
+      passing: checks.filter((c) => c.state === "passing").map((c) => c.name),
     };
   },
   async behindBy(ws, url, base, head) {
@@ -158,8 +172,10 @@ const realDeps: VerifierDeps = {
     const { dispatch } = await import("./dispatcher.js");
     // `review:` = a read-only run (runner.ts isReadOnlyRun): it never parks on an ask and is never
     // re-dispatched when one is answered. No Bash, no writes, no web: it reads files and answers.
+    const label = o.label ?? "verify";
     const job = jobs.create({
-      name: `review:verify-${o.requestId.slice(0, 8)}`, description: "second reader for a hand-off (request verifier)", goal: prompt,
+      name: `review:${label}-${o.requestId.slice(0, 8)}`,
+      description: label === "code" ? "independent code review of a PR hand-off (request verifier)" : "second reader for a hand-off (request verifier)", goal: prompt,
       workspace_id: ws.id, backend: o.backend, model: o.model, cwd: o.cwd, sandbox: ws.sandbox_mode,
       disallowed_tools: "Edit,Write,MultiEdit,NotebookEdit,Bash,BashOutput,KillShell,Task,WebFetch,WebSearch",
       trigger_type: "manual", retry_max: 0, timeout_sec: 900, max_budget_usd: 2, notify: "off",
@@ -394,6 +410,8 @@ async function runPass(r: RequestRow, ws: Workspace, targets: Target[]): Promise
   const kind = r.kind;
   const reviewPrs: ReviewInput["prs"] = [];
   const reviewDrafts: ReviewInput["drafts"] = [];
+  // The code reviews run beside the second reader below; their checks are in before anything is written.
+  const codeReviewing: Array<Promise<void>> = [];
   let cwd: string | null = null;
 
   for (const { d } of unique) {
@@ -403,7 +421,7 @@ async function runPass(r: RequestRow, ws: Workspace, targets: Target[]): Promise
       // The wall: only a PR of this workspace's own repos is read with this workspace's credentials.
       const own = prBelongsTo(ws.id, d.ref);
       if (!own.ok) {
-        for (const n of ["pr_ready", "tests", "matches_request"] as CheckName[]) push(d, { name: n, status: "skip", note: `not read: ${own.why}` });
+        for (const n of ["pr_ready", "tests", "data_diff", "code_review", "matches_request"] as CheckName[]) push(d, { name: n, status: "skip", note: `not read: ${own.why}` });
         continue;
       }
       let pr: PrRead | null = null;
@@ -428,6 +446,13 @@ async function runPass(r: RequestRow, ws: Workspace, targets: Target[]): Promise
       }
       const diff = await deps.prDiff(ws, d.ref);
       reviewPrs.push({ url: d.ref, files: pr?.files ?? null, diff: diff ? diff.slice(0, DIFF_CAP) : null, truncated: !!diff && diff.length > DIFF_CAP });
+      if (want.has("data_diff")) {
+        const swing = Number(setting("verifier.data_swing_pct", ws.id)) || 20;
+        push(d, judgeDataDiff({ repo: dataRepoOf(repoFor(ws, d.ref, s), pr?.files ?? null), files: pr?.files ?? null, diff: outcomeFor(s, d)?.data_diff ?? null, swingLimit: swing, ciPassing: pr?.passing ?? [] }));
+      }
+      if (want.has("code_review")) {
+        codeReviewing.push(codeReviewAt(r, ws, d, s, pr, diff).catch((e: any): CheckResult => ({ name: "code_review", status: "skip", note: `the code review itself failed: ${one(e?.message ?? e, 200)}` })).then((c) => push(d, c)));
+      }
     } else if (d.kind === "slack_draft" || d.kind === "email_draft") {
       push(d, await draftBound(d));
       const [channel, ...rest] = d.ref.split(":");
@@ -480,8 +505,61 @@ async function runPass(r: RequestRow, ws: Workspace, targets: Target[]): Promise
     }
   }
 
+  await Promise.all(codeReviewing);
   for (const { d } of unique) write(r, d, results.get(d.id) ?? [], at);
   return { tellable };
+}
+
+/**
+ * code_review for one PR (src/code-review.ts): read once per head by an engine that did not write it,
+ * over the whole diff, with the repo's review memory and the operator's corrections. A head already
+ * read is judged from that review and the hand-off; a new head with the diff of the last review (a
+ * clean rebase) carries it over; any other new head is read again, with the findings still open and
+ * what the hand-off says of each.
+ */
+async function codeReviewAt(r: RequestRow, ws: Workspace, d: Deliverable, s: Session | undefined, pr: PrRead | null, diff: string | null): Promise<CheckResult> {
+  const skip = (note: string): CheckResult => ({ name: "code_review", status: "skip", note });
+  if (!pr?.headRefOid || String(pr.state ?? "").toUpperCase() !== "OPEN") return skip("the PR is not open, or its head is not known — nothing to review");
+  if (!diff?.trim()) return skip("the PR's diff could not be read — nobody but its author has read it");
+  const head = pr.headRefOid;
+  const o = outcomeFor(s, d);
+  const handoff = o ? [o.summary, ...o.changes, ...o.proof] : [];
+  const saidOn = (list: Finding[]) => resolutionsIn(handoff, list.filter((f) => f.status === "open").map((f) => f.id));
+  const judge = (row: CodeReviewRow, fresh: boolean) =>
+    judgeCodeReview({ findings: row.findings, fresh, said: saidOn(row.findings), engine: row.engine, rules: row.rules, carriedFrom: row.carried_from, runRef: row.run_id ? `run:${row.run_id}` : null });
+  const cached = codeReviews.get(ws.id, d.ref, head);
+  if (cached) return judge(cached, false);
+  const prev = codeReviews.latest(ws.id, d.ref);
+  const diffHash = "sha256:" + createHash("sha256").update(diff).digest("hex");
+  if (prev && prev.diff_hash === diffHash) {
+    return judge(codeReviews.put({ ...prev, head_sha: head, carried_from: prev.carried_from ?? prev.head_sha }), false);
+  }
+  // Never the engine that wrote it: the terminal's backend and model (its workspace's default model when it set none).
+  const pick = pickReviewer(ws, { backend: s?.backend ?? null, model: s?.model || ws.default_model || null }, { backend: "claude-code", model: CONFIG.mergeGateModel || CONFIG.defaultModel });
+  if (!pick.independent) return skip(`${pick.why} — no independent review`);
+  const repo = repoFor(ws, d.ref, s);
+  const slug = slugOfPr(d.ref);
+  const memory = repo && slug ? await repoMemoryFor(ws, repo, slug) : undefined;
+  const open = (prev?.findings ?? []).filter((f) => f.status === "open");
+  const said = saidOn(open);
+  const prompt = codeReviewPrompt({
+    url: d.ref, words: r.words, goal: s?.goal ?? null, repo: repo?.name ?? slug, rules: memory?.rules ?? [], notes: operatorNotes(ws, repo, slug, pr.files),
+    open: open.map((f) => ({ ...f, said: said[f.id] ?? null })), files: pr.files, diff: diff.slice(0, CODE_DIFF_CAP), truncated: diff.length > CODE_DIFF_CAP,
+  });
+  const wt = s?.worktree_path || s?.cwd || null;
+  let run: ReviewRun;
+  try {
+    run = await deps.review(ws, prompt, { cwd: wt && fs.existsSync(wt) ? wt : os.homedir(), backend: pick.backend, model: pick.model, requestId: r.id, label: "code" });
+  } catch (e: any) {
+    run = { text: null, run_id: null, status: "error", error: String(e?.message ?? e) };
+  }
+  const out = run.status === "success" ? parseCodeReview(run.text) : null;
+  if (!out) return skip(`the code reviewer gave no verdict (${run.status}${run.error ? `: ${one(run.error, 160)}` : ""}) — nobody but its author has read the diff`);
+  const row = codeReviews.put({
+    workspace_id: ws.id, repo_id: repo?.id ?? null, pr_url: d.ref, head_sha: head, diff_hash: diffHash, findings: mergeFindings(prev?.findings ?? [], out),
+    engine: `${pick.backend} ${pick.model}`, run_id: run.run_id, rules: memory?.rules.length ?? 0, carried_from: null,
+  });
+  return judge(row, true);
 }
 
 // ───────────────────────────── when it runs ─────────────────────────────
