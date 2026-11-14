@@ -19,10 +19,10 @@ import { INBOX_AUTO_BY } from "./inbox-guard.js";
 import { relatedAmong, RELATED_WINDOW_MS } from "./inbox-thread.js";
 import type { Session } from "./types.js";
 
-const SOURCE_LABEL: Record<string, string> = { slack: "Slack", jira: "Jira", clickup: "ClickUp" };
+const SOURCE_LABEL: Record<string, string> = { slack: "Slack", jira: "Jira", clickup: "ClickUp", trigger: "a workspace trigger" };
 const KIND_LABEL: Record<string, string> = {
   dm: "direct message", mention: "@mention", self_note: "note to self", assigned: "assigned to him",
-  comment: "comment on his task", status: "status change on his task",
+  comment: "comment on his task", status: "status change on his task", alert: "it fired (`mc trigger show` has the rule)",
 };
 const id8 = (id: string) => id.slice(0, 8);
 const clip = (s: string | null | undefined, n: number) => {

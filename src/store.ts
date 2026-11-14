@@ -35,6 +35,8 @@ export { notes } from "./store/notes.js";
 export { jots } from "./store/jots.js";
 export { continuations } from "./store/continuations.js";
 export type { Continuation, ContinuationKind, ContinuationStatus, ContinuationOutcome, ContinuationThen, NewContinuation } from "./store/continuations.js";
+export { wsTriggers } from "./store/ws-triggers.js";
+export type { WsTrigger, WsTriggerKind, WsTriggerAction, WsTriggerFire, WsFireOutcome, NewWsTrigger } from "./store/ws-triggers.js";
 export { proseSamples } from "./store/prose.js";
 export type { Jot, NewJot } from "./store/jots.js";
 export { launches } from "./store/launches.js";
