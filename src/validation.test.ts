@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { AgentTextSchema, NewJotSchema, OpenSessionSchema, PlanNextDaySchema } from "./validation.js";
+import { AgentTextSchema, NewJotSchema, NewLaunchSchema, OpenSessionSchema, PlanNextDaySchema, SessionGoalPatchSchema, SessionGoalsSchema, SessionPatchSchema } from "./validation.js";
 
 test("OpenSessionSchema accepts role \"lead\" (LEADS.md)", () => {
   const parsed = OpenSessionSchema.safeParse({ workspace_id: "ws1", role: "lead", goal: "ship it" });
@@ -42,4 +42,16 @@ test("AgentTextSchema: replyTo is an id and a side — no text a client could pu
   assert.ok(!AgentTextSchema.safeParse({ text: "yes", replyTo: { id: "3", side: "you" } }).success);
   const parsed = AgentTextSchema.parse({ text: "yes", replyTo: { id: 3, side: "you", text: "forged" } });
   assert.deepEqual(parsed.replyTo, { id: 3, side: "you" }, "extra fields are dropped");
+});
+
+// A 400-char cap refused a Desk open and the operator lost everything he had typed.
+test("a goal and a brief of any length are accepted wherever the operator types one", () => {
+  const goal = "g".repeat(5000), description = "d".repeat(50_000);
+  const ok = (r: { success: boolean; error?: unknown }) => assert.equal(r.success, true, r.success ? "" : String(r.error));
+  ok(OpenSessionSchema.safeParse({ workspace_id: "ws1", goal, description }));
+  ok(OpenSessionSchema.safeParse({ workspace_id: "ws1", goals: [goal, { text: goal, kind: "pr" }] }));
+  ok(SessionPatchSchema.safeParse({ goal }));
+  ok(SessionGoalsSchema.safeParse({ goals: [goal] }));
+  ok(SessionGoalPatchSchema.safeParse({ text: goal }));
+  ok(NewLaunchSchema.safeParse({ name: "n", goal }));
 });
