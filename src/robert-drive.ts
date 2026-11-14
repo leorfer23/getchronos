@@ -331,7 +331,7 @@ export function resolveLead(leadId: string | null | undefined): Session | null {
 const STOP_PHASES: ReadonlySet<string> = new Set(["your_turn", "review", "decide", "blocked", "ended"]);
 /** `waiting --on X` where X resumes the terminal by itself (term-status.ts WAIT_ON): work is still in
  *  flight and nobody has to do anything. The rest — robert, person, terminal, other — need a hand. */
-const SELF_RESUMING: ReadonlySet<string> = new Set(["subagents", "ci", "command", "deploy"]);
+const SELF_RESUMING: ReadonlySet<string> = new Set(["subagents", "ci", "command", "query", "job", "deploy"]);
 
 /**
  * Is this terminal waiting on somebody, as opposed to working? Pure, so the whole table is testable.

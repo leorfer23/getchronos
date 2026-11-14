@@ -32,7 +32,8 @@ export const PHASES = ["blocked", "decide", "review", "your_turn", "waiting", "w
 export type Phase = (typeof PHASES)[number] | "ended";
 /** What `mc state` may declare. `idle` clears a declaration; `done` is an alias of `review`. */
 export type DeclaredState = "working" | "waiting" | "blocked" | "decide" | "review";
-export const WAIT_ON = ["subagents", "ci", "terminal", "command", "robert", "person", "deploy", "other"] as const;
+/** Keep `mc state` (scripts/mc) and SessionStatusSchema (validation.ts) in step with this list. */
+export const WAIT_ON = ["subagents", "ci", "terminal", "command", "query", "job", "robert", "person", "deploy", "other"] as const;
 export type WaitOn = (typeof WAIT_ON)[number];
 
 export type Signals = {

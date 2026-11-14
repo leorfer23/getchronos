@@ -118,7 +118,7 @@ export const SessionStatusSchema = z.object({
   state: z.enum(["working", "waiting", "blocked", "decide", "review", "done", "idle"]),
   label: z.string().max(400).nullable().optional(),
   reason: z.enum(["hitl", "approval", "question", "budget", "gate", "stall", "recovery", "review", "auth"]).nullable().optional(),
-  on: z.enum(["subagents", "ci", "terminal", "command", "robert", "person", "deploy", "other"]).nullable().optional(),
+  on: z.enum(["subagents", "ci", "terminal", "command", "query", "job", "robert", "person", "deploy", "other"]).nullable().optional(),
   eta_min: z.number().positive().max(7 * 24 * 60).nullable().optional(),
 });
 /** `mc progress 2/5 "label"` — null clears. */
