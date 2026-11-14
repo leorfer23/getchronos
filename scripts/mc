@@ -677,7 +677,10 @@ async function hook(backend, mode) {
   let ev = null;
   if (name === "userpromptsubmit" || name === "beforesubmitprompt") ev = { event: "prompt" };
   else if (name === "stop" || name === "stopfailure") {
-    ev = { event: "stop", error: name === "stopfailure" ? String(j.error || j.reason || "error") : j.status === "error" ? "error" : null };
+    // StopFailure: the error type plus the text it showed ("server_error: API Error: Can't reach the API server …"),
+    // so the card says what failed and a turn that died on the network is nudged once it is back (src/net-nudge.ts).
+    const shown = j.last_assistant_message || j.error_details;
+    ev = { event: "stop", error: name === "stopfailure" ? String(j.error || j.reason || "error") + (shown ? `: ${String(shown).slice(0, 200)}` : "") : j.status === "error" ? "error" : null };
     // Some CLIs (grok) list what is still running in the background when the turn ends.
     const bg = j.background_tasks || j.backgroundTasks;
     if (Array.isArray(bg)) ev.tasks = bg.slice(0, 20).map((t, i) => ({ key: String(t.id || t.agentId || t.agent_id || t.taskId || i), label: String(t.description || t.agentType || t.agent_type || t.type || "") }));

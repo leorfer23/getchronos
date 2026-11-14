@@ -65,6 +65,7 @@ import { sandboxWrap, workspaceSandboxAllow, type SandboxMode } from "./sandbox.
 import { clampSandbox } from "./spawn-guard.js";
 import { egressLocked } from "./egress.js";
 import { declare, statusOf, type WaitOn } from "./term-status.js";
+import { networkUp } from "./net-up.js";
 import type { Continuation, ContinuationKind, ContinuationOutcome, ContinuationThen } from "./store/continuations.js";
 import type { Job, Session } from "./types.js";
 
@@ -92,6 +93,12 @@ const DEFAULT_TIMEOUT_MS: Record<ContinuationKind, number> = {
 export const SCRIPT_TIMEOUT_MS = 60_000;
 /** Consecutive failed looks (gh down, probe crashed) before the work is woken with outcome `broken`. */
 export const MAX_ERRORS = 5;
+/**
+ * The network is down (net-up.ts): look again this soon. An outage is not the condition's failure — a
+ * look made then never counts toward MAX_ERRORS and never spends a probe (2026-11: a 7-day external
+ * check and PR-CI waits went `broken` on "gh: error connecting to api.github.com" during an outage).
+ */
+export const OFFLINE_RETRY_MS = 60_000;
 /** A met continuation that could not be delivered (seat cap, busy machine, terminal mid-question). */
 export const RETRY_MS = 2 * 60_000;
 /** Deliveries per pass, so a wake after a long sleep does not reopen ten terminals at once. */
@@ -495,6 +502,14 @@ function noted(c: Continuation, saw: string | null, nowMs: number, error = false
   changed(c);
 }
 
+/** The look says nothing while the network is down: no error, no probe spent, the next look soon (never past the timeout). */
+function offline(c: Continuation, nowMs: number): void {
+  if (continuations.get(c.id)?.status !== "armed") return;
+  const timeout = c.timeout_at ? Date.parse(c.timeout_at) : Infinity;
+  continuations.setNext(c.id, iso(Math.min(nowMs + OFFLINE_RETRY_MS, timeout)));
+  changed(c);
+}
+
 /** One due armed row: timeout, or one look at its condition. */
 export async function evaluate(c: Continuation, nowMs = Date.now(), opts: { dispatch?: typeof dispatch } = {}): Promise<void> {
   if (c.status !== "armed") return;
@@ -512,6 +527,8 @@ export async function evaluate(c: Continuation, nowMs = Date.now(), opts: { disp
     if (!evaluateEvent(c, nowMs)) noted(c, null, nowMs);
     return;
   }
+  // GitHub and a probe's model need the network; a script may not, so it runs and is judged after.
+  if ((c.kind === "pr" || c.kind === "check") && !(await networkUp())) { offline(c, nowMs); return; }
   if (c.kind === "pr") {
     let raw: any;
     try {
@@ -519,6 +536,7 @@ export async function evaluate(c: Continuation, nowMs = Date.now(), opts: { disp
       raw = await viewPr(c.target!, cwd, env);
       if (!raw) throw new Error("gh returned nothing");
     } catch (e: any) {
+      if (!(await networkUp())) { offline(c, nowMs); return; }
       noted(c, `gh: ${clip(e?.stderr || e?.message || String(e), 200)}`, nowMs, true);
       return;
     }
@@ -533,6 +551,7 @@ export async function evaluate(c: Continuation, nowMs = Date.now(), opts: { disp
   if (c.kind === "script") {
     const r = await runScript(c);
     if (r.met) meet(c, "met", r.out || "the script exited 0", nowMs);
+    else if (r.error && !(await networkUp())) offline(c, nowMs);
     else noted(c, r.out, nowMs, r.error);
     return;
   }
@@ -667,7 +686,7 @@ function startCheck(c: Continuation, nowMs: number, opts: { dispatch?: typeof di
 }
 
 /** A when-check run ended: read its verdict back onto the continuation. */
-export function finishCheck(runId: string, nowMs = Date.now()): void {
+export async function finishCheck(runId: string, nowMs = Date.now()): Promise<void> {
   const run = runs.get(runId);
   if (!run || LIVE_RUN.has(run.status)) return;
   const job = jobs.get(run.job_id);
@@ -679,6 +698,8 @@ export function finishCheck(runId: string, nowMs = Date.now()): void {
   const r = run.status === "success" ? parseCheckResult(run.summary) : null;
   if (r?.met) { meet(c, "met", r.text, nowMs); return; }
   if (r) { noted(c, r.text, nowMs); return; }
+  // A probe that died because the network did: not counted, not spent — it runs again once the network is back.
+  if (run.status !== "success" && !(await networkUp())) { offline(c, nowMs); return; }
   noted(c, run.status === "success" ? "probe gave no WHEN-RESULT line" : `probe ${run.status}${run.error ? `: ${clip(run.error, 160)}` : ""}`, nowMs, true);
 }
 
@@ -725,7 +746,10 @@ export function resumable(s: Session, nowMs = Date.now()): boolean {
   return nowMs - ended <= resumeDays() * 86_400_000;
 }
 
-export type Openers = { open?: typeof openSession; send?: typeof sendInput; phase?: (id: string) => string | null; alive?: (id: string) => boolean };
+export type Openers = {
+  open?: typeof openSession; send?: typeof sendInput; phase?: (id: string) => string | null; alive?: (id: string) => boolean;
+  netUp?: () => Promise<boolean>;
+};
 
 /**
  * Hand a met continuation to its work. Returns how, or null when it has to wait for a better moment
@@ -752,6 +776,8 @@ export async function deliver(c: Continuation, nowMs = Date.now(), o: Openers = 
     return how;
   };
   const msg = continuationMessage(c);
+  // Typing, resuming or opening all start an agent turn: not into a dead network (a 01:00 `at` in a dark wake).
+  if (!(await (o.netUp ?? networkUp)())) return later("the network is down");
 
   if (s && c.on_met !== "new") {
     // A row can say live with no pty behind it (a restart between the reap and now, a lost host): that
@@ -863,7 +889,7 @@ export function startContinuations(): void {
       } else if (e?.topic === "ask.answered" && e.ask_id) {
         for (const c of continuations.armedFor("ask", e.ask_id)) evaluateEvent(c);
       } else if (e?.topic === "run.ended" && e.run_id) {
-        finishCheck(e.run_id);
+        void finishCheck(e.run_id).catch((err) => console.warn("[when] finish check", err?.message ?? err));
       }
     } catch (err: any) {
       console.warn("[when] event", err?.message ?? err);

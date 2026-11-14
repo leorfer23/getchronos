@@ -19,6 +19,7 @@ import { bus } from "./bus.js";
 import { desktop } from "./notify.js";
 import { jots, sessions, workspaces } from "./store.js";
 import { openSession } from "./terminal.js";
+import { networkUp } from "./net-up.js";
 import type { Jot } from "./store/jots.js";
 import type { Session } from "./types.js";
 
@@ -206,9 +207,16 @@ export async function fireFollowUp(
   }
 }
 
-/** Fire what is due — a few per pass, one per client, so a wake-up does not flood the wall. */
-export async function sweepFollowUps(nowMs = Date.now(), opener: typeof openSession = openSession): Promise<number> {
+/**
+ * Fire what is due — a few per pass, one per client, so a wake-up does not flood the wall. Nothing while
+ * the network is down (net-up.ts): a follow-up due at night waits for it instead of dying on its first
+ * API call; the minute cadence of armFollowUps tries again.
+ */
+export async function sweepFollowUps(
+  nowMs = Date.now(), opener: typeof openSession = openSession, netUp: () => Promise<boolean> = networkUp,
+): Promise<number> {
   const due = jots.dueFollowUps(new Date(nowMs).toISOString());
+  if (due.length && !(await netUp())) return 0;
   const seen = new Set<string>();
   let fired = 0;
   for (const j of due) {
