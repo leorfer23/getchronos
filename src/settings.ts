@@ -54,7 +54,7 @@ export interface SettingDef {
 
 const REGISTRY = new Map<string, SettingDef>();
 /** Page order. */
-export const GROUPS = ["Workspace", "Robert", "Voice", "Alerts", "Accounts", "Failover", "Autonomy", "Memory", "Limits", "Safety", "Executor"];
+export const GROUPS = ["Workspace", "Robert", "Voice", "Alerts", "Accounts", "Failover", "Autonomy", "Memory", "Limits", "Safety", "Executor", "Trials"];
 
 export function defineSetting(d: SettingDef): SettingDef {
   REGISTRY.set(d.key, d);
@@ -598,6 +598,16 @@ defineSetting({
   label: "Data PRs: largest unexplained swing (%)",
   help: "A PR that changes models, SQL or transforms in a data repo hands off before/after numbers per changed table. A row count or key aggregate that moves more than this must carry its explanation on the hand-off, or the verifier sends it back.",
   default: () => Number(process.env.CHRONOS_VERIFIER_DATA_SWING_PCT) || 20,
+});
+
+// Trials: experiments the operator turns on per workspace to see whether they help, each measured
+// (`mc trial report <name>`). Per workspace only — one workspace's trial never touches another's.
+// The red-team trial (src/red-team.ts): hypotheses first in analysis terminals, then a red team.
+defineSetting({
+  key: "trial.red_team", group: "Trials", level: "ws", type: "bool",
+  label: "Trial: hypotheses first, then a red team (analyses)",
+  help: "An experiment, off by default. Analysis terminals open with a short protocol: restate the question, list hypotheses each with the test that would falsify it, check the known data traps (units, duplicated snapshots, cohort definitions, time windows, joins). An answer that states figures is then read once by another model that tries to break it; its findings go back in the verifier's round and the next hand-off answers each one. Needs the verifier on. `mc trial report red-team` compares this workspace's analyses with it on and off.",
+  default: () => false,
 });
 
 // Alerts (src/stuck-alerts.ts): work that is stuck reaches the operator once, on the first channel

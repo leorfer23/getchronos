@@ -216,6 +216,9 @@ export const SessionOutcomeSchema = z.object({
   shots: z.array(z.object({ name: z.string().max(80), label: z.string().max(80).optional() })).max(8).optional(),
   ask: z.enum(["merge", "deploy", "merge+deploy", "review", "none"]).optional(),
   shipped: z.array(z.string().max(400)).max(6).optional(),
+  // The red-team trial (src/red-team.ts): "<claim> | <test> | survived" and "F1=fixed: <what changed>".
+  hypotheses: z.array(z.string().max(1000)).max(12).optional(),
+  findings: z.array(z.string().max(1000)).max(12).optional(),
   // A data PR's before/after numbers (`mc outcome --data-diff`); its shape is read leniently by
   // data-diff.ts normalizeDataDiff, so here only its size is bounded.
   data_diff: z.record(z.string(), z.unknown()).refine((v) => JSON.stringify(v).length <= 40_000, "data_diff is capped at 40 000 characters").optional(),

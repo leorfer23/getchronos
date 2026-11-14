@@ -19,7 +19,8 @@ import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { normalizeDataDiff } from "./data-diff.js";
-import type { Outcome, Ship, Shown } from "./types.js";
+import { parseFindingAnswer, parseHypothesis } from "./red-team.js";
+import type { FindingAnswer, Hypothesis, Outcome, Ship, Shown } from "./types.js";
 
 export const SHIPS: readonly Ship[] = ["ask", "merge", "deploy"];
 export const OUTCOME_ASKS: readonly Outcome["ask"][] = ["merge", "deploy", "merge+deploy", "review", "none"];
@@ -166,6 +167,10 @@ export const addShown = (list: Shown[], next: Shown): Shown[] => [...list, next]
 export function normalizeOutcome(sessionId: string, body: any, now = new Date()): Outcome {
   const shots = ownShots(sessionId, body?.shots, MAX_SHOTS);
   const ask = OUTCOME_ASKS.includes(body?.ask) ? body.ask : "review";
+  // The red-team trial's two tables (src/red-team.ts). A line that is not that shape is dropped, like a bad PR link.
+  const hypotheses = list(body?.hypotheses, 6, 1000).map(parseHypothesis).filter((h): h is Hypothesis => !!h);
+  const answers = new Map<string, FindingAnswer>();
+  for (const a of list(body?.findings, 8, 1000).map(parseFindingAnswer)) if (a) answers.set(a.id, a); // a repeated id: the last word stands
   // A data PR's before/after numbers (src/data-diff.ts): kept only when it is one, clipped like the rest.
   const data_diff = normalizeDataDiff(body?.data_diff);
   return {
@@ -179,6 +184,8 @@ export function normalizeOutcome(sessionId: string, body: any, now = new Date())
     shipped: list(body?.shipped, 4, 160),
     ...(data_diff ? { data_diff } : {}),
     at: now.toISOString(),
+    ...(hypotheses.length ? { hypotheses } : {}),
+    ...(answers.size ? { findings: [...answers.values()] } : {}),
   };
 }
 
