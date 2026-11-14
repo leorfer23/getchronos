@@ -21,6 +21,7 @@ import { nameError as varNameError, expiryFromHours } from "./store/workspace-va
 import { answerAsk, notifyAskCreated, resolveAsk, waitForAskAnswer } from "./asks.js";
 import { holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { operatorAnswered, operatorKeys } from "./ask-in-terminal.js";
+import { kindOfBy } from "./turn-source.js";
 import { handTyped, noteOperatorInput, proactiveAllowed, proactiveStats } from "./proactive-score.js";
 import { deliverPending, resolveMessageTarget, sendMessage } from "./messages.js";
 import { egressCfg, egressPort, syncEgress } from "./egress.js";
@@ -105,6 +106,7 @@ import { proseSamples } from "./store/prose.js";
 import { recall, renderRecall } from "./recall.js";
 import { recordRead, recordRecall, sessionFor, usageRoute } from "./memory-usage.js";
 import * as dreamRoutes from "./dream-routes.js";
+import * as retroRoutes from "./retro-routes.js";
 import * as inboxRoutes from "./inbox-routes.js";
 import * as artifactRoutes from "./artifact-routes.js";
 import * as fileRoutes from "./file-routes.js";
@@ -832,7 +834,7 @@ export function startServer() {
     // A permission change reaches the agent the way every other word from him does: typed into it.
     // Its env and its first prompt were written before this, so without the line it would not know.
     if (ship !== undefined && (ship ?? "ask") !== (s.ship ?? "ask") && isLive(s.id) && !s.cloud_agent_id)
-      sendInput(s.id, { text: shipLine(ship ?? "ask"), enter: true }, "operator");
+      sendInput(s.id, { text: shipLine(ship ?? "ask"), enter: true }, "operator", "system");
     bus.publish({ topic: "session.updated", session_id: s.id });
     res.json(sessions.get(s.id));
   });
@@ -1088,7 +1090,9 @@ export function startServer() {
     // A Robert credential never types as the operator, whatever its body says: the trail (and the
     // ledger) must be able to tell his keystrokes from the operator's own.
     const by = robert ? (req.body.by && req.body.by !== "operator" ? req.body.by : "robert") : req.body.by || "operator";
-    const err = sendInput(req.params.id, req.body, by);
+    // Who the line is really from, for the transcript's sake (turn-source.ts) — decided by the
+    // credential, never the body: a Lead that sends no name is still a Lead, not the operator.
+    const err = sendInput(req.params.id, req.body, by, lead ? "lead" : robert ? "robert" : kindOfBy(by));
     if (err) return res.status(err.startsWith("rate limit") ? 429 : 409).json({ error: err });
     // His hand, counted for src/proactive-score.ts: the admin token with no other `by` (Desk composer,
     // Focus buttons, phone, his own `mc session send`). Robert and agents send their own `by`
@@ -1286,7 +1290,7 @@ export function startServer() {
       // back through one process is fine — but a Lead's own pacing (LEAD_GAP_MS) taught us not to
       // trust that, and a broadcast is the one place N keystrokes leave in one call.
       if (sent.length) await new Promise((r) => setTimeout(r, BROADCAST_GAP_MS));
-      const err = sendInput(w.id, { text: req.body.text }, by);
+      const err = sendInput(w.id, { text: req.body.text }, by, "lead");
       sent.push({ id8: w.id.slice(0, 8), ok: !err, ...(err ? { error: err } : {}) });
     }
     res.json({ sent });
@@ -2117,6 +2121,14 @@ export function startServer() {
   api.get("/workspaces/:id/dream/runs", dreamRoutes.runsRoute);
   api.post("/workspaces/:id/dream/runs/:run/undo", dreamRoutes.undoRoute);
   api.post("/dream/run", dreamRoutes.runNowRoute);
+  // The weekly self-retro (src/retro-pass.ts): numbers, the job's bundle and apply, the operator's
+  // approve/dismiss (his hand only). Walled per workspace in the handlers; `POST /retro/run` is admin-only.
+  api.get("/workspaces/:id/retro", retroRoutes.showRoute);
+  api.get("/workspaces/:id/retro/runs", retroRoutes.runsRoute);
+  api.get("/workspaces/:id/retro/context", retroRoutes.contextRoute);
+  api.post("/workspaces/:id/retro/apply", retroRoutes.applyRoute);
+  api.post("/workspaces/:id/retro/proposals/:pid", retroRoutes.decideRoute);
+  api.post("/retro/run", retroRoutes.runNowRoute);
 
   // The workspace inbox (src/inbox.ts, src/inbox-routes.ts): what needs the operator, per client.
   // Rows are notifications; POST /inbox/:id/dispatch (admin) is the only door from one to a terminal.

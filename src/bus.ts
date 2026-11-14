@@ -233,6 +233,8 @@ export type BusEvent = (
   // wakes on — and what one verifier pass concluded. Ids and a reason only, never the work itself.
   | { topic: "ledger.item_raised"; request_id: string; item_id: string; workspace_id: string | null; action: string; deliverable_id: string | null }
   | { topic: "ledger.verified"; request_id: string; workspace_id: string | null; ready: boolean; told: boolean; reason: string | null }
+  // The weekly self-retro (src/retro-pass.ts) gathered, applied, or a proposal was decided. Ids only.
+  | { topic: "retro.updated"; workspace_id: string; run_id?: string | null; proposal_id?: string | null }
   // The executor (src/executor.ts) carried out — or could not carry out — one yes. `say` is what the
   // voice layer speaks ("Mergeado." / "No pude: …"); the audit row is in executor_log.
   | { topic: "executor.result"; request_id: string; item_id: string; approval_id: string | null; workspace_id: string | null; action: string; status: string; code: string; say: { es: string; en: string } }

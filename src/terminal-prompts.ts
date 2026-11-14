@@ -303,7 +303,7 @@ export function answerPromptTap(sess8: string, choice: string): { ok: boolean; t
   if (!p || !ANSWERABLE.has(p.kind)) return { ok: false, text: "that prompt is gone — the terminal moved on" };
   if (p.kind === "yn") {
     const letter = choice === "y" ? "y" : "n";
-    const err = sendInput(s.id, { text: letter, enter: true }, "operator");
+    const err = sendInput(s.id, { text: letter, enter: true }, "operator", "approval");
     if (!err) noteOperatorInput(s.id); // his tap on Telegram: engagement (src/proactive-score.ts)
     return err ? { ok: false, text: err } : { ok: true, text: letter };
   }

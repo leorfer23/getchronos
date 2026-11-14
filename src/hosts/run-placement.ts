@@ -57,6 +57,7 @@ export const BRAIN_ONLY_KINDS: Record<string, string> = {
   "intake:": "the intake sweep reads Slack/MCP through the brain's own profile login",
   "prose:": "the voice pass reads the operator's Slack through the brain's own profile login",
   "dream:": "the memory pass works from the brain's own state in a brain directory, not a repo",
+  "retro:": "the weekly retro works from the brain's own state (its bundle comes from the brain's DB and transcripts)",
   "handoff:": "a cloud hand-off runs on its provider, not on a computer of ours",
   "note-work:": "a note worker reads and updates the client's tracker through the brain's own profile login",
 };
