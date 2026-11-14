@@ -575,6 +575,26 @@ const HELP = `mc — Mission Control backlog CLI
                                      check its --ref out in its cwd and restart              (operator)
   mc service edit <name> [--command …] [--cwd …] [--ref …] [--restart …] [--env K=V] [--unset K]
   mc service rm <name>                                                                       (operator)
+  mc playbook [ls] [--workspace <slug>] [--json]
+                                     this workspace's playbooks: a recurring chain (merge → release →
+                                     deploy → publish → a draft) that runs on ONE operator OK
+  mc playbook show <name>            its steps, one a line, every gate in [brackets], and recent runs
+  mc playbook save <name> --from-session [--session <id8>] [--since 2h] [--dry-run] [--replace]
+                                     draft it from what this terminal ran; the operator reviews it
+  mc playbook save <name> --file <steps.txt|-> [--description "…"] [--repo <name>] [--replace]
+                                     by hand, one step a line: a shell command · mc … · agent: <what to
+                                     do> · [merge|deploy|publish|release] marks a gate · last, maybe:
+                                     message slack|email <to>: <text>  (always a draft, never sent).
+                                     Templates: {{pr}} {{pr_number}} {{sha}} {{repo}}
+  mc playbook run <name> [--pr <url>] [--from <n>] [--here]
+                                     a run waiting for the operator's ONE OK on the Desk (it lists the
+                                     PR + head SHA and every gate); then a terminal of this workspace
+                                     (or this one, --here) works it
+  mc playbook runs [<name>] [--json] recent runs: state, progress, target
+  mc playbook status|brief [<run>]   one run (default: this terminal's) · its steps + protocol
+  mc playbook step <n> start|done|fail ["note" | "what failed"]   (the run's own terminal)
+  mc playbook stop [<run>] ["why"]   stop a run — anyone in its workspace; stopping only halts
+  mc playbook rm <name>
   mc hosts [list]                    every computer (HOSTS.md): status, load, live terminals, version,
                                      what is wrong. Without the admin token: names, room, and whether
                                      your workspace may run there. Placement is automatic; --host pins
@@ -4191,6 +4211,157 @@ function askCap(question) {
         return console.log(`deleted ${pos[2]} (its log stays on disk)`);
       }
       die("mc service [ls] | show | logs [-f] | add | edit | on | off | restart | deploy | rm  <name>  [--workspace <slug>] [--json]");
+    }
+    // Playbooks (src/playbooks.ts): a workspace's recurring chain, run on ONE operator OK. Saving and
+    // asking for a run are open to the workspace's agents; the OK itself is the operator's, on the Desk.
+    if (cmd === "playbook" || cmd === "playbooks") {
+      const sub = cmd === "playbooks" && !pos[1] ? "ls" : pos[1] || "ls";
+      const ws = opt.workspace && opt.workspace !== "true" ? opt.workspace : undefined;
+      const wsQ = ws ? "?workspace=" + encodeURIComponent(ws) : "";
+      const val = (k) => (opt[k] && opt[k] !== "true" ? opt[k] : undefined);
+      const id8 = (v) => String(v || "").slice(0, 8);
+      const name = () => pos[2] || die(`usage: mc playbook ${sub} <name>`);
+      const pbPath = (n, rest = "") => `/playbooks/${encodeURIComponent(n)}${rest}${wsQ}`;
+      const gate = (g) => (g ? `[${g}] ` : "");
+      const ICON = { todo: "○", active: "▶", done: "✔", failed: "✖", skipped: "–" };
+      const STATE = { awaiting_ok: "waiting for the operator's OK", running: "running", needs_ok: "stopped — needs the operator's OK again", done: "done", failed: "failed", stopped: "stopped", expired: "expired" };
+      const target = (r) => (r.pr_url ? `${r.pr_url.replace(/^https:\/\/github\.com\//, "").replace("/pull/", "#")} @ ${String(r.ok?.sha || r.head_sha || "").slice(0, 7)}` : "no PR");
+      const runLine = (r) => `${id8(r.id)}  ${String(r.name).padEnd(16)} ${STATE[r.state] || r.state}${r.reason && r.state !== "running" ? ` — ${r.reason}` : ""} · ${r.progress.done}/${r.progress.total} · ${target(r)}`;
+      const runFull = (r) => [runLine(r), ...r.steps.map((s) => `  ${ICON[s.status] || "?"} ${s.idx}. ${gate(s.gate)}${s.label}${s.note ? `  (${s.note})` : ""}`)].join("\n");
+      const isRunRef = (v) => !!v && /^[0-9a-f-]{6,36}$/i.test(v);
+      // The run a command is about: the one named, else this terminal's latest — whatever its state, so a
+      // refusal is the daemon's own reason (waiting for the OK, failed, stopped) rather than "no run".
+      const runOf = async (ref) => {
+        if (ref) return ref;
+        const sid = process.env.MC_SESSION || die("which run? pass its id (mc playbook runs), or run this from the run's own terminal");
+        const rows = await req("GET", "/playbook-runs?limit=1&session=" + encodeURIComponent(sid));
+        if (!rows.length) die("this terminal has no playbook run — pass the run id (mc playbook runs)");
+        return rows[0].id;
+      };
+      if (sub === "ls" || sub === "list") {
+        const out = await req("GET", "/playbooks" + wsQ);
+        if (opt.json) return console.log(JSON.stringify(out, null, 2));
+        if (!out.length) return console.log("no playbooks" + (ws ? ` in ${ws}` : "") + " — save one from a terminal that just did the chain: mc playbook save <name> --from-session");
+        for (const p of out) {
+          const gates = p.gates.map((g) => g.gate).join(", ") || "none";
+          console.log(`${String(p.name).padEnd(18)} ${String(p.workspace_slug || "").padEnd(12)} ${p.steps.length} steps · gates: ${gates}${p.reviewed ? "" : " · DRAFT (not reviewed)"}${p.last_run ? ` · last run ${id8(p.last_run.id)} ${STATE[p.last_run.state] || p.last_run.state}` : ""}`);
+        }
+        return;
+      }
+      if (sub === "show") {
+        const p = await req("GET", pbPath(name()));
+        if (opt.json) return console.log(JSON.stringify(p, null, 2));
+        console.log(`${p.name} — ${p.workspace_slug}${p.description ? ` · ${p.description}` : ""}${p.needs_pr ? " · runs on a PR (--pr <url>)" : ""}${p.reviewed ? "" : " · DRAFT: the operator has not reviewed it yet"}`);
+        console.log(p.text.split("\n").map((l) => "  " + l).join("\n"));
+        if (p.runs?.length) {
+          console.log("runs:");
+          for (const r of p.runs.slice(0, 5)) console.log("  " + runLine(r));
+        }
+        return;
+      }
+      if (sub === "save") {
+        const body = { name: name() };
+        if (ws) body.workspace = ws;
+        if (val("description") !== undefined) body.description = val("description");
+        if (val("repo") !== undefined) body.repo = val("repo");
+        if (opt.replace) body.replace = true;
+        if (opt["dry-run"]) body.dry_run = true;
+        if (opt["from-session"]) {
+          body.from_session = val("session") || val("from-session") || process.env.MC_SESSION || die("--from-session drafts from this terminal — run it inside one, or pass --session <id8>");
+          if (val("since")) body.since = val("since");
+        } else {
+          const f = val("file");
+          const text = f === "-" || (!f && !process.stdin.isTTY) ? await readStdin() : f ? fs.readFileSync(f, "utf8") : "";
+          if (!text.trim()) die("no steps — mc playbook save <name> --from-session, or --file <steps.txt> (one step a line; - reads stdin)");
+          body.text = text;
+        }
+        const r = await req("POST", "/playbooks", body);
+        if (opt.json) return console.log(JSON.stringify(r, null, 2));
+        const notes = (r.notes || []).map((x) => `  · ${x}`).join("\n");
+        if (body.dry_run) {
+          console.log(`would save ${body.name} (${r.steps.length} steps):\n` + r.text.split("\n").map((l) => "  " + l).join("\n"));
+          if (notes) console.log(notes);
+          if (r.errors?.length) console.log("it would be refused:\n" + r.errors.map((e) => "  ✖ " + e).join("\n"));
+          return;
+        }
+        const gates = r.gates.map((g) => `${g.idx}. ${g.gate}`).join(", ") || "none";
+        console.log(`saved ${r.name} (${r.workspace_slug}) — ${r.steps.length} steps · gates: ${gates}`);
+        console.log(r.text.split("\n").map((l) => "  " + l).join("\n"));
+        if (notes) console.log(notes);
+        if (r.source === "session") console.log(`a DRAFT from what the terminal ran — the operator reviews and edits it (Desk ▶ Playbooks, or mc playbook save ${r.name} --file <steps.txt> --replace)`);
+        return;
+      }
+      if (sub === "rm" || sub === "delete") {
+        await req("DELETE", pbPath(name()));
+        return console.log(`deleted ${pos[2]} (its runs go with it)`);
+      }
+      if (sub === "run") {
+        const body = {};
+        if (val("pr")) body.pr = val("pr");
+        if (val("from")) body.from = Number(val("from")) || die("--from is a step number");
+        if (opt.here) body.here = true;
+        const r = await req("POST", pbPath(name(), "/runs"), body);
+        if (opt.json) return console.log(JSON.stringify(r, null, 2));
+        console.log(`run ${id8(r.id)} of ${r.name} — waiting for the operator's ONE OK`);
+        console.log(`  target: ${target(r)}`);
+        console.log(`  gates it covers: ${r.gates.length ? r.gates.map((g) => `${g.idx}. ${g.gate} — ${g.label}`).join("\n                   ") : "none"}`);
+        console.log(`  ${r.progress.total} step${r.progress.total === 1 ? "" : "s"}; nothing runs before his OK, which he gives on the Desk (▶ Playbooks).`);
+        console.log(r.here ? "  When he OKs, the daemon types the run into THIS terminal. End your turn now." : "  When he OKs, a terminal of this workspace opens and works it.");
+        return;
+      }
+      if (sub === "runs") {
+        const q = new URLSearchParams();
+        if (ws) q.set("workspace", ws);
+        if (pos[2]) q.set("playbook", pos[2]);
+        const out = await req("GET", "/playbook-runs" + (q.toString() ? "?" + q : ""));
+        if (opt.json) return console.log(JSON.stringify(out, null, 2));
+        if (!out.length) return console.log("no runs");
+        for (const r of out) console.log(runLine(r));
+        return;
+      }
+      if (sub === "status" || sub === "brief") {
+        const id = await runOf(pos[2] || val("run"));
+        if (sub === "brief") return console.log((await req("GET", `/playbook-runs/${encodeURIComponent(id)}/brief`)).text);
+        const r = await req("GET", `/playbook-runs/${encodeURIComponent(id)}`);
+        if (opt.json) return console.log(JSON.stringify(r, null, 2));
+        return console.log(runFull(r));
+      }
+      if (sub === "step") {
+        const USAGE = 'mc playbook step <n> start|done|fail ["note" | "what failed"] [--run <id8>]';
+        const n = Number(pos[2]) || die(USAGE);
+        const act = pos[3];
+        if (!["start", "done", "fail"].includes(act)) die(USAGE);
+        const note = pos.slice(4).join(" ") || undefined;
+        const body = act === "fail" ? { error: note || die('say what failed: mc playbook step <n> fail "<what failed>"') } : note ? { note } : {};
+        const id = await runOf(val("run"));
+        let r;
+        try {
+          r = await req("POST", `/playbook-runs/${encodeURIComponent(id)}/steps/${n}/${act}`, body);
+        } catch (e) {
+          die(`step ${n} ${act} refused — ${e.message}`);
+        }
+        if (act === "start") {
+          if (r.carried) {
+            if (!r.carried.ok) {
+              console.log(`✖ step ${n} failed — ${r.carried.detail}. The run stopped and the operator was asked. Do nothing more for it.`);
+              process.exit(1);
+            }
+            return console.log(`✔ step ${n} carried out by the daemon — ${r.carried.detail} (${r.run.progress.done}/${r.run.progress.total})`);
+          }
+          console.log(`▶ step ${n} — do exactly this, then \`mc playbook step ${n} done\` (or \`fail "…"\`):`);
+          return console.log(r.command ?? r.instruction ?? "");
+        }
+        if (act === "fail") return console.log(`✖ step ${n} failed — the run stopped and the operator was asked. Stop here and wait for his answer.`);
+        return console.log(`✔ step ${n} done (${r.run.progress.done}/${r.run.progress.total})${r.run.state === "done" ? " — the run is done: mc outcome, then mc goal done" : ""}`);
+      }
+      if (sub === "stop") {
+        const ref = isRunRef(pos[2]) ? pos[2] : val("run");
+        const why = (isRunRef(pos[2]) ? pos.slice(3) : pos.slice(2)).join(" ") || undefined;
+        const id = await runOf(ref);
+        const r = await req("POST", `/playbook-runs/${encodeURIComponent(id)}/stop`, why ? { reason: why } : {});
+        return console.log(`stopped run ${id8(r.id)} of ${r.name}`);
+      }
+      die("mc playbook [ls] | show <name> | save <name> --from-session|--file <f> | run <name> [--pr <url>] [--from <n>] [--here] | runs | status | brief | step <n> start|done|fail | stop | rm <name>");
     }
     // The shared headless browser (`mc browser run` is handled before parse()).
     if (cmd === "browser") {

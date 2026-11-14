@@ -10,6 +10,8 @@ export { workspaceVars } from "./store/workspace-vars.js";
 export type { WorkspaceVar, PublicWorkspaceVar } from "./store/workspace-vars.js";
 export { services, envOf, RESTART_POLICIES, SERVICE_NAME_RE } from "./store/services.js";
 export type { Service, ServiceStatus, RestartPolicy, NewService, ServicePatch } from "./store/services.js";
+export { playbooks, playbookRuns, PLAYBOOK_NAME_RE, GATE_KINDS, STEP_KINDS, LIVE_RUN_STATES } from "./store/playbooks.js";
+export type { Playbook, PlaybookRun, PlaybookStep, PlaybookStepKind, GateKind, PlaybookRunStep, RunState, OkGate } from "./store/playbooks.js";
 export { egressLog } from "./store/egress.js";
 export { activity } from "./store/activity.js";
 export { connectorSyncs } from "./store/connector-syncs.js";

@@ -207,6 +207,7 @@ import { pressureWord, swapPctOf } from "./machine.js";
 import { machineBrowserBlock, mountBrowserRoutes } from "./resources/browser-routes.js";
 import { mountVpnRoutes } from "./vpn-routes.js";
 import { mountServiceRoutes } from "./service-routes.js";
+import { mountPlaybookRoutes } from "./playbook-routes.js";
 import { mountAlertRoutes } from "./alert-routes.js";
 import { mountCaptureRoutes } from "./capture-routes.js";
 import { procsView } from "./resources/brain.js";
@@ -2424,6 +2425,8 @@ export function startServer() {
   mountVpnRoutes(api);
   // Services: always-on processes the daemon keeps running (src/services.ts, SERVICES.md).
   mountServiceRoutes(api);
+  // Playbooks: a workspace's recurring chain, run on ONE operator OK (src/playbooks.ts).
+  mountPlaybookRoutes(api);
   // Stuck-work alerts: the record, acknowledgements, and which voice calls are live (src/stuck-alerts.ts).
   mountAlertRoutes(api);
   // "Send to Chronos" — the Mac bar (desktop/app.swift → static/bar.html, src/capture.ts).

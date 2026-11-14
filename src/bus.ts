@@ -211,6 +211,22 @@ export type BusEvent = (
   // or a failed exit its restart policy leaves down — and the operator should look.
   | { topic: "service.changed"; service_id: string; workspace_id: string; name: string; status: string }
   | { topic: "service.alarm"; service_id: string; workspace_id: string; name: string; status: string; reason: string }
+  // A playbook run moved (src/playbooks.ts): created (awaiting the operator's OK), OK'd, a step started
+  // / done / failed, stopped. `ok` rides on the transition that recorded his OK: the PR + head SHA and
+  // the gates it covered — the same binding the run row keeps.
+  | {
+      topic: "playbook.run";
+      run_id: string;
+      playbook_id: string;
+      workspace_id: string;
+      name: string;
+      state: string;
+      step?: number | null;
+      step_status?: string | null;
+      reason?: string | null;
+      pr_url?: string | null;
+      ok?: { sha: string | null; gates: Array<{ idx: number; gate: string }>; by: string; surface: string | null } | null;
+    }
   | { topic: "focus.event"; session_id: string; event: unknown }
   // The board (src/board.ts, store/board.ts) — the Buzz-channel replacement. Fires on every post;
   // `depth` is the wake-chain depth (operator/system posts are 0, an exec's auto-reply is parent+1)
