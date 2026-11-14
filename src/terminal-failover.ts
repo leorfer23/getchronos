@@ -28,7 +28,7 @@ import path from "node:path";
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
 import { LOCAL_HOST_ID, sessions, tickets, workspaces } from "./store.js";
-import { backendReady, getBackend, hasBackend } from "./backends/index.js";
+import { backendAllowed, backendReady, getBackend, hasBackend } from "./backends/index.js";
 import { childEnv } from "./child-env.js";
 import { placementCandidates } from "./hosts/candidates.js";
 import { cliFor } from "./hosts/placement.js";
@@ -532,8 +532,10 @@ function alertLoginDead(s: Session, dir: string, line: string): void {
 
 /**
  * Where a NEW agent terminal goes when its workspace's claude login is known dead: the chain a walled
- * terminal fails over to (workspace.fallback_backend, then ⚙ Settings → Failover), on this Mac. `why`
- * = nowhere: failover is off for the workspace, or nothing in the chain is installed and signed in.
+ * terminal fails over to (workspace.fallback_backend, then ⚙ Settings → Failover), on this Mac — but,
+ * unlike a stand-in, only a backend the workspace's own allowlist permits: cursor/grok/opencode share
+ * one login across workspaces, and a new terminal is not an emergency for work already running. `why`
+ * = nowhere: failover is off, or nothing in the chain is allowed here, installed and signed in.
  */
 export function loginDeadFallback(wsId: string | null | undefined): { to: string; model: string | null } | { why: string } {
   if (!terminalFailoverEnabled(wsId)) return { why: "failover is off for this workspace" };
@@ -548,10 +550,13 @@ export function loginDeadFallback(wsId: string | null | undefined): { to: string
     modelFallback: null,
     chain: fallbackChain(ws, setting<string[]>("failover.backends", wsId)),
     tried: [],
-    usable: (b) => failoverUsable(b, ws, ops.installed, LOCAL_HOST_ID, ops.hostCanRun),
+    usable: (b) => backendAllowed(ws?.backends, b) && failoverUsable(b, ws, ops.installed, LOCAL_HOST_ID, ops.hostCanRun),
     modelFor: (b) => fallbackModelFor(ws, b),
   });
   if (step.step === "backend") return { to: step.to, model: step.model };
+  const barred = fallbackChain(ws, setting<string[]>("failover.backends", wsId))
+    .filter((b) => hasBackend(b) && !backendAllowed(ws?.backends, b) && failoverUsable(b, ws, ops.installed, LOCAL_HOST_ID, ops.hostCanRun));
+  if (barred.length) return { why: `the workspace does not allow ${barred.join(", ")}` };
   return { why: step.step === "give_up" ? step.why : "no fallback backend" };
 }
 

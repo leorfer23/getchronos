@@ -609,7 +609,7 @@ test("a non-claude terminal or one on another computer never marks the brain's c
   assert.equal(notes.length, 0);
 });
 
-test("loginDeadFallback: the failover chain on this Mac; nowhere when it is off or nothing is signed in", () => {
+test("loginDeadFallback: the failover chain on this Mac, within the allowlist; nowhere when it is off or nothing is allowed and signed in", () => {
   const s = terminal();
   assert.deepEqual(loginDeadFallback(s.workspace_id), { to: "grok", model: "grok-4.5" });
   installed = new Set(["cursor"]);
@@ -617,10 +617,20 @@ test("loginDeadFallback: the failover chain on this Mac; nowhere when it is off 
   installed = new Set();
   assert.ok("why" in loginDeadFallback(s.workspace_id));
   installed = new Set(["grok"]);
+  const strict = workspaces.create({ slug: `fo-s-${Math.random().toString(36).slice(2, 8)}`, name: "Strict", config_dir: "/tmp/fo", backends: ["claude-code"] } as any);
+  assert.deepEqual(loginDeadFallback(strict.id), { why: "the workspace does not allow grok" }, "a new terminal keeps to the allowlist");
   CONFIG.terminalFailover = false;
   try {
     assert.deepEqual(loginDeadFallback(s.workspace_id), { why: "failover is off for this workspace" });
   } finally {
     CONFIG.terminalFailover = true;
   }
+});
+
+test("the alert says new terminals are refused when the workspace allows no fallback", async () => {
+  const ws = workspaces.create({ slug: `fo-s-${Math.random().toString(36).slice(2, 8)}`, name: "Strict", config_dir: "/tmp/fo", backends: ["claude-code"] } as any);
+  const a = terminal({ workspace_id: ws.id }, { frame: LOGIN_WALL });
+  await onTerminalQuiet(a.id, T0 + 10_000);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /New agent terminals there are refused until it works again \(the workspace does not allow grok, cursor\)/);
 });

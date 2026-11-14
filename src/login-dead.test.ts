@@ -69,6 +69,26 @@ test("with nowhere to go it is refused before anything spawns, saying why", asyn
   await assert.rejects(() => open({ created_by: "inbox" }), /failover is off for this workspace/);
 });
 
+test("the reroute keeps to the workspace's allowlist: the first allowed fallback, else refused", async () => {
+  // Nothing in the chain allowed here: refused, never onto a shared login the client did not allow.
+  const strict = workspaces.create({ slug: `ld-s-${Math.random().toString(36).slice(2, 8)}`, name: "Strict", config_dir: tmp, sandbox_mode: "off", backends: ["claude-code"] } as any);
+  markLoginDead(strict.id, claudeDirFor(strict.id), { line: "Not logged in · Please run /login", session_id: "dead0001" });
+  await assert.rejects(
+    () => open({ workspace_id: strict.id, created_by: "robert" }),
+    /^Error: refused: this workspace's Claude login is dead .* \(the workspace does not allow grok\)/,
+  );
+  // grok barred, cursor allowed: the chain walks on to cursor.
+  CONFIG.terminalFallbackBackends = ["grok", "cursor"];
+  process.env.CURSOR_API_KEY ??= "crsr_test";
+  setFailoverOps({ installed: (b) => b === "grok" || b === "cursor", hostCanRun: () => true });
+  const some = workspaces.create({ slug: `ld-c-${Math.random().toString(36).slice(2, 8)}`, name: "Cursorish", config_dir: tmp, sandbox_mode: "off", backends: ["claude-code", "cursor-agent"] } as any);
+  markLoginDead(some.id, claudeDirFor(some.id), { line: "Not logged in · Please run /login", session_id: "dead0002" });
+  await assert.rejects(() => open({ workspace_id: some.id, created_by: "robert" }), /agent_name `taken` already in use/);
+  console.log = log;
+  assert.equal(rerouted().length, 1);
+  assert.match(rerouted()[0], /\(robert\) → cursor/);
+});
+
 test("the operator's own open, a stand-in and another workspace are never rerouted", async () => {
   markLoginDead(wsId, claudeDirFor(wsId), { line: "Not logged in · Please run /login", session_id: "dead0001" });
   for (const o of [{ created_by: "operator" }, { created_by: undefined }, { created_by: "failover", replaces: "some-live-id" }]) {
