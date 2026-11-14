@@ -264,6 +264,24 @@ test("no Robert credential weakens a workspace's sandbox, re-grants secrets, or 
   assert.equal(workspaces.get(A.id)!.sandbox_mode, "guard");
 });
 
+test("only the operator takes a repo out of the data diff: a Robert credential may say it IS a data repo, never that it is not", async () => {
+  for (const tok of [robertToken(A.id, "rw"), robertToken(null, "rw")]) {
+    const h = { "x-mc-admin": tok };
+    for (const body of [{ data_repo: false }, { data_repo: null }]) {
+      const r = await call("PATCH", `/repos/${repoA.id}`, h, body);
+      assert.equal(r.status, 403, `${JSON.stringify(body)}: ${r.status} ${JSON.stringify(r.json)}`);
+      assert.match(r.json.error, /data_repo/);
+    }
+    assert.equal((await call("PATCH", `/repos/${repoA.id}`, h, { data_repo: true })).status, 200, "tightening is his to propose");
+    assert.equal(repos.get(repoA.id)!.data_repo, 1);
+  }
+  // The operator's own token sets it either way.
+  assert.equal((await call("PATCH", `/repos/${repoA.id}`, { "x-mc-admin": CONFIG.adminToken }, { data_repo: false })).status, 200);
+  assert.equal(repos.get(repoA.id)!.data_repo, 0);
+  assert.equal((await call("PATCH", `/repos/${repoA.id}`, { "x-mc-admin": CONFIG.adminToken }, { data_repo: null })).status, 200);
+  assert.equal(repos.get(repoA.id)!.data_repo, null);
+});
+
 test("the fleet-wide Robert does not reach the operator-only set: services, self-deploy, review approve/merge, shared vars, triggers, his chat, the clipboard", async () => {
   const h = { "x-mc-admin": robertToken(null, "rw") };
   const refused: Array<[string, string, unknown]> = [

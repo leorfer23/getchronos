@@ -33,6 +33,7 @@ import { baseJobName, isInternalJob } from "./job-name.js";
 import { FAILED_STATUSES } from "./jobs-board.js";
 import { askAboutStalls, jobCheckAskKey, listStalls } from "./recovery.js";
 import { settingOn } from "./settings.js";
+import { waitForNetwork } from "./net-up.js";
 import type { Job, Run, RunStatus, Workspace } from "./types.js";
 
 export const JOB_CHECK_PREFIX = "job-check:";
@@ -246,10 +247,11 @@ export function checkBrief(ws: Workspace, h: JobHealth, tz = CONFIG.slackTriageT
     "",
     "## How to do it",
     ...steps("terminal"),
-    "6. He reads THIS terminal, nothing else — this is how he hears about it. Do not use `mc ask` or `mc ask-robert` for him.",
+    "6. He reads THIS terminal — this is how he hears about it. Do not use `mc ask` or `mc ask-robert` for him.",
     "7. Finish with a hand-off: `mc outcome \"<one line: N fixed and green, M still red>\"` with one `--change` per job " +
       "(\"<job>: <cause> → <fix>\") and one `--proof` per green re-run (\"<job>: run <id8> success\"), `--pr <url>` for any PR, " +
-      "and `--ask none` unless something waits on him. Then `mc goal done`.",
+      "and `--ask none` unless something waits on him. This check is his own, with no thread to answer in: send him that " +
+      "line as a Slack DM in his self-DM (a draft there if the send tool is refused). Then `mc goal done`.",
   ].join("\n");
 }
 
@@ -283,15 +285,27 @@ export function recordCheck(jobId: string, h: JobHealth): Run {
  * Red → one Desk terminal in that client with the list. When it cannot open, the check job's own
  * headless run does the work instead, with the list threaded in as its context (gotcha #1: through
  * dispatch(), never patched on after).
+ *
+ * The scheduled fire waits for the network first: it comes due at night, often in a dark wake, and a
+ * terminal started then died on its first API call and sat dead until someone typed "the network is
+ * back" the next day (2026-11-11/12, five workspaces). The operator's yes (`approved`) opens at once.
  */
 export async function openCheckTerminal(
   jobId: string, checkRunId: string, h: JobHealth,
-  deps: { opener?: typeof openSession; run?: typeof dispatch; approved?: boolean } = {},
+  deps: { opener?: typeof openSession; run?: typeof dispatch; approved?: boolean; network?: () => Promise<boolean> } = {},
 ): Promise<{ session_id: string } | { run_id: string } | { error: string }> {
   const opener = deps.opener ?? openSession, run = deps.run ?? dispatch;
   const ws = workspaces.get(h.workspace_id);
   if (!ws) return { error: "workspace gone" };
   const day = h.until.slice(0, 10);
+  if (!deps.approved) {
+    const network = deps.network ?? (() => waitForNetwork({ label: `the job check's terminal in ${ws.slug}` }));
+    if (!(await network())) {
+      runs.patch(checkRunId, { summary: `${healthLine(h)} → no terminal: the network stayed down; tomorrow's check lists these again` });
+      return { error: "the network stayed down" };
+    }
+    if (!workspaces.get(ws.id) || workspaces.get(ws.id)?.archived) return { error: "workspace gone" };
+  }
   try {
     const s = await opener({
       workspace_id: ws.id,

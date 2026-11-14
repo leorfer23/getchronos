@@ -148,7 +148,9 @@ test("assigned, mention, comment on his task, status move — and never his own 
   ];
   await syncWorkspace(ws);
   const got = rows(ws.id).map((r) => `${r.ref}:${r.kind}`).sort();
-  assert.deepEqual(got, ["ANA-1:comment", "ANA-1:status", "ANA-2:mention", "ANA-3:assigned"]);
+  // One task, one row: ANA-1's comment came in with its status move, so it is an ask on that row.
+  assert.deepEqual(got, ["ANA-1:status", "ANA-2:mention", "ANA-3:assigned"]);
+  assert.deepEqual(inbox.withAsks(rows(ws.id)).find((r) => r.ref === "ANA-1")!.asks.map((a) => `${a.kind}:${a.external_key}`), ["comment:jira:ANA-1:comment:c10"]);
   const mention = rows(ws.id).find((r) => r.kind === "mention")!;
   assert.equal(mention.actor, "Bob");
   assert.match(mention.why!, /Bob mentioned you on Jira ANA-2/);
@@ -294,6 +296,12 @@ test("inboxBrief for a Slack row names no tracker task", () => {
   const b = inboxBrief({ id: "x", workspace_id: "w", source: "slack", kind: "dm", external_key: "k", ref: "C1:1", title: "t", why: null, body: null, url: null, actor: "Ana", urgent: 0, state: "new", snooze_until: null, dispatched_session: null, created_at: "2026-09-24T10:00:00.000Z", updated_at: "" }, "Acme", null);
   assert.doesNotMatch(b, /Tracker task/);
   assert.match(b, /From: Ana/);
+});
+
+test("inboxBrief: the reply is drafted where it was asked, never DMed to him", () => {
+  const b = inboxBrief({ id: "x", workspace_id: "w", source: "slack", kind: "mention", external_key: "k", ref: "C1:1", title: "t", why: null, body: null, url: null, actor: "Ana", urgent: 0, state: "new", snooze_until: null, dispatched_session: null, created_at: "2026-09-24T10:00:00.000Z", updated_at: "" }, "Acme", null);
+  assert.match(b, /the draft reply where it was asked — a Slack item gets a Slack draft in that thread or DM; a tracker task gets the text in your hand-off/);
+  assert.doesNotMatch(b, /self-DM/, "someone else asked: the answer goes back to them, as a draft");
 });
 
 test("only the dispatch route and the auto-dispatcher call dispatchInboxItem, and filing/syncing itself opens no terminal", async () => {

@@ -18,7 +18,8 @@ import { claimStaged, dropsBrief } from "./capture.js";
 import { ensureBypassAccepted, ensureTrustedCwd } from "./claude-trust.js";
 import { ensureGrokTrustedCwd, grokHome } from "./grok-trust.js";
 import { isEarlyDeath, reportEarlyDeath } from "./desk-incidents.js";
-import { inFlightAtRestart, lastActivityState, reviveSeedFor } from "./revive.js";
+import { inFlightAtRestart, lastActivityState, reviveSeedFor, REVIVE_NUDGE } from "./revive.js";
+import { kindOfBy, markInput, type InjectKind } from "./turn-source.js";
 import { childEnv } from "./child-env.js";
 import { sanitizeCwd } from "./spawn-guard.js";
 import { ensureTicketWorktree, cleanupWorktree, cleanupRemoteWorktree } from "./worktrees.js";
@@ -50,6 +51,7 @@ import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, typ
 import { goalLines, setGoals, splitGoalText } from "./goals.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "./agent-prep.js";
 import { routeConfigDir, routeProfileForHost } from "./profile-route.js";
+import { claudeDirFor, loginDeadFor } from "./login-dead.js";
 import { setting, settingOn } from "./settings.js";
 import { dupGoal, tellRobertDup, type DupGoal } from "./dup-goal.js";
 
@@ -63,14 +65,15 @@ export { excludeChronosArtifacts, gitExcludePath, gitTrackedSync, insideGitRepo,
 //
 // Keep this SHORT — it rides every turn. Card / worktree / heavy detail lives in the mission-control
 // skill (Claude) and AGENTS.md (Cursor); duplicate prose here was a standing ~2–3k-token tax.
-const FOCUS_CONTRACT = `## How your operator reads your work
+export const FOCUS_CONTRACT = `## How your operator reads your work
 They read a Focus board, never your raw output. It has four parts: the GOAL (the outcome, its finish line, a progress bar and a timer), the DECISIONS (every question you ask, with a button per option), the TALK (the conversation: every message they send you and everything you write back, with any image you show — so answer them first, plainly), and the HAND-OFF (your summary and proof, which they approve the merge/deploy from). Work in this order:
 0. JUST TALKING? Questions, exploring, brainstorming, "tell me about X" — no change or deliverable asked for — is a chat: \`mc goal set "<topic>" --kind chat\` (no --done-when, no progress, no hand-off unless they ask for one), then answer. Their board becomes the conversation. It turns into work? Set a real goal then (step 1).
 1. DEFINE FIRST, before any work. Open with one line "Understanding: …". If the goal or how we will know it is done is unclear — no goal, a vague one, two readings, unknown scope — ASK before you start: one question, 2–4 concrete options, your recommendation first (your CLI's question tool, or \`mc ask-robert "…" --options "a,b" --operator\`). Then write it down: \`mc goal set "<one outcome>" --kind pr|ui|investigation|qa|product --done-when "<a check they can verify>"\` (2–4 checks) and \`mc progress 0/<steps> "plan" --eta 30m\`. A clear prompt needs no question — set both in your first minute.
 2. KEEP THE BOARD MOVING: \`mc progress <n>/<total> "<step>" --eta <time left>\` as you cross each step, and \`mc goal check <n>\` the moment a done-when check is met — not all at the end. It is their only progress bar, checklist and countdown.
-3. ASK, DON'T GUESS: a call only they can make → \`mc ask-robert "<question + what you'd do>" --options "a,b"\`. Waiting on non-operator work → \`mc state waiting "…" --on ci --eta 10m\`; a wall → \`mc state blocked "…" --reason auth\`; hours or days → \`mc when pr <url> --until approved --note "…"\` and finish your turn. Never stop silently. Never block your turn on a wait (CI, Jenkins, a deploy, a long test): run it in the background (your shell's background mode or a background subagent) and end the turn, so they can talk to you while it runs. Their line can also land mid-step — what you were running moves to the background: answer them first, in a line or two, then pick the work back up from that task's output.
+3. ASK, DON'T GUESS: a call only they can make → \`mc ask-robert "<question + what you'd do>" --options "a,b"\`. Waiting on non-operator work → \`mc state waiting "…" --on command --eta 5m\`; a wall → \`mc state blocked "…" --reason auth\`; a long wait (CI, a review, a reply — ten minutes or more) or one that must outlive a deploy → \`mc when pr <url> --until checks --note "…"\` and finish your turn. Never stop silently. Never block your turn on a wait: run it in the background (your shell's background mode or a background subagent) and end the turn — it wakes you when it exits, as long as this terminal stays open — so they can talk to you while it runs. Their line can also land mid-step — what you were running moves to the background: answer them first, in a line or two, then pick the work back up from that task's output.
 4. HAND-OFF when the finish line is met: \`mc outcome "<1–2 plain sentences>" --change "<what changed, in human words>" --proof "<check you ran → result>" --pr <url> --ask merge|deploy|merge+deploy|review|none\`; a visible change also gets \`--shot before-<screen>-phone=a.png --shot after-<screen>-phone=b.png\` (and -desktop). The proof answers each --done-when check. Then ship only as far as \`mc goal\` says you may (ask = stop at the open PR · merge = merge once green · deploy = merge and deploy) and say so with \`mc outcome --shipped "merged #12"\` (it adds to the hand-off on top). Follow-up work after that gets its own new \`mc outcome\`; earlier ones stay on the board.
 5. END every turn: short bullets → "**Next steps**" (omit if none) → "**Summary:**" (one or two sentences; the first is your card's line). Then \`mc goal done\`. More work after that? \`mc goal set\` the new goal first.
+DELIVER WHERE IT WAS ASKED: a file he will send or share (xlsx, csv, pdf, zip, html export, chart png) goes in \`$MC_DOWNLOADS\` (not set on another computer: \`mc file put\` it). A reply to someone is a draft where they asked: a Slack thread or DM → a Slack draft there; an email → an email draft in that thread. When the work came from the operator himself and has no thread to answer in, send him a Slack DM in his self-DM with the summary, paths and links. That DM is the only message you may send (the one exception to the no-send rule below). If the send tool is refused, leave the same text as a draft in his self-DM. Name each in the hand-off: \`--change "file: <full path>"\`, \`--change "draft: <where>"\`, \`--change "DM sent"\`.
 SHOW, DON'T LIST: an image they should see (a screenshot, a chart, a mockup) → \`mc show <file|dir>… --caption "<what to look at>"\` (≤12 a call; one call per group). It appears in TALK under your reply. A file path, a folder or a Finder window shows them nothing.
 Say every link (PR, doc) in full on its own line. Write for a human on a phone: plain words, no filler, no code dumps.
 
@@ -661,6 +664,26 @@ export async function openSession(
       }
     }
   }
+  // A claude login known to be dead for this workspace (login-dead.ts, marked by the last terminal that
+  // hit the wall): an agent's NEW terminal goes where a walled one fails over to — the first fallback
+  // the workspace's allowlist permits, so no client work lands on a shared CLI login it did not allow —
+  // or is refused. Never onto the dead profile to paint the same wall again. Never the operator's own
+  // open (that terminal is how he logs in again), a reopen, or a stand-in.
+  if (
+    !remote && openedBy && openedBy !== "operator" && !opts.resumeId && !opts.replaces && !opts.movedFrom && !opts.agentSessionId &&
+    getBackend(opts.backend).name === "claude-code"
+  ) {
+    const dead = loginDeadFor(opts.workspace_id, claudeDirFor(opts.workspace_id));
+    if (dead) {
+      const { loginDeadFallback } = await import("./terminal-failover.js");
+      const fb = loginDeadFallback(opts.workspace_id);
+      if ("why" in fb) {
+        throw new Error(`refused: this workspace's Claude login is dead ("${dead.line}") and no fallback can take the terminal (${fb.why}) — the operator has to log in again`);
+      }
+      console.log(`[login-dead] new terminal (${openedBy}) → ${fb.to}${fb.model ? "/" + fb.model : ""}: this workspace's Claude login is dead ("${dead.line}")`);
+      opts = { ...opts, backend: fb.to, model: fb.model };
+    }
+  }
   // Which CLIs this client may run. Enforced HERE rather than only in the Desk picker, because the
   // picker is one of several ways a terminal gets opened (`mc session new`, Robert, the API), and
   // the reason is a client boundary rather than a preference: cursor, grok and opencode have no
@@ -882,6 +905,11 @@ export async function openSession(
     // unconditionally, like wsTicketsDir above, and created here so `--add-dir` (claude AND cursor)
     // never points at a path that does not exist yet.
     repoDirs.push(ensureDropDir(row.id));
+    // …and the workspace's folder in the operator's Downloads (src/downloads.ts), where a file for him
+    // goes: both walls again (strict writes nowhere else), its path in MC_DOWNLOADS. Every other
+    // workspace's folder is in denyDirs (isolationDenyDirs).
+    const downloads = opts.workspace_id ? workspaces.ensureDownloadsDir(opts.workspace_id) : null;
+    if (downloads) repoDirs.push(downloads);
     // CLI session id for transcript: prefer agentSessionId (headless continue), else Chronos row id.
     // Every workspace repo's MAIN checkout is read-only to the agent, whatever it was spawned in. Two
     // terminals pointed at one repo would otherwise share a working tree, and one's `git checkout`
@@ -937,6 +965,7 @@ export async function openSession(
       ...backend.env({} as any, configDir),
       ...(backend.name === "claude-code" ? leanClaudeEnv(opts.workspace_id ?? null) : {}),
       ...mcEnv(opts.workspace_id, opts.repo_id, row.ticket_id),
+      ...(downloads ? { MC_DOWNLOADS: downloads } : {}),
       // Where its one allowed send goes (no-send.ts): unset = the gate is shut, so it drafts.
       ...(selfDm ? { MC_OPERATOR_SLACK_DM: selfDm } : {}),
       // Lets the agent talk about ITSELF: `mc state working|blocked|done`, `mc goal set "…"`.
@@ -1078,6 +1107,9 @@ export async function openSession(
   if (seed) {
     // A revive's continue-nudge is not the terminal's first prompt: keep the one it was opened with.
     if (!opts.resumeId) sessions.setMeta(row.id, { first_prompt: seed });
+    // Typed by the daemon — the transcript will say the operator typed it (turn-source.ts).
+    const seedKind: InjectKind = !opts.resumeId ? "seed" : seed === REVIVE_NUDGE ? "revive" : openedBy === "continuation" ? "continuation" : "system";
+    markInput({ session_id: row.id, workspace_id: opts.workspace_id ?? null, kind: seedKind, by: openedBy, text: seed });
     // A remote host types it itself, next to the pty (it rode in the SpawnSpec).
     // (term-seed.ts: wait for the input box, then one paste and its own Enter.)
     if (!remote) typeSeed({ write: (d) => entry.pty.write(d), lastOut: () => entry.lastOut, modes: entry.modes, gone: () => live.get(row.id) !== entry, cooked: () => ttyCooked(entry.pty) }, seed, backend.name);
@@ -1587,11 +1619,16 @@ const operatorLines = new Map<string, number>();
 /** When the operator last typed a line into this terminal through the daemon, or null. */
 export const operatorSaidAt = (id: string): number | null => operatorLines.get(id) ?? null;
 
-/** Returns null on success, or a human-readable reason it did not happen. */
+/**
+ * Returns null on success, or a human-readable reason it did not happen. `kind` is who the line is
+ * really from (turn-source.ts), when the caller knows better than `by` — an approval tap or a daemon
+ * line typed under the operator's name, a Lead typing with no name of its own. Never from a request body.
+ */
 export function sendInput(
   id: string,
   req: { text?: string | null; key?: NamedKey | null; keys?: NamedKey[] | null; enter?: boolean; now?: boolean; machine?: boolean },
   by = "operator",
+  kind?: InjectKind,
 ): string | null {
   if (!live.has(id)) return "terminal is not live";
   if (!req.text && !req.key && !req.keys?.length) return "nothing to send — pass text, key or keys";
@@ -1601,6 +1638,8 @@ export function sendInput(
   // A line from the operator (not a menu key, not the daemon): the moment a later hand-off becomes a
   // follow-up rather than a correction (session-outcome.ts fileOutcome).
   if (by === "operator" && req.text) operatorLines.set(id, at);
+  // Its transcript will record this line as typed by the operator; the mark says who it really was.
+  if (req.text) markInput({ session_id: id, workspace_id: sessions.get(id)?.workspace_id ?? null, kind: kind ?? kindOfBy(by), by, text: req.text });
 
   if (req.key) writeTo(id, KEYS[req.key]);
   // A sequence is one answer ("down, down, enter" = the third option), spaced so a TUI reads
