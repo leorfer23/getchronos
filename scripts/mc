@@ -354,7 +354,7 @@ const HELP = `mc — Mission Control backlog CLI
                              A terminal can hold several goals. Your card always shows the one you
                              are ON; "mc goal done" ticks it and moves to the next, and only the
                              last tick closes the terminal out.
-  mc state <state> ["label"] [--on subagents|ci|terminal|command|robert|person|deploy|other] [--eta 10m] [--reason auth|approval]
+  mc state <state> ["label"] [--on subagents|ci|terminal|command|query|job|robert|person|deploy|other] [--eta 10m] [--reason auth|approval]
                              what your card says. working = colour for your line · waiting = on something that
                              is not the operator (--on, --eta) · blocked = a wall you can't pass · decide = a
                              decision only the operator can make · review = finished, read the Result · idle = clear
@@ -1200,7 +1200,7 @@ function askCap(question) {
       return console.log(`desk → ${url} (browser — build the native window with: scripts/build-app.sh)`);
     }
     if (cmd === "state") {
-      const USAGE = 'mc state working|waiting|blocked|decide|review|idle ["label"] [--on subagents|ci|terminal|command|robert|person|deploy|other] [--eta 10m] [--reason auth|approval|hitl]';
+      const USAGE = 'mc state working|waiting|blocked|decide|review|idle ["label"] [--on subagents|ci|terminal|command|query|job|robert|person|deploy|other] [--eta 10m] [--reason auth|approval|hitl]';
       const st = pos[1] || die(USAGE);
       const STATES = ["working", "waiting", "blocked", "decide", "review", "done", "idle"];
       if (!STATES.includes(st)) die(`unknown state '${st}'\n${USAGE}`);
@@ -1215,7 +1215,14 @@ function askCap(question) {
         });
         return console.log(`${a.state}${a.state_label ? " · " + a.state_label : ""}`);
       }
-      if (opt.on && !["subagents", "ci", "terminal", "command", "robert", "person", "deploy", "other"].includes(opt.on)) die(`--on must be one of subagents|ci|terminal|command|robert|person|deploy|other`);
+      // Keep in step with WAIT_ON (src/term-status.ts). `run` is what agents say for a job re-run. Any
+      // other word still records the wait — as `other`, with a note — rather than losing the state.
+      const WAIT_ON = ["subagents", "ci", "terminal", "command", "query", "job", "robert", "person", "deploy", "other"];
+      if (opt.on === "run") opt.on = "job";
+      if (opt.on && !WAIT_ON.includes(opt.on)) {
+        console.error(`mc state: --on '${opt.on}' is not one of ${WAIT_ON.join("|")} — recorded as 'other'`);
+        opt.on = "other";
+      }
       const etaMin = opt.eta ? durMin(opt.eta) : null;
       if (opt.eta && !etaMin) die('--eta takes minutes: 10, "10m", "2h"');
       const r = await req("POST", `/sessions/${process.env.MC_SESSION}/status`, {

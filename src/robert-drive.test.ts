@@ -269,9 +269,9 @@ test("Robert ticking a terminal done himself does not wake him about his own tic
 // ─────────────────────────────── leads (LEADS.md) ───────────────────────────────
 
 test("isStopped: a `waiting` worker only counts as stopped when it is waiting on a PERSON", () => {
-  // The whole WAIT_ON table (term-status.ts / `mc state --on`). These four come back by themselves,
+  // The whole WAIT_ON table (term-status.ts / `mc state --on`). These come back by themselves,
   // so a Lead idle while one of them runs is waiting on real work, not stuck.
-  for (const on of ["subagents", "ci", "command", "deploy"] as const)
+  for (const on of ["subagents", "ci", "command", "query", "job", "deploy"] as const)
     assert.equal(isStopped(st("waiting", { on })), false, `waiting on ${on} is work in flight`);
   // These need a hand, so the Lead idling behind them IS the thing that has to move.
   for (const on of ["robert", "person", "terminal", "other"] as const)

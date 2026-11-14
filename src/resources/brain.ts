@@ -20,9 +20,7 @@ import { localHost } from "../hosts/local.js";
 import { jobs, runs, services, sessions, workspaces } from "../store.js";
 import { currentLoad, localHeavyPool, setSlotBudget } from "../machine.js";
 import { setting } from "../settings.js";
-import { sendInput, sessionActivity } from "../terminal.js";
-import { sendMessage } from "../messages.js";
-import type { Owner, Root } from "./ledger.js";
+import type { Root } from "./ledger.js";
 import { parseStarts, Reaper, systemReaperDeps, type ReaperMode } from "./reaper.js";
 import { cleanWeight, slotBudgetOf } from "./budget.js";
 import {
@@ -98,28 +96,6 @@ function activeWorkspaces(): string[] {
   const out = new Set<string>();
   for (const o of reaper?.ledger.owners.values() ?? []) if (!o.ended && o.workspaceId) out.add(o.workspaceId);
   return [...out];
-}
-
-/**
- * The warning, by the channels that already reach an agent. A headless run gets the `mc tell` mailbox
- * (steered live when it can be, else at its next checkpoint). A Desk terminal has no non-typing channel
- * its agent reads while busy: the mailbox refuses sessions, and the hooks only hand context back on the
- * operator's NEXT prompt (`memory_notice`, UserPromptSubmit) — an autonomous agent mid-task never sees
- * that. So it is TYPED in (as host failover tells a terminal it moved — `sendInput`, rate-limited,
- * recorded as session.input), prefixed `[chronos budget]`, and DEFERRED while anyone typed into that
- * pane in the last TYPING_QUIET_MS, so it never lands in the middle of the operator's own line.
- */
-const TYPING_QUIET_MS = 30_000;
-function tellOwner(o: Owner, text: string): string | null {
-  // A service is a plain process, not an agent: there is no one in it to read a warning.
-  if (o.kind === "service") return "a service has no agent to tell";
-  if (o.kind === "session") {
-    const lastIn = sessionActivity(o.id).last_in;
-    if (lastIn != null && Date.now() - lastIn < TYPING_QUIET_MS) return `defer: typed into ${Math.round((Date.now() - lastIn) / 1000)}s ago`;
-    return sendInput(o.id, { text }, "budget");
-  }
-  const r = sendMessage(o.id, text, "budget");
-  return r.ok ? null : r.error;
 }
 
 /** Mirror of what the ladder has stopped: written on every change, removed when empty. */
@@ -232,8 +208,6 @@ export function startProcReaper(): void {
     signal: (pid, sig) => (pid > 1 ? sys.signal(pid, sig) : false),
     getNice: systemGetNice,
     setNice: systemSetNice,
-    tell: tellOwner,
-    idle: (o) => o.kind === "session" && sessionActivity(o.id).quiet,
     publish: (e) => bus.publish(e),
     save: saveLadderState,
     wsName: (ws) => (ws ? workspaces.get(ws)?.name ?? ws.slice(0, 8) : "(no workspace)"),

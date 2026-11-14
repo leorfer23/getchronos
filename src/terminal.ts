@@ -50,6 +50,7 @@ import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, typ
 import { goalLines, setGoals, splitGoalText } from "./goals.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "./agent-prep.js";
 import { routeConfigDir, routeProfileForHost } from "./profile-route.js";
+import { claudeDirFor, loginDeadFor } from "./login-dead.js";
 import { setting, settingOn } from "./settings.js";
 import { dupGoal, tellRobertDup, type DupGoal } from "./dup-goal.js";
 
@@ -659,6 +660,26 @@ export async function openSession(
           `workspace session cap reached (${seats}/${cap}) — close a terminal or raise it in ⚙ Settings → Limits`,
         );
       }
+    }
+  }
+  // A claude login known to be dead for this workspace (login-dead.ts, marked by the last terminal that
+  // hit the wall): an agent's NEW terminal goes where a walled one fails over to — the first fallback
+  // the workspace's allowlist permits, so no client work lands on a shared CLI login it did not allow —
+  // or is refused. Never onto the dead profile to paint the same wall again. Never the operator's own
+  // open (that terminal is how he logs in again), a reopen, or a stand-in.
+  if (
+    !remote && openedBy && openedBy !== "operator" && !opts.resumeId && !opts.replaces && !opts.movedFrom && !opts.agentSessionId &&
+    getBackend(opts.backend).name === "claude-code"
+  ) {
+    const dead = loginDeadFor(opts.workspace_id, claudeDirFor(opts.workspace_id));
+    if (dead) {
+      const { loginDeadFallback } = await import("./terminal-failover.js");
+      const fb = loginDeadFallback(opts.workspace_id);
+      if ("why" in fb) {
+        throw new Error(`refused: this workspace's Claude login is dead ("${dead.line}") and no fallback can take the terminal (${fb.why}) — the operator has to log in again`);
+      }
+      console.log(`[login-dead] new terminal (${openedBy}) → ${fb.to}${fb.model ? "/" + fb.model : ""}: this workspace's Claude login is dead ("${dead.line}")`);
+      opts = { ...opts, backend: fb.to, model: fb.model };
     }
   }
   // Which CLIs this client may run. Enforced HERE rather than only in the Desk picker, because the

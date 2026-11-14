@@ -63,7 +63,6 @@ function harness(o: { cfg?: Partial<LadderConfig>; mode?: LadderMode; procs?: Pr
     /** macOS: an unprivileged process may raise nice but never lower it. */
     denyLower: false,
     signals: [] as Array<[number, string]>,
-    told: [] as Array<{ to: string; text: string }>,
     events: [] as LadderEvent[],
     logs: [] as string[],
     saved: null as unknown[] | null,
@@ -93,7 +92,6 @@ function harness(o: { cfg?: Partial<LadderConfig>; mode?: LadderMode; procs?: Pr
       }
       return ok;
     },
-    tell: (owner, text) => { w.told.push({ to: owner.id, text }); return null; },
     publish: (e) => w.events.push(e),
     save: (p) => { w.saved = p; },
     wsName: (ws) => ws ?? "-",
@@ -141,7 +139,7 @@ test("a calm Mac: over budget costs nobody anything — no warning, no rung", as
   const { w, ladder, tick } = harness();
   await tick();
   await tick(600_000);
-  assert.deepEqual(w.told, []);
+  assert.deepEqual(topics(w, "budget.warn"), []);
   assert.deepEqual(w.events, []);
   const a = ladder.wsView("ws-a")!;
   assert.equal(a.over, true);
@@ -152,29 +150,41 @@ test("a calm Mac: over budget costs nobody anything — no warning, no rung", as
   assert.equal(ladder.wsView("ws-b")!.over, false);
 });
 
-test("warn: strained + over → one message to each of ITS live terminals, naming the heaviest with numbers; then not again for 10 min", async () => {
+test("warn: strained + over → one line for the operator, naming the heaviest with numbers; then not again for 10 min", async () => {
   const { w, ladder, tick } = harness();
   w.load = WARNING;
   await tick();
-  assert.deepEqual(w.told.map((t) => t.to).sort(), ["sa1-0000", "sa2-0000"], "ws-b's terminal is not told");
-  const sa1 = w.told.find((t) => t.to === "sa1-0000")!.text;
-  assert.match(sa1, /Workspace ws-a is over its share of this Mac/);
-  assert.match(sa1, /memory pressure warning, load 0\.5\/core/);
-  assert.match(sa1, /RAM 3\.5 GB of a 2\.5 GB budget, CPU 400% of 200%/);
-  assert.match(sa1, /share 50%, weight 1, 2 workspaces active/);
-  assert.match(sa1, /Heaviest: node \(vitest\) 2\.0 GB 300% CPU \(this terminal\), Google Chrome for Testing 1\.0 GB 0% CPU \(this terminal\), tsc 500 MB 100% CPU \(session sa2-0000\)/);
-  assert.ok(!sa1.includes("\n"), "one line: a pty would submit half of it");
-  const [ev] = topics(w, "budget.warn");
+  const warns = topics(w, "budget.warn");
+  assert.equal(warns.length, 1, "ws-b is under budget: no warning for it");
+  const [ev] = warns;
+  assert.match(ev.text, /^Workspace ws-a is over its share of this Mac/);
+  assert.match(ev.text, /memory pressure warning, load 0\.5\/core/);
+  assert.match(ev.text, /RAM 3\.5 GB of a 2\.5 GB budget, CPU 400% of 200%/);
+  assert.match(ev.text, /share 50%, weight 1, 2 workspaces active/);
+  assert.match(ev.text, /Heaviest: node \(vitest\) 2\.0 GB 300% CPU \(session sa1-0000\), Google Chrome for Testing 1\.0 GB 0% CPU \(session sa1-0000\), tsc 500 MB 100% CPU \(session sa2-0000\)/);
   assert.deepEqual(
-    { ws: ev.workspace_id, rss: ev.rss_mb, b: ev.budget_rss_mb, cpu: ev.cpu, bc: ev.budget_cpu, told: ev.told, top: ev.heaviest[0] },
-    { ws: "ws-a", rss: 3575, b: 2560, cpu: 400, bc: 200, told: 2, top: { cmd: "node (vitest)", count: 1, rss_mb: 2048, cpu: 300, pid: 220 } },
+    { ws: ev.workspace_id, rss: ev.rss_mb, b: ev.budget_rss_mb, cpu: ev.cpu, bc: ev.budget_cpu, top: ev.heaviest[0] },
+    { ws: "ws-a", rss: 3575, b: 2560, cpu: 400, bc: 200, top: { cmd: "node (vitest)", count: 1, rss_mb: 2048, cpu: 300, pid: 220 } },
   );
+  assert.equal(w.logs.filter((l) => l.startsWith("WARN ws ws-a")).length, 1);
   assert.equal(ladder.wsView("ws-a")!.rung, "warn");
   await tick(60_000);
   await tick(500_000);
-  assert.equal(w.told.length, 2, "at most once per 10 minutes per workspace");
+  assert.equal(topics(w, "budget.warn").length, 1, "at most once per 10 minutes per workspace");
   await tick(40_001);
-  assert.equal(w.told.length, 4, "re-sent after 10 minutes");
+  assert.equal(topics(w, "budget.warn").length, 2, "said again after 10 minutes");
+});
+
+test("warn: nothing is typed into the workspace's terminals or sent to its runs — the deps have no channel to them", async () => {
+  const { w, ladder, tick } = harness();
+  const d = (ladder as any).deps as Record<string, unknown>;
+  // An old wiring that still hands the ladder a tell/idle must not bring the typing back.
+  const told: string[] = [];
+  d.tell = (o: { id: string }) => { told.push(o.id); return null; };
+  w.load = CRITICAL;
+  for (let i = 0; i < 4; i++) await tick(60_000);
+  assert.ok(topics(w, "budget.warn").length >= 1);
+  assert.deepEqual(told, []);
 });
 
 test("the default `warn` mode: only the warning acts — the other rungs log and publish 'would', once per episode", async () => {
@@ -196,7 +206,7 @@ test("the default `warn` mode: only the warning acts — the other rungs log and
   const pause = topics(w, "budget.pause");
   assert.deepEqual(pause.map((e) => [e.pid, e.dry]), [[310, true], [230, true]], "would pause the newest heavy, one per tick");
   assert.match(w.logs.find((l) => l.startsWith("(would pause)"))!, /pid 310 — tsc, 500 MB, 100% CPU — session sa2-0000 \(ws ws-a\): memory pressure critical, RAM 3\.5 GB \/ 2\.5 GB/);
-  assert.match(w.told[0].text, /This Mac only warns for now\./);
+  assert.match(topics(w, "budget.warn")[0].text, /This Mac only warns for now\./);
 });
 
 // ───────────────────────────── the whole ladder, up and down ─────────────────────────────
@@ -318,35 +328,6 @@ test("slow: over budget with nothing heavy → warned, never reniced, '(over bud
   assert.deepEqual(w.setNiceCalls, []);
   assert.deepEqual(w.signals, []);
   assert.equal(w.logs.filter((l) => l.startsWith("(over budget, nothing heavy to slow) ws ws-a")).length, 1);
-});
-
-test("warn: a terminal someone is typing into is deferred, then told on a later tick — not typed over", async () => {
-  const { w, ladder, tick } = harness();
-  const d = (ladder as any).deps as LadderDeps;
-  let typing = true;
-  d.tell = (o, text) => (o.id === "sa1-0000" && typing ? "defer: typed into 3s ago" : (w.told.push({ to: o.id, text }), null));
-  w.load = WARNING;
-  await tick();
-  assert.deepEqual(w.told.map((t) => t.to), ["sa2-0000"]);
-  assert.equal(topics(w, "budget.warn")[0].deferred, 1);
-  await tick(10_000);
-  assert.equal(w.told.length, 1, "still typing: still deferred");
-  typing = false;
-  await tick(10_000);
-  assert.deepEqual(w.told.map((t) => t.to), ["sa2-0000", "sa1-0000"], "delivered late, once");
-  await tick(10_000);
-  assert.equal(w.told.length, 2);
-  assert.match(w.told[1].text, /^\[chronos budget\] /);
-});
-
-test("warn: an idle terminal is told only when one of the heaviest is its own — typing into one costs it a whole turn", async () => {
-  const roots = [...ROOTS, { kind: "session" as const, id: "sa3-0000", pid: 500, startedAt: T0, workspaceId: "ws-a" }];
-  const procs = [...scene(), P({ pid: 500, ppid: SELF, pgid: 500, startMs: T0, comm: CLAUDE })];
-  const { w, ladder, tick } = harness({ roots, procs, argv: { 500: "claude" } });
-  (ladder as any).deps.idle = (o: { id: string }) => o.id !== "sa1-0000";
-  w.load = WARNING;
-  await tick();
-  assert.deepEqual(w.told.map((t) => t.to).sort(), ["sa1-0000", "sa2-0000"], "sa2 is idle but its tsc is among the heaviest; sa3 owns nothing heavy");
 });
 
 // ───────────────────────────── never pause ─────────────────────────────
