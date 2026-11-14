@@ -1190,6 +1190,14 @@
   .ib-row .acts .btn { padding:1px 10px; font-size:13.5px; }
   .ib-row .acts .ib-hours { width:84px; padding:1px 8px; font-size:13.5px; }
   .ib-row .e { grid-column:2 / span 2; font-size:13px; color:var(--danger); overflow-wrap:anywhere; }
+  /* One thread, one row: the later messages folded into it, and where its Dispatch goes. */
+  .ib-row .asks { grid-column:2 / span 2; display:flex; flex-direction:column; gap:1px; font-size:13.5px; color:var(--muted); }
+  .ib-row .asks div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ib-row .asks a { color:inherit; text-decoration:none; }
+  .ib-row .asks a:hover { text-decoration:underline; }
+  .ib-row .asks span { color:var(--faint); margin-left:6px; }
+  .ib-row .thr { grid-column:2 / span 2; font-size:13px; color:var(--faint); display:flex; gap:8px; align-items:center; }
+  .ib-row .thr .btn { padding:0 8px; font-size:12.5px; }
   .ib-row.urgent .t::before { content:"● "; color:var(--danger); }
   .ib-row.pri-high { box-shadow:inset 2px 0 0 var(--accent); }
   .ib-row.pri-low .t, .ib-row.pri-low .w { opacity:.62; }
@@ -2901,13 +2909,11 @@ const EXPECT = {
   investigation: "Lands here when it is done: the answer, and the evidence behind it.",
   qa: "Lands here when it is done: the verdict — what passed, what failed, and how to reproduce each failure.",
 };
-// What the hand-off buttons type into the terminal. Typed, not executed by the page: the agent knows
-// the repo's own way to merge and deploy, and the line is in its transcript as your decision.
-const OK_LINE = {
-  merge: "Approved: merge the PR once its checks are green. Don't deploy. Then run `mc outcome --shipped \"merged #<n>\"`.",
-  "merge+deploy": "Approved: merge the PR once its checks are green, then deploy it. Then run `mc outcome --shipped \"merged #<n>\" --shipped \"deployed\"`.",
-  deploy: "Approved: deploy it. Then run `mc outcome --shipped \"deployed\"`.",
-};
+// What the hand-off buttons approve. The page names only the button; the daemon resolves what it covers —
+// the PRs on that hand-off and the commit each is at — records it, and types a line naming them into the
+// terminal (POST /sessions/:id/approve, src/card-approval-routes.ts). The agent still merges the repo's
+// own way, but only that PR at that commit, and the line is in its transcript as your decision.
+const APPROVE_KINDS = new Set(["merge", "merge+deploy", "deploy"]);
 
 // The goal QUEUE, for a terminal that was given more than one finish line (src/goals.ts). Fetched
 // lazily and only for the terminal on stage: every card already carries its counts, and a wall of
@@ -3770,14 +3776,34 @@ qs("#story").addEventListener("click", (e) => {
   const ok = e.target.closest("[data-ok]");
   if (ok) {
     if (ok.dataset.ok === "changes") { say.value = "Changes needed: "; focusSay(); say.setSelectionRange(say.value.length, say.value.length); return; }
-    const line = OK_LINE[ok.dataset.ok]; if (!line) return;
-    answer(s.id, { text: line, enter: true });
-    // The click does not vanish into the pty: the dock turns into "Merging + deploying…" until it ships.
-    shipStart(s, ok.dataset.ok);
-    renderStory();
-    toast("sent · " + ok.textContent.replace(/^✓\s*/, ""));
+    if (APPROVE_KINDS.has(ok.dataset.ok)) approveHandoff(s, ok.dataset.ok);
   }
 });
+// One approval from the hand-off's dock: which button, and which hand-off the card was drawn from. The
+// daemon refuses a card that moved under you (a newer hand-off, a PR whose head changed — then it asks the
+// terminal to hand off again) and answers with exactly what was approved: the PR and the commit.
+const APPROVING = new Set(); // one click in flight per terminal: GitHub is read before anything is typed
+async function approveHandoff(s, kind) {
+  if (APPROVING.has(s.id)) return;
+  APPROVING.add(s.id);
+  const drawn = D.id === s.id ? (D.outcome?.at ?? null) : null;
+  toast("approving · reading the PR on GitHub…");
+  try {
+    const r = await api("/sessions/" + s.id + "/approve", { method: "POST", headers: { "x-mc-operator": "1" }, body: JSON.stringify({ kind, outcome_at: drawn, surface: "desk" }) });
+    S.answered.set(s.id, Date.now()); S.notifyCount.delete(s.id);
+    renderCounts(); syncBadge();
+    // The click does not vanish into the pty: the dock turns into "Merging + deploying…" until it ships.
+    shipStart(s, kind);
+    renderStory();
+    const a = r?.approval;
+    toast("approved · " + (a ? (a.kind === "merge+deploy" ? "merge + deploy" : a.kind) + a.prs.map((p) => " #" + p.num + (p.sha ? " @" + p.sha.slice(0, 7) : "")).join(",") : kind));
+  } catch (err) {
+    toast(String(errMsg(err)).slice(0, 200));
+    decisionsLoad(s, true);
+  } finally {
+    APPROVING.delete(s.id);
+  }
+}
 // A finish-line check, ticked from the board: the same door `mc goal check` uses.
 async function toggleCheck(s, n) {
   const was = Array.isArray(s.done_checked) ? s.done_checked[n - 1] : null;
@@ -6011,8 +6037,15 @@ qs("#quick").addEventListener("submit", (e) => {
   const ship = qs("#q-ship").dataset.ship;
   if (ship && ship !== "ask") body.ship = ship;
   quickClose();
-  if (!goal) return spawn(body);
-  spawn({ ...body, goal, ...(lead ? { role: "lead" } : {}) });
+  // A refused open puts the line back exactly as he typed it — never cost the operator his words.
+  const restore = () => {
+    quickOpen(lead);
+    qs("#q-ws").value = wsId; quickSyncCli();
+    if (ship) quickShip(ship);
+    const g = qs("#q-goal"); g.value = goal; g.focus(); g.select();
+  };
+  if (!goal) return spawn(body, null, restore);
+  spawn({ ...body, goal, ...(lead ? { role: "lead" } : {}) }, null, restore);
 });
 qs("#q-goal").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); quickClose(); } });
 qs("#q-more").onclick = () => { const wsId = qs("#q-ws").value, ship = qs("#q-ship").dataset.ship; quickClose(); openNew(wsId); qs("#f-ship").value = ship || "ask"; };
@@ -6033,16 +6066,20 @@ function pendingRow(body) {
 }
 qs("#f-cancel").onclick = () => dlg.close("cancel");
 // One door for every spawn; the new terminal lands on the stage.
-async function spawn(body, onOpened) {
+// onFailed runs only when the daemon refused the open — the caller puts back what was typed.
+async function spawn(body, onOpened, onFailed) {
   const ph = pendingRow(body);
+  let s;
   try {
-    const s = await api("/sessions", { method: "POST", body: JSON.stringify({ role: "human", cols: 100, rows: 30, ...body }) });
+    s = await api("/sessions", { method: "POST", body: JSON.stringify({ role: "human", cols: 100, rows: 30, ...body }) });
+  } catch (err) { ph.remove(); renderRail(); toast("open failed: " + err.message); onFailed?.(); return; }
+  try {
     onOpened?.();
     await load();
     ph.remove();
     if (s?.id && byId(s.id)) select(s.id);
     if (s?.duplicate_of) toast(s.duplicate_of.warning);
-  } catch (err) { ph.remove(); renderRail(); toast("open failed: " + err.message); }
+  } catch (err) { ph.remove(); renderRail(); toast(err.message); }
 }
 // Close every terminal whose goal is ticked: they are done, and the rail is for what is not.
 async function closeDone() {
@@ -6114,7 +6151,8 @@ qs("#form-new").addEventListener("submit", async (e) => {
   };
   const cwd = f.get("cwd");
   if (cwd) body.cwd = cwd;
-  await spawn(body, () => e.target.reset());
+  // The form is only reset once the terminal is open; a refusal reopens it with everything still in it.
+  await spawn(body, () => e.target.reset(), () => { if (!dlg.open) dlg.showModal(); });
 });
 
 // ── the day's log ────────────────────────────────────────────────────────────────────────────
@@ -7914,6 +7952,17 @@ function renderInboxClosed() {
       `<div class="acts"><button class="btn" data-a="reopen" title="It still needs you — put it back">↩ Reopen</button></div></div>`;
   }).join("");
 }
+// One thread, one row (src/inbox-thread.ts): the later messages of its thread folded into it, the live
+// terminal its Dispatch types it into, or — never merged on its own — a row it may continue, with Merge.
+function ibThread(i) {
+  const asks = (i.asks || []).map((a) => `<div>+ ${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.title)} ↗</a>` : esc(a.title)}<span>${a.actor ? esc(a.actor) + " · " : ""}${esc(age(a.created_at))}</span></div>`).join("");
+  const thr = i.followup_to
+    ? `<div class="thr">↪ Its thread's terminal is open — Dispatch types it there: ${esc(i.followup_to.goal || i.followup_to.session_id.slice(0, 8))}</div>`
+    : i.related
+    ? `<div class="thr" title="${esc(i.related.why)}">Looks like the same conversation as “${esc(i.related.title)}”${i.related.session_id ? " — its terminal is open" : ""} <button class="btn" data-a="merge" data-into="${esc(i.related.id)}" title="Fold this into that one — never done without your press">Merge</button></div>`
+    : "";
+  return (asks ? `<div class="asks">${asks}</div>` : "") + thr;
+}
 function ibRow(i) {
   const title = i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer" title="Open in ${esc(i.source)}">${esc(i.title)} ↗</a>` : esc(i.title);
   const back = `<button class="icon" data-a="back" title="Back">‹</button>`;
@@ -7925,7 +7974,7 @@ function ibRow(i) {
     ? `<input class="ib-hours" type="number" min="0" step="0.25" inputmode="decimal" placeholder="hours" value="${esc(IB.hours)}" title="Hours spent — optional · ⏎ closes"><button class="btn primary" data-a="close" title="Close the ${where} task${i.source === "jira" ? " " + esc(i.ref) : ""}">✓ Close in ${where}</button>${back}`
     : mode === "more"
     ? `<button class="btn" data-a="wontdo" title="Mute this task — nothing about it lands here again. Nothing is written to ${i.source === "slack" ? "Slack" : where}.">Won't do</button>${back}`
-    : `<button class="btn primary" data-a="go" title="Open a terminal in this client that investigates and proposes — it answers no one">Dispatch</button>` +
+    : `<button class="btn primary" data-a="go" title="${i.followup_to ? "Type it into its thread's open terminal — no new terminal" : "Open a terminal in this client that investigates and proposes — it answers no one"}">Dispatch</button>` +
       `<button class="btn" data-a="done" title="${ibTracker(i) ? `Close the ${where} task — asks for your hours` : "Resolve it"}">✓ Done</button>` +
       `<button class="btn" data-a="later" title="Snooze">Later</button><button class="icon" data-a="more" title="More">⋯</button><button class="icon" data-a="dismiss" title="Dismiss">✕</button>`;
   const err = IB.err[i.id] ? `<div class="e">${esc(IB.err[i.id])}</div>` : "";
@@ -7933,7 +7982,7 @@ function ibRow(i) {
   const rankTip = i.priority ? `${PRI_LABEL[i.priority] || i.priority}${i.rank_why ? " — " + i.rank_why : ""}` : "Not ranked yet — arrived after the last cleanup";
   return `<div class="ib-row${i.urgent ? " urgent" : ""}${pri}" data-id="${esc(i.id)}" title="${esc(rankTip)}"><span class="src" title="${esc(i.source)} · ${esc(i.kind)}">${IB_ICON[i.source] || "•"}</span>` +
     `<div class="t">${title}</div><div class="m">${i.actor ? esc(i.actor) + " · " : ""}${esc(age(i.created_at))}</div>` +
-    `<div class="w" title="${esc(i.why || "")}">${esc(i.why || "")}</div><div class="acts">${acts}</div>${err}</div>`;
+    `<div class="w" title="${esc(i.why || "")}">${esc(i.why || "")}</div><div class="acts">${acts}</div>${ibThread(i)}${err}</div>`;
 }
 // ✓ Done: POST /inbox/:id/done. A tracker refusal (a Done screen that wants hours, a status that does
 // not exist) stays on the row; a close that went through but whose comment/time entry did not says so.
@@ -7973,10 +8022,14 @@ qs("#ib-list").onclick = async (e) => {
       .catch((err) => ibFail(id, err));
   }
   try {
-    if (a === "go") {
-      const { session } = await api("/inbox/" + id + "/dispatch", { method: "POST", body: "{}" });
+    if (a === "go" || a === "merge") {
+      const r = a === "go"
+        ? await api("/inbox/" + id + "/dispatch", { method: "POST", body: "{}" })
+        : await api("/inbox/" + id + "/merge", { method: "POST", body: JSON.stringify({ into: b.dataset.into }) });
+      if (r.followup) toast("Typed into its thread's terminal — no new terminal");
+      if (!r.session) return loadInbox();
       qs("#dlg-inbox").close();
-      await load(); select(session.id);
+      await load(); select(r.session.id);
       return;
     }
     if (a === "dismiss") await api("/inbox/" + id + "/dismiss", { method: "POST", body: "{}" });
@@ -9108,7 +9161,7 @@ const BUS_TOPICS = [
   "ask.created", "ask.answered",
   "artifact.created", "artifact.updated", "artifact.event",
   "service.changed", "service.alarm", "alert.raised",
-  "inbox.updated", "settings.changed",
+  "inbox.updated", "settings.changed", "budget.warn",
 ].join(",");
 function connectBus() {
   if (!TOKEN) return;
@@ -9262,6 +9315,9 @@ function connectBus() {
     if (e.topic === "launch.updated" || e.topic === "launch.ran") loadSoon();
     if (e.topic === "run.started" || e.topic === "run.ended" || e.topic === "job.updated") onJobEvent(e);
     if (e.topic === "service.changed" || e.topic === "service.alarm") onServiceEvent(e);
+    // The budget ladder's warning is yours, not the workspace's terminals' (src/resources/ladder.ts);
+    // the full line (numbers, the next rung) is e.text and the daemon log.
+    if (e.topic === "budget.warn") toast(`◔ ${wsName(e.workspace_id) || "A workspace"} is over its share of this strained Mac — heaviest: ${(e.heaviest || []).slice(0, 2).map((h) => h.cmd).join(", ") || "nothing identifiable"}`);
   };
   ws.onclose = () => setTimeout(connectBus, 2500);
 }

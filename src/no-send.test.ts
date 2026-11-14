@@ -17,6 +17,7 @@ const denied = (tool: string) => claudeNoSendRules().filter((r) => !r.startsWith
 test("send tools are denied on every server spelling; drafts and reads are not", () => {
   for (const t of [
     "mcp__slack__slack_send_message", "mcp__claude_ai_Slack__slack_send_message", "mcp__slack__slack_add_reaction",
+    "mcp__plugin_slack_slack__slack_send_message", "mcp__plugin_slack_slack__slack_schedule_message",
     "mcp__claude_ai_Gmail__send_message", "mcp__claude_ai_Gmail__reply", "mcp__claude_ai_Gmail__forward",
     "mcp__claude_ai_Atlassian__addCommentToJiraIssue", "mcp__claude_ai_Atlassian_Rovo_2__addCommentToJiraIssue",
     "mcp__atlassian__addCommentToJiraIssue", "mcp__claude_ai_Google_Calendar__create_event",
@@ -64,8 +65,11 @@ test("every claude spawn shape carries it: headless, steered, one-shot, interact
     assert.equal(args.filter((x) => x === "--disallowed-tools").length, 1);
   }
   const head = claudeBackend.buildArgs(job, "s1", null);
-  assert.match(head[head.indexOf("--append-system-prompt") + 1], /NEVER SEND ANYTHING/);
-  assert.ok(NO_SEND_RULE.includes("DRAFT"));
+  assert.match(head[head.indexOf("--append-system-prompt") + 1], /DRAFT EVERYWHERE/);
+  // The one send is spelled out (a DM to him, at $MC_OPERATOR_SLACK_DM) and nothing still says "not even to him".
+  assert.match(NO_SEND_RULE, /ONE send allowed is a Slack DM to the operator himself/);
+  assert.match(NO_SEND_RULE, /\$MC_OPERATOR_SLACK_DM/);
+  assert.doesNotMatch(NO_SEND_RULE, /not even to him/);
 });
 
 test("grok spawns carry --deny rules (deny wins over always-approve)", () => {

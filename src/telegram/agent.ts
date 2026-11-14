@@ -1,5 +1,5 @@
 import { humanizeStep, type RobertStep } from "../robert-steps.js";
-import { claudeDenyArgs } from "../no-send.js";
+import { claudeDenyArgs, openSlackSelfSend, operatorSlackIds } from "../no-send.js";
 import { assistantName, assistantNameLine, onSettingChange } from "../settings.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import os from "node:os";
@@ -1133,6 +1133,11 @@ export class WarmManager {
       "--max-budget-usd", String(CONFIG.agent.maxBudgetUsd * this.opts.maxTurns),
     ];
     if (this.resumeId) args.push("--resume", this.resumeId);
+    // The one send (no-send.ts): a Slack DM to the operator, for a project's Robert whose project names his
+    // ids (robertSandbox hands him that project's env). The fleet-wide Robert, with no project, sends nothing.
+    const selfDm = !this.opts.customArgs && this.opts.baseEnv
+      ? openSlackSelfSend(args, operatorSlackIds(this.opts.baseEnv), { profileDir })
+      : null;
     const cwd = this.opts.cwd || process.cwd();
     const { cmd, cmdArgs } = sandboxWrap(
       this.opts.sandbox ?? "guard", cwd, this.opts.addDirs ?? [], profileDir, this.opts.denyDirs ?? [], CONFIG.claudeBin, args,
@@ -1140,7 +1145,7 @@ export class WarmManager {
     );
     const child = spawn(cmd, cmdArgs, {
       cwd,
-      env: withoutOperatorToken({ ...withClaudeHome(this.opts.baseEnv ?? process.env, profileDir), ...PERSONA_ENV, ...(this.opts.extraEnv ?? {}) }),
+      env: withoutOperatorToken({ ...withClaudeHome(this.opts.baseEnv ?? process.env, profileDir), ...PERSONA_ENV, ...(this.opts.extraEnv ?? {}), ...(selfDm ? { MC_OPERATOR_SLACK_DM: selfDm } : {}) }),
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child = child;

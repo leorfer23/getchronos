@@ -29,9 +29,9 @@ const nullableId = id.nullable();
 // ───────────────────────────── sessions ─────────────────────────────
 /** One item of a terminal's goal list — bare words, or words with a shape of work. */
 export const GoalItemSchema = z.union([
-  z.string().min(1).max(400),
+  z.string().min(1),
   z.object({
-    text: z.string().min(1).max(400),
+    text: z.string().min(1),
     kind: z.enum(GOAL_KINDS).nullable().optional(),
   }),
 ]);
@@ -45,7 +45,7 @@ export const SessionGoalsSchema = z.object({
 /** `PATCH /sessions/:id/goals/:goalId` — retitle, reshape, tick or untick one item. */
 export const SessionGoalPatchSchema = z
   .object({
-    text: z.string().min(1).max(400).optional(),
+    text: z.string().min(1).optional(),
     kind: z.enum(GOAL_KINDS).nullable().optional(),
     source: z.enum(["seed", "auto", "agent", "human"]).optional(),
     done: z.boolean().optional(),
@@ -57,7 +57,9 @@ export const OpenSessionSchema = z.object({
   workspace_id: nullableId.optional(),
   repo_id: nullableId.optional(),
   title: z.string().nullable().optional(),
-  goal: z.string().max(400).nullable().optional(),
+  /** No length cap on the goal or the brief: the operator typed them, and a 400-char cap here
+   *  refused the open and threw away everything he wrote. express.json's 16mb is the only bound. */
+  goal: z.string().nullable().optional(),
   goal_kind: z.enum(GOAL_KINDS).nullable().optional(),
   /** More than one finish line, in the order to work them (src/goals.ts). The first becomes the
    *  card's goal; the rest queue behind it. Capped so a spawn cannot queue a novel. */
@@ -65,7 +67,7 @@ export const OpenSessionSchema = z.object({
   /** Who opened it — for the day's ledger. operator | robert | agent:<name> | ticket | cron. */
   created_by: z.string().max(60).nullable().optional(),
   /** Free-text brief typed in the spawn dialog. Becomes the terminal's first prompt (see deskSeed). */
-  description: z.string().max(4000).nullable().optional(),
+  description: z.string().nullable().optional(),
   agent_name: z
     .string()
     .regex(/^[a-z][a-z0-9_-]{0,31}$/, "agent_name must match [a-z][a-z0-9_-]{0,31}")
@@ -94,6 +96,9 @@ export const OpenSessionSchema = z.object({
   resumeAgent: z.boolean().optional(),
   /** Pin the terminal to a connected host (HOSTS.md phase 3), by id or name. Unset = the brain. */
   host_id: z.string().max(80).nullable().optional(),
+  /** `mc session new --from <id>`: open it with that finished terminal's hand-off, in its workspace
+   *  and repo (src/fresh-terminal.ts). Never another workspace's. */
+  from: id.optional(),
 });
 
 export const AgentNameSchema = z.object({
@@ -118,7 +123,7 @@ export const SessionStatusSchema = z.object({
   state: z.enum(["working", "waiting", "blocked", "decide", "review", "done", "idle"]),
   label: z.string().max(400).nullable().optional(),
   reason: z.enum(["hitl", "approval", "question", "budget", "gate", "stall", "recovery", "review", "auth"]).nullable().optional(),
-  on: z.enum(["subagents", "ci", "terminal", "command", "robert", "person", "deploy", "other"]).nullable().optional(),
+  on: z.enum(["subagents", "ci", "terminal", "command", "query", "job", "robert", "person", "deploy", "other"]).nullable().optional(),
   eta_min: z.number().positive().max(7 * 24 * 60).nullable().optional(),
 });
 /** `mc progress 2/5 "label"` — null clears. */
@@ -180,7 +185,7 @@ export const UsageReportSchema = z.object({
 
 /** Desk wall: edit a terminal's objective (and tick it off) after it was opened. */
 export const SessionPatchSchema = z.object({
-  goal: z.string().max(400).nullable().optional(),
+  goal: z.string().nullable().optional(),
   goal_done: z.boolean().optional(),
   /** With `goal_done: true` on a terminal that has a goal LIST: tick every open item, not just the
    *  one on the card. This is the operator closing the terminal ("done is done"), where the agent's
@@ -211,6 +216,9 @@ export const SessionOutcomeSchema = z.object({
   shots: z.array(z.object({ name: z.string().max(80), label: z.string().max(80).optional() })).max(8).optional(),
   ask: z.enum(["merge", "deploy", "merge+deploy", "review", "none"]).optional(),
   shipped: z.array(z.string().max(400)).max(6).optional(),
+  // A data PR's before/after numbers (`mc outcome --data-diff`); its shape is read leniently by
+  // data-diff.ts normalizeDataDiff, so here only its size is bounded.
+  data_diff: z.record(z.string(), z.unknown()).refine((v) => JSON.stringify(v).length <= 40_000, "data_diff is capped at 40 000 characters").optional(),
 });
 /** One screenshot for a hand-off, as base64 (≤6 MB decoded — the app-wide JSON limit is 16 MB). */
 export const SessionShotSchema = z.object({
@@ -240,6 +248,10 @@ export const SessionInputSchema = z
     // background and it reads the line in the same turn (sendInput). Ignored by every other CLI.
     now: z.boolean().optional(),
     by: z.string().max(60).optional(),
+    // `mc session send --goal`: this text is NEW work, for this goal. A terminal whose goal is already
+    // finished gets a fresh terminal for it instead, with a hand-off (src/fresh-terminal.ts). Without
+    // it the text is a follow-up and is typed in.
+    goal: z.string().min(1).max(400).optional(),
   })
   .refine((b) => !!b.text || !!b.key || !!b.keys?.length, { message: "pass text, key or keys" });
 
@@ -561,6 +573,8 @@ const repoFields = {
   review_min_difficulty: z.number().int().min(0).max(5).nullable().optional(),
   post_merge_cmd: z.string().nullable().optional(),
   ideas_enabled: z.boolean().optional(),
+  // Is it a data repo (its PRs owe the verifier a data diff)? null = decide from the checkout.
+  data_repo: z.boolean().nullable().optional(),
 };
 const repoObject = z.object(repoFields);
 
@@ -713,7 +727,7 @@ export const PushUnsubscribeSchema = z.object({ endpoint: z.string().url().max(2
 // launch is legal (a named bare terminal in a chosen folder is still worth a chip).
 export const NewLaunchSchema = z.object({
   name: z.string().min(1).max(80),
-  goal: z.string().max(400).nullable().optional(),
+  goal: z.string().nullable().optional(),
   goal_kind: z.enum(GOAL_KINDS).nullable().optional(),
   description: z.string().max(20000).nullable().optional(),
   backend: z.string().max(40).nullable().optional(),
@@ -1135,9 +1149,14 @@ export const NewInboxItemSchema = z.object({
   actor: z.string().trim().max(200).optional(),
   ref: z.string().trim().max(120).optional(),
   urgent: z.boolean().optional(),
+  // The conversation, when the feed names it (a Slack `<channel id>:<thread root ts>`). Otherwise it is
+  // read off the permalink / key / ref (src/inbox-thread.ts).
+  thread: z.string().trim().max(300).optional(),
 });
 // Close a row whose ask already happened — the triage/cleanup job's reason is what the Desk shows.
 export const InboxResolveSchema = z.object({ reason: z.string().trim().min(1).max(300) });
+// The operator's Merge on the Desk's "same conversation?" suggestion: the row this one folds into.
+export const InboxMergeSchema = z.object({ into: z.string().trim().min(8).max(64) });
 // The cleanup job's ranking of one client's open inbox rows and notes, most important first.
 const RankEntry = z.object({
   id: z.string().trim().min(8).max(64),
@@ -1203,7 +1222,7 @@ export const NewContinuationSchema = z.object({
   every: z.union([z.string().max(20), z.number()]).nullable().optional(),
   timeout: z.string().max(80).nullable().optional(),
   note: z.string().max(4000).nullable().optional(),
-  goal: z.string().max(400).nullable().optional(),
+  goal: z.string().nullable().optional(),
   then: z.string().max(10).nullable().optional(),
   /** The terminal to continue. Defaults to the caller's own (x-mc-session). */
   session_id: z.string().max(64).nullable().optional(),

@@ -17,6 +17,7 @@ import { jsonLine, type AgentBackend, type OneShotOpts, type SpawnSpec } from ".
 //   !cache-read: <n>     cache_read_input_tokens on the result usage (default omitted)
 //   !cache-write: <n>    cache_creation_input_tokens on the result usage (default omitted)
 //   !event: <json>       emit <json> as its own stream-json line
+//   !env: <NAME>         emit {type:"mock_env", name, value}: that variable as the run was spawned with it
 //   !verdict: <json>     (oneShot only) reply with <json> — drives the verifier. FLAT objects only:
 //                        parseVerdict's regex has no nested-brace support, so a nested !verdict
 //                        reads as unparseable (non-blocking) and a failing-verdict test passes
@@ -58,6 +59,7 @@ const main = async () => {
       }
     }
   for (const d of ds) if (d.name === "stderr") process.stderr.write(d.arg + "\\n");
+  for (const d of ds) if (d.name === "env") out({ type: "mock_env", name: d.arg, value: process.env[d.arg] ?? null });
   const sleep = get("sleep");
   if (sleep) await new Promise((r) => setTimeout(r, Number(sleep.arg) || 0));
   const rl = get("rate-limit");

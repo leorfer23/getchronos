@@ -39,6 +39,7 @@ import {
   type LiveTurnView, type Prereq, type TerminalAct, type TerminalView, type TurnLane, type Via,
 } from "./ledger-model.js";
 import { terminalMove } from "./robert-steps.js";
+import { approvalWhat, approvalsOf, currentApproval } from "./card-approval.js";
 import type { GoalKind, Outcome, Session } from "./types.js";
 
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -904,6 +905,10 @@ export function detailOf(r: RequestRow, opts: { operator: boolean }) {
     result,
     deliverables: requests.deliverables(r.id),
     decisions: requests.items(r.id),
+    // What the operator approved on these terminals' hand-off cards (card-approval.ts) inside each link's
+    // window: who, where, which PRs at which commits, when, and the hand-off each one answered.
+    approvals: links.filter((l) => l.primary).flatMap((l) =>
+      approvalsOf(l.session_id).filter((a) => a.at >= l.linked_at && (!l.until || a.at < l.until))),
     // Every check ever run, each marked stale when it ran against something its deliverable no longer is.
     checks: checks.map((c) => {
       const d = c.deliverable_id ? requests.deliverable(c.deliverable_id) : undefined;
@@ -1026,7 +1031,11 @@ export function ledgerText(ws: string | undefined, opts: { max?: number; width?:
           if (st?.progress) progress = `${st.progress.n}/${st.progress.of}`;
         } catch { /* a status that cannot be read just has no progress */ }
       }
-      return { id: r.id, state: r.state, title: titleOf(r, links), state_line: r.state_line, via: r.via, workspace: wsInfo(r.workspace_id)?.name ?? null, progress };
+      // His yes on that terminal's hand-off card (card-approval.ts): said on the line, so no one reading
+      // the ledger takes an approved merge for an unapproved one.
+      const s = prim ? sessions.get(prim.session_id) : undefined;
+      const a = s ? currentApproval(s) : null;
+      return { id: r.id, state: r.state, title: titleOf(r, links), state_line: r.state_line, via: r.via, workspace: wsInfo(r.workspace_id)?.name ?? null, progress, approved: a ? approvalWhat(a) : null };
     });
   return ledgerLines(lines, { ...opts, withWorkspace: ws === undefined });
 }

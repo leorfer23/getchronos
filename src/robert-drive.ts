@@ -42,6 +42,7 @@ import { focusEvents, sessionActivity, sendInput } from "./terminal.js";
 import { signalsOf, statusOf, type TermStatus } from "./term-status.js";
 import { setting, settingOn } from "./settings.js";
 import { isShipTerminal } from "./ship-guard.js";
+import { approvalNote, currentApproval } from "./card-approval.js";
 
 export type DriveKind = "review" | "turn" | "decide" | "blocked" | "robert";
 /** The same five as a set — the inbox stores kinds as free text, and only these have a Robert wake. */
@@ -201,6 +202,12 @@ export function orphanLeadLine(s: { lead_id?: string | null }): string | null {
   );
 }
 
+/** The card approval that still speaks for this terminal, as Robert's one line — null when there is none. */
+function approvedNote(s: Session, nowMs = Date.now()): string | null {
+  const a = currentApproval(s, nowMs);
+  return a ? approvalNote(a, nowMs) : null;
+}
+
 export function driveSay(
   s: Pick<Session, "id" | "goal" | "spawn_goal" | "workspace_id"> & { lead_id?: string | null },
   kind: DriveKind,
@@ -210,10 +217,14 @@ export function driveSay(
   /** Set only when the STOPPED terminal is itself a Lead: how many live workers it has, all of them
    *  stopped (that is the only shape in which a Lead's idle turn reaches here — see driveKind). */
   leadWorkers: number | null = null,
+  /** What the operator already approved on its card (card-approval.ts approvalNote), or null. */
+  approved: string | null = null,
 ): string {
   const head: Record<DriveKind, string> = {
     review: "a terminal says its GOAL IS DONE and is waiting for someone to check it.",
-    turn: "a terminal FINISHED ITS TURN and has been sitting idle — nobody has told it what's next.",
+    // A Claude terminal's Stop hook does not list the shells it left running, so one waiting on its own
+    // background task reads as this too — and that task wakes it when it exits (BACKGROUND WORK).
+    turn: "a terminal FINISHED ITS TURN and has been sitting idle — nobody has told it what's next. (Waiting on a task it started in the background? That task wakes it when it exits — see BACKGROUND WORK.)",
     decide: "a terminal is waiting on a DECISION and nobody has taken it.",
     blocked: "a terminal declared itself BLOCKED.",
     robert: "a terminal says it is WAITING ON YOU (Robert) — it declared `mc state waiting --on robert`.",
@@ -232,6 +243,12 @@ export function driveSay(
       ? `THIS IS A LEAD; its ${leadWorkers} workers are all stopped and waiting on it.\n`
       : "") +
     (orphan ?? "") +
+    // His yes on its hand-off card is a decision already made: Robert hears it before he looks, so he
+    // never tells the terminal to stop or hold a merge the operator approved.
+    (approved
+      ? `THE OPERATOR ALREADY APPROVED ITS HAND-OFF — ${approved}. That is his decision for exactly that PR at that commit: ` +
+        `never countermand it (no stop, hold or revert) and never say he did not approve it.\n`
+      : "") +
     `ITS CARD SAYS: ${st.line || "(nothing)"}\n` +
     (words.result ? `ITS LAST RESULT: ${words.result}\n` : words.said ? `IT LAST SAID: ${words.said}\n` : "") +
     follow + ` Say in one line what you did.`
@@ -331,7 +348,7 @@ export function resolveLead(leadId: string | null | undefined): Session | null {
 const STOP_PHASES: ReadonlySet<string> = new Set(["your_turn", "review", "decide", "blocked", "ended"]);
 /** `waiting --on X` where X resumes the terminal by itself (term-status.ts WAIT_ON): work is still in
  *  flight and nobody has to do anything. The rest — robert, person, terminal, other — need a hand. */
-const SELF_RESUMING: ReadonlySet<string> = new Set(["subagents", "ci", "command", "deploy"]);
+const SELF_RESUMING: ReadonlySet<string> = new Set(["subagents", "ci", "command", "query", "job", "deploy"]);
 
 /**
  * Is this terminal waiting on somebody, as opposed to working? Pure, so the whole table is testable.
@@ -694,6 +711,8 @@ function escalateEvent(ev: LeadEvent): void {
         { line: p.card_line ?? "" },
         { result: p.last_result ?? null, said: p.last_said ?? null },
         wsName,
+        null,
+        approvedNote(s),
       ),
       session_id: ev.session_id,
       kind: ev.kind,
@@ -831,7 +850,7 @@ export function fireIfStill(sessionId: string, key: string, nowMs = Date.now()):
     subject: `session:${sessionId}`,
     workspace_id: s.workspace_id,
     payload: {
-      say: driveSay(s, kind, st, lastWords(sessionId), wsName, stalled),
+      say: driveSay(s, kind, st, lastWords(sessionId), wsName, stalled, approvedNote(s, nowMs)),
       session_id: sessionId,
       kind,
     },
