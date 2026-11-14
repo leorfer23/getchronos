@@ -2901,13 +2901,11 @@ const EXPECT = {
   investigation: "Lands here when it is done: the answer, and the evidence behind it.",
   qa: "Lands here when it is done: the verdict — what passed, what failed, and how to reproduce each failure.",
 };
-// What the hand-off buttons type into the terminal. Typed, not executed by the page: the agent knows
-// the repo's own way to merge and deploy, and the line is in its transcript as your decision.
-const OK_LINE = {
-  merge: "Approved: merge the PR once its checks are green. Don't deploy. Then run `mc outcome --shipped \"merged #<n>\"`.",
-  "merge+deploy": "Approved: merge the PR once its checks are green, then deploy it. Then run `mc outcome --shipped \"merged #<n>\" --shipped \"deployed\"`.",
-  deploy: "Approved: deploy it. Then run `mc outcome --shipped \"deployed\"`.",
-};
+// What the hand-off buttons approve. The page names only the button; the daemon resolves what it covers —
+// the PRs on that hand-off and the commit each is at — records it, and types a line naming them into the
+// terminal (POST /sessions/:id/approve, src/card-approval-routes.ts). The agent still merges the repo's
+// own way, but only that PR at that commit, and the line is in its transcript as your decision.
+const APPROVE_KINDS = new Set(["merge", "merge+deploy", "deploy"]);
 
 // The goal QUEUE, for a terminal that was given more than one finish line (src/goals.ts). Fetched
 // lazily and only for the terminal on stage: every card already carries its counts, and a wall of
@@ -3770,14 +3768,34 @@ qs("#story").addEventListener("click", (e) => {
   const ok = e.target.closest("[data-ok]");
   if (ok) {
     if (ok.dataset.ok === "changes") { say.value = "Changes needed: "; focusSay(); say.setSelectionRange(say.value.length, say.value.length); return; }
-    const line = OK_LINE[ok.dataset.ok]; if (!line) return;
-    answer(s.id, { text: line, enter: true });
-    // The click does not vanish into the pty: the dock turns into "Merging + deploying…" until it ships.
-    shipStart(s, ok.dataset.ok);
-    renderStory();
-    toast("sent · " + ok.textContent.replace(/^✓\s*/, ""));
+    if (APPROVE_KINDS.has(ok.dataset.ok)) approveHandoff(s, ok.dataset.ok);
   }
 });
+// One approval from the hand-off's dock: which button, and which hand-off the card was drawn from. The
+// daemon refuses a card that moved under you (a newer hand-off, a PR whose head changed — then it asks the
+// terminal to hand off again) and answers with exactly what was approved: the PR and the commit.
+const APPROVING = new Set(); // one click in flight per terminal: GitHub is read before anything is typed
+async function approveHandoff(s, kind) {
+  if (APPROVING.has(s.id)) return;
+  APPROVING.add(s.id);
+  const drawn = D.id === s.id ? (D.outcome?.at ?? null) : null;
+  toast("approving · reading the PR on GitHub…");
+  try {
+    const r = await api("/sessions/" + s.id + "/approve", { method: "POST", headers: { "x-mc-operator": "1" }, body: JSON.stringify({ kind, outcome_at: drawn, surface: "desk" }) });
+    S.answered.set(s.id, Date.now()); S.notifyCount.delete(s.id);
+    renderCounts(); syncBadge();
+    // The click does not vanish into the pty: the dock turns into "Merging + deploying…" until it ships.
+    shipStart(s, kind);
+    renderStory();
+    const a = r?.approval;
+    toast("approved · " + (a ? (a.kind === "merge+deploy" ? "merge + deploy" : a.kind) + a.prs.map((p) => " #" + p.num + (p.sha ? " @" + p.sha.slice(0, 7) : "")).join(",") : kind));
+  } catch (err) {
+    toast(String(errMsg(err)).slice(0, 200));
+    decisionsLoad(s, true);
+  } finally {
+    APPROVING.delete(s.id);
+  }
+}
 // A finish-line check, ticked from the board: the same door `mc goal check` uses.
 async function toggleCheck(s, n) {
   const was = Array.isArray(s.done_checked) ? s.done_checked[n - 1] : null;
@@ -6011,8 +6029,15 @@ qs("#quick").addEventListener("submit", (e) => {
   const ship = qs("#q-ship").dataset.ship;
   if (ship && ship !== "ask") body.ship = ship;
   quickClose();
-  if (!goal) return spawn(body);
-  spawn({ ...body, goal, ...(lead ? { role: "lead" } : {}) });
+  // A refused open puts the line back exactly as he typed it — never cost the operator his words.
+  const restore = () => {
+    quickOpen(lead);
+    qs("#q-ws").value = wsId; quickSyncCli();
+    if (ship) quickShip(ship);
+    const g = qs("#q-goal"); g.value = goal; g.focus(); g.select();
+  };
+  if (!goal) return spawn(body, null, restore);
+  spawn({ ...body, goal, ...(lead ? { role: "lead" } : {}) }, null, restore);
 });
 qs("#q-goal").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); quickClose(); } });
 qs("#q-more").onclick = () => { const wsId = qs("#q-ws").value, ship = qs("#q-ship").dataset.ship; quickClose(); openNew(wsId); qs("#f-ship").value = ship || "ask"; };
@@ -6033,16 +6058,20 @@ function pendingRow(body) {
 }
 qs("#f-cancel").onclick = () => dlg.close("cancel");
 // One door for every spawn; the new terminal lands on the stage.
-async function spawn(body, onOpened) {
+// onFailed runs only when the daemon refused the open — the caller puts back what was typed.
+async function spawn(body, onOpened, onFailed) {
   const ph = pendingRow(body);
+  let s;
   try {
-    const s = await api("/sessions", { method: "POST", body: JSON.stringify({ role: "human", cols: 100, rows: 30, ...body }) });
+    s = await api("/sessions", { method: "POST", body: JSON.stringify({ role: "human", cols: 100, rows: 30, ...body }) });
+  } catch (err) { ph.remove(); renderRail(); toast("open failed: " + err.message); onFailed?.(); return; }
+  try {
     onOpened?.();
     await load();
     ph.remove();
     if (s?.id && byId(s.id)) select(s.id);
     if (s?.duplicate_of) toast(s.duplicate_of.warning);
-  } catch (err) { ph.remove(); renderRail(); toast("open failed: " + err.message); }
+  } catch (err) { ph.remove(); renderRail(); toast(err.message); }
 }
 // Close every terminal whose goal is ticked: they are done, and the rail is for what is not.
 async function closeDone() {
@@ -6114,7 +6143,8 @@ qs("#form-new").addEventListener("submit", async (e) => {
   };
   const cwd = f.get("cwd");
   if (cwd) body.cwd = cwd;
-  await spawn(body, () => e.target.reset());
+  // The form is only reset once the terminal is open; a refusal reopens it with everything still in it.
+  await spawn(body, () => e.target.reset(), () => { if (!dlg.open) dlg.showModal(); });
 });
 
 // ── the day's log ────────────────────────────────────────────────────────────────────────────
@@ -9108,7 +9138,7 @@ const BUS_TOPICS = [
   "ask.created", "ask.answered",
   "artifact.created", "artifact.updated", "artifact.event",
   "service.changed", "service.alarm", "alert.raised",
-  "inbox.updated", "settings.changed",
+  "inbox.updated", "settings.changed", "budget.warn",
 ].join(",");
 function connectBus() {
   if (!TOKEN) return;
@@ -9262,6 +9292,9 @@ function connectBus() {
     if (e.topic === "launch.updated" || e.topic === "launch.ran") loadSoon();
     if (e.topic === "run.started" || e.topic === "run.ended" || e.topic === "job.updated") onJobEvent(e);
     if (e.topic === "service.changed" || e.topic === "service.alarm") onServiceEvent(e);
+    // The budget ladder's warning is yours, not the workspace's terminals' (src/resources/ladder.ts);
+    // the full line (numbers, the next rung) is e.text and the daemon log.
+    if (e.topic === "budget.warn") toast(`◔ ${wsName(e.workspace_id) || "A workspace"} is over its share of this strained Mac — heaviest: ${(e.heaviest || []).slice(0, 2).map((h) => h.cmd).join(", ") || "nothing identifiable"}`);
   };
   ws.onclose = () => setTimeout(connectBus, 2500);
 }
