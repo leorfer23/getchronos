@@ -85,9 +85,12 @@ test("won't do mutes the task: no new comment, status move or re-assign files fo
   await syncWorkspace(ws); // baseline
   const a = row(ws.id);
   const sibling = row(ws.id, { kind: "comment" });
+  assert.equal(sibling.merged_into, a.id, "a second item about the same task is an ask on the first row, not a row");
+  // A row filed before rows carried a thread key stands on its own — Won't do still takes it along.
+  const legacy = inbox.add({ workspace_id: ws.id, source: "jira", kind: "comment", external_key: "k-legacy", ref: "ANA-1", title: "Fix the loader" })!;
   const r = fakeRes(); routes.wontdoRoute(fakeReq({ id: a.id }, ADMIN()), r);
   assert.equal(r.body.state, "muted");
-  assert.equal(inbox.get(sibling.id)!.state, "muted", "the other open rows about the task go with it");
+  assert.equal(inbox.get(legacy.id)!.state, "muted", "the other open rows about the task go with it");
   assert.ok(isMuted(ws.id, "jira", "ANA-1"));
   assert.deepEqual(calls, [], "nothing is written to the tracker");
 
@@ -123,12 +126,14 @@ test("done on a Jira row: hours set first, then the close carries them, then the
   emitTrackerInbox(ws.id, "jira", ME, [task()]); // baseline, no mirror ticket
   const a = row(ws.id);
   const sibling = row(ws.id, { kind: "comment" });
+  assert.equal(sibling.merged_into, a.id, "the same task: an ask on the first row");
+  const legacy = inbox.add({ workspace_id: ws.id, source: "jira", kind: "comment", external_key: "k-legacy", ref: "ANA-1", title: "Fix the loader" })!;
   const r = await done(a.id, { hours: 1.5, comment: "  Shipped the fix.  " });
   assert.equal(r.statusCode, 200, JSON.stringify(r.body));
   assert.equal(r.body.item.state, "done");
   assert.equal(r.body.target, "done", "no status_map: the default 'done' (Jira matches labels case-insensitively)");
   assert.deepEqual(calls, [["setHours", "ANA-1", 1.5], ["pushStatus", "ANA-1", "done", 1.5], ["addComment", "ANA-1", "Shipped the fix."]]);
-  assert.equal(inbox.get(sibling.id)!.state, "done");
+  assert.equal(inbox.get(legacy.id)!.state, "done");
   assert.equal(inbox.list({ workspace_id: ws.id }).length, 0);
   assert.equal(emitTrackerInbox(ws.id, "jira", ME, [task({ status: "done", statusRaw: "Done" })]), 0, "his own close echoing back is not news");
   assert.equal(emitTrackerInbox(ws.id, "jira", ME, [task({ status: "in_progress", statusRaw: "Reopened" })]), 1, "a reopen after it is");

@@ -16,6 +16,12 @@
  *                                         open inbox rows + notes, most important first
  *  POST /inbox/:id/done {hours?, comment?} operator only — close the tracker task too (src/inbox-done.ts)
  *  POST /inbox/:id/wontdo                 operator only — mute the task: it files nothing again
+ *  POST /inbox/:id/merge {into}           operator only — the Desk's "same conversation?" Merge: this row
+ *                                         becomes an ask on `into` (src/inbox-dispatch.ts mergeInboxItem)
+ *
+ * A row from a thread that already has an open row is filed as an ask on it (src/inbox-thread.ts):
+ * POST /workspaces/:id/inbox answers 200 {merged:true, id: <that row>, ask_id}. Lists carry each
+ * row's asks, and the live terminal its Dispatch would type it into (`followup_to`).
  *
  * Every :id route checks the row's workspace against the caller's scope first (CLAUDE.md gotcha #4),
  * so another client's token gets the same 404 an unknown id does, never a 403 that confirms it exists.
@@ -27,10 +33,10 @@ import { bus } from "./bus.js";
 import { inbox, jots, workspaces, INBOX_STATES, type InboxItem } from "./store.js";
 import { guard } from "./guard.js";
 import { addInboxItem } from "./inbox.js";
-import { dispatchInboxItem, InboxDispatchError } from "./inbox-dispatch.js";
+import { dispatchInboxItem, InboxDispatchError, mergeInboxItem, withThreadContext } from "./inbox-dispatch.js";
 import { parseFollowUpAt } from "./jot-followup.js";
 import { doneInboxItem, InboxDoneError, wontdoInboxItem } from "./inbox-done.js";
-import { InboxDoneSchema, InboxResolveSchema, InboxSnoozeSchema, NewInboxItemSchema, RankSchema } from "./validation.js";
+import { InboxDoneSchema, InboxMergeSchema, InboxResolveSchema, InboxSnoozeSchema, NewInboxItemSchema, RankSchema } from "./validation.js";
 
 type Req = express.Request;
 type Res = express.Response;
@@ -54,17 +60,20 @@ export function listAllRoute(req: Req, res: Res): void {
   const want = typeof req.query.workspace === "string" ? req.query.workspace : null;
   if (want && !checkScope(req, res, want)) return;
   const ws = scope.ws ?? want;
-  res.json({ items: inbox.list({ workspace_id: ws, ...listFilter(req) }), counts: inbox.counts(scope.ws) });
+  res.json({ items: withThreadContext(inbox.list({ workspace_id: ws, ...listFilter(req) })), counts: inbox.counts(scope.ws) });
 }
 
 /** GET /workspaces/:id/inbox */
 export function listRoute(req: Req, res: Res): void {
   if (!checkScope(req, res, req.params.id)) return;
   if (!workspaces.get(req.params.id)) { res.status(404).json({ error: "workspace not found" }); return; }
-  res.json({ items: inbox.list({ workspace_id: req.params.id, ...listFilter(req) }), counts: inbox.counts(req.params.id) });
+  res.json({ items: withThreadContext(inbox.list({ workspace_id: req.params.id, ...listFilter(req) })), counts: inbox.counts(req.params.id) });
 }
 
-/** POST /workspaces/:id/inbox — file one row. 201 with the row, or 200 {duplicate:true} for a key already filed. */
+/**
+ * POST /workspaces/:id/inbox — file one row. 201 with the row; 200 {duplicate:true} for a key already
+ * filed; 200 {merged:true, id, ask_id} when its thread already has an open row and it became an ask on it.
+ */
 export function addRoute(req: Req, res: Res): void {
   if (!checkScope(req, res, req.params.id)) return;
   if (!workspaces.get(req.params.id)) { res.status(404).json({ error: "workspace not found" }); return; }
@@ -92,8 +101,10 @@ export function addRoute(req: Req, res: Res): void {
     actor: b.actor ?? null,
     ref: b.ref ?? null,
     urgent: !!b.urgent,
+    thread: b.thread ?? null,
   });
   if (!row) { res.status(200).json({ duplicate: true }); return; }
+  if (row.merged_into) { res.status(200).json({ merged: true, id: row.merged_into, ask_id: row.id, urgent: row.urgent }); return; }
   res.status(201).json(row);
 }
 
@@ -247,4 +258,23 @@ export function wontdoRoute(req: Req, res: Res): void {
   const item = operatorRow(req, res);
   if (!item) return;
   res.json(wontdoInboxItem(item.id));
+}
+
+/**
+ * POST /inbox/:id/merge {into} — 200 {item, merged:true} when `into` was still open (this row is now an
+ * ask on it), or {item, session, followup:true} when it went into the live terminal `into` is with.
+ * `into` from another workspace answers exactly like one that does not exist.
+ */
+export async function mergeRoute(req: Req, res: Res): Promise<void> {
+  const item = operatorRow(req, res);
+  if (!item) return;
+  const p = InboxMergeSchema.safeParse(req.body ?? {});
+  if (!p.success) { res.status(400).json({ error: "merge needs {into: <inbox item id>}" }); return; }
+  const target = inbox.find(p.data.into);
+  if (!target || target.workspace_id !== item.workspace_id) { res.status(404).json({ error: "not found" }); return; }
+  try {
+    res.json(await mergeInboxItem(item.id, target.id));
+  } catch (e: any) {
+    res.status(e instanceof InboxDispatchError ? e.status : 400).json({ error: String(e?.message ?? e) });
+  }
 }

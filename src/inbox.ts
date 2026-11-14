@@ -18,10 +18,14 @@
  *
  * Everything that arrives here is untrusted external text on its way into an agent prompt (the
  * dispatch brief), so every field passes guard() at ingestion, same as the connector mirror.
+ *
+ * One thread, one row: every item is filed with the key of its conversation (src/inbox-thread.ts), and
+ * a new ask from a thread that already has an open row becomes an ask on that row (store/inbox.ts).
  */
 import { createHash } from "node:crypto";
 import { bus } from "./bus.js";
 import { guard } from "./guard.js";
+import { threadKeyOf } from "./inbox-thread.js";
 import { inbox, kv, workspaces, type InboxItem, type InboxSource, type NewInboxItem } from "./store.js";
 import { notify } from "./telegram/api.js";
 import type { ExternalTask } from "./connectors/types.js";
@@ -73,26 +77,32 @@ const closedEcho = (wsId: string, source: string, t: ExternalTask): boolean => {
  * File one item. Guards and caps every external field, dedups on (workspace, source, key), and — for
  * an urgent Slack DM/mention only — pushes it to the operator's phone. Returns the row, or null when
  * this key was already filed (so a re-run of the triage or a re-sync is silent) or its task is muted.
+ * An item from a thread with an open row comes back as an ask on it (`merged_into` set). `thread` is
+ * the conversation when the feed names it itself; otherwise it is read off the permalink, key or ref.
  */
-export function addInboxItem(n: NewInboxItem): InboxItem | null {
+export function addInboxItem(n: NewInboxItem & { thread?: string | null }): InboxItem | null {
   if (isMuted(n.workspace_id, n.source, n.ref)) return null;
   const where = `inbox ${n.source}`;
   const g = (s: string | null | undefined, cap: number) => {
     const t = (s ?? "").trim();
     return t ? guard(t, where, n.workspace_id).slice(0, cap) : null;
   };
+  const external_key = n.external_key.trim().slice(0, CAP.key);
+  const url = safeUrl(n.url);
+  const ref = n.ref ? n.ref.slice(0, 120) : null;
   const row = inbox.add({
     ...n,
-    external_key: n.external_key.trim().slice(0, CAP.key),
+    external_key,
     title: oneLine(g(n.title, CAP.title) ?? "(no title)"),
     why: g(n.why, CAP.why),
     body: g(n.body, CAP.body),
     actor: g(n.actor, CAP.actor),
-    url: safeUrl(n.url),
-    ref: n.ref ? n.ref.slice(0, 120) : null,
+    url,
+    ref,
+    thread_key: threadKeyOf({ source: n.source, external_key, ref, url, thread: n.thread }),
   });
   if (!row) return null;
-  bus.publish({ topic: "inbox.updated", workspace_id: row.workspace_id, item_id: row.id });
+  bus.publish({ topic: "inbox.updated", workspace_id: row.workspace_id, item_id: row.merged_into ?? row.id });
   if (shouldPush(row)) {
     const ws = workspaces.get(row.workspace_id);
     // Straight to the phone, not the board: the board wakes executives on @handles, and this is
@@ -264,7 +274,12 @@ export function emitTrackerInbox(
   let added = 0;
   for (const d of items) if (addInboxItem({ ...d, workspace_id: wsId })) added++;
   kv.set(snapKey(wsId, source), JSON.stringify(next));
-  const open = inbox.list({ workspace_id: wsId, open: true, limit: 1000 }).filter((r) => r.source === source);
+  // A row with later asks folded in is judged by the newest one: he answered it = he answered the row.
+  const open = inbox.withAsks(inbox.list({ workspace_id: wsId, open: true, limit: 1000 }).filter((r) => r.source === source))
+    .map((r) => {
+      const last = r.asks.at(-1);
+      return last ? { ...r, kind: last.kind, external_key: last.external_key, created_at: last.created_at } : r;
+    });
   for (const { id, reason } of trackerResolutions(open, tasks, me, source)) {
     const row = inbox.resolve(id, reason);
     if (row) bus.publish({ topic: "inbox.updated", workspace_id: wsId, item_id: id });

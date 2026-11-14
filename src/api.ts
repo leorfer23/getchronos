@@ -2131,6 +2131,7 @@ export function startServer() {
   api.post("/inbox/:id/dispatch", inboxRoutes.dispatchRoute);
   api.post("/inbox/:id/done", inboxRoutes.doneRoute);
   api.post("/inbox/:id/wontdo", inboxRoutes.wontdoRoute);
+  api.post("/inbox/:id/merge", inboxRoutes.mergeRoute);
 
   // The file shelf (src/shared-files.ts, src/file-routes.ts): `mc file put` on one computer, `mc file
   // get` on another. Chunked JSON, so it is the same request from the brain and through a host's forwarder.

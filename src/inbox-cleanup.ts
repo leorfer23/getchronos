@@ -45,6 +45,7 @@ export function cleanupGoal(ws: Workspace, repoList: Array<{ name: string; path:
     `   - a Slack row (key "<channel id>:<message ts>"): he replied or reacted after it, someone else resolved it, or the asker withdrew it;\n` +
     `   - a monitor/alert row: a newer row covers the same issue (keep the newest), or it was a one-off alert over 3 days old;\n` +
     `   - a duplicate of another open row: keep one, resolve the rest "duplicate of <id8>";\n` +
+    `  A row's "asks" are later messages of its thread folded into it: judge the row by the newest one.\n` +
     `   - the evidence above shows what it asked for happened.\n` +
     `  Notes → \`mc pad resolve <id> "<why>"\` only for notes whose source is "agent" or "nextday", when done (with evidence), duplicated, ` +
     `superseded by a newer note, obsolete (what it is about no longer exists), or a dated plan card whose day passed and a later note covers it. ` +

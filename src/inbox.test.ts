@@ -148,7 +148,9 @@ test("assigned, mention, comment on his task, status move — and never his own 
   ];
   await syncWorkspace(ws);
   const got = rows(ws.id).map((r) => `${r.ref}:${r.kind}`).sort();
-  assert.deepEqual(got, ["ANA-1:comment", "ANA-1:status", "ANA-2:mention", "ANA-3:assigned"]);
+  // One task, one row: ANA-1's comment came in with its status move, so it is an ask on that row.
+  assert.deepEqual(got, ["ANA-1:status", "ANA-2:mention", "ANA-3:assigned"]);
+  assert.deepEqual(inbox.withAsks(rows(ws.id)).find((r) => r.ref === "ANA-1")!.asks.map((a) => `${a.kind}:${a.external_key}`), ["comment:jira:ANA-1:comment:c10"]);
   const mention = rows(ws.id).find((r) => r.kind === "mention")!;
   assert.equal(mention.actor, "Bob");
   assert.match(mention.why!, /Bob mentioned you on Jira ANA-2/);
