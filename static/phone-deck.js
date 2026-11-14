@@ -27,7 +27,9 @@
  *            (kept on this phone until the ledger), sending a draft or merging by itself (executor).
  *
  * What "Yes" does today never exceeds what the system already allows:
- *   merge / deploy hand-off → the Desk's own approval line typed into that terminal (OK_LINE below);
+ *   merge / deploy hand-off → POST /sessions/:id/approve, the Desk's own door: the daemon resolves the PR
+ *                           and the commit from that terminal's hand-off, records his yes and types a line
+ *                           naming them (src/card-approval-routes.ts) — the page never writes that line;
  *   a question            → the existing answer door (POST /asks/:id/answer, or the terminal's input);
  *   a draft               → nothing is sent (there is no executor, agents never send): his approval is
  *                           typed into the terminal that wrote it, as a record; he sends it himself;
@@ -46,13 +48,9 @@
   // What the operator calls his assistant (static/assistant-name.js; "Robert" when it is not loaded).
   var assistant = function () { return root.AssistantName ? root.AssistantName.get() : "Robert"; };
 
-  // The Desk's approval lines (static/desk.html OK_LINE): typed, not executed by the page — the agent
-  // knows its repo's own way to merge and deploy, and the line is in its transcript as his decision.
-  var OK_LINE = {
-    merge: "Approved: merge the PR once its checks are green. Don't deploy. Then run `mc outcome --shipped \"merged #<n>\"`.",
-    "merge+deploy": "Approved: merge the PR once its checks are green, then deploy it. Then run `mc outcome --shipped \"merged #<n>\" --shipped \"deployed\"`.",
-    deploy: "Approved: deploy it. Then run `mc outcome --shipped \"deployed\"`.",
-  };
+  // The cards whose yes is an approval for the terminal to carry out. What it covers is the daemon's to
+  // say, never this page's: POST /sessions/:id/approve names the PR and the commit (approveInto below).
+  var APPROVES = { merge: true, deploy: true, "merge+deploy": true };
   var KIND_WORD = { merge: "Merge", deploy: "Deploy", "merge+deploy": "Merge + deploy", review: "Read", question: "Question", blocked: "Stopped", draft: "Draft" };
   var RANK = { blocked: 0, question: 1, merge: 2, "merge+deploy": 2, deploy: 2, draft: 3, review: 4 };
   var YES_WORD = { merge: "Merge", deploy: "Deploy", "merge+deploy": "Merge + deploy", review: "Got it", draft: "Approve" };
@@ -170,7 +168,7 @@
     var added = s.lines_added || u.lines_added || 0, removed = s.lines_removed || u.lines_removed || 0;
     var checks = (s.done_when || []).map(function (text, i) { return { text: text, met: !!(s.done_checked || [])[i] }; });
     var it = {
-      key: "handoff:" + s.id + ":" + (o.at || ""), kind: kind, ws: s.workspace_id, sid: s.id, live: !!s.live,
+      key: "handoff:" + s.id + ":" + (o.at || ""), kind: kind, ws: s.workspace_id, sid: s.id, live: !!s.live, outcomeAt: o.at || null,
       at: Date.parse(o.at) || Date.now(), title: plain(s.goal || s.title || ""),
       asked: plain(s.spawn_goal || s.first_prompt || s.goal || ""),
       verdict: cap(firstSentence(o.summary)), summary: o.summary || "", changes: o.changes || [], proof: o.proof || [],
@@ -261,7 +259,7 @@
     h.key = "ledger:" + q.item_id; h.src = "ledger"; h.ledger = led; h.asked = base.asked || h.asked; h.ws = base.ws || h.ws;
     h.verified = (det.checks || []).map(function (c) { return { name: c.name, state: c.status === "pass" ? "pass" : c.status === "fail" ? "fail" : "none", lines: (c.evidence || []).map(function (e) { return typeof e === "string" ? e : (e && (e.label || e.ref)) || ""; }).filter(Boolean) }; });
     if (led.work === "ui" && !h.pairs.length) h.warn = "A UI change with no before/after screenshots.";
-    if (OK_LINE[h.kind] && !led.bound) h.note = "Not bound to an exact version yet — your yes goes to the terminal, as on the Desk.";
+    if (APPROVES[h.kind] && !led.bound) h.note = "Not verified at an exact version yet — your yes goes to the terminal for the commit GitHub has now, as on the Desk.";
     return h;
   }
 
@@ -428,8 +426,8 @@
       return SAY.askedFor(words);
     }
     // d === "yes"
-    if (OK_LINE[it.kind]) {
-      await typeInto(OK_LINE[it.kind]);
+    if (APPROVES[it.kind]) {
+      await approveInto(it, null);
       record(it.key, "yes", null, heard);
       return SAY.done(it.kind);
     }
@@ -456,8 +454,8 @@
   /**
    * What follows a recorded yes, from the decision route's answer (the executor puts `executed` on it):
    *   executed === true  → it already ran: say so, and type NOTHING into the terminal (no second merge);
-   *   executed === false → the executor did not run it: the terminal is told the Desk's way (OK_LINE),
-   *                        so the agent carries it out as before;
+   *   executed === false → the executor did not run it: the terminal is told the Desk's way (approveInto),
+   *                        so the agent carries it out — that PR, at that commit;
    *   no field           → today's behaviour: recorded, nothing typed.
    */
   function yesFollowUp(resp) {
@@ -497,17 +495,19 @@
       return SAY.askedFor(words);
     }
     // yes
-    if (OK_LINE[it.kind]) {
+    if (APPROVES[it.kind]) {
       if (!L.bound) {
-        // The ledger cannot take this yes yet (no bound PR head): today's way, said on the card — and kept
-        // on this phone so the card does not come back while the ledger waits for the PR to settle.
-        await typeInto(OK_LINE[it.kind]);
+        // The ledger cannot take this yes yet (no bound PR head): the Desk's way, said on the card — the
+        // daemon binds it to the commit GitHub has now and records it on this item — and kept on this phone
+        // so the card does not come back while the ledger waits for the PR to settle.
+        await approveInto(it, { ledger: { request: L.request, item: L.item } });
         record(it.key, "yes", null, heardOf(meta));
         return SAY.done(it.kind);
       }
       var follow = yesFollowUp(await post("yes", { target_hash: L.target_hash, words: meta.words || null }));
       if (follow === "executed") return SAY.executed(it.kind);
-      if (follow === "type") { await typeInto(OK_LINE[it.kind]); return SAY.done(it.kind); }
+      // Bound to the head he was shown: a PR that moved since is never merged — the terminal hands off again.
+      if (follow === "type") { await approveInto(it, { ledger: { request: L.request, item: L.item } }); return SAY.done(it.kind); }
       return SAY.recorded();
     }
     if (it.kind === "draft") {
@@ -519,6 +519,22 @@
     return it.kind === "review" ? SAY.read() : SAY.recorded();
   }
   function sid(it) { return !!(it.sid && it.live); }
+  /**
+   * The approval itself, for a merge / deploy card: which kind, the hand-off the card was drawn from and,
+   * for a ledger card, its request item — never a line of text. The daemon refuses a card that moved
+   * (409: a newer hand-off, a PR whose head changed — the terminal is then told to hand off again).
+   */
+  function approveInto(it, extra) {
+    if (!it.sid || !it.live) return Promise.reject(new Error(SAY.ended()));
+    var body = { kind: it.kind, surface: C.surface === "desk" ? "desk" : "phone" };
+    if (it.outcomeAt) body.outcome_at = it.outcomeAt;
+    if (extra && extra.ledger) body.ledger = extra.ledger;
+    return C.api("/sessions/" + it.sid + "/approve", { method: "POST", headers: { "x-mc-operator": "1" }, body: JSON.stringify(body) })
+      .catch(function (e) {
+        if (e && e.status === 409) { var x = new Error(SAY.moved()); x.moved = true; throw x; }
+        throw e;
+      });
+  }
 
   // ── rendering ──────────────────────────────────────────────────────────────────────────────────
   var D = { el: null, track: null, bar: null, open: false, idx: 0, keys: [], pending: new Set(), shots: new Map(), busy: false };
@@ -622,7 +638,7 @@
     if (it.kind === "blocked") return '<button type="button" class="db" data-d="term">Open</button><button type="button" class="db later" data-d="later">Later</button><button type="button" class="db yes" data-d="reply">Reply</button>';
     var noText = it.kind === "draft" && (!it.draft.text || (it.src === "ledger" && !it.hashOk));
     return '<button type="button" class="db" data-d="change">Change</button><button type="button" class="db later" data-d="later">Later</button>' +
-      '<button type="button" class="db yes" data-d="yes"' + (noText || (OK_LINE[it.kind] && !it.live) ? " disabled" : "") + ">" + esc(YES_WORD[it.kind] || "Yes") + "</button>";
+      '<button type="button" class="db yes" data-d="yes"' + (noText || (APPROVES[it.kind] && !it.live) ? " disabled" : "") + ">" + esc(YES_WORD[it.kind] || "Yes") + "</button>";
   }
 
   function current() { return Q.items[D.idx] || null; }
@@ -1197,7 +1213,7 @@
     else body.push(t("No dejó pruebas.", "It filed no proof."));
     if (it.pairs && it.pairs.length) body.push(t("Tenés el antes y el después en pantalla.", "The before and after are on screen."));
     ask = { merge: t("¿Lo mergeo?", "Shall I merge?"), deploy: t("¿Lo despliego?", "Shall I deploy?"), "merge+deploy": t("¿Lo mergeo y despliego?", "Shall I merge and deploy?"), review: t("¿Lo doy por leído?", "Shall I mark it read?") }[it.kind];
-    if (OK_LINE[it.kind] && !it.live) ask = SAY.termEnded();
+    if (APPROVES[it.kind] && !it.live) ask = SAY.termEnded();
     return { head: head, body: body, ask: ask };
   }
   function reprompt(it) {
@@ -1395,7 +1411,7 @@
         if (it.kind === "draft" && !it.draft.text) { C.voice.say(SAY.noFullText(), { tag: "card" }); return true; }
         if (it.kind === "draft" && !VA.read) { speakThen(SAY.readFirst(), function () { if (VA.key === it.key) readCard(it); }); return true; }
         if (!VA.verdict) { readCard(it); return true; }
-        if (OK_LINE[it.kind] && !it.live) { C.voice.say(SAY.termEnded(), { tag: "card" }); return true; }
+        if (APPROVES[it.kind] && !it.live) { C.voice.say(SAY.termEnded(), { tag: "card" }); return true; }
         if (IRREVERSIBLE[it.kind]) {
           if (VA.weak) { heard.words = VA.weak + " → " + text; heard.how = "confirmed"; }
           holdThenRun(it, null, heard);
@@ -1507,7 +1523,7 @@
     viewerOpen: function () { return !!PV; }, closeViewer: function (fromHistory) { if (PV) PV.close(!!fromHistory); },
     KIND_WORD: KIND_WORD,
     // Pure helpers, for the tests (src/phone-deck.test.ts).
-    _t: { intentOf: intentOf, groupProof: groupProof, lineFails: lineFails, pairShots: pairShots, firstSentence: firstSentence, handoffItem: handoffItem, questionItem: questionItem, draftItem: draftItem, blockedItem: blockedItem, readout: readout, decide: decide, setCtx: function (c) { C = c; }, OK_LINE: OK_LINE, hidden: hidden, record: record, draftHash: draftHash, draftCanon: draftCanon, ledgerItem: ledgerItem,
+    _t: { intentOf: intentOf, groupProof: groupProof, lineFails: lineFails, pairShots: pairShots, firstSentence: firstSentence, handoffItem: handoffItem, questionItem: questionItem, draftItem: draftItem, blockedItem: blockedItem, readout: readout, decide: decide, setCtx: function (c) { C = c; }, APPROVES: APPROVES, hidden: hidden, record: record, draftHash: draftHash, draftCanon: draftCanon, ledgerItem: ledgerItem,
       SAY: SAY, STRONG_YES: STRONG_YES, WEAK_YES: WEAK_YES, STRONG_PHRASE: STRONG_PHRASE, IRREVERSIBLE: IRREVERSIBLE, pageWords: pageWords, deckLines: deckLines, reprompt: reprompt, voiceAnswer: voiceAnswer,
       settled: settled, swipeStartOk: swipeStartOk, swipeIntent: swipeIntent, swipeTarget: swipeTarget, wireSwipe: wireSwipe, SWIPE: SWIPE,
       setHold: function (ms, wait) { HOLD_MS = ms; if (wait != null) HOLD_WAIT_MS = wait; }, va: function () { return VA; }, act: act,

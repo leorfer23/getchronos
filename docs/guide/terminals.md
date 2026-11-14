@@ -58,7 +58,10 @@ The state comes from what the agent declares (`mc state`), its CLI's hooks, and 
 - Before you hear "ready", a verifier checks a hand-off that asks for a merge, review or deploy: the PR
   is open and mergeable, the repo's check command passes at the PR head, and a second model reads the
   diff against what you asked. A fail goes back to the agent first.
-- A click on **Approve merge** types the approval into the terminal; the agent merges and says so.
+- A click on **Approve merge** reads the PR's head on GitHub and types an approval naming that PR and
+  that commit into the terminal; the agent merges exactly that commit and says so. If the head moves
+  before it merges (or had moved since a card bound to one commit was put to you), nothing is merged:
+  the terminal hands off again for you to approve the new head.
 - It never ships further than you allowed (ask / merge / deploy), set when you open it or on the Goal
   card.
 - A green PR whose terminal already closed comes back once, in a **Ship** terminal that asks you one

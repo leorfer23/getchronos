@@ -83,6 +83,7 @@ import { frontTakes } from "./agent-route.js";
 import { noteVoiceTrace, voiceTraces } from "./voice-trace.js";
 import { mountLedgerRoutes } from "./ledger-routes.js";
 import { mountExecutorRoutes } from "./executor-routes.js";
+import { mountCardApprovalRoutes } from "./card-approval-routes.js";
 import { assistantRoutes } from "./assistant-routes.js";
 import { robertGateFor } from "./robert-scope.js";
 import { homeWorkspace } from "./robert-hands.js";
@@ -2432,6 +2433,8 @@ export function startServer() {
   mountLedgerRoutes(api);
   // What the executor carried out (src/executor.ts): its log (the operator's) and its switches.
   mountExecutorRoutes(api);
+  // The operator's yes on a hand-off card, bound to the PR and the commit it covers (src/card-approval.ts).
+  mountCardApprovalRoutes(api);
 
   api.get("/stats", requireAdmin, (_req, res) => {
     const days = (n: number) => new Date(Date.now() - n * 86400000).toISOString();

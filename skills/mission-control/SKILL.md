@@ -246,8 +246,11 @@ mc outcome clear       # drop it (a new `mc outcome` replaces the last one anywa
   is typed back into you as `[verifier] Not ready…` — fix it, push, and file `mc outcome` again (two rounds,
   then it goes to him as not ready).
 - **`--ask`**: what you need from the operator — `merge`, `deploy`, `merge+deploy`, `review` (just read
-  it) or `none`. The card turns it into buttons; a click types `Approved: …` into you. Then do exactly
-  that, and run `mc outcome --shipped "<what you shipped>"`.
+  it) or `none`. The card turns it into buttons; a click types `Approved by the operator on the Desk card
+  (approval ap-…): merge PR #24 (<url>) at head 1a2b3c4 …` into you — the PR and the exact commit he
+  approved. Merge only that PR at that commit (`gh pr merge <url> --match-head-commit <sha>`); if its head
+  moved since, do not merge: file a fresh `mc outcome` for the new head. Then run
+  `mc outcome --shipped "<what you shipped>"`.
 - Already allowed to ship (`mc goal` says merge/deploy)? Ship, then file the hand-off with
   `--shipped "merged #24" --shipped "deployed"` and `--ask none` (or `deploy` if you may only merge).
 

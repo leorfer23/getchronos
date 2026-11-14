@@ -626,6 +626,8 @@ export type LineRow = {
   workspace?: string | null;
   /** n/total from the terminal's own progress, when it reports one. */
   progress?: string | null;
+  /** What he approved on its terminal's hand-off card (card-approval.ts approvalWhat), while it still stands. */
+  approved?: string | null;
 };
 
 const STATE_WORD: Record<RequestState, string> = { needs_operator: "needs you", stuck: "stuck", working: "working", done: "done", closed: "closed" };
@@ -647,7 +649,8 @@ export function ledgerLines(rows: LineRow[], opts: { max?: number; width?: numbe
     const ref = r.state === "needs_operator" ? ` [${r.id.slice(0, 8)}]` : "";
     const why = r.state_line ? ` — ${r.state_line}` : "";
     const prog = r.progress && r.state === "working" ? ` · ${r.progress}` : "";
-    return clip(`- ${STATE_WORD[r.state]} · ${where}${who}${clip(r.title, 90)}${prog}${why}`, width - ref.length) + ref;
+    const ok = r.approved ? ` · ✓ he approved ${r.approved} on its card` : "";
+    return clip(`- ${STATE_WORD[r.state]} · ${where}${who}${clip(r.title, 90)}${prog}${ok}${why}`, width - ref.length) + ref;
   });
   if (open.length > max) lines.push(`- … ${open.length - max} more (mc ledger)`);
   return `LEDGER (${open.length} open · ${needs} need you):\n${lines.join("\n")}`;
