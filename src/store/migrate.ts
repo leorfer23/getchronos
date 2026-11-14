@@ -2549,6 +2549,61 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     },
   },
 
+  {
+    version: 161,
+    name: "playbooks — a workspace's recurring multi-step chain, run on ONE operator OK (src/playbooks.ts)",
+    // `playbooks`: a name and ordered steps (JSON — shell / mc / agent instruction / a final message that
+    // is always a draft), some of them gates (merge, deploy, publish, release). `reviewed_at` is set when
+    // the operator saves it himself; a draft from a terminal's transcript (`source` 'session') has none.
+    // `playbook_runs`: one run = a snapshot of the steps (with each step's status), one target (PR + the
+    // head SHA it was read at) and the one OK the operator gave for it (`ok_*`: the SHA he saw, the gates
+    // it listed, when, from where). A run never changes its steps; a failed run is never run again — a new
+    // run (and a new OK) is.
+    up: (db) => db.exec(`
+      CREATE TABLE playbooks (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        description TEXT,
+        repo_id TEXT,
+        steps TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'hand',
+        drafted_from TEXT,
+        reviewed_at TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (workspace_id, name)
+      );
+      CREATE TABLE playbook_runs (
+        id TEXT PRIMARY KEY,
+        playbook_id TEXT NOT NULL REFERENCES playbooks(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        steps TEXT NOT NULL,
+        pr_url TEXT,
+        pr_number INTEGER,
+        head_sha TEXT,
+        state TEXT NOT NULL,
+        reason TEXT,
+        from_step INTEGER NOT NULL DEFAULT 1,
+        session_id TEXT,
+        here INTEGER NOT NULL DEFAULT 0,
+        requested_by TEXT,
+        requested_session TEXT,
+        ok_sha TEXT,
+        ok_gates TEXT,
+        ok_by TEXT,
+        ok_at TEXT,
+        ok_surface TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        ended_at TEXT
+      );
+      CREATE INDEX idx_playbook_runs_ws ON playbook_runs(workspace_id, created_at);
+      CREATE INDEX idx_playbook_runs_pb ON playbook_runs(playbook_id, created_at);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
