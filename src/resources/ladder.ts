@@ -13,10 +13,10 @@
  *    RAM (total − max(3 GB, 20 %)) and CPU (ncpu × 100 %). A lone workspace's share is the whole Mac.
  *
  * The rungs, per workspace, while strained AND over budget:
- *  1. WARN at once: one message to each of its live terminals (typed in, as host failover tells a
- *     terminal — the only channel that reaches a busy terminal agent; deferred while someone is typing
- *     into that pane) and to each headless run (the `mc tell` mailbox), naming the heaviest processes
- *     with their RSS and CPU. At most once per `warnEveryMs` (10 min) per workspace.
+ *  1. WARN at once: one line for the OPERATOR — the `budget.warn` event, which the Desk shows — naming
+ *     the heaviest processes with their RSS and CPU. Never typed into the workspace's terminals nor
+ *     sent to its runs: a worker mid-task cannot weigh one workspace against the Mac, and the line
+ *     landed in the middle of its work. At most once per `warnEveryMs` (10 min) per workspace.
  *  2. SLOW after `slowAfterMs` (2 min) still over: renice the workspace's HEAVY processes (leak family,
  *     test runners, build tools) with their own descendants to `slowNice` (20; agents start at
  *     CHRONOS_AGENT_NICE 10), heaviest first, up to `maxActions` per tick. ONE-WAY: macOS lets only root
@@ -151,10 +151,8 @@ export type LadderEvent =
       pressure: string;
       load_per_core: number;
       heaviest: Array<{ cmd: string; count: number; rss_mb: number; cpu: number; pid: number }>;
-      told: number;
-      failed: number;
-      /** Terminals someone was typing into: retried on the next ticks rather than typed over. */
-      deferred: number;
+      /** The one line the operator reads (the Desk toasts it). */
+      text: string;
     }
   | { topic: "budget.slow"; workspace_id: string | null; dry: boolean; nice: number; pids: number[]; count: number; rss_mb: number; cpu: number; over_ms: number }
   | {
@@ -202,14 +200,6 @@ export type LadderDeps = {
   getNice(pid: number): number | null;
   /** Set these pids to nice `n`; resolves to the pids that now are at `n`. */
   setNice(pids: number[], n: number): Promise<Set<number>>;
-  /** Deliver one line to a live owner (terminal: typed in; run: mailbox). null = delivered, else why not. */
-  tell(owner: Owner, text: string): string | null;
-  /**
-   * A terminal sitting at its prompt with nothing running. Typing into one is a whole turn — its
-   * context re-read, or re-written at the cache-write price once its prompt cache went cold — so it
-   * is told only when one of the heaviest processes is its own. Absent: every owner is told.
-   */
-  idle?(owner: Owner): boolean;
   publish?(e: LadderEvent): void;
   /** Mirror of the paused list (brain.ts writes the state file). */
   save?(paused: PausedRec[]): void;
@@ -265,8 +255,6 @@ export class Ladder {
   private last: Measured | null = null;
   private lastAt: number | null = null;
   private lastMode: LadderMode;
-  /** Owners whose warning was deferred (someone was typing into that terminal): ownerKey → workspace key. */
-  private readonly pendingTell = new Map<string, string>();
 
   constructor(readonly cfg: LadderConfig, private readonly deps: LadderDeps) {
     this.lastMode = cfg.mode;
@@ -358,7 +346,6 @@ export class Ladder {
     if (mode === "off") {
       await this.releaseAllNow("disabled");
       for (const st of this.ws.values()) { st.overSince = null; st.rung = "ok"; st.slowNoted = false; st.idleNoted = false; st.pauseNoted.clear(); }
-      this.pendingTell.clear();
       return;
     }
 
@@ -378,7 +365,6 @@ export class Ladder {
       }
     }
     for (const [k, st] of this.ws) if (!m.active.has(k)) { st.overSince = null; st.rung = "ok"; }
-    for (const [ok, k] of this.pendingTell) if (!climbing.has(k)) this.pendingTell.delete(ok);
 
     await this.comeDown(climbing, m);
 
@@ -389,7 +375,7 @@ export class Ladder {
       if (st.warnedAt == null || now - st.warnedAt >= this.cfg.warnEveryMs) {
         st.warnedAt = now;
         await this.warn(k, m);
-      } else await this.warn(k, m, true);
+      }
       if (overMs < this.cfg.slowAfterMs) continue;
       st.rung = "slow";
       await this.slow(k, m, overMs, mode === "slow" || mode === "on");
@@ -508,14 +494,12 @@ export class Ladder {
   // ───────────────────────── rung 1: warn ─────────────────────────
 
   /**
-   * Rung 1. Delivery is TYPED into a terminal (no other channel reaches a busy terminal agent — see
-   * RESOURCES.md → Warn delivery), so `tell` defers a terminal someone typed into in the last moments
-   * (its error starts with "defer"): that owner is retried on the next ticks (`retry`), never typed
-   * into the middle of the operator's own line, and the workspace's 10-minute clock is not reset for it.
+   * Rung 1: one line for the operator, on the bus (`budget.warn` → the Desk). Not to the workspace's
+   * terminals or runs: the workers it would reach are mid-task on something else, cannot see the rest
+   * of the Mac, and a line typed into a pane lands in the middle of their turn.
    */
-  private async warn(k: string, m: Measured, retry = false): Promise<void> {
+  private async warn(k: string, m: Measured): Promise<void> {
     const ws = unkey(k);
-    if (retry && ![...this.pendingTell.values()].includes(k)) return;
     // A runtime's argv turns `node` into `node (vitest)` — read once per process, cached on the entry.
     const runtimes = [...this.ledger.entries.values()]
       .filter((e) => e.argv === undefined && this.deps.reaper.runtimes.test(exeName(e.proc.comm)) && key(this.ledger.owners.get(e.owner)?.workspaceId) === k)
@@ -525,37 +509,21 @@ export class Ladder {
     const b = m.budgets.get(k)!;
     const s = m.shares.get(k)!;
     const heavy = heaviest(this.ledger, k, this.deps.reaper, 3);
-    const owners = [...this.ledger.owners.values()].filter((o) => !o.ended && key(o.workspaceId) === k && (!retry || this.pendingTell.has(o.key)))
-      .filter((o) => !this.deps.idle?.(o) || heavy.some((h) => h.owner === o.key));
     const mode = this.mode();
     const next =
       mode === "warn" ? "This Mac only warns for now." :
       mode === "slow" ? `Still over in ${Math.round(this.cfg.slowAfterMs / 60_000)} min: the heaviest of them are reniced to ${this.cfg.slowNice}.` :
       `Still over in ${Math.round(this.cfg.slowAfterMs / 60_000)} min: the heaviest are reniced to ${this.cfg.slowNice}; if memory pressure turns critical, the newest heavy process is paused (SIGSTOP) until there is room.`;
-    let told = 0;
-    let failed = 0;
-    let deferred = 0;
-    for (const o of owners) {
-      const list = heavy.map((h) => `${h.cmd}${h.count > 1 ? ` ×${h.count}` : ""} ${gb(h.rssMb)} ${Math.round(h.cpu)}% CPU (${h.owner === o.key ? "this terminal" : `${h.ownerKind} ${h.ownerId.slice(0, 8)}`})`).join(", ");
-      const text =
-        `[chronos budget] Workspace ${this.name(ws)} is over its share of this Mac while the Mac is strained ` +
-        `(memory pressure ${pressureName(m.reading.pressureLevel)}, load ${r1(m.reading.loadPerCore)}/core): ` +
-        `RAM ${gb(u.rssMb)} of a ${gb(b.rssMb)} budget, CPU ${Math.round(u.cpu)}% of ${Math.round(b.cpu)}% ` +
-        `(share ${Math.round(s.share * 100)}%, weight ${s.weight}, ${m.active.size} workspace${m.active.size === 1 ? "" : "s"} active). ` +
-        `Heaviest: ${list || "nothing identifiable"}. Stop what you no longer need, and run suites and builds through \`mc heavy\`. ${next}`;
-      const err = this.deps.tell(o, text);
-      if (err?.startsWith("defer")) { deferred++; this.pendingTell.set(o.key, k); continue; }
-      this.pendingTell.delete(o.key);
-      if (err) { failed++; this.log(`warn → ${o.kind} ${o.id.slice(0, 8)} not delivered: ${err}`); }
-      else told++;
-    }
-    if (retry) {
-      if (told) this.log(`WARN ws ${this.name(ws)} — delivered late to ${told} terminal(s) that were being typed into`);
-      return;
-    }
+    const list = heavy.map((h) => `${h.cmd}${h.count > 1 ? ` ×${h.count}` : ""} ${gb(h.rssMb)} ${Math.round(h.cpu)}% CPU (${h.ownerKind} ${h.ownerId.slice(0, 8)})`).join(", ");
+    const text =
+      `Workspace ${this.name(ws)} is over its share of this Mac while the Mac is strained ` +
+      `(memory pressure ${pressureName(m.reading.pressureLevel)}, load ${r1(m.reading.loadPerCore)}/core): ` +
+      `RAM ${gb(u.rssMb)} of a ${gb(b.rssMb)} budget, CPU ${Math.round(u.cpu)}% of ${Math.round(b.cpu)}% ` +
+      `(share ${Math.round(s.share * 100)}%, weight ${s.weight}, ${m.active.size} workspace${m.active.size === 1 ? "" : "s"} active). ` +
+      `Heaviest: ${list || "nothing identifiable"}. ${next}`;
     this.log(
       `WARN ws ${this.name(ws)} — RAM ${gb(u.rssMb)} / ${gb(b.rssMb)}, CPU ${Math.round(u.cpu)}% / ${Math.round(b.cpu)}% (share ${Math.round(s.share * 100)}%) — ` +
-        `pressure ${pressureName(m.reading.pressureLevel)}, load ${r1(m.reading.loadPerCore)}/core — told ${told} of ${owners.length}${deferred ? ` (${deferred} deferred: being typed into)` : ""} — heaviest ${heavy.map((h) => `${h.cmd} ${gb(h.rssMb)}`).join(", ") || "-"}`,
+        `pressure ${pressureName(m.reading.pressureLevel)}, load ${r1(m.reading.loadPerCore)}/core — heaviest ${heavy.map((h) => `${h.cmd} ${gb(h.rssMb)}`).join(", ") || "-"}`,
     );
     this.publish({
       topic: "budget.warn",
@@ -569,9 +537,7 @@ export class Ladder {
       pressure: pressureName(m.reading.pressureLevel),
       load_per_core: r1(m.reading.loadPerCore),
       heaviest: heavy.map((h) => ({ cmd: h.cmd, count: h.count, rss_mb: Math.round(h.rssMb), cpu: Math.round(h.cpu), pid: h.pid })),
-      told,
-      failed,
-      deferred,
+      text,
     });
   }
 
