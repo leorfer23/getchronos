@@ -66,6 +66,6 @@ export type { MemoryUsageRow, MemoryUsageKind, MemoryUsageAggregate, MemoryUsage
 export { dreamRuns, memoryClocks } from "./store/dream.js";
 export type { DreamRun, DreamStatus, DreamSource, MemoryClock } from "./store/dream.js";
 export { inbox, INBOX_SOURCES, INBOX_KINDS, INBOX_STATES, PRIORITIES } from "./store/inbox.js";
-export type { InboxItem, NewInboxItem, InboxSource, InboxKind, InboxState, Priority } from "./store/inbox.js";
+export type { InboxItem, InboxAsk, NewInboxItem, InboxSource, InboxKind, InboxState, Priority } from "./store/inbox.js";
 export { artifacts } from "./store/artifacts.js";
 export type { Artifact, ArtifactEvent, ArtifactEventKind, ArtifactStatus, NewArtifact } from "./store/artifacts.js";
