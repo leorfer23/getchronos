@@ -11,6 +11,7 @@ import { sessionGoalReached, statusOf } from "./term-status.js";
 import { sessionHostOffline } from "./remote-terminals.js";
 import { brainLink } from "./hostlink/brain-link.js";
 import { hostsView, type HostView } from "./hostlink/view.js";
+import { approvalNote, currentApproval } from "./card-approval.js";
 
 const MAX_ROWS = 30;
 /** Same order as the Desk rail: needs you → to review → your turn → stalled → waiting on others → working. */
@@ -109,9 +110,13 @@ function fleetBody(workspace_id?: string | null): string {
     const rank = RANK[phase] ?? 9;
     const ws = s.workspace_id ? workspaces.get(s.workspace_id)?.name ?? "—" : "—";
     const extra = st ? [st.subagents ? `${st.subagents} subagents` : "", st.progress ? `${st.progress.n}/${st.progress.of}` : ""].filter(Boolean).join(", ") : "";
+    // What the operator already approved on its card (card-approval.ts): his decision, in front of Robert
+    // on every turn, so nobody tells this terminal to stop a merge he said yes to.
+    const approved = currentApproval(s);
     const line =
       `- ${s.id.slice(0, 8)} · ${ws} · ${phase.replace("_", " ")}${quiet && phase === "your_turn" ? ` ${quiet}m` : ""}${extra ? ` (${extra})` : ""} · ${one(s.goal || s.title, 90) || "(no goal)"}` +
       (st?.line ? ` · ${one(st.line, 120)}` : "") +
+      (approved ? ` · ${approvalNote(approved)}` : "") +
       hostSuffix(s, nameOf);
     return { rank, quiet, line };
   });

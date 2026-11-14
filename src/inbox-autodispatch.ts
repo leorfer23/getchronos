@@ -18,6 +18,9 @@
  *   never floods the Desk with the old backlog.
  * - A row whose terminal fails to open three times stays `new` for his hand.
  *
+ * - Network: nothing is judged or opened while the network is down (net-up.ts) — the first pass and
+ *   the terminal both need it; the next tick tries again.
+ *
  * Event-driven (inbox.updated, session.ended) plus a cheap 60s store-only tick for the grace timer.
  */
 import { bus, type BusEvent } from "./bus.js";
@@ -27,6 +30,7 @@ import { dispatchInboxItem, followUpWait, threadOwner, type FollowUpDeps } from 
 import { saveVerdict, savedVerdict, triageInboxItem, type Verdict } from "./inbox-triage.js";
 import { setting } from "./settings.js";
 import { openSession } from "./terminal.js";
+import { networkUp } from "./net-up.js";
 
 const AFTER_KEY = "inbox.auto.after";
 const MAX_FAILS = 3;
@@ -41,6 +45,7 @@ export type AutoDeps = {
   enabled?: (wsId: string) => boolean;
   triage?: (item: InboxItem) => Promise<Verdict | null>;
   triageOn?: (wsId: string) => boolean;
+  netUp?: () => Promise<boolean>;
   /** How a follow-up is typed into its thread's live terminal — a test has no pty. */
   follow?: FollowUpDeps;
 };
@@ -50,6 +55,7 @@ export function createAutoDispatcher(deps: AutoDeps = {}) {
   const enabled = deps.enabled ?? ((ws: string) => setting<boolean>("inbox.auto_dispatch", ws) !== false);
   const triage = deps.triage ?? ((i: InboxItem) => triageInboxItem(i));
   const triageOn = deps.triageOn ?? ((ws: string) => setting<boolean>("inbox.triage", ws) !== false);
+  const netUp = deps.netUp ?? networkUp;
   const firstSeen = new Map<string, number>();
   const fails = new Map<string, number>();
   const triageFails = new Map<string, number>();
@@ -117,10 +123,13 @@ export function createAutoDispatcher(deps: AutoDeps = {}) {
       const cands = inbox.autoCandidates(after());
       const seen = new Set(cands.map((c) => c.id));
       for (const id of firstSeen.keys()) if (!seen.has(id)) firstSeen.delete(id);
+      let online: boolean | null = null; // looked at once, and only when a row is ready to go
       for (const c of cands) {
         if (!firstSeen.has(c.id)) firstSeen.set(c.id, t);
         if (t - firstSeen.get(c.id)! < CONFIG.inboxAuto.graceSec * 1000) continue;
         if ((fails.get(c.id) ?? 0) >= MAX_FAILS) continue;
+        // A typed follow-up starts an agent turn too: not into a dead network (net-up.ts).
+        if ((online ??= await netUp()) === false) break;
         const f = await followUp(c);
         if (f) { if (f === "typed") opened.push(c.id); continue; }
         if (!workspaces.get(c.workspace_id) || !enabled(c.workspace_id)) continue;

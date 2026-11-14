@@ -104,8 +104,8 @@ function configDirFor(id: string): string | null {
   return ws?.config_dir ?? CONFIG.profiles[CONFIG.defaultProfile] ?? CONFIG.profiles.claude ?? null;
 }
 
-/** claude pins the transcript filename to the session id; the project dir depends on cwd. */
-function transcriptFor(id: string): string | null {
+/** claude pins the transcript filename to the session id; the project dir depends on cwd. Also the weekly retro's reader (retro-pass.ts). */
+export function transcriptFor(id: string): string | null {
   // A terminal on another host: its transcript is the mirror the host streams into (hosts/transcript-mirror.ts).
   const row = sessions.get(id);
   if (row && row.host_id && row.host_id !== LOCAL_HOST_ID) {

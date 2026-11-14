@@ -30,11 +30,12 @@ type World = {
   head: string; files: string[] | null; behind: number | null; gitHead: string; dirty: boolean;
   gates: Array<{ ok: boolean; output?: string }>; verdict: string | null; told: Array<{ sid: string; text: string }>;
   reviews: number; gateRuns: number; heavy: number; draft: { kind: "slack" | "email"; to: string | null; channel: string | null; subject: string | null; text: string | null } | null;
+  prompts: string[];
 };
 let w: World;
 let stubs: Partial<V.VerifierDeps> = {};
 function stub() {
-  w = { head: HEAD_A, files: ["src/retry.ts", "src/retry.test.ts"], behind: 0, gitHead: HEAD_A, dirty: false, gates: [{ ok: true }], verdict: 'VERDICT {"pass":true,"reasons":["does what was asked"],"risks":[]}', told: [], reviews: 0, gateRuns: 0, heavy: 0, draft: null };
+  w = { head: HEAD_A, files: ["src/retry.ts", "src/retry.test.ts"], behind: 0, gitHead: HEAD_A, dirty: false, gates: [{ ok: true }], verdict: 'VERDICT {"pass":true,"reasons":["does what was asked"],"risks":[]}', told: [], reviews: 0, gateRuns: 0, heavy: 0, draft: null, prompts: [] };
   stubs = {
     prRead: async () => ({ state: "OPEN", isDraft: false, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", headRefOid: w.head, baseRefName: "main", files: w.files, ci: null, failing: [] }),
     behindBy: async () => w.behind,
@@ -42,7 +43,7 @@ function stub() {
     gitState: async () => ({ head: w.gitHead, dirty: w.dirty }),
     runGates: async (_ws, _cwd, gates) => { w.gateRuns++; return gates.map((g, i) => ({ name: g.name, cmd: g.cmd, ok: w.gates[i]?.ok ?? true, ms: 1200, output: w.gates[i]?.output ?? "ok" })); },
     heavy: async (_ws, _label, fn) => { w.heavy++; return fn(); },
-    review: async () => { w.reviews++; return { text: w.verdict, run_id: "run-1", status: "success" }; },
+    review: async (_ws, prompt) => { w.reviews++; w.prompts.push(prompt); return { text: w.verdict, run_id: "run-1", status: "success" }; },
     tell: async (sid, text) => { w.told.push({ sid, text }); return null; },
     draftText: async () => w.draft,
   };
@@ -58,11 +59,11 @@ beforeEach(() => {
 });
 
 let n = 0;
-function world(kind: "pr" | "ui" | "investigation" = "pr", gate = true) {
+function world(kind: "pr" | "ui" | "investigation" = "pr", gate = true, goal = "retry failed uploads") {
   const ws = workspaces.create({ slug: `acme-${Math.random().toString(36).slice(2, 8)}`, name: "acme", config_dir: `/tmp/vf-${Math.random()}` } as any);
   const repo = repos.create({ workspace_id: ws.id, name: `app${n}`, path: wt, git_remote: `https://github.com/acme${n}/app.git`, gate_cmds: gate ? JSON.stringify([{ name: "test", cmd: "npm test" }]) : null } as any);
   setRemoteReader(() => null); // drop pr-ownership's memo: the repo above is new
-  const s = sessions.create({ workspace_id: ws.id, repo_id: repo.id, cwd: wt, goal: "retry failed uploads", goal_kind: kind, created_by: "operator", backend: "claude-code", model: "opus" } as any);
+  const s = sessions.create({ workspace_id: ws.id, repo_id: repo.id, cwd: wt, goal, goal_kind: kind, created_by: "operator", backend: "claude-code", model: "opus" } as any);
   L.onLedgerEvent({ topic: "session.started", session_id: s.id });
   const url = `https://github.com/acme${n++}/app/pull/12`;
   return { ws, repo, s: sessions.get(s.id)!, url };
@@ -300,6 +301,90 @@ test("an analysis: the reader judges whether it answers the question and states 
   assert.equal(latestCheck(r.id, "queries")!.status, "fail");
   assert.equal(out.ready, false);
   assert.match(w.told[0].text, /queries: missing: the queries or sources/);
+});
+
+/** A Slack draft announced by its terminal's hook, its words on file and bound. */
+function draftIn(s: Session, text: string) {
+  w.draft = { kind: "slack", to: null, channel: "#team", subject: null, text };
+  L.noteDraft(s.id, { label: "Slack draft → #team", tool: { name: "mcp__x__slack_send_message_draft" }, target: { channel: "slack", to: "#team", hash: draftHash({ channel: "slack", to: "#team", subject: "", text }) } });
+}
+const TRIO = ["queries", "crosscheck", "assumptions"];
+
+test("an analysis whose answer states no figures is not sent back for queries, a cross-check or assumptions", async () => {
+  // Anonymized from real hand-offs the verifier sent back for these three alone — with a reader as strict as it was then.
+  w.verdict = 'VERDICT {"pass":true,"reasons":["answers it"],"aspects":{"queries":false,"crosscheck":false,"assumptions":false}}';
+  const cases: Array<{ goal: string; draft?: string; handoff?: Partial<Outcome> }> = [
+    { goal: "Inbox: data tool setup: who gets access to the 3 connections", draft: "Thanks for setting this up! Please add the analytics team and me to the group that can use the 3 connections. We will manage the rest ourselves and add people later." },
+    { goal: "Inbox: ask the vendor contact for a cost-report backfill", draft: "Hi! The new cost export is loading fine. One gap is left: the weeks before it started have no cost in our tables. Could you open a support case to backfill the report into the same bucket? Let me know when it lands and I will load it." },
+    { goal: "Inbox: is request R-042 the second card-data request?", draft: "Yes, R-042 is the one: the card volume, item counts and rates request. It shipped in #311 and its totals were checked against the source." },
+    { goal: "Job check: 1 red — find why", handoff: { ask: "review", summary: "The nightly cleanup job timed out because the machine was asleep when it fired at 02:00; it never reached the API and was killed at the next wake (exit 143).", proof: ["run log: started 02:00:21Z during a dark wake, killed at 02:13:23Z"] } },
+  ];
+  for (const c of cases) {
+    const { s } = world("investigation", true, c.goal);
+    if (c.draft) draftIn(s, c.draft);
+    if (c.handoff) handOff(s, c.handoff);
+    const r = reqOf(s);
+    const out = await V.verifyRequest(r.id, { trigger: c.draft ? "draft" : "outcome" });
+    for (const name of TRIO) {
+      const chk = latestCheck(r.id, name)!;
+      assert.equal(chk.status, "na", `${c.goal}: ${name}`);
+      assert.match(chk.note!, /no figures/);
+    }
+    assert.equal(latestCheck(r.id, "matches_request")!.status, "pass");
+    assert.equal(out.ready, true, `${c.goal}: ${out.reason ?? ""}`);
+    assert.equal(out.told, false, c.goal);
+    assert.ok(!/- queries:/.test(w.prompts.at(-1)!), `${c.goal}: the reader is not asked for queries`);
+  }
+  assert.equal(w.told.length, 0, "no rework round for any of them");
+});
+
+test("a numeric answer still owes all three: no query behind its figures is sent back, from a hand-off or a draft", async () => {
+  const { s } = world("investigation", true, "Inbox: ask the vendor contact for a cost-report backfill");
+  w.verdict = 'VERDICT {"pass":true,"reasons":["answers it"],"aspects":{"queries":false,"crosscheck":true,"assumptions":false}}';
+  handOff(s, { ask: "review", summary: "The gap is real: the account's cost is $0/day from the 2nd to the 31st, $310.50 the day before and $455 the day after.", proof: ["the daily cost table, by day"] });
+  const r = reqOf(s);
+  const out = await V.verifyRequest(r.id);
+  assert.match(w.prompts[0], /it states what may be such figures: \$0\/day, \$310\.50, \$455\)/);
+  assert.deepEqual(TRIO.map((name) => latestCheck(r.id, name)!.status), ["fail", "pass", "fail"]);
+  assert.equal(out.ready, false);
+  assert.match(w.told[0].text, /queries: missing: the queries or sources.*assumptions: missing/);
+  // A draft with figures is told just the same.
+  const d = world("investigation", true, "Inbox: how many migrated accounts got a concession?").s;
+  w.verdict = 'VERDICT {"pass":true,"reasons":["answers it"],"aspects":{"queries":false,"crosscheck":false,"assumptions":true}}';
+  draftIn(d, "120 of 64.5K migrated accounts got one (0.2%), $180K since 2023.");
+  await V.verifyRequest(reqOf(d).id, { trigger: "draft" });
+  assert.match(w.told[1].text, /queries: missing.*crosscheck: missing/);
+});
+
+test("figures the reader says are not derived from data: n/a with its reason, never a pass; an n/a without one is not counted", async () => {
+  const { s } = world("investigation", true, "Inbox: is request R-042 the second card-data request?");
+  w.verdict = 'VERDICT {"pass":true,"reasons":["answers it"],"aspects":{"queries":"n/a: the only figure is context quoted from the shipped PR; the answer is a yes/no","crosscheck":"n/a: same","assumptions":"n/a"}}';
+  handOff(s, { ask: "review", summary: "Yes, R-042 is the card-data request, shipped in #311. Still open on it: the 1.5-2.5% fee gap." });
+  const r = reqOf(s);
+  const out = await V.verifyRequest(r.id);
+  assert.match(w.prompts[0], /may be such figures: 1\.5-2\.5%\)/);
+  assert.equal(latestCheck(r.id, "queries")!.status, "na");
+  assert.match(latestCheck(r.id, "queries")!.note!, /says the reader: the only figure is context quoted/);
+  assert.equal(latestCheck(r.id, "crosscheck")!.status, "na");
+  assert.equal(latestCheck(r.id, "assumptions")!.status, "skip");
+  assert.equal(w.told.length, 0);
+  assert.equal(out.ready, true, out.reason ?? "");
+  const q = L.queueView(undefined).items.find((i) => i.request_id === r.id)!;
+  assert.match(q.line, /checks pass \(not checked: assumptions\)/, "an n/a with no reason is said with the yes, as a gap");
+});
+
+test("the gates are as strict as before: a draft that says live when nothing was published fails and is told", async () => {
+  const { s } = world("investigation", true, "Inbox: is the rebuilt report published?");
+  w.verdict = 'VERDICT {"pass":false,"reasons":["it says the report is live, but nothing shows it was published"],"aspects":{"queries":true,"crosscheck":true,"assumptions":true}}';
+  draftIn(s, "Yes, it is live: the report was rebuilt and published, and it prints from the page's menu.");
+  const r = reqOf(s);
+  const out = await V.verifyRequest(r.id, { trigger: "draft" });
+  assert.equal(latestCheck(r.id, "matches_request")!.status, "fail");
+  assert.equal(out.ready, false);
+  assert.equal(w.told.length, 1);
+  assert.match(w.told[0].text, /matches_request: it says the report is live/);
+  assert.ok(!/queries|crosscheck|assumptions/.test(w.told[0].text), "the analysis slots are not what it is sent back for");
+  assert.deepEqual(TRIO.map((name) => latestCheck(r.id, name)!.status), ["na", "na", "na"], "and the reader's true is no pass for them either");
 });
 
 test("the verifier off for a workspace: nothing runs on its own — the operator's re-run still does", async () => {
