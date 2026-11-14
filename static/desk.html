@@ -1335,6 +1335,44 @@
   .sv-err { padding:8px 16px; background:var(--danger-soft); color:var(--danger); font-size:13.5px; border-bottom:1px solid var(--line); }
   .sv-log { flex:1; min-height:0; position:relative; background:var(--term-bg); }
   @media (max-width:800px) { .jv-body:has(.sv-list) { flex-direction:column; } .sv-list { width:auto; max-height:34vh; border-right:0; border-bottom:1px solid var(--line); } }
+  /* ── Playbooks (src/playbooks.ts): a workspace's recurring chain — the list left (the Services rows), one
+     playbook right; a run waiting for the operator's ONE OK leads, with its PR, head and every gate ── */
+  #dlg-pb { width:100vw; height:100vh; max-width:none; max-height:none; margin:0; border:0; border-radius:0; box-shadow:none; background:var(--bg); }
+  #dlg-pb::backdrop { background:var(--bg); }
+  .pb-chip { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); font-weight:600; }
+  .sv-row .need { color:var(--accent); font-weight:600; }
+  .pb-main { flex:1; min-width:0; overflow-y:auto; padding:16px 20px 28px; display:flex; flex-direction:column; gap:14px; }
+  .pb-h { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .pb-h h3 { margin:0; font-size:18px; }
+  .pb-h .st { color:var(--muted); font-size:13.5px; }
+  .pb-h .sp { flex:1; }
+  .pb-note { color:var(--muted); font-size:13px; line-height:1.5; }
+  .pb-note code { font-size:12.5px; }
+  .pb-err { color:var(--danger); font-size:13.5px; white-space:pre-wrap; }
+  .pb-err:empty { display:none; }
+  .pb-ok { border:1px solid var(--accent); background:var(--accent-soft); border-radius:10px; padding:12px 14px; display:flex; flex-direction:column; gap:8px; font-size:14px; }
+  .pb-ok.moved { border-color:var(--warn); background:var(--warn-soft); }
+  .pb-ok b { color:var(--ink); }
+  .pb-ok .row, .pb-form .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .pb-steps { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:2px; }
+  .pb-steps li { display:flex; gap:8px; align-items:baseline; padding:5px 8px; border-radius:7px; font-size:14px; }
+  .pb-steps li.gate { background:var(--surface); }
+  .pb-steps .i { color:var(--faint); font-variant-numeric:tabular-nums; min-width:2.2ch; text-align:right; flex:none; }
+  .pb-steps .s { width:1.2em; text-align:center; color:var(--muted); flex:none; }
+  .pb-steps .s.done { color:var(--ok); }
+  .pb-steps .s.failed { color:var(--danger); }
+  .pb-steps .s.active { color:var(--accent); }
+  .pb-steps .t { flex:1; min-width:0; }
+  .pb-steps code { font-size:13px; white-space:pre-wrap; word-break:break-word; color:var(--ink); }
+  .pb-steps .n { color:var(--muted); font-size:12.5px; }
+  .pb-g { font-size:11.5px; font-weight:650; text-transform:uppercase; letter-spacing:.04em; padding:1px 7px; border-radius:999px; border:1px solid var(--accent); color:var(--accent); flex:none; }
+  .pb-form { display:flex; flex-direction:column; gap:8px; }
+  .pb-form input, .pb-form select, .pb-form textarea { font:inherit; font-size:14px; padding:6px 9px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+  .pb-form textarea { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:13px; min-height:220px; resize:vertical; }
+  .pb-runs { display:flex; flex-direction:column; gap:3px; font-size:13.5px; color:var(--muted); }
+  .pb-runs .r { display:flex; gap:10px; flex-wrap:wrap; }
+  .pb-runs .r b { color:var(--ink); font-weight:600; }
+  .pb-runs .r.failed b, .pb-runs .r.expired b { color:var(--danger); }
   .jv { display:flex; flex-direction:column; height:100%; min-height:0; font-size:14.5px; position:relative; }
   .jv-bar { display:flex; align-items:center; gap:10px; padding:0 16px; height:52px; flex:none; background:var(--surface); border-bottom:1px solid var(--line); white-space:nowrap; }
   .jv-bar .back { border:0; background:none; color:var(--muted); font-size:14.5px; padding:4px 8px; border-radius:7px; }
@@ -1678,6 +1716,7 @@
   <div class="counts" id="counts"></div>
   <span class="sp"></span>
   <button class="mchip svc-chip" id="svc-chip" hidden></button>
+  <button class="mchip pb-chip" id="pb-chip" hidden></button>
   <button class="mchip" id="mac" hidden></button>
   <div class="usage" id="usage" title="Subscription usage — click for every profile and window"></div>
   <div class="tools">
@@ -1795,6 +1834,7 @@
   <div class="sep"></div>
   <button id="btn-jobs">⏱ Jobs</button>
   <button id="btn-services">◉ Services</button>
+  <button id="btn-playbooks">▶ Playbooks</button>
   <button id="btn-hosts">🖥 Computers</button>
   <button id="btn-phone">📱 Phone</button>
   <button id="btn-briefs">📋 Briefs</button>
@@ -2098,6 +2138,25 @@
   </div>
 </dialog>
 
+<!-- Playbooks (src/playbooks.ts): a workspace's recurring chain that runs on ONE OK. Left: every playbook
+     and whether a run waits for you. Right: the one picked — a run waiting for your OK first (its PR, the
+     head SHA and every gate it will pass), then its steps, Run / Edit, and its runs. -->
+<dialog id="dlg-pb">
+  <div class="jv">
+    <header class="jv-bar">
+      <button class="back" id="pb-close" title="Back to the Desk (esc)">‹ Desk</button>
+      <h2>Playbooks</h2>
+      <button class="btn" id="pb-new">+ New</button>
+      <span class="sp"></span>
+      <span class="sv-hint">One OK runs the whole chain · from a terminal that just did it: <code>mc playbook save &lt;name&gt; --from-session</code></span>
+    </header>
+    <div class="jv-body">
+      <section class="sv-list" id="pb-list"></section>
+      <section class="pb-main" id="pb-main"></section>
+    </div>
+  </div>
+</dialog>
+
 <!-- Computers (HOSTS.md): every Mac that runs agents for this Desk. Left: this Mac first, then each
      joined computer with its state. Right: one computer — vitals, which clients may run there, what
      it has installed and cloned — or "+ Add": a one-time code and the one command to paste. -->
@@ -2220,8 +2279,8 @@ const qsa = (s, r = document) => [...r.querySelectorAll(s)];
 const LOCK = DeskScope.get();
 const api = (p, opts) => {
   const headers = { "content-type": "application/json", ...(TOKEN ? { "x-mc-admin": TOKEN } : {}), ...(opts?.headers || {}) };
-  // Closing a terminal is operator-only: this header is the Desk's hand (src/authz.ts).
-  if (/\/(?:sessions\/[^/]+\/kill|desk\/close-done)$/.test(String(p).split("?")[0])) headers["x-mc-operator"] = "1";
+  // Closing a terminal and a playbook run's OK are operator-only: this header is the Desk's hand (src/authz.ts).
+  if (/\/(?:sessions\/[^/]+\/kill|desk\/close-done|playbook-runs\/[^/]+\/ok)$/.test(String(p).split("?")[0])) headers["x-mc-operator"] = "1";
   return fetch("/api" + p, {
   ...opts,
   headers,
@@ -6529,6 +6588,7 @@ qs("#keys-close").onclick = () => qs("#dlg-keys").close();
 async function openFromHash() {
   if (location.hash === "#jobs") return openJobs();
   if (location.hash === "#services") return openServices();
+  if (location.hash === "#playbooks") return openPlaybooks();
   if (location.hash === "#settings") return openSettings();
   const m = /#reopen=([0-9a-f-]{8,})/.exec(location.hash);
   if (!m) return;
@@ -7523,6 +7583,172 @@ function onServiceEvent(e) {
   onServiceEvent.t = setTimeout(loadServices, 300);
 }
 loadServices();
+// ── ▶ Playbooks (src/playbooks.ts) ──────────────────────────────────────────────────────────────────
+// A workspace's recurring chain (merge → release → deploy → publish → a draft) that runs on ONE OK. The
+// bar chip says a run waits for that OK; the page leads with it — the PR, the head SHA and every gate —
+// and its button is the operator's hand (api() adds x-mc-operator on /playbook-runs/:id/ok). The OK
+// sends back exactly what it showed; the daemon refuses it if the head or the gates are not those now.
+const PB = { list: [], sel: null, d: null, mode: null, err: null, busy: false };
+const pbDlg = qs("#dlg-pb");
+const PB_STATE = { awaiting_ok: "waits for your OK", running: "running", needs_ok: "needs your OK again", done: "done", failed: "failed", stopped: "stopped", expired: "expired" };
+const PB_ICON = { todo: "○", active: "▶", done: "✔", failed: "✖", skipped: "–" };
+const pbNeeds = (p) => !!p.last_run?.needs_ok;
+const pbPr = (r) => (r.pr_url ? r.pr_url.replace(/^https:\/\/github\.com\//, "").replace("/pull/", "#") : null);
+const pbLive = (d) => (d?.runs || []).find((r) => r.state === "awaiting_ok" || r.state === "running" || r.state === "needs_ok") || null;
+// api() keeps 200 characters of an error body: pull the message out of a cut-off JSON one.
+function pbErr(e) {
+  const m = errMsg(e);
+  const j = /^\{"error":"((?:[^"\\]|\\.)*)/.exec(m || "");
+  if (!j) return m;
+  try { return JSON.parse(`"${j[1]}"`) + (m.endsWith("}") ? "" : "…"); } catch { return j[1]; }
+}
+async function loadPlaybooks() {
+  try { PB.list = await api("/playbooks"); } catch { return; }
+  renderPbChip();
+  if (pbDlg.open) renderPbList();
+}
+function renderPbChip() {
+  const el = qs("#pb-chip"), need = PB.list.filter(pbNeeds);
+  el.hidden = !need.length;
+  if (!need.length) return;
+  el.textContent = need.length === 1 ? `▶ ${need[0].name} needs your OK` : `▶ ${need.length} playbooks need your OK`;
+  el.title = "A playbook run waits for your one OK — click to see its PR, its head and every gate it covers";
+}
+async function openPlaybooks(id) {
+  if (!pbDlg.open) pbDlg.showModal();
+  if (location.hash !== "#playbooks") history.replaceState(null, "", "#playbooks");
+  await loadPlaybooks();
+  PB.sel = id || PB.sel || PB.list.find(pbNeeds)?.id || PB.list[0]?.id || null;
+  PB.mode = null; PB.err = null;
+  renderPbList();
+  await loadPb();
+}
+pbDlg.addEventListener("close", () => { if (location.hash === "#playbooks") history.replaceState(null, "", location.pathname); });
+qs("#pb-close").onclick = () => pbDlg.close();
+qs("#btn-playbooks").onclick = () => openPlaybooks();
+qs("#pb-chip").onclick = () => openPlaybooks(PB.list.find(pbNeeds)?.id);
+qs("#pb-new").onclick = () => { PB.sel = null; PB.d = null; PB.mode = "new"; PB.err = null; renderPbList(); renderPb(); };
+function renderPbList() {
+  qs("#pb-list").innerHTML = PB.list.length ? PB.list.map((p) => {
+    const r = p.last_run;
+    const meta = pbNeeds(p) ? `<span class="need">${esc(PB_STATE[r.state])}</span>` : r ? `last run ${esc(PB_STATE[r.state] || r.state)}` : `${p.steps.length} steps`;
+    return `<div class="sv-row${p.id === PB.sel ? " on" : ""}" data-pb="${esc(p.id)}"><div class="t"><div class="n">${esc(p.name)}</div>
+      <div class="m"><span class="sw">${wsDot(p.workspace_id)}${esc(wsLabel(p.workspace_id))}</span> · ${meta}${p.reviewed ? "" : " · draft"}</div></div></div>`;
+  }).join("")
+    : `<div class="sv-empty">No playbooks yet. A playbook is a chain a terminal keeps doing by hand — merge, release, deploy, publish, a draft saying it is live — that then runs on one OK.<br><br>From the terminal that just did it: <code>mc playbook save &lt;name&gt; --from-session</code></div>`;
+}
+async function loadPb() {
+  if (!PB.sel) { PB.d = null; return renderPb(); }
+  try { PB.d = await api(`/playbooks/${PB.sel}`); } catch (e) { if (e.status === 404) { PB.sel = null; PB.d = null; } }
+  renderPb();
+}
+function pbStep(s) {
+  const what = s.kind === "agent" ? esc(s.run) : s.kind === "message" ? `${esc(s.label)}: <span class="n">${esc(s.run)}</span>` : `<code>${esc(s.run)}</code>`;
+  const note = s.note ? ` <span class="n">— ${esc(s.note)}</span>` : s.carried ? ` <span class="n">— the daemon carries it out</span>` : "";
+  return `<li class="${s.gate ? "gate" : ""}"><span class="i">${s.idx}</span>${s.status ? `<span class="s ${esc(s.status)}">${PB_ICON[s.status] || ""}</span>` : ""}${s.gate ? `<span class="pb-g">${esc(s.gate)}</span>` : ""}<span class="t">${what}${note}</span></li>`;
+}
+function pbOkCard(r) {
+  const pr = pbPr(r);
+  return `<div class="pb-ok${r.state === "needs_ok" ? " moved" : ""}">
+    <div><b>Run ${esc(r.id.slice(0, 8))} ${r.state === "needs_ok" ? "stopped — it needs your OK again" : "waits for your OK"}</b>${r.reason ? ` · ${esc(r.reason)}` : ""}</div>
+    <div>${pr ? `Target: <a href="${esc(r.pr_url)}" target="_blank" rel="noopener">${esc(pr)}</a> at head <code>${esc(String(r.head_sha || "").slice(0, 7))}</code>` : "No PR: it acts on nothing but its steps."}</div>
+    <div>${r.gates.length ? `This OK covers ${r.gates.length === 1 ? "this gate" : `these ${r.gates.length} gates`} and nothing else:` : "No gates in this run."}</div>
+    ${r.gates.length ? `<ul class="pb-steps">${r.gates.map(pbStep).join("")}</ul>` : ""}
+    <div class="row"><button class="btn primary" data-pba="ok" ${PB.busy ? "disabled" : ""}>OK — run it</button><button class="btn" data-pba="stop" ${PB.busy ? "disabled" : ""}>Not now</button>
+      <span class="pb-note">${r.progress.total} step${r.progress.total === 1 ? "" : "s"} · it stops at the first failure and asks you · never re-run on its own</span></div>
+  </div>`;
+}
+function renderPb() {
+  const main = qs("#pb-main"), d = PB.d;
+  if (PB.mode === "new" || (PB.mode === "edit" && d)) return renderPbEdit();
+  if (!d) { main.innerHTML = ""; return; }
+  const live = pbLive(d);
+  const steps = live && live.state !== "awaiting_ok" ? live.steps : d.steps;
+  const runForm = PB.mode === "run" ? `<div class="pb-form">
+      ${d.needs_pr ? `<input id="pb-pr" placeholder="the PR it runs on — https://github.com/<owner>/<repo>/pull/<n>" autocomplete="off">` : ""}
+      <label class="pb-note">From step <select id="pb-from">${d.steps.map((s) => `<option value="${s.idx}">${s.idx}. ${esc(s.label.slice(0, 70))}</option>`).join("")}</select></label>
+      <div class="row"><button class="btn primary" data-pba="ask" ${PB.busy ? "disabled" : ""}>Show me the OK</button><button class="btn ghost" data-pba="cancel">Cancel</button></div>
+    </div>` : "";
+  main.innerHTML = `
+    <div class="pb-h"><h3>${esc(d.name)}</h3><span class="st">${esc(wsLabel(d.workspace_id))}${d.description ? ` · ${esc(d.description)}` : ""}</span><span class="sp"></span>
+      ${live || PB.mode === "run" ? "" : `<button class="btn" data-pba="run">Run…</button>`}<button class="btn" data-pba="edit">Edit</button></div>
+    ${d.reviewed ? "" : `<div class="pb-note">A draft${d.source === "session" ? " from what a terminal ran" : ""} — read its steps before the first run; Edit changes them.</div>`}
+    ${PB.err ? `<div class="pb-err">${esc(PB.err)}</div>` : ""}
+    ${live && live.needs_ok ? pbOkCard(live) : ""}
+    ${runForm}
+    <ul class="pb-steps">${steps.map(pbStep).join("")}</ul>
+    ${d.runs?.length ? `<div class="pb-runs">${d.runs.map((r) => `<div class="r ${esc(r.state)}"><b>${esc(PB_STATE[r.state] || r.state)}</b><span>${esc(r.id.slice(0, 8))}</span><span>${r.progress.done}/${r.progress.total}</span>${pbPr(r) ? `<span>${esc(pbPr(r))}</span>` : ""}<span>${esc(new Date(r.created_at).toLocaleString())}</span>${r.reason && r.state !== "running" ? `<span>${esc(r.reason)}</span>` : ""}</div>`).join("")}</div>` : ""}`;
+}
+function renderPbEdit() {
+  const d = PB.mode === "edit" ? PB.d : null;
+  const wss = S.workspaces || [];
+  qs("#pb-main").innerHTML = `<div class="pb-form">
+    <div class="pb-h"><h3>${d ? `Edit ${esc(d.name)}` : "New playbook"}</h3><span class="sp"></span>${d ? `<button class="btn ghost" data-pba="delete">Delete</button>` : ""}</div>
+    ${d ? "" : `<input id="pb-name" placeholder="name — lowercase, e.g. release" autocomplete="off">
+      ${wss.length > 1 ? `<select id="pb-ws">${wss.map((w) => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join("")}</select>` : ""}`}
+    <input id="pb-desc" placeholder="what it is for (optional)" value="${esc(d?.description || "")}">
+    <textarea id="pb-text" spellcheck="false" placeholder="[merge] gh pr merge {{pr}} --squash&#10;cd ~/work/tool &amp;&amp; make release&#10;[release] ./scripts/upload.sh dist/tool.zip&#10;mc service deploy bot&#10;[publish] agent: rebuild the data page and republish it&#10;message slack @requester: It is live.">${esc(d?.text || "")}</textarea>
+    <div class="pb-note">One step a line: a command · <code>mc …</code> · <code>agent: …</code> for an instruction · <code>[merge|deploy|publish|release]</code> marks a gate (merges, service deploys, publishes and uploads are gates anyway) · last, maybe, <code>message slack|email &lt;to&gt;: &lt;text&gt;</code> — always a draft, never sent. Templates: <code>{{pr}}</code> <code>{{sha}}</code> <code>{{pr_number}}</code> <code>{{repo}}</code>. A line indented two spaces continues the one above.</div>
+    <div class="pb-err" id="pb-edit-err"></div>
+    <div class="row"><button class="btn primary" data-pba="save">Save</button><button class="btn ghost" data-pba="cancel">Cancel</button></div>
+  </div>`;
+}
+qs("#pb-list").addEventListener("click", (e) => {
+  const r = e.target.closest("[data-pb]");
+  if (!r) return;
+  PB.sel = r.dataset.pb; PB.mode = null; PB.err = null;
+  renderPbList(); loadPb();
+});
+qs("#pb-main").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-pba]");
+  if (!b || PB.busy) return;
+  const a = b.dataset.pba, d = PB.d, live = pbLive(d);
+  if (a === "run" || a === "edit") { PB.mode = a; PB.err = null; return renderPb(); }
+  if (a === "cancel") { PB.mode = null; PB.err = null; PB.sel = PB.sel || PB.list[0]?.id || null; renderPbList(); return loadPb(); }
+  if (a === "delete" && !confirm(`Delete the playbook ${d.name}? Its runs go with it.`)) return;
+  PB.busy = true; PB.err = null; b.disabled = true;
+  try {
+    if (a === "ask") {
+      const body = { from: Number(qs("#pb-from")?.value || 1) };
+      const pr = qs("#pb-pr")?.value.trim();
+      if (pr) body.pr = pr;
+      await api(`/playbooks/${d.id}/runs`, { method: "POST", body: JSON.stringify(body) });
+      PB.mode = null;
+    } else if (a === "ok") {
+      // Exactly what he was shown: the head SHA and every gate. Anything else is refused by the daemon.
+      const r = await api(`/playbook-runs/${live.id}/ok`, { method: "POST", body: JSON.stringify({ sha: live.head_sha, gates: live.gates.map((g) => g.idx), surface: "desk" }) });
+      toast(`▶ ${d.name}: running${r.session_id ? " — its terminal is open" : ""}`);
+    } else if (a === "stop") {
+      await api(`/playbook-runs/${live.id}/stop`, { method: "POST", body: JSON.stringify({ reason: "not now, on the Desk" }) });
+    } else if (a === "save") {
+      const text = qs("#pb-text").value, description = qs("#pb-desc").value.trim() || null;
+      if (PB.mode === "new") {
+        const p = await api("/playbooks", { method: "POST", body: JSON.stringify({ workspace: qs("#pb-ws")?.value || S.workspaces?.[0]?.id, name: qs("#pb-name").value.trim(), text, description }) });
+        PB.sel = p.id;
+      } else await api(`/playbooks/${d.id}`, { method: "PATCH", body: JSON.stringify({ text, description }) });
+      PB.mode = null;
+    } else if (a === "delete") {
+      await api(`/playbooks/${d.id}`, { method: "DELETE" });
+      PB.sel = null; PB.mode = null;
+    }
+  } catch (err) {
+    PB.busy = false; b.disabled = false;
+    // A refused save keeps what he typed: say why under the box, redraw nothing.
+    if (a === "save") return void (qs("#pb-edit-err").textContent = pbErr(err));
+    PB.err = pbErr(err);
+  }
+  PB.busy = false;
+  await loadPlaybooks();
+  await loadPb();
+});
+function onPlaybookEvent(e) {
+  if (e.state === "failed" && e.step_status === "failed") toast(`▶ ${e.name}: stopped — ${e.reason || "a step failed"}`);
+  else if (e.state === "needs_ok") toast(`▶ ${e.name}: the PR moved — it needs your OK again`);
+  else if (e.state === "awaiting_ok" && !e.step) toast(`▶ ${e.name}: a run waits for your OK`);
+  clearTimeout(onPlaybookEvent.t);
+  onPlaybookEvent.t = setTimeout(async () => { await loadPlaybooks(); if (pbDlg.open && !PB.mode) await loadPb(); }, 300);
+}
+loadPlaybooks();
 // ── ⚙ Settings (src/settings.ts) ─────────────────────────────────────────────────────────────────
 // One page for every knob: "All workspaces" is the global level, a workspace chip shows what that
 // workspace runs with and lets it differ. Every control saves on change; "reset" drops back to what
@@ -9107,7 +9333,7 @@ const BUS_TOPICS = [
   "host.online", "host.offline", "host.updated", "host.inventory",
   "ask.created", "ask.answered",
   "artifact.created", "artifact.updated", "artifact.event",
-  "service.changed", "service.alarm", "alert.raised",
+  "service.changed", "service.alarm", "alert.raised", "playbook.run",
   "inbox.updated", "settings.changed",
 ].join(",");
 function connectBus() {
@@ -9262,6 +9488,7 @@ function connectBus() {
     if (e.topic === "launch.updated" || e.topic === "launch.ran") loadSoon();
     if (e.topic === "run.started" || e.topic === "run.ended" || e.topic === "job.updated") onJobEvent(e);
     if (e.topic === "service.changed" || e.topic === "service.alarm") onServiceEvent(e);
+    if (e.topic === "playbook.run") onPlaybookEvent(e);
   };
   ws.onclose = () => setTimeout(connectBus, 2500);
 }

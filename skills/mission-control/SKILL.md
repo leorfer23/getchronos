@@ -399,6 +399,25 @@ restarting or deploying one is the operator's: when a change you made needs a re
 say so in your hand-off (`mc service restart <name>` / `mc service deploy <name>`). **Never kill a
 service's process yourself.** The daemon would start it again, and that is a restart nobody asked for.
 
+## A chain you keep doing — `mc playbook`
+
+When the same multi-step chain comes back (merge the PR → build and upload a release → deploy a
+service → republish a page → a draft saying it is live), make it a **playbook**: it then runs on ONE
+operator OK instead of one approval per step.
+
+- **Save it** from the terminal that just did it: `mc playbook save <name> --from-session` drafts the
+  steps from what you ran (from the first merge on; looks and `mc` bookkeeping left out, the PR and its
+  head as `{{pr}}` / `{{sha}}`). Read what it printed; the operator reviews it. Or write it:
+  `mc playbook save <name> --file steps.txt` — one step a line (`mc playbook --help` has the format).
+- **Ask for a run**: `mc playbook run <name> --pr <url>` (add `--here` to run it in this terminal). It
+  waits for his OK on the Desk, which names the PR, its head SHA and every gate — nothing runs before.
+- **If you are the run's terminal**, follow its brief exactly (`mc playbook brief`): for each step,
+  `mc playbook step <n> start`, do exactly that step, then `mc playbook step <n> done` — or
+  `mc playbook step <n> fail "<what failed>"` and stop. A refused `start` means stop: do nothing more
+  for that run. Never retry, skip or work around a step; the daemon asks the operator. A
+  `mc service deploy|restart` step is carried out by the daemon when you start it. The final message
+  is always a draft.
+
 ## A workspace VPN — `mc vpn`
 
 Some workspaces reach their private hosts (databases, internal APIs) only over a VPN the operator
