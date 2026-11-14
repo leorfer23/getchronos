@@ -293,7 +293,10 @@ export function validateSteps(ws: Workspace, steps: PlaybookStep[]): string[] {
     }
     for (const t of cdTargets(run)) {
       const p = expandHome(t);
-      if (!path.isAbsolute(p)) continue;
+      if (!path.isAbsolute(p)) {
+        if (t.split("/").includes("..")) errors.push(`${at}: \`cd ${t}\` climbs out with .. — name the place by its path in this workspace`);
+        continue;
+      }
       if (!roots.some((r) => isUnder(p, r))) errors.push(`${at}: \`cd ${t}\` is outside this workspace's repos and services`);
     }
     for (const p of pathsIn(run)) {
@@ -930,6 +933,7 @@ export async function startStep(run: PlaybookRun, n: number, nowMs = Date.now())
   if (before) return fail(409, `step ${before.idx} comes first (it is ${before.status})`);
   if (step.status === "done") return fail(409, `step ${n} is already done`);
   const svc = serviceAction(step);
+  if (svc && !step.gate) return fail(403, `step ${n} deploys a service but is not a gate the OK named — stop`, { stop: true });
   const t = targetOf(r);
   if (step.status === "active") {
     // A daemon-carried step still active means the carry-out never finished (a daemon restart): it is
@@ -966,8 +970,13 @@ export async function startStep(run: PlaybookRun, n: number, nowMs = Date.now())
       }
     }
   }
+  // Claimed here, with no await between this read and the write: two `start`s racing across the PR
+  // read above cannot both pass — and a deploy is never carried out twice.
+  const now = playbookRuns.get(r.id);
+  if (!now || now.state !== "running") return stateRefusal(now ?? r);
+  if (now.steps.find((s) => s.idx === n)?.status !== "todo") return fail(409, `step ${n} was started already`);
   const ran = step.kind === "shell" || step.kind === "mc" ? renderRun(step, t) : null;
-  const started = setStep(r, n, { status: "active", started_at: iso(nowMs), ran });
+  const started = setStep(now, n, { status: "active", started_at: iso(nowMs), ran });
   if (!started) return stateRefusal(playbookRuns.get(r.id) ?? r);
   r = started;
   publish(r, { step: n, step_status: "active" });

@@ -140,6 +140,7 @@ test("a step never reaches outside its workspace: a cd elsewhere, another worksp
     { kind: "mc", run: "mc service add x --command y", gate: null },
     { kind: "agent", run: "merge the PR", gate: "merge" },
     { kind: "shell", run: "echo {{token}}", gate: null },
+    { kind: "shell", run: "cd ../../elsewhere && make", gate: null },
   ];
   const errors = P.validateSteps(A, P.normalizeSteps(bad));
   const has = (re: RegExp) => assert.ok(errors.some((e) => re.test(e)), `${re} in:\n${errors.join("\n")}`);
@@ -151,6 +152,7 @@ test("a step never reaches outside its workspace: a cd elsewhere, another worksp
   has(/step 6: a playbook deploys or restarts one of this workspace's services/);
   has(/step 7: a merge is the command itself/);
   has(/step 8: \{\{token\}\} is not a template/);
+  has(/step 9: `cd \.\.\/\.\.\/elsewhere` climbs out with \.\./);
   // A message is the last step, and there is one at most.
   const msgs = P.validateSteps(A, [
     { kind: "message", run: "hi", to: "x", channel: "slack", gate: null },
@@ -398,6 +400,12 @@ test("the step the agent cannot do itself — its workspace's service — is car
   const r = reload(run.id);
   assert.equal(r.steps[3].status, "done");
   assert.ok(!P.finishStep(r, 4, "done", "x").ok, "its result is the daemon's to record");
+  // Two starts racing across the PR read cannot both carry it out.
+  const twice = await okd(chainPlaybook(), { from: 4 });
+  carried.length = 0;
+  const [a, b] = await Promise.all([P.startStep(twice, 4), P.startStep(twice, 4)]);
+  assert.equal(carried.length, 1, "deployed once");
+  assert.equal([a, b].filter((x) => x.ok).length, 1, JSON.stringify([a, b]));
   // A deploy that fails stops the run and asks, like any step.
   serviceFails = "git fetch origin main failed";
   try {
