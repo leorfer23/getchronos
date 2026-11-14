@@ -15,6 +15,7 @@ import { kb, type Btn } from "./telegram/keyboards.js";
 import { maybeHygiene, reapEphemeralJobs } from "./hygiene.js";
 import { maybeDream } from "./dream.js";
 import { maybeLearnProse } from "./prose.js";
+import { maybeLearnStyle } from "./house-style.js";
 import { maybeExpireIdeas, maybeMineIdeas } from "./ideas.js";
 import { pollDeliveries } from "./delivery.js";
 import { harvestSessionPrs, pollSessionPrs } from "./terminal-automerge.js";
@@ -603,6 +604,7 @@ export function startMonitor() {
       await maybeHygiene();
       await maybeDream();
       maybeLearnProse();
+      maybeLearnStyle();
       reapEphemeralJobs();
       maybeExpireIdeas();
       await maybeMineIdeas();

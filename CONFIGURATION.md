@@ -725,6 +725,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_CONNECTOR_SYNC_MIN` | `30` | `src/config.ts` |
 | `CHRONOS_CONNECTOR_SYNC_RETAIN` | `2000` | `src/config.ts` |
 | `CHRONOS_CRON_CATCHUP_HOURS` | `24` | `src/config.ts` |
+| `CHRONOS_CRITIC_DIR` | `~/.mc/critic` (one subdir per workspace, denied to every other workspace) | `src/repo-root.ts` |
 | `CHRONOS_CURSOR_BIN` | `"cursor-agent"` | `src/config.ts` |
 | `CHRONOS_DAILY_BUDGET` | `0` | `src/config.ts` |
 | `CHRONOS_DAY_HEARTBEAT` | `"1"` | `src/config.ts` |
@@ -899,6 +900,8 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_TERMINAL_FAILOVER_TYPING_SEC` | `20` | `src/config.ts` |
 | `CHRONOS_STUCK_RUN_HRS` | `2` | `src/config.ts` |
 | `CHRONOS_STUCK_SESSION_HRS` | `8` | `src/config.ts` |
+| `CHRONOS_STYLE_LEARN` | on (`0` = the house style page is rewritten only by `mc style learn`) | `src/house-style.ts` |
+| `CHRONOS_STYLE_MODEL` | `CHRONOS_PROSE_MODEL` (`opus`) | `src/house-style.ts` |
 | `CHRONOS_TERM_INPUT_MAX` | `12` | `src/terminal.ts` |
 | `CHRONOS_TERM_QUIET_MS` | `6000` | `src/terminal.ts` |
 | `CHRONOS_TERM_SCROLLBACK` | `500` | `src/term-screen.ts` |
@@ -939,6 +942,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_WHISPER_PORT` | `7778` | `scripts/install-launchd.mjs`, `src/voice-setup.ts` |
 | `CHRONOS_TTS_URL` | `"http://127.0.0.1:7779"` (Kokoro, `scripts/tts-server.py`); `off` = `say` only | `src/speak.ts` |
 | `CHRONOS_VAPID_FILE` | `path.join` | `src/push.ts` |
+| `CHRONOS_VERIFIER_CRITIC` | on (`0` = the visual critic is off by default; per workspace in ⚙ Settings → Safety) | `src/visual-critic.ts` |
 | `CHRONOS_VERIFY_MODE` | `"enforce"` | `src/config.ts` |
 | `CHRONOS_VOICE_EN` | best installed male voice, else `"Zoe (Premium)"` | `src/speak.ts` |
 | `CHRONOS_VOICE_ES` | best installed male voice, else `"Marisol (Premium)"` | `src/speak.ts` |

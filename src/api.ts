@@ -209,6 +209,7 @@ import { mountVpnRoutes } from "./vpn-routes.js";
 import { mountServiceRoutes } from "./service-routes.js";
 import { mountAlertRoutes } from "./alert-routes.js";
 import { mountCaptureRoutes } from "./capture-routes.js";
+import { mountStyleRoutes } from "./style-routes.js";
 import { procsView } from "./resources/brain.js";
 import { hostById, LOCAL_HOST_ID } from "./hosts/index.js";
 import { hostName, reposOnHost } from "./hosts/workdir.js";
@@ -2424,6 +2425,8 @@ export function startServer() {
   mountVpnRoutes(api);
   // Services: always-on processes the daemon keeps running (src/services.ts, SERVICES.md).
   mountServiceRoutes(api);
+  // House style per workspace (`mc style`) and what the visual critic rendered (src/house-style.ts, src/visual-critic.ts).
+  mountStyleRoutes(api);
   // Stuck-work alerts: the record, acknowledgements, and which voice calls are live (src/stuck-alerts.ts).
   mountAlertRoutes(api);
   // "Send to Chronos" — the Mac bar (desktop/app.swift → static/bar.html, src/capture.ts).

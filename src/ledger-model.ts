@@ -71,7 +71,7 @@ export const FINAL_DELIVERABLE: ReadonlySet<DeliverableState> = new Set<Delivera
 export const CHECK_NAMES = [
   "tests", "regression", "pr_ready", "matches_request", "shots", "walkthrough",
   "queries", "crosscheck", "assumptions", "exercised", "repro_steps",
-  "repro_before", "fixed_after", "post_deploy", "goal_test", "draft_bound",
+  "repro_before", "fixed_after", "post_deploy", "goal_test", "draft_bound", "visual",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
 /** `na` = the slot does not apply to this answer (an analysis that states no figures): never a pass, never missing. */
@@ -110,6 +110,11 @@ const TESTS: ExpectedCheck = { name: "tests", required: true, what: "the repo's 
 const PR_READY: ExpectedCheck = { name: "pr_ready", required: true, gate: true, what: "the PR exists, is open, mergeable and up to date with its base" };
 const MATCHES: ExpectedCheck = { name: "matches_request", required: true, gate: true, what: "a reader that did not write it says the change does what was asked" };
 const DRAFT_BOUND: ExpectedCheck = { name: "draft_bound", required: true, gate: true, what: "the words, recipient and channel he hears are the ones a yes is bound to" };
+/**
+ * The visual critic (visual-critic.ts), on a hand-off that delivered a page, a dashboard or a document:
+ * not required — a hand-off with nothing visual has nothing to miss — but a fail is a fail.
+ */
+const VISUAL: ExpectedCheck = { name: "visual", required: false, what: "a critic that did not make it saw it rendered at desktop and phone width and read it against the workspace's house style" };
 
 /**
  * A request's work type IS a terminal's goal kind (types.ts GoalKind) — one vocabulary, set where it
@@ -214,8 +219,8 @@ export function slotsFor(kind: GoalKind | null | undefined, deliverable: Deliver
   }
   if (deliverable === "slack_draft" || deliverable === "email_draft") return [DRAFT_BOUND, MATCHES];
   if (deliverable === "deploy") return [];
-  if (k === "investigation" || k === "qa") return WORK[k].evidence;
-  return [MATCHES];
+  if (k === "investigation" || k === "qa") return [...WORK[k].evidence, VISUAL];
+  return [MATCHES, VISUAL];
 }
 
 /** One slot as the newest current check left it (`expectedChecks` over the checks for this target). */
