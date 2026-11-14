@@ -56,6 +56,7 @@ import { operatorNotes, repoMemoryFor } from "./repo-memory.js";
 import { requests, type DecisionItem, type Deliverable, type RequestRow, type VerificationRow } from "./store/requests.js";
 import { FINAL_DELIVERABLE, draftHash, slotsFor, type CheckName, type Evidence } from "./ledger-model.js";
 import { itemReadiness } from "./ledger.js";
+import { critiqueHandoff } from "./visual-critic.js";
 import {
   MAX_ROUNDS, answerFigures, judgeAspects, judgeGoalTest, judgePr, judgeShots, judgeWalkthrough, parseReview, pickReviewer, reviewerPrompt, tellLine,
   type CheckResult, type PrView, type ReviewInput, type ReviewVerdict,
@@ -461,6 +462,15 @@ async function runPass(r: RequestRow, ws: Workspace, targets: Target[]): Promise
     }
   }
 
+  // The visual critic (visual-critic.ts): a page, dashboard or document this hand-off delivered, rendered at
+  // desktop and phone width and read against the workspace's house style — beside the second reader, not after it.
+  // Its fixes are `tellable` like any other check: they ride these rounds, never a loop of their own.
+  const looked = unique.filter(({ d }) => d.kind === "answer" || d.kind === "artifact" || d.kind === "doc" || d.kind === "dashboard");
+  // Each hand-off leaves its own open item: judge the newest one, whatever order the items come in.
+  const newest = [...looked].sort((a, b) => (b.d.source_at ?? "").localeCompare(a.d.source_at ?? ""))[0];
+  const author = newest ? terminalFor(r, newest.d) : undefined;
+  const visual = newest ? critiqueHandoff({ request: r, ws, session: author ?? null, outcome: outcomeFor(author, newest.d) }) : Promise.resolve(null);
+
   // The second reader, once for the whole hand-off, on every deliverable that a reader can judge.
   const readable = unique.filter(({ d }) => d.kind !== "deploy" && results.get(d.id)?.every((c) => !c.note.startsWith("not read:")) !== false);
   if (readable.length) {
@@ -506,6 +516,9 @@ async function runPass(r: RequestRow, ws: Workspace, targets: Target[]): Promise
   }
 
   await Promise.all(codeReviewing);
+  const critique = await visual;
+  if (critique) for (const { d } of looked) push(d, critique);
+
   for (const { d } of unique) write(r, d, results.get(d.id) ?? [], at);
   return { tellable };
 }

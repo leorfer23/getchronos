@@ -258,6 +258,11 @@ mc outcome clear       # drop it (a new `mc outcome` replaces the last one anywa
   head; a second model reads the diff against what he asked; backend work needs a test in the diff. A fail
   is typed back into you as `[verifier] Not ready…` — fix it, push, and file `mc outcome` again (two rounds,
   then it goes to him as not ready).
+- **The visual critic**: a hand-off that delivers a page (`mc artifact`), a dashboard or a document is
+  rendered at desktop and phone width in the shared browser and read against the workspace's house style
+  (`mc style`). Its fixes — including charts to **remove** — come back in the same rounds;
+  `mc style critique` prints the full list and the renders it looked at. Behind a login the shared browser
+  does not have (Hex, Looker, a private doc)? Attach `--shot <name>-desktop=a.png --shot <name>-phone=b.png`.
 - **Code review findings** (`code_review: R1 … R2 …`): another engine read your full diff against the repo's
   review memory. Fix each (push) or justify it, and put one line per finding on the new hand-off:
   `--proof "R1 fixed: <how>"` · `--proof "R2 justified: <why>"`. A pushed head is read again; a "fixed"
@@ -758,6 +763,25 @@ mc prose add --channel jira --draft "<your draft>" "<what he sent instead>"   # 
 - **He rewrote your draft? Save the pair** with `--draft`. That gap is the best lesson there is.
 - Only his own words go in — never your draft alone, never a colleague's message, never Chronos output.
 - The guide (memo `prose-guide`) re-learns by itself once enough new samples land; `mc prose learn` forces it.
+
+## Dashboards, reports and pages — `mc style`
+
+Quality over quantity: fewer charts, each one earning its place, the story first. Each workspace has a
+house style — its own (a dataviz or brand skill in its profile, a style guide in its repos) or one Chronos
+keeps for it, refined from what the operator approved and corrected.
+
+```bash
+mc style --kind dashboard        # BEFORE building: the bar, this workspace's own style sources, the house-style page
+mc style --kind report           # …or report / artifact
+mc style add "<what he said>"    # he corrected how it should look: save his words, the page re-learns
+mc style critique                # after a hand-off: the critic's full verdict and what it looked at
+```
+
+- **Headline first**, then drivers, then detail. Titles state the takeaway. One question per chart — cut
+  the rest. Readable at 390 px. Every number traceable to its query.
+- Look at it yourself at desktop and phone width before you hand off (`mc browser run -- …`).
+- The critic runs on every visual hand-off and can send back fixes or ask you to remove charts: do them,
+  then file `mc outcome` again. Two rounds, then it goes to the operator as not ready, with the reason.
 
 ## Slack (when connected)
 

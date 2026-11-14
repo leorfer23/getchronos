@@ -52,6 +52,14 @@ export const resolveNotesDir = (env: NodeJS.ProcessEnv = process.env, root = REP
 export const resolveTicketsDir = (env: NodeJS.ProcessEnv = process.env, root = REPO_ROOT): string =>
   resolveStateDir("tickets", "CHRONOS_TICKETS_DIR", env, root);
 
+/**
+ * What the visual critic rendered (`<dir>/<workspace_id>/<pass>/…png`, src/visual-critic.ts), beside the
+ * hand-off screenshots under ~/.mc. Each workspace's subdir is denied to every other workspace's agents
+ * (store/workspaces.ts isolationDenyDirs). `CHRONOS_CRITIC_DIR` wins.
+ */
+export const resolveCriticDir = (env: NodeJS.ProcessEnv = process.env): string =>
+  resolveStateDir("critic", "CHRONOS_CRITIC_DIR", env, path.join(os.homedir(), ".mc"));
+
 /** Uploaded files (`<dir>/<workspace_id>/<ticket_id>/…`, `<dir>/chat/…`). `CHRONOS_ATTACHMENTS` wins. */
 export const resolveAttachmentsDir = (env: NodeJS.ProcessEnv = process.env, root = REPO_ROOT): string =>
   resolveStateDir("attachments", "CHRONOS_ATTACHMENTS", env, root);

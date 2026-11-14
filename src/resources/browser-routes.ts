@@ -43,9 +43,9 @@ const isRpcHost = (h: unknown): h is RpcHost => typeof (h as RpcHost)?.browserRp
 /**
  * The brain's pool. A lease's contexts go through its workspace's egress proxy when that workspace
  * has one running (the same proxy its agents get in HTTP(S)_PROXY): borrowing the daemon's browser
- * must not be a way around an egress lock.
+ * must not be a way around an egress lock. The visual critic (visual-critic.ts) borrows it the same way.
  */
-const brainPool = () =>
+export const brainPool = () =>
   localBrowserPool((o) => {
     const port = egressPort(o.workspace_id ?? null);
     return port ? `http://127.0.0.1:${port}` : null;
