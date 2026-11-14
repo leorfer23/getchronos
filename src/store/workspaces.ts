@@ -1,9 +1,12 @@
+import fs from "node:fs";
 import path from "node:path";
 import { worktreeRootFor } from "../worktree-core.js";
 import { inRepo, resolveNotesDir } from "../repo-root.js";
 import { randomUUID, randomBytes } from "node:crypto";
 import { db } from "./db.js";
+import { kv } from "./kv.js";
 import { now } from "./util.js";
+import { assignFolders, downloadsRoot, type FolderRow } from "../downloads.js";
 import { mergeConnectorConfigWithSentinel } from "../redact.js";
 import type { NewWorkspace, Workspace } from "../types.js";
 import { parseEnvFile } from "../env-file.js";
@@ -19,6 +22,20 @@ function githubOf(id: string, secretsFile: string | null): { own: boolean; dir: 
   }
   try { Object.assign(env, workspaceVars.active(id)); } catch { /* store hiccup = none */ }
   return { own: hasOwnGithub(env), dir: env.GH_CONFIG_DIR?.trim() ? expandHome(env.GH_CONFIG_DIR) : null };
+}
+
+/** Every folder in the operator's Downloads each workspace was ever given, by workspace id (downloads.ts). */
+const HELD_DOWNLOADS = "downloads.folders";
+function heldDownloads(): Record<string, string[]> {
+  try {
+    const v = JSON.parse(kv.get(HELD_DOWNLOADS) ?? "{}");
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    const out: Record<string, string[]> = {};
+    for (const [id, list] of Object.entries(v)) if (Array.isArray(list)) out[id] = list.filter((f): f is string => typeof f === "string" && !!f);
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 export const workspaces = {
@@ -182,6 +199,34 @@ export const workspaces = {
   remove(id: string): void {
     db.prepare("DELETE FROM workspaces WHERE id = ?").run(id);
   },
+  /** Each workspace's folder in the operator's Downloads, by id (downloads.ts assignFolders). It may not exist yet. */
+  downloadsDirs(): Map<string, string> {
+    const rows = db.prepare("SELECT id, slug, name FROM workspaces ORDER BY created_at, id").all() as FolderRow[];
+    const root = downloadsRoot();
+    return new Map([...assignFolders(rows, heldDownloads())].map(([id, f]) => [id, path.join(root, f)]));
+  },
+  /**
+   * This workspace's folder in the operator's Downloads, created (0700) and recorded as its own for
+   * good, so a later rename never leaves it unwalled. Null when there is no such workspace or the
+   * folder cannot be made — a spawn goes on without it rather than failing.
+   */
+  ensureDownloadsDir(id: string): string | null {
+    const dir = this.downloadsDirs().get(id);
+    if (!dir) return null;
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    } catch (e) {
+      console.warn(`[downloads] cannot create ${dir}: ${String((e as Error)?.message ?? e)}`);
+      return null;
+    }
+    const held = heldDownloads();
+    const name = path.basename(dir);
+    if (!(held[id] ?? []).includes(name)) {
+      held[id] = [...(held[id] ?? []), name];
+      kv.set(HELD_DOWNLOADS, JSON.stringify(held));
+    }
+    return dir;
+  },
   // Filesystem deny-list for a job scoped to `workspaceId`: every OTHER workspace's repo roots
   // + their secrets files. Re-granted cwd/add_dirs still win (sandbox.ts layering). A repo another
   // workspace explicitly shared INTO this one (repo_shares) is not "other" — it is left off, exactly
@@ -235,6 +280,15 @@ export const workspaces = {
     // buildProfile leaves them off the deny list then.)
     if (me?.config_dir && !isDefaultClaudeDir(me.config_dir)) {
       extra.push(ownClaudeConfig(), path.join(defaultClaudeDir(), "backups"), ownCodexHome());
+    }
+    // The operator's Downloads is shared by every workspace (downloads.ts): every other workspace's
+    // folder there, and every folder one was ever given — a workspace renamed since keeps its old one
+    // walled. Denied whether or not it exists yet; the deny also stops anyone creating it first.
+    const dl = this.downloadsDirs();
+    const root = downloadsRoot();
+    for (const [id, dir] of dl) if (id !== workspaceId) extra.push(dir);
+    for (const [id, list] of Object.entries(heldDownloads())) {
+      if (id !== workspaceId) for (const f of list) if (path.join(root, f) !== dl.get(workspaceId)) extra.push(path.join(root, f));
     }
     const worktrees = otherRoots.map((r) => worktreeRootFor(r.p));
     return [...new Set([...otherRoots.map((r) => r.p), ...worktrees, ...otherSecrets.map((r) => r.p), ...extra])];

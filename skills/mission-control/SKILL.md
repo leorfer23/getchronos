@@ -23,6 +23,8 @@ finishes or blocks, and opens the next one himself.
   changing — see `mc worktree` below.
 - `MC_HOST_ID` / `MC_HOST_NAME` / `MC_HOST_BRAIN` — the computer you run on (`local` and `1` = the
   operator's main Mac, the brain). See *Running on another computer* below.
+- `MC_DOWNLOADS` — this workspace's folder in the operator's Downloads: every file for him goes here
+  (see *The hand-off*). Other workspaces' agents are walled out of it. Not set on another computer.
 - **Workspace vars** — tokens, API keys, URLs, IDs the operator set for this workspace. **Need a
   credential or config value? Run `mc vars` FIRST** — before asking the operator, grepping `.env`
   files or declaring yourself blocked. See *Shared vars* below for how to load them safely.
@@ -250,6 +252,13 @@ mc outcome clear       # drop it (a new `mc outcome` replaces the last one anywa
   that, and run `mc outcome --shipped "<what you shipped>"`.
 - Already allowed to ship (`mc goal` says merge/deploy)? Ship, then file the hand-off with
   `--shipped "merged #24" --shipped "deployed"` and `--ask none` (or `deploy` if you may only merge).
+- **Deliver where it was asked.** A file he will send or share (xlsx, csv, pdf, zip, html export, chart
+  png) goes in `$MC_DOWNLOADS` (on another computer: `mc file put` it). A reply to someone is a draft
+  where they asked: a Slack thread or DM → a Slack draft there; an email → an email draft in that
+  thread. When the work came from the operator himself and has no thread to answer in, send him a Slack
+  DM in his self-DM with the summary, paths and links. That DM is the only message you may send. If the
+  send tool is refused, leave the same text as a draft in his self-DM. Name each one on the hand-off:
+  `--change "file: /full/path/report.xlsx"`, `--change "draft: <where it waits>"`, `--change "DM sent"`.
 
 ## Showing images — `mc show`
 
@@ -689,6 +698,7 @@ mc prose add --channel jira --draft "<your draft>" "<what he sent instead>"   # 
 - **You never send — drafts only.** No agent sends an email, Slack message, comment, review or invite,
   ever; the send tools are switched off. Write the draft (`slack_send_message_draft`, Gmail
   `create_draft`, or the text here), then tell the operator where it is (`mc state review "draft ready: …"`).
+  The one exception is the DM to his own self-DM under *The hand-off*.
 - **Short, human, to the point — always, every workspace.** Every Slack draft (DM or
   channel), comment and email: the point in the first line, 1–4 short lines, no preamble, recap, headers,
   bold labels or sign-off. Link the PR/doc instead of pasting it. Reads like a report? Cut it in half.

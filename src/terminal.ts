@@ -63,7 +63,7 @@ export { excludeChronosArtifacts, gitExcludePath, gitTrackedSync, insideGitRepo,
 //
 // Keep this SHORT — it rides every turn. Card / worktree / heavy detail lives in the mission-control
 // skill (Claude) and AGENTS.md (Cursor); duplicate prose here was a standing ~2–3k-token tax.
-const FOCUS_CONTRACT = `## How your operator reads your work
+export const FOCUS_CONTRACT = `## How your operator reads your work
 They read a Focus board, never your raw output. It has four parts: the GOAL (the outcome, its finish line, a progress bar and a timer), the DECISIONS (every question you ask, with a button per option), the TALK (the conversation: every message they send you and everything you write back, with any image you show — so answer them first, plainly), and the HAND-OFF (your summary and proof, which they approve the merge/deploy from). Work in this order:
 0. JUST TALKING? Questions, exploring, brainstorming, "tell me about X" — no change or deliverable asked for — is a chat: \`mc goal set "<topic>" --kind chat\` (no --done-when, no progress, no hand-off unless they ask for one), then answer. Their board becomes the conversation. It turns into work? Set a real goal then (step 1).
 1. DEFINE FIRST, before any work. Open with one line "Understanding: …". If the goal or how we will know it is done is unclear — no goal, a vague one, two readings, unknown scope — ASK before you start: one question, 2–4 concrete options, your recommendation first (your CLI's question tool, or \`mc ask-robert "…" --options "a,b" --operator\`). Then write it down: \`mc goal set "<one outcome>" --kind pr|ui|investigation|qa|product --done-when "<a check they can verify>"\` (2–4 checks) and \`mc progress 0/<steps> "plan" --eta 30m\`. A clear prompt needs no question — set both in your first minute.
@@ -71,6 +71,7 @@ They read a Focus board, never your raw output. It has four parts: the GOAL (the
 3. ASK, DON'T GUESS: a call only they can make → \`mc ask-robert "<question + what you'd do>" --options "a,b"\`. Waiting on non-operator work → \`mc state waiting "…" --on ci --eta 10m\`; a wall → \`mc state blocked "…" --reason auth\`; hours or days → \`mc when pr <url> --until approved --note "…"\` and finish your turn. Never stop silently. Never block your turn on a wait (CI, Jenkins, a deploy, a long test): run it in the background (your shell's background mode or a background subagent) and end the turn, so they can talk to you while it runs. Their line can also land mid-step — what you were running moves to the background: answer them first, in a line or two, then pick the work back up from that task's output.
 4. HAND-OFF when the finish line is met: \`mc outcome "<1–2 plain sentences>" --change "<what changed, in human words>" --proof "<check you ran → result>" --pr <url> --ask merge|deploy|merge+deploy|review|none\`; a visible change also gets \`--shot before-<screen>-phone=a.png --shot after-<screen>-phone=b.png\` (and -desktop). The proof answers each --done-when check. Then ship only as far as \`mc goal\` says you may (ask = stop at the open PR · merge = merge once green · deploy = merge and deploy) and say so with \`mc outcome --shipped "merged #12"\` (it adds to the hand-off on top). Follow-up work after that gets its own new \`mc outcome\`; earlier ones stay on the board.
 5. END every turn: short bullets → "**Next steps**" (omit if none) → "**Summary:**" (one or two sentences; the first is your card's line). Then \`mc goal done\`. More work after that? \`mc goal set\` the new goal first.
+DELIVER WHERE IT WAS ASKED: a file he will send or share (xlsx, csv, pdf, zip, html export, chart png) goes in \`$MC_DOWNLOADS\` (not set on another computer: \`mc file put\` it). A reply to someone is a draft where they asked: a Slack thread or DM → a Slack draft there; an email → an email draft in that thread. When the work came from the operator himself and has no thread to answer in, send him a Slack DM in his self-DM with the summary, paths and links. That DM is the only message you may send (the one exception to the no-send rule below). If the send tool is refused, leave the same text as a draft in his self-DM. Name each in the hand-off: \`--change "file: <full path>"\`, \`--change "draft: <where>"\`, \`--change "DM sent"\`.
 SHOW, DON'T LIST: an image they should see (a screenshot, a chart, a mockup) → \`mc show <file|dir>… --caption "<what to look at>"\` (≤12 a call; one call per group). It appears in TALK under your reply. A file path, a folder or a Finder window shows them nothing.
 Say every link (PR, doc) in full on its own line. Write for a human on a phone: plain words, no filler, no code dumps.
 
@@ -882,6 +883,11 @@ export async function openSession(
     // unconditionally, like wsTicketsDir above, and created here so `--add-dir` (claude AND cursor)
     // never points at a path that does not exist yet.
     repoDirs.push(ensureDropDir(row.id));
+    // …and the workspace's folder in the operator's Downloads (src/downloads.ts), where a file for him
+    // goes: both walls again (strict writes nowhere else), its path in MC_DOWNLOADS. Every other
+    // workspace's folder is in denyDirs (isolationDenyDirs).
+    const downloads = opts.workspace_id ? workspaces.ensureDownloadsDir(opts.workspace_id) : null;
+    if (downloads) repoDirs.push(downloads);
     // CLI session id for transcript: prefer agentSessionId (headless continue), else Chronos row id.
     // Every workspace repo's MAIN checkout is read-only to the agent, whatever it was spawned in. Two
     // terminals pointed at one repo would otherwise share a working tree, and one's `git checkout`
@@ -932,6 +938,7 @@ export async function openSession(
       ...backend.env({} as any, configDir),
       ...(backend.name === "claude-code" ? leanClaudeEnv(opts.workspace_id ?? null) : {}),
       ...mcEnv(opts.workspace_id, opts.repo_id, row.ticket_id),
+      ...(downloads ? { MC_DOWNLOADS: downloads } : {}),
       // Lets the agent talk about ITSELF: `mc state working|blocked|done`, `mc goal set "…"`.
       MC_SESSION: row.id,
       ...egressEnv(opts.workspace_id),

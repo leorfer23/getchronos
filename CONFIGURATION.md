@@ -89,6 +89,11 @@ CHRONOS_PROTECTED_DIRS_EXTRA=/Users/you/code
 CHRONOS_PROTECTED_SECRETS_EXTRA=/Users/you/code/api/.env:/Users/you/code/api/.dev.vars
 ```
 
+Files an agent makes for you (a spreadsheet, a PDF, an export) go in `~/Downloads/<Workspace name>/`.
+Each workspace's agents get their own folder there, and every other workspace's folder is denied to
+them, including the folder a workspace had before it was renamed. `CHRONOS_DOWNLOADS_DIR` moves the
+parent (default `~/Downloads`).
+
 ### 3. Point it at your accounts
 
 A **profile** is a CLI config directory: its own login, settings, skills and MCP servers. Whichever

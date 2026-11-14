@@ -12,6 +12,7 @@ import { asks, events, hosts, jobs, messages, repos, runs, sessions, tickets, wo
 import { resolveVerifyMode, verdictBlocks, verify } from "./verifier.js";
 import { createForRun, prDeliveryPatch } from "./reviews.js";
 import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow, type SandboxMode } from "./sandbox.js";
+import { HEADLESS_DELIVER } from "./downloads.js";
 import { niceWrap } from "./machine.js";
 import { hostFor, LOCAL_HOST_ID, type Host, type ProcHandle } from "./hosts/index.js";
 import { brainPathsInProc, buildRemoteProcSpec, type ProcSpec } from "./hosts/proc-spec.js";
@@ -305,9 +306,14 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
   // gitTrackedSync, not the async twin, and NOT the syncAgentsMd call further down: every statement
   // before the `liveSteer.set` registration below has to stay await-free (see the comment there).
   const mcNote = backend.name !== "claude-code" && gitTrackedSync(job.cwd, "AGENTS.md") ? mcSystemText() : "";
+  // The workspace's folder in the operator's Downloads (src/downloads.ts) for a brain run that may
+  // write: granted below like the tickets dir, its path in MC_DOWNLOADS, and one standing line. A host
+  // run is never granted a brain path; a read-only run writes nothing.
+  const downloads = ws && runHostId === LOCAL_HOST_ID && !isReadOnlyRun(job.name) ? workspaces.ensureDownloadsDir(ws.id) : null;
   const appendSystem = [
     ctx && ctx !== job.append_system ? [ctx, job.append_system].filter(Boolean).join("\n\n") : job.append_system,
     mcNote,
+    downloads ? HEADLESS_DELIVER : "",
     // Repos shared into this workspace — a brain run only: a host run is never granted them.
     job.workspace_id && runHostId === LOCAL_HOST_ID ? sharedReposBlock(job.workspace_id) : "",
     retryNote,
@@ -334,6 +340,7 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
       ...repos.accessible(ws.id).map((r) => r.path).filter((p) => p && !excluded.has(p) && fs.existsSync(p)),
       ...sharedIn.map((r) => ensureRoot(r.path)).filter((p): p is string => !!p),
       ensureWsTicketsDir(ws.slug),
+      ...(downloads ? [downloads] : []),
     ];
     addDirs = [...new Set([...addDirs, ...grant, ...wt.grant])];
     for (const d of mainCheckouts(sharedIn.map((r) => r.path))) if (!readonlyDirs.includes(d)) readonlyDirs.push(d);
@@ -428,7 +435,7 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
       // MC_RUN: lets `mc steps`/`mc step` (unlike ticket/workspace/repo, sessions have no run — so this
       // is set here, not inside mcEnv) address this run's progress checklist without the CLI knowing its
       // own run id any other way.
-      env: { ...childEnv(ws), ...backend.env(job, profileDir), ...mcEnv(job.workspace_id, null, job.ticket_id), MC_RUN: runId, ...egressEnv(job.workspace_id) },
+      env: { ...childEnv(ws), ...backend.env(job, profileDir), ...mcEnv(job.workspace_id, null, job.ticket_id), ...(downloads ? { MC_DOWNLOADS: downloads } : {}), MC_RUN: runId, ...egressEnv(job.workspace_id) },
       stdin: steerMode,
     });
   } else {
