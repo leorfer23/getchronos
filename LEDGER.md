@@ -145,7 +145,9 @@ A hand-off becomes deliverables and decision items, from its `ask`:
   `all` · `?needs=decision` · `?workspace=` (operator only) · `?since=2h|ISO` · `?session=<id>` ·
   `?format=text` for the compact block.
 - `GET /api/ledger/:id` — one request in full: terminals (goal, done-when, phase), result (the hand-offs in its
-  windows), deliverables, decisions, checks, and the expected evidence slots of its work type.
+  windows), deliverables, decisions, checks, the expected evidence slots of its work type, and the operator's
+  hand-off card approvals on its terminals (`approvals`: who, where, each PR at the commit approved, when, the
+  hand-off — src/card-approval.ts). A card approval also decides the PR's open merge item yes on that commit.
 - `GET /api/ledger/queue` — every open item, in the order he should hear it: questions blocking a terminal ·
   executable, bound and verified · bound, unverified · reviews · unbound · failing checks; oldest first inside
   each. Held items are listed apart. Each carries a speakable `line`.
@@ -239,7 +241,8 @@ file. It stops a yes from covering anything but the version he was shown, from b
 workspaces, and from merging past failing or missing checks. It does not stop anything running as the operator's OS user
 outside the sandbox (malware, an unsandboxed terminal or a workspace whose sandbox he set to off, a daemon command
 that reads the token file for an agent): such a process can read the admin token and speak as him. Agents also keep
-their own `gh pr merge` (Leads have merge authority; the Desk's approval line asks a terminal to merge) — the executor
+their own `gh pr merge` (Leads have merge authority; a card approval — `POST /api/sessions/:id/approve` — asks a terminal
+to merge one PR at one commit) — the executor
 adds a guarded road, it does not close that one.
 
 ## Restart, replay, backfill

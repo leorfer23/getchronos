@@ -34,6 +34,7 @@ import {
   waitForLeadEvents,
 } from "./robert-drive.js";
 import { fileReport } from "./lead-report.js";
+import { recordApproval } from "./card-approval.js";
 import { CONFIG } from "./config.js";
 import { writeSetting } from "./settings.js";
 
@@ -214,6 +215,32 @@ test("fireIfStill: Robert's own keystrokes don't count as the operator, and the 
     if (fireIfStill(s.id, driveKey(s.id, "your_turn", status.since), NOW + i * 1000)) sent++;
   }
   assert.equal(sent, cap);
+});
+
+test("fireIfStill: a terminal whose hand-off the operator approved on its card wakes Robert with that approval first", () => {
+  reset();
+  const s = term();
+  const sha = "4f1c2d3a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e";
+  const outcomeAt = new Date(NOW - 120_000).toISOString();
+  db.prepare("UPDATE sessions SET outcome = ?, outcome_at = ? WHERE id = ?").run(
+    JSON.stringify({ summary: "The rollback is ready", changes: [], proof: [], prs: ["https://github.com/acme/app/pull/200"], shots: [], ask: "merge", shipped: [], at: outcomeAt }), outcomeAt, s.id);
+  recordApproval({
+    id: "ap-1a2b3c4d", session_id: s.id, workspace_id: s.workspace_id, outcome_at: outcomeAt, kind: "merge", approved_by: "operator", surface: "desk",
+    at: new Date(NOW - 60_000).toISOString(), ledger: null, prs: [{ url: "https://github.com/acme/app/pull/200", repo: "acme/app", num: 200, sha, state: "open" }],
+  });
+  const status = st("your_turn");
+  screens.set(s.id, status);
+  assert.ok(fireIfStill(s.id, driveKey(s.id, "your_turn", status.since), NOW));
+  const say = JSON.parse(rows()[0].payload).say as string;
+  assert.match(say, /THE OPERATOR ALREADY APPROVED ITS HAND-OFF — ✓ the operator approved on the Desk card 1m ago: merge PR #200 @4f1c2d3 \(ap-1a2b3c4d\)/);
+  assert.match(say, /never countermand it/);
+  assert.ok(say.indexOf("ALREADY APPROVED") < say.indexOf("mc session focus"), "he hears it before he looks");
+  // A terminal with no approval on record is told nothing of the kind.
+  reset();
+  const plain = term();
+  screens.set(plain.id, status);
+  assert.ok(fireIfStill(plain.id, driveKey(plain.id, "your_turn", status.since), NOW));
+  assert.doesNotMatch(JSON.parse(rows()[0].payload).say, /APPROVED/);
 });
 
 test("driveSay: every kind names the terminal, the goal and the move", () => {
