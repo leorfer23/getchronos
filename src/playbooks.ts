@@ -813,10 +813,12 @@ export async function okRun(run: PlaybookRun, b: OkBody, nowMs = Date.now()): Pr
   publish(r, { actor: "operator", ok: true });
   const n = nextIdx(r);
   if (again) {
-    await deps.tell(r.session_id!, hereLine(r, n, true)).catch(() => null);
-    return { ok: true, run: r };
+    const why = await deps.tell(r.session_id!, hereLine(r, n, true)).catch((e) => String((e as Error)?.message ?? e));
+    if (!why) return { ok: true, run: r };
+    // Its terminal is gone (closed, or a restart that did not bring it back): a new one picks the run
+    // up where it stopped — the brief says which steps are done.
   }
-  const asked = r.here && r.requested_session ? sessions.get(r.requested_session) : undefined;
+  const asked = !again && r.here && r.requested_session ? sessions.get(r.requested_session) : undefined;
   if (asked && asked.status === "live" && asked.workspace_id === r.workspace_id) {
     r = playbookRuns.patch(r.id, { session_id: asked.id }) ?? r;
     const why = await deps.tell(asked.id, hereLine(r, n, false)).catch((e) => String((e as Error)?.message ?? e));
@@ -1006,7 +1008,9 @@ export function stopRun(run: PlaybookRun, by: string, why: string | null, nowMs 
   const out = playbookRuns.patch(r.id, { state: "stopped", reason: `stopped by ${by}${why ? `: ${oneLine(why, 200)}` : ""}`, ended_at: iso(nowMs) }, LIVE_RUN_STATES);
   if (!out) return fail(409, "the run changed — reload it");
   publish(out, { actor: by });
-  if (out.session_id && by !== "its terminal") void deps.tell(out.session_id, `Playbook run ${id8(out.id)} (${out.name}) was stopped by ${by}${why ? ` (${oneLine(why, 120)})` : ""}. Do nothing more for it.`).catch(() => null);
+  // Its terminal — or, for a --here run still waiting for the OK, the terminal that asked for it.
+  const sid = out.session_id ?? (out.here ? out.requested_session : null);
+  if (sid && by !== "its terminal") void deps.tell(sid, `Playbook run ${id8(out.id)} (${out.name}) was stopped by ${by}${why ? ` (${oneLine(why, 120)})` : ""}. Do nothing more for it.`).catch(() => null);
   return { ok: true, run: out };
 }
 
@@ -1062,8 +1066,11 @@ export function runBrief(r: PlaybookRun, wsName: string): string {
     if (s.kind === "agent") return indentRest(`${head}${g}(instruction) ${s.run}`);
     return indentRest(`${head}${g}${renderRun(s, t)}${serviceAction(s) ? "   ← the daemon carries this out when you start it" : ""}`);
   };
+  const done = r.steps.filter((s) => s.status === "done").map((s) => s.idx);
+  const next = r.steps.find((s) => s.status === "todo" || s.status === "active");
   return [
     `The daemon opened this terminal to run the playbook "${r.name}" for ${wsName} — run ${id8(r.id)}.`,
+    ...(done.length ? [`Already done in this run: step${done.length === 1 ? "" : "s"} ${done.join(", ")}. Start at step ${next?.idx ?? "?"} — never redo a done step.`] : []),
     `The operator gave ONE OK for this run${r.pr_url ? `, for ${r.pr_url} at head ${short(r.ok_sha)}` : ""}. It covers these gates and nothing else:`,
     ...(gates.length ? gates.map((g) => `  - step ${g.idx}: ${g.gate}`) : ["  (none)"]),
     "",

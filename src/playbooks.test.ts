@@ -321,6 +321,29 @@ test("the PR head moves after the OK: the run stops before the next gate and wai
   assert.equal(s1b.command, `gh pr merge ${PR} --squash --match-head-commit ${SHA2}`);
 });
 
+test("a new OK whose terminal has gone opens a fresh one, told what is already done", async () => {
+  const run = await okd();
+  assert.ok((await P.startStep(run, 1)).ok);
+  assert.ok(P.finishStep(reload(run.id), 1, "done", "merged").ok);
+  assert.ok((await P.startStep(reload(run.id), 2)).ok);
+  assert.ok(P.finishStep(reload(run.id), 2, "done", "built").ok);
+  heads[PR] = { state: "MERGED", head: SHA2, number: 12, draft: false };
+  const s3 = await P.startStep(reload(run.id), 3);
+  assert.ok(!s3.ok && s3.stop, JSON.stringify(s3));
+  assert.equal(reload(run.id).state, "needs_ok");
+  P.setPlaybookDeps({ tell: async (sid, text) => { told.push([sid, text]); return "terminal is not live"; } });
+  try {
+    const before = opened.length;
+    const ok = await P.okRun(reload(run.id), { sha: SHA2, gates: [3, 4, 5] });
+    assert.ok(ok.ok, JSON.stringify(ok));
+    assert.equal(opened.length, before + 1, "a fresh terminal picks the run up");
+    assert.notEqual(ok.run.session_id, run.session_id);
+    assert.match(opened.at(-1).description, /Already done in this run: steps 1, 2\. Start at step 3 — never redo a done step\./);
+  } finally {
+    P.setPlaybookDeps({ tell: async (sid, text) => { told.push([sid, text]); return null; } });
+  }
+});
+
 test("a failed step stops the run and asks the operator; nothing after it runs, and nothing runs it again", async () => {
   const run = await okd();
   assert.ok((await P.startStep(run, 1)).ok);
@@ -432,4 +455,14 @@ test("one run of a playbook at a time; stopping one is always allowed and tells 
   assert.match(told[0][1], /stopped by operator \(not today\)\. Do nothing more for it/);
   assert.ok(!(await P.startStep(reload(run.id), 1)).ok);
   assert.ok((await P.createRun(pb, { pr: PR, by: "robert" })).ok, "and the next run may start");
+});
+
+test("stopping a --here run that still waits for its OK tells the terminal that asked", async () => {
+  const mine = sessions.create({ workspace_id: A.id, cwd: tmp, goal: "asked for a run" } as any);
+  const c = await P.createRun(chainPlaybook(), { pr: PR, by: "terminal", here: true, session: mine.id });
+  assert.ok(c.ok);
+  told.length = 0;
+  assert.ok(P.stopRun(c.run, "operator", null).ok);
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(told.map((x) => x[0]), [mine.id]);
 });
