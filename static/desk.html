@@ -3513,6 +3513,9 @@ function outcomeBody(o, prs) {
   return `<div class="fx-sum">${md(o.summary)}</div>`
     + (o.changes?.length ? `<div class="fx-sub">What changed</div><ul class="fx-list">${o.changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : "")
     + (o.proof?.length ? `<div class="fx-sub">Proof</div><ul class="fx-proof">${o.proof.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : "")
+    // The red-team trial (src/red-team.ts): what it tested, and its answer to each finding beside the finding.
+    + (o.hypotheses?.length ? `<div class="fx-sub">Hypotheses</div><ul class="fx-list">${o.hypotheses.map((h) => `<li><b>${esc(h.result)}</b> · ${esc(h.claim)}${h.test ? ` — <i>test: ${esc(h.test)}</i>` : ""}</li>`).join("")}</ul>` : "")
+    + (o.findings?.length ? `<div class="fx-sub">Red team</div><ul class="fx-list">${o.findings.map((f) => `<li><b>${esc(f.id)} ${f.resolution === "fixed" ? "fixed" : "does not hold"}</b>${f.claim ? ` · ${esc(f.claim)}` : ""} — ${esc(f.note)}</li>`).join("")}</ul>` : "")
     + shots
     + (links.length ? `<div class="fx-sub">Pull request${links.length === 1 ? "" : "s"}</div>` + prsHtml(links) : "")
     + (o.shipped?.length ? `<div class="fx-shipped">Shipped: ${esc(o.shipped.join(" · "))}</div>` : "");

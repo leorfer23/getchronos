@@ -18,7 +18,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import type { Outcome, Ship, Shown } from "./types.js";
+import { parseFindingAnswer, parseHypothesis } from "./red-team.js";
+import type { FindingAnswer, Hypothesis, Outcome, Ship, Shown } from "./types.js";
 
 export const SHIPS: readonly Ship[] = ["ask", "merge", "deploy"];
 export const OUTCOME_ASKS: readonly Outcome["ask"][] = ["merge", "deploy", "merge+deploy", "review", "none"];
@@ -164,6 +165,10 @@ export const addShown = (list: Shown[], next: Shown): Shown[] => [...list, next]
 export function normalizeOutcome(sessionId: string, body: any, now = new Date()): Outcome {
   const shots = ownShots(sessionId, body?.shots, MAX_SHOTS);
   const ask = OUTCOME_ASKS.includes(body?.ask) ? body.ask : "review";
+  // The red-team trial's two tables (src/red-team.ts). A line that is not that shape is dropped, like a bad PR link.
+  const hypotheses = list(body?.hypotheses, 6, 1000).map(parseHypothesis).filter((h): h is Hypothesis => !!h);
+  const answers = new Map<string, FindingAnswer>();
+  for (const a of list(body?.findings, 8, 1000).map(parseFindingAnswer)) if (a) answers.set(a.id, a); // a repeated id: the last word stands
   return {
     // Empty only for a `--shipped`-only re-file, which fileOutcome() folds into the hand-off on top.
     summary: clip(body?.summary, 600),
@@ -174,6 +179,8 @@ export function normalizeOutcome(sessionId: string, body: any, now = new Date())
     ask,
     shipped: list(body?.shipped, 4, 160),
     at: now.toISOString(),
+    ...(hypotheses.length ? { hypotheses } : {}),
+    ...(answers.size ? { findings: [...answers.values()] } : {}),
   };
 }
 

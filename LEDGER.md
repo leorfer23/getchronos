@@ -18,7 +18,7 @@
 | `request_terminals` | (request, terminal) | `role` · `is_primary` · the window `[linked_at, until)` its hand-offs count in |
 | `request_deliverables` | thing that came back | `kind` (pr · deploy · slack_draft · email_draft · artifact · dashboard · doc · answer) · `ref` (what it is) · `target_hash` (what it is *now*) · `state` |
 | `request_decisions` | question put to him | `action` (merge · deploy · send · review · answer) · bound `target_hash` · `status` (open · held · decided · superseded) · `decision` (yes · no · later · change · answered) + his `words`, `decided_by`, `decided_at`, `hold_until`, `audio_ref` |
-| `request_checks` | verifier check run | `name` · pass/fail/skip · `evidence[]` refs (+ meta: screen, viewport, side) · `target_hash` it ran against · `ran_by`, `ran_at` — written by the verifier (below) |
+| `request_checks` | verifier check run | `name` · pass/fail/skip/na · `evidence[]` refs (+ meta: screen, viewport, side) · `target_hash` it ran against · `ran_by`, `ran_at` — written by the verifier (below) |
 | `request_verifications` | verifier pass | why it ran (`trigger`) · the targets it judged (`target_key`) · `ready` · `reason` · `told` (one of the two rounds) · `round` (migration 158) |
 
 - **A request fans out, a terminal carries on.** A request links to any number of terminals; a terminal can
@@ -37,7 +37,7 @@
 |---|---|---|---|
 | `pr` | PR open, tests green, nothing else broke | merge | tests · regression · pr_ready · matches_request |
 | `ui` | PR + before/after shots per screen and width + a walkthrough | merge | tests · regression · shots · walkthrough · pr_ready · matches_request |
-| `investigation` | an answer in the form asked for — a draft, a page, a dashboard | send · review | queries · crosscheck · assumptions |
+| `investigation` | an answer in the form asked for — a draft, a page, a dashboard | send · review | matches_request · queries · crosscheck · assumptions (the last three only when it states figures from data) |
 | `qa` | a verdict with repro steps | review | exercised · repro_steps |
 | `product` | live: merged, deployed, checked in production; bugs reproduced before, fixed after; replies as drafts | merge · deploy · send | tests · pr_ready · post_deploy · matches_request (+ repro_before · fixed_after for a bug) |
 | `chat` | nothing to finish | — | — |
@@ -273,13 +273,20 @@ code and evidence, never by the terminal's own claim.
   cannot park on an ask or post anything). Backend: `goal_test` (a test file in the diff; skip when undecidable),
   `regression` (skip: not machine-checked). UI: `shots` (before/after per screen at phone AND desktop width,
   labels `before-<screen>-phone` …, evidence meta `{screen, viewport, side}` for the phone's card) and
-  `walkthrough` (`mc show` steps). Analysis/QA: the reader judges `queries` · `crosscheck` · `assumptions` /
-  `exercised` · `repro_steps`. Drafts: `draft_bound` — the words on file re-hashed with `draftHash` (the formula
-  `mc hook` uses) and bound, or matched against what the hook bound.
+  `walkthrough` (`mc show` steps). Analysis, with the red-team trial on: `red_team` (*Trials* below). Analysis/QA: the reader judges `queries` · `crosscheck` · `assumptions` /
+  `exercised` · `repro_steps`. The analysis three are owed only by figures derived from data
+  (`verify-model.ts` `answerFigures`): when every word of the answer is on file (the hand-off, the drafts, no
+  link but a PR's) and none is a figure — names like R-042 or #311, dates, clock times, labels like
+  "exit 143" and a count restated from the request do not count — they are `na`, decided in code and not asked
+  of the reader. Otherwise the reader judges them true/false, or `"n/a: <why>"` when the answer rests on no
+  figure from data (its numbers are names, dates, restated counts or context); an n/a without a reason is a
+  skip. Drafts: `draft_bound` — the words on file re-hashed with `draftHash` (the formula `mc hook` uses) and
+  bound, or matched against what the hook bound.
 - **Ready** = on the item's CURRENT target: every required slot has a result, none failed, and every gate passed
-  (`pr_ready`, `matches_request`, `shots`, `draft_bound` — a skip is not enough). Other required slots may be
-  skipped with a reason; the queue line says them ("checks pass (not checked: tests, regression)"). A check run
-  against an older head or older words is stale and counts for nothing.
+  (`pr_ready`, `matches_request`, `shots`, `draft_bound` — a skip or an `na` is not enough). Other required
+  slots may be skipped with a reason; the queue line says them ("checks pass (not checked: tests, regression)").
+  An `na` slot does not apply: not missing, not a gap, never a pass, and never told back. A check run against an
+  older head or older words is stale and counts for nothing.
 - **Fail → the terminal.** A fail the terminal can fix is typed into it (`[verifier] Not ready… round n of 2`),
   at most two rounds; after that, and when its terminal is closed, the request surfaces as not ready with the
   reason (`GET /api/ledger/:id` → `verification`, the queue line). Infrastructure trouble (GitHub unreachable, no
@@ -289,6 +296,38 @@ code and evidence, never by the terminal's own claim.
   `POST /api/ledger/:id/verify` / `mc ledger verify <id>` — the operator's token only (a workspace token reads
   its own checks, never re-runs). Setting `verifier.enabled` (Safety) turns the automatic verifier off per
   workspace; the operator's re-run still works.
+
+## Trials: hypotheses first, then a red team
+
+An experiment per workspace (`trial.red_team`, ⚙ Settings → Trials, **off** by default), measured so the operator
+can tell after a week whether it helped. Code: `src/red-team.ts` (pure) · `src/red-team-trial.ts` (setting, rows,
+report) · `src/store/trials.ts` (migration 161) · the pass in `src/request-verifier.ts`.
+
+- **Protocol.** An `investigation` terminal opened while the trial is on carries one more paragraph in its first
+  prompt (`terminal.ts deskSeed`): restate the question and the finish line; 2-4 hypotheses, each with the test that
+  would falsify it; run them and record which survived; check the known traps (units, duplicated snapshots or
+  versions, cohort and filter definitions, time windows, joins that fan out). It hands off with
+  `mc outcome … --hypothesis "<claim> | <test> | survived|rejected"`.
+- **Red team.** In the verifier's pass over an analysis's hand-off (its `answer`), once per request, and only when
+  the answer states figures (`answerFigures`): a `review:redteam-…` run — read-only like the reader, beside it, on an
+  engine other than the worker's (`pickReviewer`; none = `skip`, not run) — tries to break the conclusion and
+  answers `REDTEAM {"findings":[…]}` (at most 4). Findings are a `red_team` **fail**, typed back one line each inside
+  the verifier's own round (the same two rounds — no loop of its own). No verdict is a `skip`, never told, and the
+  run is spent all the same. Every newer hand-off must answer each finding,
+  `--finding "F1=fixed: <what changed>"` or `--finding "F1=holds-not: <why>"`: all answered = `pass`, any left out =
+  a told `fail`. The hand-off carries both tables; the daemon puts each finding's words beside its answer, and
+  Focus shows them under the proof.
+- **The slot.** `red_team` is a non-required slot of `investigation` marked `trial`: listed only where a check ran
+  (a workspace without the trial never sees it missing); a fail blocks ready, a skip or a pass never does.
+- **Measured, on or off.** One `trial_handoffs` row per analysis hand-off chain (terminal × request): its arm (the
+  setting at its first hand-off), whether its first prompt carried the protocol, hypotheses on its fullest
+  hand-off, the verifier's told rounds and the checks each was for (`rejections` = rounds that were not only the red
+  team's), the red team's findings and how many its answers fixed, the operator's own typed turns after the
+  hand-off (his composer, his `mc session send`, his pane — never a line the daemon, Robert, a Lead or the verifier
+  typed; once the terminal takes on another request his lines are that one's), and asked → hand-off → ready.
+  `mc trial report red-team [--ws slug] [--days 30]` (`GET /api/trials/red_team/report`) prints on vs off for a
+  workspace: a workspace token reads its own, another workspace is the same 404 as none; the operator reads any.
+  Rows start at deploy, so the off arm fills while the trial is off: leave it off a few days for a baseline.
 
 ## Not yet
 

@@ -2549,6 +2549,45 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     },
   },
 
+  {
+    version: 161,
+    name: "trial_handoffs — what each analysis hand-off came to, with a trial on or off (src/red-team-trial.ts)",
+    // One row per terminal and request (a hand-off chain) of an `investigation` terminal: the arm it ran
+    // in (the workspace's trial setting at its first hand-off), whether its first prompt carried the
+    // protocol, the verifier's rounds and what they were for, the red team's findings and how many led to
+    // a change, the operator's own typed turns after the hand-off, and when it was asked, handed off and
+    // found ready. `mc trial report red-team` compares the arms per workspace. IF NOT EXISTS keeps a
+    // re-run harmless if parallel work renumbers it.
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS trial_handoffs (
+        id TEXT PRIMARY KEY,
+        trial TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        request_id TEXT,
+        arm TEXT NOT NULL,
+        protocol INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL,
+        first_handoff_at TEXT NOT NULL,
+        last_handoff_at TEXT NOT NULL,
+        handoffs INTEGER NOT NULL DEFAULT 1,
+        hypotheses INTEGER NOT NULL DEFAULT 0,
+        ready_at TEXT,
+        rounds INTEGER NOT NULL DEFAULT 0,
+        rejections INTEGER NOT NULL DEFAULT 0,
+        aspects TEXT,
+        red_team TEXT,
+        findings INTEGER NOT NULL DEFAULT 0,
+        answered INTEGER NOT NULL DEFAULT 0,
+        changed INTEGER NOT NULL DEFAULT 0,
+        operator_turns INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_trial_handoffs_chain ON trial_handoffs(trial, session_id, COALESCE(request_id, ''));
+      CREATE INDEX IF NOT EXISTS idx_trial_handoffs_ws ON trial_handoffs(trial, workspace_id, first_handoff_at);
+      CREATE INDEX IF NOT EXISTS idx_trial_handoffs_session ON trial_handoffs(session_id, first_handoff_at);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

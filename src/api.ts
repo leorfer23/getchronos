@@ -22,6 +22,7 @@ import { answerAsk, notifyAskCreated, resolveAsk, waitForAskAnswer } from "./ask
 import { holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { operatorAnswered, operatorKeys } from "./ask-in-terminal.js";
 import { handTyped, noteOperatorInput, proactiveAllowed, proactiveStats } from "./proactive-score.js";
+import { noteOperatorTurn, notePaneInput, noteTrialHandoff, trialReportView, withFindingClaims } from "./red-team-trial.js";
 import { deliverPending, resolveMessageTarget, sendMessage } from "./messages.js";
 import { egressCfg, egressPort, syncEgress } from "./egress.js";
 import { createSkill, skillBody, skillRef, patchSkill, appendSkill, setSkillStatus, removeSkill, useSkill } from "./skills.js";
@@ -844,10 +845,11 @@ export function startServer() {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
-    const o = normalizeOutcome(s.id, req.body);
+    const o = withFindingClaims(s, normalizeOutcome(s.id, req.body));
     if (!o.summary && !(o.shipped.length && s.outcome)) return res.status(400).json({ error: "a hand-off needs a summary (only a --shipped re-file may leave it out)" });
     const filed = fileOutcome(s.outcome, s.outcome_prev, o, operatorSaidAt(s.id));
     sessions.setOutcome(s.id, filed.latest, filed.earlier);
+    noteTrialHandoff(s.id); // an analysis's hand-off, counted for the trial on or off (red-team-trial.ts)
     bus.publish({ topic: "session.updated", session_id: s.id });
     res.status(201).json({ ...filed.latest, earlier: filed.earlier.length });
   });
@@ -1093,7 +1095,11 @@ export function startServer() {
     // His hand, counted for src/proactive-score.ts: the admin token with no other `by` (Desk composer,
     // Focus buttons, phone, his own `mc session send`). Robert and agents send their own `by`
     // (MC_AGENT_NAME); a Lead is never admin here, whatever its body claims.
-    if (admin && (req.body.by || "operator") === "operator") noteOperatorInput(s.id);
+    if (admin && (req.body.by || "operator") === "operator") {
+      noteOperatorInput(s.id);
+      // A line he typed and sent, not a key: one of his turns, for the trial's follow-up count (red-team-trial.ts).
+      if (req.body.text && req.body.enter !== false) noteOperatorTurn(s.id);
+    }
     // The operator answering from the Desk composer / Focus buttons — never Robert's or a Lead's typing.
     const submitted = req.body.enter !== false && (req.body.text || req.body.key === "enter" || req.body.keys?.includes("enter"));
     if (admin && (req.body.by || "operator") === "operator" && submitted)
@@ -2547,6 +2553,11 @@ export function startServer() {
   // reads every workspace; a workspace token reads only its own — naming another is a 404 (CLAUDE.md #4).
   api.get("/proactive/stats", (req, res) => {
     const r = proactiveStats(callerScope(req), { days: req.query.days, workspace: req.query.workspace });
+    res.status(r.status).json(r.body);
+  });
+  // A trial, on vs off (`mc trial report red-team`): scoped like /proactive/stats — a workspace reads its own.
+  api.get("/trials/:trial/report", (req, res) => {
+    const r = trialReportView(callerScope(req), { trial: req.params.trial, workspace: req.query.workspace, days: req.query.days });
     res.status(r.status).json(r.body);
   });
 
@@ -5582,6 +5593,7 @@ export function startServer() {
         // or daemon hand types through a websocket (they all use sendInput). Scored by proactive-score.ts
         // — typing only: xterm's own replies (cursor reports, focus, mouse) start with ESC and do not count.
         if (handTyped(m.d)) noteOperatorInput(id);
+        notePaneInput(id, m.d); // a line he typed and sent here is one of his turns (red-team-trial.ts)
         // His Enter in this pane answers the question it holds (src/ask-in-terminal.ts).
         if (typeof m.d === "string") void operatorKeys(id, m.d)?.catch((e) => console.warn("[ask-in-terminal]", e?.message ?? e));
       }

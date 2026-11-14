@@ -20,6 +20,7 @@ import { ensureGrokTrustedCwd, grokHome } from "./grok-trust.js";
 import { isEarlyDeath, reportEarlyDeath } from "./desk-incidents.js";
 import { inFlightAtRestart, lastActivityState, reviveSeedFor } from "./revive.js";
 import { childEnv } from "./child-env.js";
+import { trialProtocol } from "./red-team-trial.js";
 import { sanitizeCwd } from "./spawn-guard.js";
 import { ensureTicketWorktree, cleanupWorktree, cleanupRemoteWorktree } from "./worktrees.js";
 import { egressBrokered, egressEnforced, egressEnv, egressLocked, egressPolicy } from "./egress.js";
@@ -190,6 +191,8 @@ export function deskSeed(
   goals?: SessionGoal[] | null,
   /** What the operator lets it do once the work is green (src/session-outcome.ts). */
   ship?: Ship | null,
+  /** A trial's protocol for this kind of work (red-team-trial.ts trialProtocol) — null while it is off. */
+  protocol?: string | null,
 ): string {
   const brief = (description ?? "").trim();
   const g = (goal ?? "").trim();
@@ -197,6 +200,7 @@ export function deskSeed(
   return [
     g ? `Goal: ${g}` : null,
     kind ? KIND_CONTRACT[kind] : null,
+    protocol || null,
     list
       ? `Your operator gave this terminal ${list.length} goals, in this order:\n` +
         goalLines(list).join("\n") +
@@ -833,8 +837,8 @@ export async function openSession(
         : (row.goal || opts.description?.trim()) && !opts.resumeId
           ? (row.role === "lead"
               ? `You are the LEAD for this goal in ${ws?.name ?? "this workspace"}. Read your instructions above, then start.\n\n` +
-                deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id), row.ship)
-              : deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id), row.ship))
+                deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id), row.ship, trialProtocol(row.goal_kind, opts.workspace_id))
+              : deskSeed(row.goal ?? "", row.goal_kind ?? null, opts.description, sessionGoals.list(row.id), row.ship, trialProtocol(row.goal_kind, opts.workspace_id)))
           : null);
     // Backends without a system-prompt channel (cursor) get the standing notes + Focus contract folded
     // into the seed instead — but only when there's an actual task/context to run (never paste the
