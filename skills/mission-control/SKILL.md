@@ -103,9 +103,9 @@ mc goal                                                    # goal, Done when, wh
 
 mc progress 2/5 "running the migrations" --eta 15m        # the operator's progress bar + time left
 mc state working "bisecting the 3am failure"               # the line under your title while you grind
-mc state waiting "CI on PR #214" --on ci --eta 12m         # BEFORE you stop to wait on anything that isn't the operator
+mc state waiting "full test suite" --on command --eta 8m   # a short wait running in the background — BEFORE you stop
 mc state waiting "the export terminal (a1b2c3d4)" --on terminal
-mc when pr <url> --until approved --note "merge it"           # waiting hours/days? park it — Chronos continues you when it happens
+mc when pr <url> --until checks --note "fix it if red"      # a long wait (CI, a review, a reply)? park it — Chronos continues you when it happens
 mc pr checks <url>                                         # a PR's CI, review and mergeable — not `gh pr checks` (a workspace's own GitHub token cannot read check runs)
 mc state blocked "need write access to the prod bucket" --reason auth   # a wall
 mc state decide "drop the legacy view or keep it? I'd drop it"          # only when mc ask-robert doesn't fit
@@ -129,12 +129,16 @@ takes `10`, `10m`, `2h`.
    **Shape of work** (`--kind`) is your finish line: `pr` = a pull request open, tests green ·
    `investigation` = an answer with evidence, no code changes unless asked · `qa` = a verdict: what
    passed, what failed, how to reproduce.
-2. **Never stop silently while you wait.** Silence reads 🟠 *your turn* — the operator opens you,
-   finds nothing to do, and learns to ignore your card. Launched background subagents? The hooks
-   count them for you. Waiting on CI, a deploy, a long command, another terminal? `mc state waiting`
-   with what and roughly how long, *then* stop. Waiting on something that takes **hours or days** — a
-   PR review, a person's reply, an email, another terminal's result? **`mc when`** (below): the daemon
-   watches it and continues your work when it happens, even if this terminal is closed by then.
+2. **Never stop silently while you wait — and never hold your turn open for a wait.** Silence reads
+   🟠 *your turn* — the operator opens you, finds nothing to do, and learns to ignore your card.
+   - **A short wait** (a test run, a build, a query of a few minutes): run it in the background (your
+     shell's background mode or a background subagent), `mc state waiting "…" --on command --eta 5m`,
+     and end your turn. The task wakes you the moment it exits, as long as this terminal stays open,
+     and the operator can talk to you meanwhile. Background subagents are counted for you by the hooks.
+   - **A long wait** — CI, a PR review, a person's reply, an email, another terminal, a query of ten
+     minutes or more — or one that must survive a daemon restart (a deploy) or the Mac sleeping, both
+     of which end background tasks: **`mc when`** (below). The daemon watches it and continues your
+     work when it happens, even if this terminal is closed by then.
 3. **`mc ask-robert` for a decision you can't make** (see below) — your card reads 🔵 *waiting on
    Robert* while he triages and 🟣 *decide* once it reaches the operator. **`mc state blocked` for a
    wall, not a question** — say what you need in the label.
@@ -585,7 +589,9 @@ When your work is blocked on something outside you that will take a while, park 
 instead of spinning or stopping silently. The daemon watches it; when it is met (or times out) it
 continues **this** work: typed into this terminal if it is still open and idle, otherwise this terminal
 is reopened on the same transcript with the news as its next prompt (a fresh terminal with a handoff
-only when that is impossible). Your card shows ⏳ *waiting · <condition>* meanwhile.
+only when that is impossible). Your card shows ⏳ *waiting · <condition>* meanwhile. A short wait on a
+background task of your own needs none of this: the task wakes you when it exits — but only while
+this terminal lives.
 
 ```bash
 mc when pr https://github.com/o/r/pull/12 --until approved --note "merge, then deploy staging"
