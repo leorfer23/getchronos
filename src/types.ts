@@ -741,6 +741,27 @@ export interface Outcome {
   /** What it already did on its own, under the permission it had (`ship`): merged, deployed. */
   shipped: string[];
   at: string;
+  /** The red-team trial (src/red-team.ts): the hypotheses it tested, each with its falsifying test. */
+  hypotheses?: Hypothesis[];
+  /** The red-team trial: its answer to each finding of the model that tried to break the conclusion. */
+  findings?: FindingAnswer[];
+}
+/** One hypothesis of an analysis (`mc outcome --hypothesis "<claim> | <test> | survived"`). */
+export interface Hypothesis {
+  claim: string;
+  /** What would falsify it. */
+  test: string;
+  result: "survived" | "rejected" | "open";
+}
+/** An answer to one red-team finding (`mc outcome --finding "F1=fixed: <what changed>"`). */
+export interface FindingAnswer {
+  /** F1, F2 … as the finding was told. */
+  id: string;
+  /** The finding itself, filled in by the daemon from the red team's check (red-team-trial.ts). */
+  claim?: string;
+  resolution: "fixed" | "holds-not";
+  /** What changed, or why it does not hold. */
+  note: string;
 }
 /** Images a terminal put in front of the operator mid-work (`mc show`): one call, one caption. */
 export interface Shown {

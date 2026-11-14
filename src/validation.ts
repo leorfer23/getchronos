@@ -211,6 +211,9 @@ export const SessionOutcomeSchema = z.object({
   shots: z.array(z.object({ name: z.string().max(80), label: z.string().max(80).optional() })).max(8).optional(),
   ask: z.enum(["merge", "deploy", "merge+deploy", "review", "none"]).optional(),
   shipped: z.array(z.string().max(400)).max(6).optional(),
+  // The red-team trial (src/red-team.ts): "<claim> | <test> | survived" and "F1=fixed: <what changed>".
+  hypotheses: z.array(z.string().max(1000)).max(12).optional(),
+  findings: z.array(z.string().max(1000)).max(12).optional(),
 });
 /** One screenshot for a hand-off, as base64 (≤6 MB decoded — the app-wide JSON limit is 16 MB). */
 export const SessionShotSchema = z.object({

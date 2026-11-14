@@ -71,7 +71,7 @@ export const FINAL_DELIVERABLE: ReadonlySet<DeliverableState> = new Set<Delivera
 export const CHECK_NAMES = [
   "tests", "regression", "pr_ready", "matches_request", "shots", "walkthrough",
   "queries", "crosscheck", "assumptions", "exercised", "repro_steps",
-  "repro_before", "fixed_after", "post_deploy", "goal_test", "draft_bound",
+  "repro_before", "fixed_after", "post_deploy", "goal_test", "draft_bound", "red_team",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
 /** `na` = the slot does not apply to this answer (an analysis that states no figures): never a pass, never missing. */
@@ -92,7 +92,12 @@ export type Prereq = { kind: "vpn" | "login" | string; name?: string | null; why
  * A required check that is not a gate may be skipped with its reason — the queue says what was not
  * checked, so a gap is spoken, never passed off as a pass.
  */
-export type ExpectedCheck = { name: CheckName; required: boolean; what: string; gate?: boolean };
+export type ExpectedCheck = {
+  name: CheckName; required: boolean; what: string; gate?: boolean;
+  /** A trial's slot (src/red-team.ts): listed only where the trial ran a check for it, so a workspace that
+   *  never turned the trial on is not shown it as missing. Never required, so absent never blocks; a fail blocks. */
+  trial?: boolean;
+};
 export type WorkType = {
   /** How it is said aloud ("a UI PR"). */
   label: string;
@@ -156,6 +161,7 @@ export const WORK: Record<GoalKind, WorkType> = {
       { name: "queries", required: true, what: "every query or source behind each number, re-runnable (n/a when it states no figures from data)" },
       { name: "crosscheck", required: true, what: "the headline numbers reproduced another way (n/a when it states no figures from data)" },
       { name: "assumptions", required: true, what: "what was assumed or left out in getting the numbers, stated (n/a when it states no figures from data)" },
+      { name: "red_team", required: false, trial: true, what: "trial: a model other than the worker tried to break an answer that states figures, and every finding was answered — fixed, or why it does not hold" },
     ],
   },
   qa: {
@@ -192,10 +198,11 @@ export function expectedChecks(
   slots: ExpectedCheck[] | null = null,
 ): SlotStatus[] {
   if (!kind && !slots) return [];
-  return (slots ?? WORK[kind!].evidence).map((e) => {
+  return (slots ?? WORK[kind!].evidence).flatMap((e) => {
     // The newest run of a check is the one that counts.
     const last = checks.filter((c) => c.name === e.name).sort((a, b) => b.ran_at.localeCompare(a.ran_at))[0];
-    return { ...e, status: (last?.status as CheckStatus | undefined) ?? "missing", note: last?.note ?? null };
+    if (!last && e.trial) return [];
+    return [{ ...e, status: (last?.status as CheckStatus | undefined) ?? "missing", note: last?.note ?? null }];
   });
 }
 

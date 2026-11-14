@@ -20,6 +20,9 @@
  *                                decided from its text when it is all on file, else the reader's "n/a: why")
  *   drafts       draft_bound      the words on file re-hashed with ledger-model.ts draftHash (the same formula
  *                                `mc hook` uses) and bound, or matched against what the hook bound
+ *   analysis     red_team         a trial, per workspace (src/red-team.ts): once per request, on an answer that
+ *                                states figures, a model other than the worker's tries to break it; its findings
+ *                                ride the pass's round, and every later hand-off must answer each one
  *
  * A fail the terminal can fix goes back to it, typed into its terminal (at most two rounds); after that
  * the request surfaces as not ready with the reason. A check run against an older PR head no longer
@@ -49,6 +52,8 @@ import {
   MAX_ROUNDS, answerFigures, judgeAspects, judgeGoalTest, judgePr, judgeShots, judgeWalkthrough, parseReview, pickReviewer, reviewerPrompt, tellLine,
   type CheckResult, type PrView, type ReviewInput, type ReviewVerdict,
 } from "./verify-model.js";
+import { parseRedTeam, priorRedTeam, redTeamCheck, redTeamPrompt, resolutionCheck, type RedTeamStat } from "./red-team.js";
+import { noteTrialPass, redTeamOn } from "./red-team-trial.js";
 import type { GateResult, Outcome, Repo, Session, Workspace } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -85,8 +90,8 @@ export type VerifierDeps = {
   runGates(ws: Workspace, cwd: string, gates: Array<{ name: string; cmd: string }>): Promise<GateResult[]>;
   /** Run `fn` holding one of this machine's heavy slots (`mc heavy`), so a suite never starves live terminals. */
   heavy<T>(ws: Workspace, label: string, fn: () => Promise<T>): Promise<T>;
-  /** The second reader: a read-only `review:` run in the workspace. */
-  review(ws: Workspace, prompt: string, o: { cwd: string; backend: string; model: string; requestId: string }): Promise<ReviewRun>;
+  /** The second reader (and the red team, `label` "redteam"): a read-only `review:` run in the workspace. */
+  review(ws: Workspace, prompt: string, o: { cwd: string; backend: string; model: string; requestId: string; label?: "verify" | "redteam" }): Promise<ReviewRun>;
   /** Type one line into the terminal. null = done, else why not. */
   tell(sessionId: string, text: string): Promise<string | null>;
   /** The draft's words as its hook carried them (draft-notify.ts, memory only). */
@@ -159,7 +164,8 @@ const realDeps: VerifierDeps = {
     // `review:` = a read-only run (runner.ts isReadOnlyRun): it never parks on an ask and is never
     // re-dispatched when one is answered. No Bash, no writes, no web: it reads files and answers.
     const job = jobs.create({
-      name: `review:verify-${o.requestId.slice(0, 8)}`, description: "second reader for a hand-off (request verifier)", goal: prompt,
+      name: `review:${o.label ?? "verify"}-${o.requestId.slice(0, 8)}`,
+      description: o.label === "redteam" ? "red team for an analysis hand-off (trial, request verifier)" : "second reader for a hand-off (request verifier)", goal: prompt,
       workspace_id: ws.id, backend: o.backend, model: o.model, cwd: o.cwd, sandbox: ws.sandbox_mode,
       disallowed_tools: "Edit,Write,MultiEdit,NotebookEdit,Bash,BashOutput,KillShell,Task,WebFetch,WebSearch",
       trigger_type: "manual", retry_max: 0, timeout_sec: 900, max_budget_usd: 2, notify: "off",
@@ -368,6 +374,8 @@ export async function verifyRequest(id: string, o: { trigger?: string; by?: stri
       }
     }
     requests.finishVerification(ver.id, { status: "done", ready, reason, told, round: told ? round : null, session_id: sid, target_key: keyOf(targetsOf(latest)) });
+    // Every analysis is counted, the trial on or off: that is the comparison (red-team-trial.ts).
+    if (latest.kind === "investigation") noteTrialPass({ request: latest, session: terminalFor(latest, targets[0].d), told, names: out.names, ready, redTeam: out.redTeam });
     bus.publish({ topic: "ledger.verified", request_id: r.id, workspace_id: ws.id, ready, told, reason });
     return { status: "done", ready, reason, told, verification_id: ver.id };
   } catch (e: any) {
@@ -381,13 +389,19 @@ export async function verifyRequest(id: string, o: { trigger?: string; by?: stri
   }
 }
 
-async function runPass(r: RequestRow, ws: Workspace, targets: Target[]): Promise<{ tellable: string[] }> {
+async function runPass(r: RequestRow, ws: Workspace, targets: Target[]): Promise<{ tellable: string[]; names: string[]; redTeam: RedTeamStat | null }> {
   const at = iso();
   const tellable: string[] = [];
+  /** What this pass's round is for, by check (the trial counts them: red-team-trial.ts). */
+  const names = new Set<string>();
+  let redTeam: RedTeamStat | null = null;
   const results = new Map<string, CheckResult[]>();
   const push = (d: Deliverable, c: CheckResult) => {
     results.set(d.id, [...(results.get(d.id) ?? []), c]);
-    if (c.status === "fail" && c.tellable && !tellable.includes(`${c.name}: ${c.note}`)) tellable.push(`${c.name}: ${c.note}`);
+    if (c.status === "fail" && c.tellable) {
+      names.add(c.name);
+      if (!tellable.includes(`${c.name}: ${c.note}`)) tellable.push(`${c.name}: ${c.note}`);
+    }
   };
   const seen = new Set<string>();
   const unique = targets.filter((t) => (seen.has(t.d.id) ? false : (seen.add(t.d.id), true)));
@@ -447,6 +461,13 @@ async function runPass(r: RequestRow, ws: Workspace, targets: Target[]): Promise
     };
     const pick = pickReviewer(ws, { backend: s?.backend ?? null, model: s?.model ?? null }, { backend: "claude-code", model: CONFIG.mergeGateModel || CONFIG.defaultModel });
     const runCwd = cwd && fs.existsSync(cwd) ? cwd : os.homedir();
+    // The red-team trial, on the hand-off itself (the `answer` a `mc outcome` raised): off unless this
+    // workspace turned it on. It runs beside the second reader, and its lines join this pass's round —
+    // one round, never a loop of its own.
+    const answers = readable.filter((t) => t.d.kind === "answer").map((t) => t.d);
+    const redTeamRun = kind === "investigation" && answers.length && redTeamOn(ws.id)
+      ? redTeamStep(r, ws, answers, reviewDrafts, runCwd).catch((e: any) => { console.warn("[verifier] red team", r.id.slice(0, 8), e?.message ?? e); return null; })
+      : null;
     let verdict: ReviewVerdict | null = null;
     let run: ReviewRun | null = null;
     try {
@@ -478,10 +499,68 @@ async function runPass(r: RequestRow, ws: Workspace, targets: Target[]): Promise
       }
       for (const c of judgeAspects(kind, figures, verdict)) push(d, c);
     }
+
+    const step = redTeamRun ? await redTeamRun : null;
+    if (step) {
+      push(step.on, step.check);
+      for (const line of step.tell) if (!tellable.includes(line)) tellable.push(line);
+      if (step.tell.length) names.add("red_team");
+      redTeam = step.stat;
+    }
   }
 
   for (const { d } of unique) write(r, d, results.get(d.id) ?? [], at);
-  return { tellable };
+  return { tellable, names: [...names], redTeam };
+}
+
+/**
+ * The red team (src/red-team.ts), at most once per request, always on the newest hand-off in the pass
+ * (a follow-up leaves the earlier one open too). The first one that states figures is attacked by a model
+ * other than the worker's; a newer hand-off is judged on whether it answers every finding. Null = nothing
+ * to write: no figures (the cost guard), or no hand-off newer than the one it read.
+ */
+async function redTeamStep(
+  r: RequestRow, ws: Workspace, answers: Deliverable[], drafts: ReviewInput["drafts"], cwd: string,
+): Promise<{ on: Deliverable; check: CheckResult; tell: string[]; stat: RedTeamStat } | null> {
+  const id8 = r.id.slice(0, 8);
+  const newest = (ds: Deliverable[]) => [...ds].sort((a, b) => (b.source_at ?? "").localeCompare(a.source_at ?? ""))[0];
+  const prior = priorRedTeam(requests.checks(r.id));
+  if (prior) {
+    if (!prior.findings.length) return null;
+    // Its findings stand on the hand-off it read (a re-run of that one adds nothing); a newer one answers them.
+    const read = prior.deliverable_id ? requests.deliverable(prior.deliverable_id) : undefined;
+    const fresh = answers.filter((d) => d.id !== prior.deliverable_id && (d.source_at ?? "") > (read?.source_at ?? ""));
+    if (!fresh.length) return null;
+    const on = newest(fresh);
+    const res = resolutionCheck(prior.findings, outcomeFor(terminalFor(r, on), on)?.findings, id8);
+    return { on, check: res.check, tell: res.tell, stat: { kind: "answers", answered: res.answered, changed: res.changed } };
+  }
+  const on = newest(answers);
+  const s = terminalFor(r, on);
+  const o = outcomeFor(s, on);
+  const outcome = o ? { summary: o.summary, changes: o.changes, proof: o.proof } : null;
+  const figures = answerFigures({ words: r.words, outcome, drafts });
+  if (!figures?.length) return null;
+  const pick = pickReviewer(ws, { backend: s?.backend ?? null, model: s?.model ?? null }, { backend: "claude-code", model: CONFIG.mergeGateModel || CONFIG.defaultModel });
+  // The very engine that did the work cannot red-team it: nothing is spent, a later hand-off may try again.
+  if (!pick.independent) return { on, check: { name: "red_team", status: "skip", note: `not run: ${pick.why}` }, tell: [], stat: { kind: "skipped" } };
+  const prompt = redTeamPrompt({
+    words: r.words, goal: s?.goal ?? null, done_when: s?.done_when ?? [], drafts, figures,
+    outcome: outcome ? { ...outcome, hypotheses: o?.hypotheses ?? [] } : null,
+  });
+  let run: ReviewRun;
+  try {
+    run = await deps.review(ws, prompt, { cwd, backend: pick.backend, model: pick.model, requestId: r.id, label: "redteam" });
+  } catch (e: any) {
+    run = { text: null, run_id: null, status: "error", error: String(e?.message ?? e) };
+  }
+  const findings = run.status === "success" ? parseRedTeam(run.text) : null;
+  const ev: Evidence = {
+    ref: run.run_id ? `run:${run.run_id}` : "run:none", label: `${pick.backend} ${pick.model}`,
+    meta: { backend: pick.backend, model: pick.model, independent: pick.independent, why: pick.why, trial: "red_team" },
+  };
+  const res = redTeamCheck(findings, ev, id8, findings ? null : `${run.status}${run.error ? `: ${run.error}` : ""}`);
+  return { on, check: res.check, tell: res.tell, stat: findings ? { kind: "ran", findings: findings.length } : { kind: "skipped" } };
 }
 
 // ───────────────────────────── when it runs ─────────────────────────────

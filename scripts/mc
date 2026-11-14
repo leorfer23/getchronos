@@ -313,6 +313,9 @@ const HELP = `mc — Mission Control backlog CLI
   mc executor status [--workspace slug]   is the executor on (it carries out the operator's yes: merge a PR, send a draft), which actions
   mc executor log [--request id8] [--workspace slug] [--status done|refused|failed] [--limit N] [--json]
                                      what it carried out or refused: who approved, his words, the surface, what ran, the hashes (operator only)
+  mc trial report red-team [--ws slug] [--days 30] [--json]
+                                     a trial, on vs off, in one workspace: verifier rounds and what for, red-team findings and
+                                     how many led to a change, the operator's follow-ups, time to ready (yours only, from a terminal)
   mc pad resolve <id> ["why"]        close the row, keeping the reason on it (a follow-up terminal's usual last step)
   mc pad due                         this client's scheduled follow-ups, soonest first
   mc pad append <id> "<text>"        ADD to a row's detail without replacing it — the usual one; any terminal
@@ -362,6 +365,8 @@ const HELP = `mc — Mission Control backlog CLI
   mc outcome "<summary>" [--change "…"]… [--proof "…"]… [--shot before=a.png]… [--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped "…"]…
                              the hand-off on Focus: what changed, the proof, the PR — the operator approves
                              merge/deploy from it. mc outcome show | mc outcome clear
+                             analyses in a workspace trialling the red team: [--hypothesis "<claim> | <test> | survived|rejected"]…
+                             and, after its findings, [--finding "F1=fixed: <what changed>" | "F1=holds-not: <why>"]…
   mc show <image|dir>… [--caption "what to look at"]
                              show the operator images NOW (screenshots, charts): Focus draws them in Talk under
                              your reply. A path in your reply shows nothing. name=file.png labels one; ≤12 a call
@@ -1916,6 +1921,49 @@ function askCap(question) {
       if (r.children?.length) out.push("per project:", ...r.children.map((c) => `  ${row(c)}`));
       return console.log(out.join("\n"));
     }
+    // A trial, on vs off (src/red-team-trial.ts): what the operator reads after a week to decide whether
+    // it helped. A terminal reads its own workspace; the operator any (--ws), or every one with rows.
+    if (cmd === "trial" || cmd === "trials") {
+      const USAGE = "mc trial report red-team [--ws slug] [--days 30] [--json]";
+      if ((pos[1] || "report") !== "report") die(USAGE);
+      const name = pos[2] || "red-team";
+      const q = new URLSearchParams();
+      const ws = [opt.ws, opt.workspace].find((v) => v && v !== "true");
+      if (ws) q.set("workspace", String(ws));
+      if (opt.days && opt.days !== "true") q.set("days", String(opt.days));
+      const r = await req("GET", `/trials/${encodeURIComponent(name)}/report${q.toString() ? `?${q}` : ""}`);
+      if (opt.json) return console.log(JSON.stringify(r, null, 2));
+      if (!r.workspaces.length) return console.log(`no analysis has been handed off in the last ${r.days} days — nothing to compare yet`);
+      const per = (n, d) => (d ? (n / d).toFixed(1) : "—");
+      const min = (m) => (m == null ? "—" : m >= 120 ? `${(m / 60).toFixed(1)}h` : `${m}m`);
+      const of = (n, d) => (d ? `${n} of ${d}` : "—");
+      const asp = (a) => Object.entries(a).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(" · ") || "—";
+      const out = [];
+      for (const w of r.workspaces) {
+        const { on, off } = w.arms;
+        const row = (label, a, b) => `  ${label.padEnd(34)} ${String(a).padEnd(16)} ${b}`;
+        out.push(
+          `red-team trial · ${w.workspace.name} · now ${w.trial_on ? "ON" : "off"} · last ${r.days} days`,
+          row("", "trial on", "trial off"),
+          row("analyses handed off", on.analyses, off.analyses),
+          row("  opened with the protocol", of(on.protocol, on.analyses), "—"),
+          row("  with a hypotheses table", of(on.with_hypotheses, on.analyses), of(off.with_hypotheses, off.analyses)),
+          row("verifier rounds per analysis", per(on.rounds, on.analyses), per(off.rounds, off.analyses)),
+          row("  sent back for its own checks", of(on.rejected, on.analyses), of(off.rejected, off.analyses)),
+          `  what was sent back, on:  ${asp(on.aspects)}`,
+          `  what was sent back, off: ${asp(off.aspects)}`,
+          `  red team: ran on ${on.red_team.ran}${on.red_team.skipped ? ` (${on.red_team.skipped} skipped)` : ""} · ${on.red_team.findings} finding${on.red_team.findings === 1 ? "" : "s"} · ${on.red_team.changed} led to a change · ${on.red_team.answered - on.red_team.changed} did not hold · ${Math.max(0, on.red_team.findings - on.red_team.answered)} unanswered`,
+          row("operator follow-ups per analysis", per(on.operator_turns, on.analyses), per(off.operator_turns, off.analyses)),
+          row("ready for him", of(on.ready, on.analyses), of(off.ready, off.analyses)),
+          row("  time to ready (median)", min(on.ask_to_ready_min), min(off.ask_to_ready_min)),
+          row("  first hand-off → ready", min(on.handoff_to_ready_min), min(off.handoff_to_ready_min)),
+        );
+        if (!w.verifier_on) out.push("  (the verifier is off in this workspace: no rounds, no red team, no time to ready)");
+        if (on.analyses < 3 || off.analyses < 3) out.push(`  (fewer than 3 analyses in an arm — too few to say yet${!off.analyses ? "; the off arm fills while the trial is off" : ""})`);
+        out.push("");
+      }
+      return console.log(out.join("\n").trimEnd());
+    }
     // The executor (src/executor.ts): it carries out the operator's recorded yes — nothing here makes
     // or uses an approval (only his own device does, through POST /api/ledger/:id/decision).
     if (cmd === "executor") {
@@ -3465,7 +3513,9 @@ function askCap(question) {
       const sid = process.env.MC_SESSION || die("no MC_SESSION — `mc outcome` only works inside a terminal session");
       const USAGE =
         'mc outcome "<summary: one or two plain sentences>" [--change "…"]… [--proof "…"]… [--shot before-<screen>-phone=a.png --shot after-<screen>-phone=b.png]… ' +
-        "[--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped \"merged #12\"]… | mc outcome --shipped \"deployed\" | mc outcome show | mc outcome clear";
+        "[--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped \"merged #12\"]… " +
+        "[--hypothesis \"<claim> | <test that would falsify it> | survived|rejected\"]… [--finding \"F1=fixed: <what changed>\" | \"F1=holds-not: <why>\"]… " +
+        "| mc outcome --shipped \"deployed\" | mc outcome show | mc outcome clear";
       if (pos[1] === "show") {
         const d = await req("GET", `/sessions/${sid}/decisions`);
         const o = d.outcome;
@@ -3477,6 +3527,8 @@ function askCap(question) {
           ...o.shots.map((x) => `  🖼 ${x.label}`),
           ...o.prs.map((u) => "PR: " + u),
           ...(o.shipped.length ? ["Shipped: " + o.shipped.join(" · ")] : []),
+          ...(o.hypotheses?.length ? ["Hypotheses:", ...o.hypotheses.map((h) => `  [${h.result}] ${h.claim}${h.test ? ` — test: ${h.test}` : ""}`)] : []),
+          ...(o.findings?.length ? ["Red team:", ...o.findings.map((f) => `  ${f.id}${f.claim ? ` (${f.claim})` : ""}: ${f.resolution === "fixed" ? "fixed" : "does not hold"} — ${f.note}`)] : []),
           `Asks for: ${o.ask}`,
         ].join("\n"));
       }
@@ -3497,16 +3549,24 @@ function askCap(question) {
         const r = await req("POST", `/sessions/${sid}/outcome/shot`, { label, ext, data_base64: bytes.toString("base64") });
         shots.push({ name: r.name, label });
       }
+      // The red-team trial's two tables (src/red-team.ts), only when given: a plain hand-off is what it always was.
+      const hypotheses = vals("hypothesis"), findings = vals("finding");
       const o = await req("POST", `/sessions/${sid}/outcome`, {
         summary, changes: vals("change"), proof: vals("proof"), prs: vals("pr"), shots, ask, shipped: vals("shipped"),
+        ...(hypotheses.length ? { hypotheses } : {}), ...(findings.length ? { findings } : {}),
       });
       const dropped = vals("pr").length - o.prs.length;
+      const hyp = o.hypotheses?.length || 0, ans = o.findings?.length || 0;
+      const badAnswers = findings.length - ans;
       return console.log(
         `📦 hand-off filed — ${o.changes.length} change${o.changes.length === 1 ? "" : "s"}, ${o.proof.length} proof line${o.proof.length === 1 ? "" : "s"}, ` +
         `${o.shots.length} screenshot${o.shots.length === 1 ? "" : "s"}, ${o.prs.length} PR${o.prs.length === 1 ? "" : "s"} · asks for: ${o.ask}` +
         (o.shipped?.length ? ` · shipped: ${o.shipped.join(" · ")}` : "") +
         (o.earlier ? ` · ${o.earlier} earlier hand-off${o.earlier === 1 ? "" : "s"} kept under it` : "") +
-        (dropped > 0 ? `\n(${dropped} --pr value${dropped === 1 ? " was" : "s were"} not a full https://github.com/<owner>/<repo>/pull/<n> link and ${dropped === 1 ? "was" : "were"} left out)` : ""),
+        (hyp ? ` · ${hyp} hypothes${hyp === 1 ? "is" : "es"}` : "") +
+        (ans ? ` · ${ans} red-team finding${ans === 1 ? "" : "s"} answered` : "") +
+        (dropped > 0 ? `\n(${dropped} --pr value${dropped === 1 ? " was" : "s were"} not a full https://github.com/<owner>/<repo>/pull/<n> link and ${dropped === 1 ? "was" : "were"} left out)` : "") +
+        (badAnswers > 0 ? `\n(${badAnswers} --finding value${badAnswers === 1 ? " was" : "s were"} not "F1=fixed: <what changed>" or "F1=holds-not: <why it does not hold>" and ${badAnswers === 1 ? "was" : "were"} left out)` : ""),
       );
     }
     if (cmd === "ask-robert" || cmd === "askrobert" || cmd === "ask-lead" || cmd === "asklead") {
