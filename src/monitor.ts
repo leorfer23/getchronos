@@ -15,6 +15,7 @@ import { kb, type Btn } from "./telegram/keyboards.js";
 import { maybeHygiene, reapEphemeralJobs } from "./hygiene.js";
 import { maybeDream } from "./dream.js";
 import { maybeRetro } from "./retro.js";
+import { networkUp } from "./net-up.js";
 import { maybeLearnProse } from "./prose.js";
 import { maybeExpireIdeas, maybeMineIdeas } from "./ideas.js";
 import { pollDeliveries } from "./delivery.js";
@@ -604,7 +605,7 @@ export function startMonitor() {
       await maybeHygiene();
       await maybeDream();
       // Weekly, caught up after sleep; gathers in the background so a slow week never stalls this tick.
-      void maybeRetro().catch((e) => console.warn("[retro]", e?.message ?? e));
+      void maybeRetro({ network: networkUp }).catch((e) => console.warn("[retro]", e?.message ?? e));
       maybeLearnProse();
       reapEphemeralJobs();
       maybeExpireIdeas();
