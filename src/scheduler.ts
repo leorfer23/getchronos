@@ -4,6 +4,7 @@ import { dispatch } from "./dispatcher.js";
 import { onceDecision } from "./once.js";
 import { missedFire } from "./cron-catchup.js";
 import { CONFIG } from "./config.js";
+import { brainAwakeSince } from "./brain-awake.js";
 import type { Job } from "./types.js";
 
 const tasks = new Map<string, Cron>();
@@ -68,6 +69,32 @@ function fireCron(job: Job, trigger: string): void {
   }
 }
 
+/**
+ * A cron fire waits until the Mac has been awake this long. A fire it slept through comes due in the next
+ * dark wake — 2 seconds, no network — so the run started, the Mac slept again, and the run timed out on
+ * the wake after (2026-11-12, reap-stale-worktrees-chronos). A Mac in use is long past it; the minute
+ * after the lid opens is the only fire it delays.
+ */
+const AWAKE_BEFORE_FIRE_MS = 60_000;
+/** How long a cron fire at `nowMs` waits for the Mac to have been awake a minute; 0 = fire now. */
+export function cronFireWait(nowMs: number, awakeSinceMs: number): number {
+  return Math.min(AWAKE_BEFORE_FIRE_MS, Math.max(0, AWAKE_BEFORE_FIRE_MS - (nowMs - awakeSinceMs)));
+}
+const waitingToFire = new Set<string>();
+/** The cron fire, held until the Mac has been awake a minute — re-checked each time, so a later dark wake waits again. */
+export function fireCronWhenAwake(job: Job): void {
+  const wait = cronFireWait(Date.now(), brainAwakeSince());
+  if (wait === 0) return fireCron(job, "cron");
+  if (waitingToFire.has(job.id)) return;
+  waitingToFire.add(job.id);
+  console.log(`[scheduler] ${job.name} waits ${Math.ceil(wait / 1000)}s — the Mac just woke (a dark wake has no network)`);
+  setTimeout(() => {
+    waitingToFire.delete(job.id);
+    const cur = jobs.get(job.id); // disabled or deleted while it waited → no fire
+    if (cur?.enabled && cur.cron_expr) fireCronWhenAwake(cur);
+  }, wait).unref?.();
+}
+
 // Rebuild all cron registrations from the jobs table. Called on boot and on any job CRUD.
 export function reloadSchedules(): void {
   for (const c of tasks.values()) c.stop();
@@ -81,7 +108,7 @@ export function reloadSchedules(): void {
         // protect: block re-entry while the callback itself is still on the stack/promise;
         // hasInflight covers the longer case where the prior run is still queued/executing.
         { timezone: job.timezone || "UTC", name: job.id, protect: true },
-        () => fireCron(job, "cron")
+        () => fireCronWhenAwake(job)
       );
       tasks.set(job.id, cron);
     } catch (e) {

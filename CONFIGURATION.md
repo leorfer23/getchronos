@@ -89,6 +89,11 @@ CHRONOS_PROTECTED_DIRS_EXTRA=/Users/you/code
 CHRONOS_PROTECTED_SECRETS_EXTRA=/Users/you/code/api/.env:/Users/you/code/api/.dev.vars
 ```
 
+Files an agent makes for you (a spreadsheet, a PDF, an export) go in `~/Downloads/<Workspace name>/`.
+Each workspace's agents get their own folder there, and every other workspace's folder is denied to
+them, including the folder a workspace had before it was renamed. `CHRONOS_DOWNLOADS_DIR` moves the
+parent (default `~/Downloads`).
+
 ### 3. Point it at your accounts
 
 A **profile** is a CLI config directory: its own login, settings, skills and MCP servers. Whichever
@@ -347,6 +352,8 @@ point Chronos at a repo you care about:
 | `CHRONOS_JOB_CHECK` | on | the daily job check (`src/job-check.ts`); `0` removes the check jobs |
 | `CHRONOS_JOB_CHECK_CRON` | `0 17 * * *` | when it runs |
 | `CHRONOS_JOB_CHECK_AUTO_RERUN` | off | default of ⚙ Settings → *Daily job check fixes and re-runs failed jobs*. Off: a red check files a recovery card and waits for you. On: a terminal opens at once to fix and re-run. An install that had projects before this existed is pinned on (migration 160) |
+| `CHRONOS_TRIGGERS` | on | default of ⚙ Settings → *Triggers open work* (`mc trigger`, `src/ws-triggers.ts`). `0`: no workspace trigger looks at anything or opens work |
+| `CHRONOS_TRIGGER_QUIET_HOURS` | empty | default of ⚙ Settings → *Trigger quiet hours*, local `start-end` (`22-07`). Inside them triggers neither look nor open work; what happened meanwhile is seen once they end |
 | `CHRONOS_RECOVER_MAX_ASK` | `3` | recovery cards open at once |
 | `CHRONOS_MONITOR_MIN` | `5` | general sweep cadence |
 | `CHRONOS_CI_POLL_SEC` | `25` | fast CI poll while a PR is open |
@@ -725,6 +732,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_CONNECTOR_SYNC_MIN` | `30` | `src/config.ts` |
 | `CHRONOS_CONNECTOR_SYNC_RETAIN` | `2000` | `src/config.ts` |
 | `CHRONOS_CRON_CATCHUP_HOURS` | `24` | `src/config.ts` |
+| `CHRONOS_CRITIC_DIR` | `~/.mc/critic` (one subdir per workspace, denied to every other workspace) | `src/repo-root.ts` |
 | `CHRONOS_CURSOR_BIN` | `"cursor-agent"` | `src/config.ts` |
 | `CHRONOS_DAILY_BUDGET` | `0` | `src/config.ts` |
 | `CHRONOS_DAY_HEARTBEAT` | `"1"` | `src/config.ts` |
@@ -899,6 +907,8 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_TERMINAL_FAILOVER_TYPING_SEC` | `20` | `src/config.ts` |
 | `CHRONOS_STUCK_RUN_HRS` | `2` | `src/config.ts` |
 | `CHRONOS_STUCK_SESSION_HRS` | `8` | `src/config.ts` |
+| `CHRONOS_STYLE_LEARN` | on (`0` = the house style page is rewritten only by `mc style learn`) | `src/house-style.ts` |
+| `CHRONOS_STYLE_MODEL` | `CHRONOS_PROSE_MODEL` (`opus`) | `src/house-style.ts` |
 | `CHRONOS_TERM_INPUT_MAX` | `12` | `src/terminal.ts` |
 | `CHRONOS_TERM_QUIET_MS` | `6000` | `src/terminal.ts` |
 | `CHRONOS_TERM_SCROLLBACK` | `500` | `src/term-screen.ts` |
@@ -939,6 +949,7 @@ literal default: the value is either optional, computed, or a feature switch tha
 | `CHRONOS_WHISPER_PORT` | `7778` | `scripts/install-launchd.mjs`, `src/voice-setup.ts` |
 | `CHRONOS_TTS_URL` | `"http://127.0.0.1:7779"` (Kokoro, `scripts/tts-server.py`); `off` = `say` only | `src/speak.ts` |
 | `CHRONOS_VAPID_FILE` | `path.join` | `src/push.ts` |
+| `CHRONOS_VERIFIER_CRITIC` | on (`0` = the visual critic is off by default; per workspace in ⚙ Settings → Safety) | `src/visual-critic.ts` |
 | `CHRONOS_VERIFY_MODE` | `"enforce"` | `src/config.ts` |
 | `CHRONOS_VOICE_EN` | best installed male voice, else `"Zoe (Premium)"` | `src/speak.ts` |
 | `CHRONOS_VOICE_ES` | best installed male voice, else `"Marisol (Premium)"` | `src/speak.ts` |

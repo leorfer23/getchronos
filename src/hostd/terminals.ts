@@ -30,6 +30,7 @@ import { installMcCli, installMcSkill, syncAgentsMd } from "../agent-prep.js";
 import { ensureBypassAccepted, ensureTrustedCwd } from "../claude-trust.js";
 import { ensureGrokTrustedCwd } from "../grok-trust.js";
 import { installClaudeHooks, installCursorHooks, installGrokHooks } from "../term-hooks.js";
+import { installClaudeSendGate } from "../no-send.js";
 import { sandboxAvailable, sandboxWrap, workspaceSandboxAllow } from "../sandbox.js";
 import { niceWrap } from "../machine.js";
 import { ensureDropDir, saveDrop } from "../drops.js";
@@ -405,8 +406,10 @@ export class HostTerminals {
     // Hooks rewrite the CLI's USER config; tests spawn with real-looking profiles and must never.
     if (!process.env.CHRONOS_TEST) {
       try {
-        if (backend === "claude-code") installClaudeHooks(profileDir);
-        else if (backend === "cursor-agent") installCursorHooks(path.join(this.home, ".cursor"));
+        if (backend === "claude-code") {
+          installClaudeHooks(profileDir);
+          installClaudeSendGate(profileDir); // no-send.ts: the operator's own sessions in this profile too
+        } else if (backend === "cursor-agent") installCursorHooks(path.join(this.home, ".cursor"));
         else if (backend === "grok") installGrokHooks(path.join(this.home, ".grok"));
       } catch (e: any) {
         console.warn(`[host] ${backend} card hooks install failed: ${e?.message ?? e}`);

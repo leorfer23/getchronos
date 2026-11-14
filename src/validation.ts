@@ -96,6 +96,9 @@ export const OpenSessionSchema = z.object({
   resumeAgent: z.boolean().optional(),
   /** Pin the terminal to a connected host (HOSTS.md phase 3), by id or name. Unset = the brain. */
   host_id: z.string().max(80).nullable().optional(),
+  /** `mc session new --from <id>`: open it with that finished terminal's hand-off, in its workspace
+   *  and repo (src/fresh-terminal.ts). Never another workspace's. */
+  from: id.optional(),
 });
 
 export const AgentNameSchema = z.object({
@@ -120,7 +123,7 @@ export const SessionStatusSchema = z.object({
   state: z.enum(["working", "waiting", "blocked", "decide", "review", "done", "idle"]),
   label: z.string().max(400).nullable().optional(),
   reason: z.enum(["hitl", "approval", "question", "budget", "gate", "stall", "recovery", "review", "auth"]).nullable().optional(),
-  on: z.enum(["subagents", "ci", "terminal", "command", "robert", "person", "deploy", "other"]).nullable().optional(),
+  on: z.enum(["subagents", "ci", "terminal", "command", "query", "job", "robert", "person", "deploy", "other"]).nullable().optional(),
   eta_min: z.number().positive().max(7 * 24 * 60).nullable().optional(),
 });
 /** `mc progress 2/5 "label"` — null clears. */
@@ -216,6 +219,9 @@ export const SessionOutcomeSchema = z.object({
   // The red-team trial (src/red-team.ts): "<claim> | <test> | survived" and "F1=fixed: <what changed>".
   hypotheses: z.array(z.string().max(1000)).max(12).optional(),
   findings: z.array(z.string().max(1000)).max(12).optional(),
+  // A data PR's before/after numbers (`mc outcome --data-diff`); its shape is read leniently by
+  // data-diff.ts normalizeDataDiff, so here only its size is bounded.
+  data_diff: z.record(z.string(), z.unknown()).refine((v) => JSON.stringify(v).length <= 40_000, "data_diff is capped at 40 000 characters").optional(),
 });
 /** One screenshot for a hand-off, as base64 (≤6 MB decoded — the app-wide JSON limit is 16 MB). */
 export const SessionShotSchema = z.object({
@@ -245,6 +251,10 @@ export const SessionInputSchema = z
     // background and it reads the line in the same turn (sendInput). Ignored by every other CLI.
     now: z.boolean().optional(),
     by: z.string().max(60).optional(),
+    // `mc session send --goal`: this text is NEW work, for this goal. A terminal whose goal is already
+    // finished gets a fresh terminal for it instead, with a hand-off (src/fresh-terminal.ts). Without
+    // it the text is a follow-up and is typed in.
+    goal: z.string().min(1).max(400).optional(),
   })
   .refine((b) => !!b.text || !!b.key || !!b.keys?.length, { message: "pass text, key or keys" });
 
@@ -566,6 +576,8 @@ const repoFields = {
   review_min_difficulty: z.number().int().min(0).max(5).nullable().optional(),
   post_merge_cmd: z.string().nullable().optional(),
   ideas_enabled: z.boolean().optional(),
+  // Is it a data repo (its PRs owe the verifier a data diff)? null = decide from the checkout.
+  data_repo: z.boolean().nullable().optional(),
 };
 const repoObject = z.object(repoFields);
 
@@ -1140,9 +1152,14 @@ export const NewInboxItemSchema = z.object({
   actor: z.string().trim().max(200).optional(),
   ref: z.string().trim().max(120).optional(),
   urgent: z.boolean().optional(),
+  // The conversation, when the feed names it (a Slack `<channel id>:<thread root ts>`). Otherwise it is
+  // read off the permalink / key / ref (src/inbox-thread.ts).
+  thread: z.string().trim().max(300).optional(),
 });
 // Close a row whose ask already happened — the triage/cleanup job's reason is what the Desk shows.
 export const InboxResolveSchema = z.object({ reason: z.string().trim().min(1).max(300) });
+// The operator's Merge on the Desk's "same conversation?" suggestion: the row this one folds into.
+export const InboxMergeSchema = z.object({ into: z.string().trim().min(8).max(64) });
 // The cleanup job's ranking of one client's open inbox rows and notes, most important first.
 const RankEntry = z.object({
   id: z.string().trim().min(8).max(64),
@@ -1218,6 +1235,33 @@ export const NewContinuationSchema = z.object({
 });
 export const FireContinuationSchema = z.object({ evidence: z.string().max(2000).nullable().optional(), by: z.string().max(80).nullable().optional() });
 export const CancelContinuationSchema = z.object({ why: z.string().max(400).nullable().optional() });
+// Workspace triggers (src/ws-triggers.ts, `mc trigger`). Shape only — parseTrigger reads the meaning and
+// says what is wrong in words; resolveTrigger checks every name against the workspace.
+const optText = (n: number) => z.string().max(n).nullable().optional();
+export const NewWsTriggerSchema = z.object({
+  kind: z.string().trim().min(1).max(20),
+  target: optText(4000),
+  name: optText(80),
+  on: optText(20),
+  until: optText(20),
+  from: optText(200),
+  match: optText(200),
+  lines: z.boolean().nullable().optional(),
+  band: optText(60),
+  within: optText(20),
+  action: optText(20),
+  inbox: z.boolean().nullable().optional(),
+  goal: optText(400),
+  skill: optText(80),
+  playbook: optText(80),
+  repo: optText(200),
+  dedupe: optText(80),
+  rate: optText(20),
+  every: z.union([z.string().max(20), z.number()]).nullable().optional(),
+  cron: optText(80),
+  workspace_id: optText(64),
+});
+export const PatchWsTriggerSchema = z.object({ enabled: z.boolean(), why: optText(300) });
 /** ✓ Done on an inbox row: his hours on the task (Jira Hours Spent / a ClickUp time entry) and an optional comment. */
 export const InboxDoneSchema = z.object({
   hours: z.number().positive().max(999).optional(),

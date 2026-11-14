@@ -467,13 +467,17 @@ export function pickReviewer(
 
 export const MAX_ROUNDS = 2;
 
-/** One line typed into the terminal: what failed, and what to do. Rounds are counted from 1. */
+/** Room for one reason in the line: a list (the code review's findings, a data diff's gaps) gets more than a sentence. */
+const REASON_CAP: Partial<Record<CheckName, number>> = { code_review: 1500, data_diff: 1000 };
+const LINE_CAP = 2800;
+
+/** One line typed into the terminal: what failed, and what to do. Rounds are counted from 1. What to do is never cut. */
 export function tellLine(round: number, reasons: string[]): string {
   const last = round >= MAX_ROUNDS;
-  return one(
-    `[verifier] Not ready for the operator yet (round ${round} of ${MAX_ROUNDS}): ${reasons.map((r) => one(r, 300)).join(" · ")}. ` +
-      `Fix it, push, and file \`mc outcome\` again — it is re-checked on the new hand-off.` +
-      (last ? " This is the last round: after it, the request goes to the operator as not ready, with this reason." : ""),
-    1800,
-  );
+  const head = `[verifier] Not ready for the operator yet (round ${round} of ${MAX_ROUNDS}): `;
+  const tail =
+    `. Fix it, push, and file \`mc outcome\` again — it is re-checked on the new hand-off.` +
+    (last ? " This is the last round: after it, the request goes to the operator as not ready, with this reason." : "");
+  const body = reasons.map((r) => one(r, REASON_CAP[r.split(":")[0] as CheckName] ?? 300)).join(" · ");
+  return head + one(body, LINE_CAP - head.length - tail.length) + tail;
 }

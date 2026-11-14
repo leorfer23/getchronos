@@ -18,6 +18,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { normalizeDataDiff } from "./data-diff.js";
 import { parseFindingAnswer, parseHypothesis } from "./red-team.js";
 import type { FindingAnswer, Hypothesis, Outcome, Ship, Shown } from "./types.js";
 
@@ -124,7 +125,8 @@ export function fileOutcome(
   const newPr = latest.prs.length > 0 && next.prs.some((u) => !latest.prs.includes(u));
   if (next.shipped.length && !latest.shipped.length && !newPr) {
     const keep = <K extends "changes" | "proof" | "prs" | "shots">(k: K) => (next[k].length ? next[k] : latest[k]);
-    return { latest: { ...next, changes: keep("changes"), proof: keep("proof"), prs: keep("prs"), shots: keep("shots") }, earlier };
+    const data_diff = next.data_diff ?? latest.data_diff;
+    return { latest: { ...next, changes: keep("changes"), proof: keep("proof"), prs: keep("prs"), shots: keep("shots"), ...(data_diff ? { data_diff } : {}) }, earlier };
   }
   const followUp =
     (latest.shipped.length > 0 && !next.shipped.length) || newPr ||
@@ -169,6 +171,8 @@ export function normalizeOutcome(sessionId: string, body: any, now = new Date())
   const hypotheses = list(body?.hypotheses, 6, 1000).map(parseHypothesis).filter((h): h is Hypothesis => !!h);
   const answers = new Map<string, FindingAnswer>();
   for (const a of list(body?.findings, 8, 1000).map(parseFindingAnswer)) if (a) answers.set(a.id, a); // a repeated id: the last word stands
+  // A data PR's before/after numbers (src/data-diff.ts): kept only when it is one, clipped like the rest.
+  const data_diff = normalizeDataDiff(body?.data_diff);
   return {
     // Empty only for a `--shipped`-only re-file, which fileOutcome() folds into the hand-off on top.
     summary: clip(body?.summary, 600),
@@ -178,6 +182,7 @@ export function normalizeOutcome(sessionId: string, body: any, now = new Date())
     shots,
     ask,
     shipped: list(body?.shipped, 4, 160),
+    ...(data_diff ? { data_diff } : {}),
     at: now.toISOString(),
     ...(hypotheses.length ? { hypotheses } : {}),
     ...(answers.size ? { findings: [...answers.values()] } : {}),
