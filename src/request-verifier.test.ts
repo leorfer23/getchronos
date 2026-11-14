@@ -13,7 +13,10 @@ import { requests } from "./store/requests.js";
 import * as L from "./ledger.js";
 import * as V from "./request-verifier.js";
 import { draftHash } from "./ledger-model.js";
+import { normalizeDataDiff } from "./data-diff.js";
+import { repoMemory } from "./store/review-memory.js";
 import { setRemoteReader } from "./pr-ownership.js";
+import { setRepoMemoryEdges } from "./repo-memory.js";
 import { writeSetting, _resetSettingsCache } from "./settings.js";
 import { isReadOnlyRun } from "./runner.js";
 import type { Outcome, Session } from "./types.js";
@@ -31,27 +34,40 @@ type World = {
   gates: Array<{ ok: boolean; output?: string }>; verdict: string | null; told: Array<{ sid: string; text: string }>;
   reviews: number; gateRuns: number; heavy: number; draft: { kind: "slack" | "email"; to: string | null; channel: string | null; subject: string | null; text: string | null } | null;
   prompts: string[];
+  /** The code reviewer (label "code"): its answer, its runs, its prompts and the engine each ran on. */
+  diff: string; codeVerdict: string | null; codeReviews: number; codePrompts: string[]; codeEngines: string[]; passing: string[];
+  /** Every gh call the repo memory made, GitHub's answer to it, and the helper model's rewrite. */
+  gh: string[][]; ghData: unknown; distilled: string | null;
 };
 let w: World;
 let stubs: Partial<V.VerifierDeps> = {};
 function stub() {
-  w = { head: HEAD_A, files: ["src/retry.ts", "src/retry.test.ts"], behind: 0, gitHead: HEAD_A, dirty: false, gates: [{ ok: true }], verdict: 'VERDICT {"pass":true,"reasons":["does what was asked"],"risks":[]}', told: [], reviews: 0, gateRuns: 0, heavy: 0, draft: null, prompts: [] };
+  w = {
+    head: HEAD_A, files: ["src/retry.ts", "src/retry.test.ts"], behind: 0, gitHead: HEAD_A, dirty: false, gates: [{ ok: true }], verdict: 'VERDICT {"pass":true,"reasons":["does what was asked"],"risks":[]}', told: [], reviews: 0, gateRuns: 0, heavy: 0, draft: null, prompts: [],
+    diff: "diff --git a/src/retry.ts b/src/retry.ts\n+retry()", codeVerdict: 'REVIEW {"findings":[]}', codeReviews: 0, codePrompts: [], codeEngines: [], passing: [],
+    gh: [], ghData: { data: { repository: { pullRequests: { nodes: [] } } } }, distilled: null,
+  };
   stubs = {
-    prRead: async () => ({ state: "OPEN", isDraft: false, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", headRefOid: w.head, baseRefName: "main", files: w.files, ci: null, failing: [] }),
+    prRead: async () => ({ state: "OPEN", isDraft: false, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", headRefOid: w.head, baseRefName: "main", files: w.files, ci: null, failing: [], passing: w.passing }),
     behindBy: async () => w.behind,
-    prDiff: async () => "diff --git a/src/retry.ts b/src/retry.ts\n+retry()",
+    prDiff: async () => w.diff,
     gitState: async () => ({ head: w.gitHead, dirty: w.dirty }),
     runGates: async (_ws, _cwd, gates) => { w.gateRuns++; return gates.map((g, i) => ({ name: g.name, cmd: g.cmd, ok: w.gates[i]?.ok ?? true, ms: 1200, output: w.gates[i]?.output ?? "ok" })); },
     heavy: async (_ws, _label, fn) => { w.heavy++; return fn(); },
-    review: async (_ws, prompt) => { w.reviews++; w.prompts.push(prompt); return { text: w.verdict, run_id: "run-1", status: "success" }; },
+    review: async (_ws, prompt, o) => {
+      if (o.label === "code") { w.codeReviews++; w.codePrompts.push(prompt); w.codeEngines.push(`${o.backend} ${o.model}`); return { text: w.codeVerdict, run_id: `code-${w.codeReviews}`, status: "success" }; }
+      w.reviews++; w.prompts.push(prompt); return { text: w.verdict, run_id: "run-1", status: "success" };
+    },
     tell: async (sid, text) => { w.told.push({ sid, text }); return null; },
     draftText: async () => w.draft,
   };
   V.setVerifierDeps(stubs);
+  // The repo memory reads GitHub and asks a helper model: both stubbed, so a test never reaches either.
+  setRepoMemoryEdges({ gh: async (args) => { w.gh.push(args); return JSON.stringify(w.ghData); }, distill: async () => w.distilled });
 }
 
 beforeEach(() => {
-  db.exec("DELETE FROM request_verifications; DELETE FROM request_checks; DELETE FROM request_decisions; DELETE FROM request_deliverables; DELETE FROM request_terminals; DELETE FROM requests; DELETE FROM asks; DELETE FROM sessions;");
+  db.exec("DELETE FROM request_verifications; DELETE FROM request_checks; DELETE FROM request_decisions; DELETE FROM request_deliverables; DELETE FROM request_terminals; DELETE FROM requests; DELETE FROM asks; DELETE FROM sessions; DELETE FROM code_reviews; DELETE FROM repo_review_memory;");
   L.resetLedgerMemory();
   V.resetVerifierMemory();
   kv.set("ledger.since", "2000-01-01T00:00:00.000Z");
@@ -59,15 +75,27 @@ beforeEach(() => {
 });
 
 let n = 0;
-function world(kind: "pr" | "ui" | "investigation" = "pr", gate = true, goal = "retry failed uploads") {
-  const ws = workspaces.create({ slug: `acme-${Math.random().toString(36).slice(2, 8)}`, name: "acme", config_dir: `/tmp/vf-${Math.random()}` } as any);
-  const repo = repos.create({ workspace_id: ws.id, name: `app${n}`, path: wt, git_remote: `https://github.com/acme${n}/app.git`, gate_cmds: gate ? JSON.stringify([{ name: "test", cmd: "npm test" }]) : null } as any);
+type WorldOpts = { repoPath?: string; repoName?: string; remote?: string; backend?: string; model?: string | null; ws?: Record<string, unknown> };
+function world(kind: "pr" | "ui" | "investigation" = "pr", gate = true, goal = "retry failed uploads", o: WorldOpts = {}) {
+  const ws = workspaces.create({ slug: `acme-${Math.random().toString(36).slice(2, 8)}`, name: "acme", config_dir: `/tmp/vf-${Math.random()}`, ...o.ws } as any);
+  const remote = o.remote ?? `https://github.com/acme${n}/app.git`;
+  const repo = repos.create({ workspace_id: ws.id, name: o.repoName ?? `app${n}`, path: o.repoPath ?? wt, git_remote: remote, gate_cmds: gate ? JSON.stringify([{ name: "test", cmd: "npm test" }]) : null } as any);
   setRemoteReader(() => null); // drop pr-ownership's memo: the repo above is new
-  const s = sessions.create({ workspace_id: ws.id, repo_id: repo.id, cwd: wt, goal, goal_kind: kind, created_by: "operator", backend: "claude-code", model: "opus" } as any);
+  const s = sessions.create({ workspace_id: ws.id, repo_id: repo.id, cwd: wt, goal, goal_kind: kind, created_by: "operator", backend: o.backend ?? "claude-code", model: o.model === undefined ? "opus" : o.model } as any);
   L.onLedgerEvent({ topic: "session.started", session_id: s.id });
-  const url = `https://github.com/acme${n++}/app/pull/12`;
+  n++;
+  const url = `https://github.com/${remote.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "")}/pull/12`;
   return { ws, repo, s: sessions.get(s.id)!, url };
 }
+/** A checkout on disk with these files: what makes a repo a data repo is read from it. */
+const checkout = (files: Record<string, string>) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "verifier-data-"));
+  for (const [rel, body] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), body);
+  }
+  return root;
+};
 let tick = 0;
 function handOff(s: Session, over: Partial<Outcome> = {}): Outcome {
   const cur = sessions.get(s.id)!;
@@ -441,4 +469,236 @@ test("the second reader is a read-only run: it never parks on an ask, and cannot
   const out = await pending.finally(() => clearInterval(keepAlive));
   assert.equal(out.status, "success", "finished, not paused");
   assert.notEqual(runs.get(run.id)!.status, "paused");
+});
+
+// ───────────────────────────── data PRs: the data diff ─────────────────────────────
+
+const ORDERS_DIFF = {
+  range: "2026-10-01..2026-10-07",
+  models: [{ name: "fct_orders", rows: { before: 1200, after: 1188 }, aggregates: [{ name: "sum(amount)", before: 52340, after: 52101 }], cmd: "select count(*), sum(amount) from fct_orders where order_day between '2026-10-01' and '2026-10-07'" }],
+  tests: [{ cmd: "dbt build -s fct_orders", result: "Done. PASS=12 WARN=0 ERROR=0 SKIP=0 TOTAL=12" }],
+};
+
+test("data_diff is owed only by a data repo's PR that changes models: told back without one, a pass with one, n/a elsewhere", async () => {
+  const { s, url } = world("pr", true, "fix the order totals", { repoPath: checkout({ "dbt_project.yml": "name: shop" }) });
+  w.files = ["models/marts/fct_orders.sql", "tests/assert_order_totals.sql"];
+  handOff(s, { prs: [url] });
+  const r = reqOf(s);
+  const one = await V.verifyRequest(r.id);
+  assert.equal(one.ready, false);
+  assert.equal(latestCheck(r.id, "data_diff")!.status, "fail");
+  assert.match(w.told[0].text, /data_diff: this PR changes 1 model\/SQL\/transform file \(models\/marts\/fct_orders\.sql\) in a data repo and the hand-off has no data diff/);
+  assert.match(w.told[0].text, /--data-diff diff\.json/);
+  assert.match(w.told[0].text, /own warehouse tools and vars \(`mc vars`\)/);
+  handOff(s, { prs: [url], summary: "order totals fixed, with the data diff", data_diff: normalizeDataDiff(ORDERS_DIFF)! });
+  const two = await V.verifyRequest(r.id);
+  const dd = latestCheck(r.id, "data_diff")!;
+  assert.equal(dd.status, "pass", dd.note!);
+  assert.match(dd.note!, /dbt build -s fct_orders → Done\. PASS=12/);
+  assert.equal(two.ready, true, two.reason ?? "");
+  // The same files in a repo that is not a data repo owe no data diff: n/a — not missing, not a pass.
+  const app = world("pr");
+  w.files = ["models/marts/fct_orders.sql", "tests/assert_order_totals.sql"];
+  handOff(app.s, { prs: [app.url] });
+  const r2 = reqOf(app.s);
+  const out = await V.verifyRequest(r2.id);
+  assert.equal(latestCheck(r2.id, "data_diff")!.status, "na");
+  assert.equal(out.ready, true, out.reason ?? "");
+  const q = L.queueView(undefined).items.find((i) => i.request_id === r2.id)!;
+  assert.match(q.line, /checks pass \(not checked: regression\)/, "an n/a slot is not said as a gap");
+});
+
+test("the operator's word on a repo wins: a repo set as a data repo owes the diff, one set as not owes nothing", async () => {
+  const yes = world("pr", true, "fix the export", { repoPath: checkout({ "src/export.ts": "" }) });
+  repos.update(yes.repo.id, { data_repo: true });
+  w.files = ["sql/export.sql", "src/export.test.ts"];
+  handOff(yes.s, { prs: [yes.url] });
+  await V.verifyRequest(reqOf(yes.s).id);
+  assert.equal(latestCheck(reqOf(yes.s).id, "data_diff")!.status, "fail");
+  const no = world("pr", true, "fix the export", { repoPath: checkout({ "dbt_project.yml": "" }) });
+  repos.update(no.repo.id, { data_repo: false });
+  handOff(no.s, { prs: [no.url] });
+  await V.verifyRequest(reqOf(no.s).id);
+  const c = latestCheck(reqOf(no.s).id, "data_diff")!;
+  assert.equal(c.status, "na");
+  assert.match(c.note!, /setting says it is not a data repo/);
+});
+
+test("a swing past the workspace's threshold is told back until it is explained; the threshold is a setting", async () => {
+  const { ws, s, url } = world("pr", true, "fix the activity rollup", { repoPath: checkout({ "pipelines/dags/daily_activity.py": "" }) });
+  w.files = ["pipelines/dags/daily_activity.py", "pipelines/dags/tests/test_daily_activity.py"];
+  const swing = {
+    range: "2026-09-20..2026-09-22",
+    models: [{ name: "daily_activity", rows: { before: 3, after: 3 }, aggregates: [{ name: "active_minutes", before: 12400, after: 56300 } as Record<string, unknown>], cmd: "select day, sum(active_minutes) from daily_activity where day between '2026-09-20' and '2026-09-22' group by 1" }],
+  };
+  handOff(s, { prs: [url], data_diff: normalizeDataDiff(swing)! });
+  const r = reqOf(s);
+  await V.verifyRequest(r.id);
+  assert.equal(latestCheck(r.id, "data_diff")!.status, "fail");
+  assert.match(w.told[0].text, /daily_activity\.active_minutes moved 12,400 → 56,300 \(\+354%\), past ±20%, unexplained/);
+  // This workspace allows more: the same numbers are no swing to explain.
+  writeSetting("verifier.data_swing_pct", 400, ws.id);
+  _resetSettingsCache();
+  await V.verifyRequest(r.id, { trigger: "manual", force: true });
+  assert.equal(latestCheck(r.id, "data_diff")!.status, "pass");
+  writeSetting("verifier.data_swing_pct", null, ws.id);
+  _resetSettingsCache();
+  // Back at ±20%, explained on the hand-off: a pass that says the swing and why.
+  swing.models[0].aggregates[0].explain = "late close events now count toward a session's full length; checked against the raw events";
+  handOff(s, { prs: [url], summary: "the swing is explained", data_diff: normalizeDataDiff(swing)! });
+  await V.verifyRequest(r.id);
+  const dd = latestCheck(r.id, "data_diff")!;
+  assert.equal(dd.status, "pass", dd.note!);
+  assert.match(dd.note!, /explained: daily_activity\.active_minutes \+354% — late close events/);
+});
+
+// ───────────────────────────── the independent code review ─────────────────────────────
+
+test("the code review's findings go back as one round; justified while the head stands still they are settled, not re-read", async () => {
+  const { s, url } = world("pr");
+  w.codeVerdict = 'REVIEW {"findings":[{"where":"src/retry.ts:12","what":"the retry is never awaited","fix":"await it"},{"where":"src/retry.ts:30","what":"no test covers giving up after 3 tries"}]}';
+  handOff(s, { prs: [url] });
+  const r = reqOf(s);
+  const one = await V.verifyRequest(r.id);
+  assert.equal(one.ready, false);
+  assert.equal(latestCheck(r.id, "code_review")!.status, "fail");
+  assert.equal(w.told.length, 1, "every finding in one round");
+  assert.match(w.told[0].text, /round 1 of 2.*code_review: 2 findings .*R1 src\/retry\.ts:12 — the retry is never awaited \(fix: await it\); R2 src\/retry\.ts:30 — no test covers giving up/);
+  assert.match(w.told[0].text, /--proof "R1 fixed: <how>"/);
+  handOff(s, { prs: [url], proof: ["R1 justified: upload() awaits the promise it returns, one level up", "R2 justified: retry.int.test.ts gives up after 3 tries and runs in CI"] });
+  const two = await V.verifyRequest(r.id);
+  assert.equal(w.codeReviews, 1, "one review for one head");
+  const cr = latestCheck(r.id, "code_review")!;
+  assert.equal(cr.status, "pass", cr.note!);
+  assert.match(cr.note!, /2 findings justified on the hand-off, not re-read .*R1: upload\(\) awaits/);
+  assert.deepEqual(cr.evidence.filter((e) => e.ref.startsWith("finding:")).map((e) => e.ref), ["finding:R1", "finding:R2"], "the findings ride on the check, for him");
+  assert.equal(two.ready, true, two.reason ?? "");
+});
+
+test("a pushed head is read again with the open findings and what the hand-off says of each; one still open is told in the next round", async () => {
+  const { s, url } = world("pr");
+  w.codeVerdict = 'REVIEW {"findings":[{"where":"src/retry.ts:12","what":"the retry is never awaited"},{"where":"src/api.ts:40","what":"the new route skips the workspace check"}]}';
+  handOff(s, { prs: [url] });
+  const r = reqOf(s);
+  await V.verifyRequest(r.id);
+  // R1 fixed by a push (a new head, a new diff), R2 argued; the reviewer takes the fix, not the argument.
+  w.head = HEAD_B;
+  w.gitHead = HEAD_B;
+  w.diff += "\n+await retry()";
+  w.codeVerdict = 'REVIEW {"findings":[],"resolved":{"R1":true,"R2":"no: any workspace token can still call it"}}';
+  handOff(s, { prs: [url], summary: "awaited it", proof: ["R1 fixed: awaited in upload()", "R2 justified: the route is only linked from the operator's page"] });
+  const two = await V.verifyRequest(r.id);
+  assert.equal(w.codeReviews, 2, "a new head is read again");
+  assert.match(w.codePrompts[1], /R1 · src\/retry\.ts:12 — the retry is never awaited The author says: fixed — awaited in upload\(\)\./);
+  assert.match(w.codePrompts[1], /R2 · src\/api\.ts:40 — the new route skips the workspace check The author says: justified — the route is only linked/);
+  const cr = latestCheck(r.id, "code_review")!;
+  assert.equal(cr.status, "fail");
+  assert.match(cr.note!, /R2 src\/api\.ts:40 — the new route skips the workspace check \[not settled: any workspace token can still call it\]/);
+  assert.ok(!/R1 src/.test(cr.note!), "the accepted fix is not told again");
+  assert.match(w.told[1].text, /round 2 of 2.*code_review/);
+  assert.equal(two.ready, false);
+  // Arguing it again without a push does not settle what the reviewer turned down at this head.
+  handOff(s, { prs: [url], summary: "awaited it", proof: ["R1 fixed: awaited in upload()", "R2 justified: really, only the operator's page links it"] });
+  await V.verifyRequest(r.id);
+  assert.equal(w.codeReviews, 2);
+  assert.match(latestCheck(r.id, "code_review")!.note!, /already turned that down at this head/);
+});
+
+test("one code review per head: the same head is not read twice; a clean rebase carries the review over; a new diff is read", async () => {
+  const { s, url } = world("pr");
+  handOff(s, { prs: [url] });
+  const r = reqOf(s);
+  await V.verifyRequest(r.id);
+  assert.equal(w.codeReviews, 1);
+  handOff(s, { prs: [url], summary: "uploads retry now (summary reworded)" });
+  await V.verifyRequest(r.id);
+  assert.equal(w.codeReviews, 1, "a new hand-off on the same head reads nothing again");
+  // Rebased: a new head, byte-for-byte the same diff.
+  w.head = HEAD_B;
+  w.gitHead = HEAD_B;
+  await V.verifyRequest(r.id, { trigger: "head_moved", force: true });
+  assert.equal(w.codeReviews, 1, "the same diff on a new head is carried over");
+  assert.match(latestCheck(r.id, "code_review")!.note!, /same diff as the review at aaaaaaa: not read again/);
+  w.head = "c".repeat(40);
+  w.gitHead = w.head;
+  w.diff += "\n+backoff()";
+  await V.verifyRequest(r.id, { trigger: "head_moved", force: true });
+  assert.equal(w.codeReviews, 2, "a changed diff is read");
+});
+
+test("the code reviewer is never the engine that wrote the PR", async () => {
+  const opus = world("pr");
+  handOff(opus.s, { prs: [opus.url] });
+  await V.verifyRequest(reqOf(opus.s).id);
+  assert.deepEqual(w.codeEngines, ["claude-code sonnet"], "written on opus, read on sonnet");
+  const sonnet = world("pr", true, "retry failed uploads", { model: "sonnet" });
+  handOff(sonnet.s, { prs: [sonnet.url] });
+  await V.verifyRequest(reqOf(sonnet.s).id);
+  assert.equal(w.codeEngines[1], "claude-code opus", "written on sonnet, read on opus");
+  // No model on the terminal: it ran on its workspace's default, and that is the writer's model.
+  const dflt = world("pr", true, "retry failed uploads", { model: null, ws: { default_model: "sonnet" } });
+  handOff(dflt.s, { prs: [dflt.url] });
+  await V.verifyRequest(reqOf(dflt.s).id);
+  assert.equal(w.codeEngines[2], "claude-code opus");
+  // The workspace's review engine is the writer's own: nobody independent reads it — a skip that says why.
+  const same = world("pr", true, "retry failed uploads", { backend: "codex", model: "gpt-x", ws: { review_backend: "codex", review_model: "gpt-x" } });
+  handOff(same.s, { prs: [same.url] });
+  await V.verifyRequest(reqOf(same.s).id);
+  assert.equal(w.codeEngines.length, 3, "no review dispatched");
+  const cr = latestCheck(reqOf(same.s).id, "code_review")!;
+  assert.equal(cr.status, "skip");
+  assert.match(cr.note!, /same engine as the writer .*no independent review/);
+});
+
+test("the reviewer holds a PR to its own workspace's repo memory and corrections — never another workspace's, same repo and remote", async () => {
+  const remote = "https://github.com/shared-org/app.git";
+  const a = world("pr", true, "retry failed uploads", { repoName: "app", remote });
+  const b = world("pr", true, "retry failed uploads", { repoName: "app", remote });
+  assert.equal(a.url, b.url);
+  repoMemory.save(a.ws.id, a.repo.id, { slug: "shared-org/app", rules: ["Atlas rule: every handler logs its request id."], comments_seen: 2, seen_through: "2026-10-01T00:00:00Z" });
+  repoMemory.save(b.ws.id, b.repo.id, { slug: "shared-org/app", rules: ["Cedar rule: money is integer cents."], comments_seen: 1, seen_through: "2026-10-01T00:00:00Z" });
+  handOff(a.s, { prs: [a.url] });
+  const ra = reqOf(a.s);
+  await V.verifyRequest(ra.id);
+  assert.match(w.codePrompts[0], /Atlas rule: every handler logs its request id/);
+  assert.ok(!w.codePrompts[0].includes("Cedar rule"));
+  // The operator asks for changes on A's PR: his words are A's, and only A's next review hears them.
+  const said = L.recordDecision({ request: ra.id, decision: "change", words: "never log the upload token" });
+  assert.ok(said.ok, JSON.stringify(said));
+  handOff(b.s, { prs: [b.url] });
+  await V.verifyRequest(reqOf(b.s).id);
+  assert.match(w.codePrompts[1], /Cedar rule: money is integer cents/);
+  assert.ok(!w.codePrompts[1].includes("Atlas rule"), "another workspace's memory never crosses");
+  assert.ok(!w.codePrompts[1].includes("never log the upload token"), "nor its operator notes");
+  w.head = HEAD_B;
+  w.gitHead = HEAD_B;
+  w.diff += "\n+redact(token)";
+  handOff(a.s, { prs: [a.url], summary: "token redacted" });
+  await V.verifyRequest(reqOf(a.s).id);
+  assert.match(w.codePrompts[2], /He asked for changes on https:\/\/github\.com\/shared-org\/app\/pull\/12: never log the upload token/);
+  assert.equal(w.gh.length, 0, "both memories were fresh: GitHub was not asked");
+});
+
+test("nothing is posted to GitHub: the memory's one read is a query, the findings go only to the terminal, the reviewer is a read-only run", async () => {
+  const { s, url } = world("pr");
+  w.ghData = { data: { repository: { pullRequests: { nodes: [{ number: 3, author: { login: "builder" }, reviews: { nodes: [{ author: { __typename: "User", login: "rev" }, body: "Always add a regression test next to the fix, please.", submittedAt: "2026-10-01T00:00:00Z", comments: { nodes: [] } }] }, comments: { nodes: [] } }] } } } };
+  w.distilled = JSON.stringify(["Add a regression test next to every fix."]);
+  w.codeVerdict = 'REVIEW {"findings":[{"where":"src/retry.ts:3","what":"no regression test next to the fix","rule":"Add a regression test next to every fix."}]}';
+  handOff(s, { prs: [url] });
+  await V.verifyRequest(reqOf(s).id);
+  assert.match(w.codePrompts[0], /- Add a regression test next to every fix\./, "what it learned from human review is in the review");
+  assert.equal(w.gh.length, 1);
+  assert.deepEqual(w.gh[0].slice(0, 2), ["api", "graphql"]);
+  assert.ok(!/mutation/i.test(w.gh[0].join(" ")));
+  assert.deepEqual(w.told.map((t) => t.sid), [s.id], "the findings were typed into its terminal, nowhere else");
+  // The real edge the code review goes through: a `review:` job — read-only, no Bash, no web, no writes.
+  const ws = workspaces.create({ slug: `cr-${Math.random().toString(36).slice(2, 8)}`, name: "reviewer", config_dir: `/tmp/vf-${Math.random()}`, sandbox_mode: "off" } as any);
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verifier-code-"));
+  const keepAlive = setInterval(() => {}, 1000);
+  const out = await V.defaultVerifierDeps.review(ws, "code review\n!sleep: 20", { cwd, backend: "mock", model: "", requestId: "c0de0000-1111", label: "code" }).finally(() => clearInterval(keepAlive));
+  const job = jobs.list().find((j) => j.workspace_id === ws.id)!;
+  assert.equal(job.name, "review:code-c0de0000");
+  assert.ok(isReadOnlyRun(job.name));
+  assert.match(job.disallowed_tools, /\bEdit\b.*\bWrite\b.*\bBash\b.*\bWebFetch\b.*\bWebSearch\b/);
+  assert.equal(out.status, "success");
 });

@@ -122,19 +122,34 @@ test("tellLine: the round, the reasons, and the last round says so", () => {
   assert.match(tellLine(MAX_ROUNDS, ["x"]), /last round/);
 });
 
+test("tellLine: a code review's findings get room, and what to do is never cut — however long the reasons", () => {
+  const findings = Array.from({ length: 6 }, (_, i) => `R${i + 1} src/f${i}.ts:${i} — ${"x".repeat(220)}`).join("; ");
+  const line = tellLine(MAX_ROUNDS, [
+    "tests: the repo's checks fail at abc1234",
+    `code_review: 6 findings (read by codex gpt-x) — fix each (push) or justify it: ${findings}`,
+    `data_diff: ${"y".repeat(1600)}`,
+    `matches_request: ${"z".repeat(900)}`,
+  ]);
+  assert.ok(line.length <= 2800, String(line.length));
+  assert.match(line, /code_review: 6 findings \(read by codex gpt-x\) — fix each \(push\) or justify it: R1 .*R4 /, "the findings are not cut to a sentence");
+  assert.match(line, /Fix it, push, and file `mc outcome` again — it is re-checked on the new hand-off\. This is the last round/);
+  assert.ok(line.includes("y".repeat(900)) && !line.includes("y".repeat(1001)), "a data diff's gaps are capped");
+});
+
 test("readiness: gates must pass, other required slots may be skipped with a reason, a fail is never ready", () => {
   const slots = slotsFor("pr", "pr");
-  assert.deepEqual(slots.map((s) => s.name), ["tests", "regression", "goal_test", "pr_ready", "matches_request"]);
+  assert.deepEqual(slots.map((s) => s.name), ["tests", "regression", "goal_test", "data_diff", "code_review", "pr_ready", "matches_request"]);
   const c = (name: string, status: string, note: string | null = null) => ({ name, status, ran_at: "2026-11-09T10:00:00.000Z", note });
-  const all = [c("tests", "skip", "no check command"), c("regression", "skip"), c("goal_test", "pass"), c("pr_ready", "pass"), c("matches_request", "pass")];
+  const all = [c("tests", "skip", "no check command"), c("regression", "skip"), c("goal_test", "pass"), c("data_diff", "na", "n/a: not a data repo"), c("code_review", "pass"), c("pr_ready", "pass"), c("matches_request", "pass")];
   const ok = readiness(expectedChecks("pr", all, slots));
   assert.equal(ok.ready, true);
   assert.deepEqual(ok.gaps.map((g) => g.name), ["tests", "regression"], "what was not checked is said, not passed off");
-  const noReader = readiness(expectedChecks("pr", [...all.slice(0, 4), c("matches_request", "skip", "no verdict")], slots));
+  assert.deepEqual(ok.na.map((g) => g.name), ["data_diff"], "a data diff a code repo does not owe is n/a — no gap");
+  const noReader = readiness(expectedChecks("pr", [...all.slice(0, 6), c("matches_request", "skip", "no verdict")], slots));
   assert.equal(noReader.ready, false);
   assert.deepEqual(noReader.gate_unmet.map((g) => g.name), ["matches_request"]);
   assert.equal(queueRank({ item_id: "x", action: "merge", status: "open", target_hash: "a", hold_until: null, created_at: "", checks: { pass: 3, fail: 0, missing_required: 0, gate_unmet: 1 } }), 2);
-  const failing = readiness(expectedChecks("pr", [...all.slice(0, 4), c("matches_request", "fail")], slots));
+  const failing = readiness(expectedChecks("pr", [...all.slice(0, 6), c("matches_request", "fail")], slots));
   assert.equal(failing.status, "failing");
   assert.equal(readiness(expectedChecks("pr", [], slots)).status, "unverified");
   // A draft is judged by its binding and its words, whatever the request's type; a product's PR not by post_deploy.
