@@ -39,8 +39,16 @@ daemon warns about it at every boot.
 - Where it can, the daemon makes the authenticated call for the agent: a local proxy adds the
   credential to the request, so `git push` works without the token entering the sandbox.
 - Shared vars (🔑) can expire after N hours; an expired one is deleted.
-- **No agent sends anything** — no email, Slack message, comment or review. Send tools are removed
-  from every agent CLI; agents leave drafts.
+- **Agents draft; the one send is a Slack DM to you.** No email, comment, review or Slack message to
+  anyone else: agents leave drafts. The one exception is a DM to you, in a project where you named your
+  own Slack ids as the shared var `OPERATOR_SLACK_SELF_IDS` (Desk → ⋯ → 🔑 Shared vars, or
+  `mc vars set OPERATOR_SLACK_SELF_IDS "U0123ABCD,D0456EFGH" --workspace <project id>` on the daemon's
+  Mac): your member id (Slack: your profile → ⋯ → Copy member ID) and the channel id of your own DM (open
+  it → its name at the top → the id at the bottom). Agents find it as `$MC_OPERATOR_SLACK_DM`.
+  A hook checks every send: any other channel, person or thread is refused, and so is every send in a
+  project without the var. Every Claude profile's `settings.json` gets the same hook, so the `claude`
+  sessions you start yourself follow the rule too (the first change keeps the original beside it as
+  `settings.json.bak-chronos-send-gate`). Other agent CLIs (cursor, grok, opencode) send nothing at all.
 - **Every API call names its caller.** A request to the daemon with no token is refused (only health,
   the push key, webhooks with their own secret and the one-time sign-in code are open). `CHRONOS_TOKENLESS=log`
   lets them through but records each one; `GET /api/authz/tokenless` lists who called.
