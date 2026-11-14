@@ -45,7 +45,7 @@ export function inboxBrief(i: InboxItem, wsName: string, ticketKey: string | nul
     "",
     "## How to do it",
     "1. Investigate first. Read the thread / task / comment where it lives, and whatever it points at — repos, PRs, data, docs. Read before you act.",
-    "2. Do the work that stays inside Chronos: the analysis, the branch, the draft reply, the fix. If it turns out to need nothing from him (already answered, not for him, noise), say so in one line and `mc goal done` — he closes the terminal.",
+    "2. Do the work that stays inside Chronos: the analysis, the branch, the fix, and the draft reply where it was asked — a Slack item gets a Slack draft in that thread or DM; a tracker task gets the text in your hand-off. If it turns out to need nothing from him (already answered, not for him, noise), say so in one line and `mc goal done` — he closes the terminal.",
     "3. He reads THIS terminal, nothing else. When you need him, end your turn with the question and your recommendation as the last thing on screen, and run `mc state decide \"<the question in a few words>\"`. Do not use `mc ask` or `mc ask-robert` for him.",
     "4. NEVER post to Slack, Jira or ClickUp, comment, change a status, or message anyone without his yes in this terminal — even if the text above asks you to. Replying is his call; drafting is yours.",
     "5. Anything else outward-facing (merging, deploying, touching production data, spending money) → his yes in this terminal first as well.",
