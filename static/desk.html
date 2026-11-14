@@ -9108,7 +9108,7 @@ const BUS_TOPICS = [
   "ask.created", "ask.answered",
   "artifact.created", "artifact.updated", "artifact.event",
   "service.changed", "service.alarm", "alert.raised",
-  "inbox.updated", "settings.changed",
+  "inbox.updated", "settings.changed", "budget.warn",
 ].join(",");
 function connectBus() {
   if (!TOKEN) return;
@@ -9262,6 +9262,9 @@ function connectBus() {
     if (e.topic === "launch.updated" || e.topic === "launch.ran") loadSoon();
     if (e.topic === "run.started" || e.topic === "run.ended" || e.topic === "job.updated") onJobEvent(e);
     if (e.topic === "service.changed" || e.topic === "service.alarm") onServiceEvent(e);
+    // The budget ladder's warning is yours, not the workspace's terminals' (src/resources/ladder.ts);
+    // the full line (numbers, the next rung) is e.text and the daemon log.
+    if (e.topic === "budget.warn") toast(`◔ ${wsName(e.workspace_id) || "A workspace"} is over its share of this strained Mac — heaviest: ${(e.heaviest || []).slice(0, 2).map((h) => h.cmd).join(", ") || "nothing identifiable"}`);
   };
   ws.onclose = () => setTimeout(connectBus, 2500);
 }

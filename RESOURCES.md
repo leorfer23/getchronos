@@ -209,12 +209,161 @@ It runs only while the machine is **strained**: memory pressure ≥ warning, or 
 `CHRONOS_MAX_LOAD_PER_CORE` (admission's own inputs, `currentLoad()`). Over budget on a calm Mac costs
 nobody anything. Per workspace, while strained **and** over:
 
-1. **Warn** at once: one line to each of the workspace's live owners on this Mac. A headless run gets
-   the **`mc tell` mailbox** (`sendMessage`: steered live when it can be, else at its next checkpoint).
-   A Desk terminal is **typed into** (`sendInput`, as host failover tells a terminal it moved;
-   rate-limited and recorded as `session.input`) — see *Warn delivery* below for why. It names the share,
-   budget, usage, pressure and load, and the three heaviest process groups with RSS and CPU
-   (`node (vitest) ×4 2.1 GB 310% CPU (this terminal)`). At most once per `CHRONOS_LADDER_WARN_EVERY_MS`
+1. **Warn** at once: one line for the **operator** — the `budget.warn` bus event (its `text`), which the
+   Desk toasts, plus the daemon log — see *Warn delivery* below. It names the share, budget, usage,
+   pressure and load, and the three heaviest process groups with RSS and CPU
+   (`node (vitest) ×4 2.1 GB 310% CPU (session 1a2b3c4d)`). At most once per `CHRONOS_LADDER_WARN_EVERY_MS`
+   (10 min) per workspace.
+2. **Slow** — still over after `CHRONOS_LADDER_SLOW_AFTER_MS` (2 min): renice the workspace's **heavy
+   processes only** (the same `isHeavy` as rung 3: leak family, test runners, build tools) together with
+   their own descendants — a Chrome's renderers, a vitest's workers — to `CHRONOS_LADDER_NICE` (20),
+   heaviest first (subtree RSS, or CPU when only CPU is over), up to `CHRONOS_LADDER_MAX_ACTIONS` (3) per
+   workspace per tick. Never a non-heavy process at the top of a subtree, and nothing in the never-list
+   (shells, ptys, agent CLIs, `mc`) even below a heavy one; a runtime running the `mc` CLI (`mc heavy --
+   npx vitest`) is never heavy. A process already at 20 — e.g. a worker forked by a reniced vitest after
+   the fact, born there — counts as already slowed.
+   **Renice is one-way on macOS without root**: only root may *lower* a nice value (measured here:
+   `renice 10` on our own nice-20 `sleep` → `Permission denied`). So nothing is ever put back, and that
+   is exactly why rung 2 renices only short-lived heavy processes: a suite, a build, a headless browser
+   exit on their own and take the nice value with them. An agent's MCP servers (chrome-devtools-mcp, fff,
+   graphify, `dart mcp-server`…), persistent tool shells, `mc` long-polls and dev servers live for the
+   whole terminal; reniced, they would stay slow long after the episode — they are never touched. When
+   the episode ends the ladder forgets its records with ONE log line per workspace ("N heavy process(es)
+   reniced to 20 stay there until they exit"). A workspace over budget with nothing heavy gets only the
+   warning, plus `(over budget, nothing heavy to slow)` logged once per episode. Considered and NOT done:
+   `taskpolicy -b` / `-B` (PRIO_DARWIN_BG) *is* reversible unprivileged (measured: pri 4 → 31), but it
+   clamps to the E-cores and throttles I/O — `machine.ts` rejected it for agents for that reason, and
+   the operator's decision was renice.
+3. **Pause** — still over (past the 2 min) **and** memory pressure critical: SIGSTOP the workspace's
+   **newest heavy process**, one per workspace per tick. Heavy = leak family (the reaper's), a node/bun/deno
+   running a test runner, or a build tool (`tsc`, `esbuild`, `webpack`, `rollup`, `cargo`, `rustc`, `go`,
+   `gradle`, `swift*`, `xcodebuild`, `clang`, `javac`, `bazel`, `ninja`…, or a runtime whose argv runs
+   `tsc` / `vite build` / `next build`…; `CHRONOS_LADDER_HEAVY` adds names). Never a CLI root, a shell or
+   pty (`zsh`, `bash`, `login`, `tmux`, `spawn-helper`…), an agent CLI (`claude`, `codex`, `grok`, …), a
+   keep-listed process or anything below one.
+
+Back down: paused processes get SIGCONT **oldest pause first**, up to `CHRONOS_LADDER_MAX_ACTIONS` per tick,
+when the workspace is back under budget (`under_budget`) or the machine is calm (`calm`). Between them —
+still strained, still over, but pressure only "warning" — nothing more is paused and nothing resumes.
+
+**Every paused pid is SIGCONTed:**
+- **before the reaper signals it** — the reaper calls `beforeSignal(pids)` right before each kill(2); a
+  SIGSTOPped process never handles SIGTERM (it stays pending), so it would sit out the grace and be
+  SIGKILLed (`reason: reaped`);
+- when its owner ends and the reaper spares it (a detached non-leak process is left running) —
+  the next ladder pass (`owner_ended`);
+- when the ladder is switched off (`disabled`; the global setting takes effect on the next tick, no restart);
+- on daemon exit — `process.on("exit")` (index.ts turns SIGTERM/SIGINT into `process.exit`), synchronous,
+  with one blocking `ps` to re-check start times; if `ps` cannot answer the SIGCONT goes anyway (a process
+  left stopped forever is the worse failure than a no-op SIGCONT to a stranger) (`shutdown`);
+- **after a crash**: the paused list is mirrored to `CHRONOS_LADDER_STATE` (default
+  `<CHRONOS_DB>.ladder-paused.json`, gitignored by `chronos.db.*`; written on every change, removed when
+  empty). On boot, before the first tick, every recorded pid that is **still stopped** (`ps` state `T`)
+  **and** still the same process (start time) gets SIGCONT (`boot`); nothing else is touched, and the file
+  goes. If `ps` cannot answer, the file is kept for the next start. Remaining risk, accepted: a SIGKILLed
+  daemon that paused a process and then is never started again leaves it stopped; and a process the
+  previous daemon paused that someone else ALSO stopped (a `^Z`) is resumed.
+
+**Modes** (`CHRONOS_LADDER`, overridden live by the Desk's global setting `resources.ladder`):
+`warn` (**default**) — only rung 1 acts; rungs 2-3 log `(would renice to 20) …` / `(would pause) …` and
+publish their event with `dry: true`, once per episode (pause: once per would-be target), so the first
+deploy is observable · `slow` — rungs 1-2 · `on` — all three · `off` — nothing; anything slowed or paused
+is released on the next tick. Independent of `CHRONOS_REAPER`, except that `CHRONOS_REAPER=off` means
+no ledger and so no ladder (the slot fairness still works, weighing only the pool's contenders).
+
+**Safety** — the reaper's guards, shared through `guards.ts` (not copied): ledger-owned only; never
+pid ≤ 1, the daemon, a live root, another user's process, a protected path, the keep-list or anything
+below it, with every owned ancestor's argv read first (an unread one is a veto — nothing is reniced or
+paused that tick); the start time re-read (`ps -o lstart -p`) right before every renice and every
+SIGSTOP/SIGCONT on the way down; capped actions per tick. The ladder signals **pids only, never a
+process group** — so the daemon's own group (where headless runs live) is never a target, while a headless
+run's own test runner can still be paused by pid like a terminal's.
+
+**Trail.** Every action is a log line with its numbers (`[ladder] SIGSTOP pid 4242 — node (vitest), 2048 MB,
+300% CPU — session ab12cd34 (ws acme): memory pressure critical, RAM 9.1 GB / 7.2 GB, CPU 640% / 600%`) and
+a bus event — `budget.warn` (usage, budget, share, weight, pressure, load, heaviest, told/failed),
+`budget.slow` (pids, nice, rss, cpu, over_ms, dry), `budget.pause` (pid, cmd, rss, cpu, owner, dry),
+`budget.resume` (action `cont`, reason `under_budget|calm|owner_ended|reaped|disabled|shutdown|boot`,
+`paused_ms`) — which `activity.ts` records like `proc.reaped`. `budget.warn` also carries `deferred`.
+
+**Warn delivery — the operator, not the workers.** The warning used to be typed into each of the
+workspace's terminals (and sent to its runs' mailboxes). A worker mid-task cannot weigh its workspace
+against the rest of the Mac, and the line landed in the middle of its turn. So rung 1 now only publishes
+`budget.warn` (operator-only bus: `/ws` takes the admin token) and logs; the Desk shows it as a toast,
+cut to the locked client by `DeskScope.passes` on a shared screen. Nothing is typed into a terminal and
+nothing is sent to a run. Rungs 2-3 are unchanged.
+
+**Surface.** `GET /api/machine` (and so `mc machine`) gains `procs`: `{ mode, every_ms, sampled_at,
+workspaces: [{workspace_id, pids, rss_mb, cpu, orphans, reaped, left_running}], owners: [{kind, id,
+workspace_id, ended, pids, rss_mb, cpu, orphans, reaped, left_running}] }`. Admin sees every workspace; a workspace token sees
+only its own rows. Brain only: a request forwarded from a host gets no `procs`.
+
+**Hosts.** hostd runs the same `Reaper` over its own live channels (`src/hostd/index.ts`), on its own
+`CHRONOS_REAPER*` env, logging to the host log. Not yet reported to the brain: a `procs` frame on the
+link (so `GET /machine` can show a host's rollup) is still a TODO — see PR 2 → Hosts.
+
+### Knobs
+
+| Env | Default | Meaning |
+|---|---|---|
+| `CHRONOS_REAPER` | `on` | `on` · `dry` (log, never signal) · `off` (no ledger). |
+| `CHRONOS_REAPER_TICK_MS` | `10000` | Ledger sample + reaper pass interval (min 1000). |
+| `CHRONOS_REAPER_KILL_GRACE_MS` | `10000` | SIGTERM → SIGKILL. |
+| `CHRONOS_REAPER_ORPHAN_GRACE_MS` | `120000` | How long a leak-family process must be orphaned before rule 2. |
+| `CHRONOS_REAPER_MAX_SIGNALS` | `20` | kill(2) calls per tick, all rules together. |
+| `CHRONOS_REAPER_ORPHAN_FAMILY` | browsers + workerd | Regex over the executable name for rule 2 (an invalid one keeps the default). |
+| `CHRONOS_REAPER_PROTECT` | — | Extra comma-separated executable path prefixes never signalled. |
+| `CHRONOS_REAPER_KEEP` | — | Extra keep-list regex over argv: never signalled, nor anything below it (an invalid one is logged and ignored). |
+
+## PR 2 — per-workspace budgets + the ladder (built, brain only)
+
+`src/resources/budget.ts` (the math, pure), `src/resources/ladder.ts` (the rungs), `src/resources/guards.ts`
+(the guards it shares with the reaper), `src/machine.ts` `HeavyPool` (slot fairness), wired in
+`src/resources/brain.ts`.
+
+### Shares and budgets
+
+On each tick, from the ledger's snapshot (the ladder runs right after the reaper's pass, on the same `ps`):
+
+- **Active** workspace = owns at least one live (not ended) owner on this machine.
+- **Weight** `w` per workspace: the per-workspace setting `resources.weight` (default 1, 0.1–100), shown
+  on the Desk's ⚙ Settings page for a workspace under Limits. **Share** = `w(ws) / Σ w(active)`. An idle
+  workspace is not in the sum: its share is lent to the rest automatically. `GET /machine` shows a workspace
+  with nothing live the share it *would* get (`active: false`).
+- **Capacity**, minus a reserve for the OS, the daemon and the Desk: RAM `= total − max(3 GB, 20 %)`
+  (`CHRONOS_LADDER_RESERVE_MB` / `_PCT`); CPU `= ncpu × 100 %`; heavy slots `= the machine's pool size`.
+- **Budget** = share × capacity. Heavy slots: `max(1, floor(share × slots))`, so a lone workspace may hold
+  every slot and two equal workspaces cannot both be starved.
+- **Usage** = Σ RSS and Σ %CPU of what the workspace's **live** owners hold (CPU = median of the last 3
+  ticks, to ignore a compile spike), and slots held (holders carry `workspace_id`). An ended owner's
+  leftovers do not count: they are the reaper's (killed, or deliberately left running).
+- **Over** = RSS over budget, or CPU over budget. Slots are not part of "over" — holding more than the slot
+  budget is lending, and fairness takes it back the moment somebody else waits.
+
+### Heavy-slot fairness
+
+Measured 2026-10-02: one terminal held both of the brain's slots while other workspaces' suites waited.
+In `HeavyPool.pump`, a waiter whose workspace already holds its slot budget is **passed over** while a
+waiter of a **different** workspace that is under its own budget is waiting (its poll parked, or it
+polled within `FAIR_WAITING_MS` = 5 s — a ctrl-C'd `mc heavy` does not hold a free slot back for the
+90 s its queue entry survives). It keeps its place. Nobody else waiting → the slot is lent (`mc heavy`
+for a lone workspace is unchanged). Two workspaces both at budget hold nobody back: plain FIFO, never a
+deadlock. An unattributed caller (no workspace: the operator's own shell) is never held back and never
+holds anyone back. The workspace comes from the caller's workspace token, else the `session_id`'s row.
+The budget is the weighted share over the machine's active workspaces (the brain's ledger, local pool
+only) plus every contender in the pool (a waiter is active by definition, which is all a host's pool on
+the brain can see).
+
+### The ladder
+
+It runs only while the machine is **strained**: memory pressure ≥ warning, or load/core over
+`CHRONOS_MAX_LOAD_PER_CORE` (admission's own inputs, `currentLoad()`). Over budget on a calm Mac costs
+nobody anything. Per workspace, while strained **and** over:
+
+1. **Warn** at once: one line for the **operator** — the `budget.warn` bus event (its `text`), which the
+   Desk toasts, plus the daemon log — see *Warn delivery* below. It names the share, budget, usage,
+   pressure and load, and the three heaviest process groups with RSS and CPU
+   (`node (vitest) ×4 2.1 GB 310% CPU (session 1a2b3c4d)`). At most once per `CHRONOS_LADDER_WARN_EVERY_MS`
    (10 min) per workspace.
 2. **Slow** — still over after `CHRONOS_LADDER_SLOW_AFTER_MS` (2 min): renice the workspace's **heavy
    processes only** (the same `isHeavy` as rung 3: leak family, test runners, build tools) together with
@@ -326,9 +475,8 @@ prints one line per row it gets — the caller's own, or every workspace for the
   on every read) already does exactly this, renders on the Desk's Settings page with no UI work, needs no
   migration, and a change lands on the next tick. A column would have meant a migration, a schema field,
   a PATCH path and a hand-built Desk control for one number.
-- **Warn delivery** reuses the two existing channels (terminal: typed input like host failover's `tell`;
-  run: the `mc tell` mailbox) — no new channel, no Desk card yet (PR 3's Desk work can render the
-  `budget.*` events, which are already in activity).
+- **Warn delivery** is the `budget.warn` event only (the Desk toasts it) — never typed into a worker
+  terminal or sent to a run (see *Warn delivery* above).
 - **Renice is never undone** (one-way without root, see Slow), so rung 2 is restricted to heavy
   processes. Pause is undone when the workspace is back under budget OR the machine is calm.
 - **"Never the daemon or its group"** = never a group signal at all (pid-only), never the daemon pid —
