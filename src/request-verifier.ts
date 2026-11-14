@@ -15,7 +15,9 @@
  *   pr (backend) goal_test        a test changed in the diff; skip when it cannot be judged
  *   ui           shots            before/after per screen at phone and desktop width — none is a fail
  *                walkthrough      the flow shown step by step (`mc show`)
- *   analysis/qa  queries · crosscheck · assumptions / exercised · repro_steps — the reader's judgement
+ *   analysis/qa  queries · crosscheck · assumptions / exercised · repro_steps — the reader's judgement; the
+ *                                analysis three only when the answer states figures from data (`na` otherwise:
+ *                                decided from its text when it is all on file, else the reader's "n/a: why")
  *   drafts       draft_bound      the words on file re-hashed with ledger-model.ts draftHash (the same formula
  *                                `mc hook` uses) and bound, or matched against what the hook bound
  *
@@ -44,7 +46,7 @@ import { requests, type DecisionItem, type Deliverable, type RequestRow, type Ve
 import { FINAL_DELIVERABLE, draftHash, slotsFor, type CheckName, type Evidence } from "./ledger-model.js";
 import { itemReadiness } from "./ledger.js";
 import {
-  ASPECTS, MAX_ROUNDS, judgeGoalTest, judgePr, judgeShots, judgeWalkthrough, parseReview, pickReviewer, reviewerPrompt, tellLine,
+  MAX_ROUNDS, answerFigures, judgeAspects, judgeGoalTest, judgePr, judgeShots, judgeWalkthrough, parseReview, pickReviewer, reviewerPrompt, tellLine,
   type CheckResult, type PrView, type ReviewInput, type ReviewVerdict,
 } from "./verify-model.js";
 import type { GateResult, Outcome, Repo, Session, Workspace } from "./types.js";
@@ -457,11 +459,12 @@ async function runPass(r: RequestRow, ws: Workspace, targets: Target[]): Promise
       ref: run?.run_id ? `run:${run.run_id}` : "run:none", label: `${pick.backend} ${pick.model}`,
       meta: { backend: pick.backend, model: pick.model, independent: pick.independent, why: pick.why, ...(verdict?.risks.length ? { risks: verdict.risks.join(" · ").slice(0, 1500) } : {}) },
     }];
-    const aspects = (kind && ASPECTS[kind]) || [];
+    // The analysis slots are owed by figures from data: none in an answer read whole = n/a, decided here.
+    const figures = answerFigures(input);
     for (const { d } of readable) {
       if (!verdict) {
         push(d, { name: "matches_request", status: "skip", evidence: ev, note: `the second reader gave no verdict (${run?.status ?? "error"}${run?.error ? `: ${one(run.error, 160)}` : ""}) — nobody but its author has read it` });
-        for (const a of aspects) push(d, { name: a.name, status: "skip", note: "the second reader gave no verdict" });
+        for (const c of judgeAspects(kind, figures, null)) push(d, c);
         continue;
       }
       const why = verdict.reasons.join(" · ");
@@ -473,11 +476,7 @@ async function runPass(r: RequestRow, ws: Workspace, targets: Target[]): Promise
           ? { name: "matches_request", status: "pass", evidence: ev, note: one(why || "does what was asked", 600) }
           : { name: "matches_request", status: "fail", evidence: ev, tellable: true, note: one(why || "the reader says it does not do what was asked", 600) });
       }
-      for (const a of aspects) {
-        const v = verdict.aspects[a.name];
-        if (typeof v !== "boolean") push(d, { name: a.name, status: "skip", note: "the reader did not judge it" });
-        else push(d, v ? { name: a.name, status: "pass", note: a.ask } : { name: a.name, status: "fail", tellable: true, note: `missing: ${a.ask}` });
-      }
+      for (const c of judgeAspects(kind, figures, verdict)) push(d, c);
     }
   }
 

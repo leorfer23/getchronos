@@ -1905,7 +1905,7 @@ function askCap(question) {
       if (r.decisions.length) out.push("decisions:", ...r.decisions.map((d) => `  [${d.id.slice(0, 8)}] ${d.action} · ${d.label} · ${d.status}${d.decision ? ` · ${d.decision}${d.words ? ` "${d.words}"` : ""}` : ""}${d.target_hash ? ` · target ${d.target_hash.slice(0, 19)}` : ""}`));
       if (r.expected_checks.length) out.push(`checks: ${r.expected_checks.map((c) => `${c.name} ${c.status}`).join(" · ")}`);
       // Every check the verifier wrote, newest last; a stale one ran against an older PR head or older words.
-      const ICON = { pass: "✓", fail: "✗", skip: "–" };
+      const ICON = { pass: "✓", fail: "✗", skip: "–", na: "·" };
       if (r.checks?.length) out.push("check runs:", ...r.checks.slice(-30).map((c) => `  ${ICON[c.status] || "?"} ${c.name} ${c.status}${c.stale ? " (STALE — ran on an older target)" : ""}${c.target_hash ? ` @${c.target_hash.replace(/^sha256:/, "").slice(0, 7)}` : ""} · ${c.ran_at.slice(0, 16).replace("T", " ")}${c.note ? ` — ${c.note}` : ""}` +
         (c.evidence || []).filter((e) => e.meta && (e.meta.screen || e.meta.output)).slice(0, 6).map((e) => `\n      ${e.meta.screen ? `${e.meta.side} · ${e.meta.screen} · ${e.meta.viewport}: ${e.ref}` : `${e.label}: ${String(e.meta.output).split("\n").slice(-3).join(" / ").slice(0, 200)}`}`).join("")));
       for (const x of r.readiness || []) out.push(`  → ${x.action} ${x.label}: ${x.ready ? "READY for his yes" : `not ready — ${x.line}`}${x.gaps?.length ? ` · not checked: ${x.gaps.map((g) => g.name).join(", ")}` : ""}`);

@@ -74,7 +74,8 @@ export const CHECK_NAMES = [
   "repro_before", "fixed_after", "post_deploy", "goal_test", "draft_bound",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
-export const CHECK_STATUSES = ["pass", "fail", "skip"] as const;
+/** `na` = the slot does not apply to this answer (an analysis that states no figures): never a pass, never missing. */
+export const CHECK_STATUSES = ["pass", "fail", "skip", "na"] as const;
 export type CheckStatus = (typeof CHECK_STATUSES)[number];
 /** One piece of evidence a check points at: a run, a file, a shot, a URL. `meta` = e.g. {screen, viewport, side}. */
 export type Evidence = { ref: string; label?: string | null; meta?: Record<string, string | number | boolean> | null };
@@ -145,14 +146,16 @@ export const WORK: Record<GoalKind, WorkType> = {
   },
   investigation: {
     label: "an analysis",
-    done: "An answer in the form he asked for — a draft, a page, a dashboard — with the queries behind it, a cross-check and the assumptions stated.",
+    done: "An answer in the form he asked for — a draft, a page, a dashboard. When it states figures from data: the queries behind them, a cross-check and the assumptions stated.",
     deliverables: ["answer", "slack_draft", "email_draft", "artifact", "dashboard", "doc"],
     actions: ["send", "review"],
+    // The last three are owed by figures derived from data; an answer with none (a cause, a yes/no, a
+    // drafted request) has them as `na`, never as a pass (verify-model.ts judgeAspects).
     evidence: [
       { ...MATCHES, what: "a reader that did not do the work says the answer addresses the question, in the form asked" },
-      { name: "queries", required: true, what: "every query or source behind each number, re-runnable" },
-      { name: "crosscheck", required: true, what: "the headline numbers reproduced another way" },
-      { name: "assumptions", required: true, what: "what was assumed or left out, stated" },
+      { name: "queries", required: true, what: "every query or source behind each number, re-runnable (n/a when it states no figures from data)" },
+      { name: "crosscheck", required: true, what: "the headline numbers reproduced another way (n/a when it states no figures from data)" },
+      { name: "assumptions", required: true, what: "what was assumed or left out in getting the numbers, stated (n/a when it states no figures from data)" },
     ],
   },
   qa: {
@@ -230,6 +233,8 @@ export type Readiness = {
   gaps: Array<{ name: CheckName; note: string | null }>;
   /** Gates that were only skipped: why it is not ready even though nothing failed. */
   gate_unmet: Array<{ name: CheckName; note: string | null }>;
+  /** Slots that do not apply to this answer, each with why: not missing, not a gap, and never counted as a pass. */
+  na: Array<{ name: CheckName; note: string | null }>;
 };
 
 /**
@@ -241,11 +246,13 @@ export function readiness(slots: SlotStatus[]): Readiness {
   const failed = slots.filter((s) => s.status === "fail").map((s) => ({ name: s.name, note: s.note ?? null }));
   const missing = req.filter((s) => s.status === "missing").map((s) => s.name);
   const gaps = req.filter((s) => s.status === "skip" && !s.gate).map((s) => ({ name: s.name, note: s.note ?? null }));
-  const gate_unmet = req.filter((s) => s.gate && s.status === "skip").map((s) => ({ name: s.name, note: s.note ?? null }));
+  // A gate needs a pass: one only skipped, or said not to apply, is unmet.
+  const gate_unmet = req.filter((s) => s.gate && (s.status === "skip" || s.status === "na")).map((s) => ({ name: s.name, note: s.note ?? null }));
+  const na = slots.filter((s) => s.status === "na" && !s.gate).map((s) => ({ name: s.name, note: s.note ?? null }));
   const passed = slots.filter((s) => s.status === "pass").length;
-  if (!slots.length) return { ready: false, status: "none", passed, failed, missing, gaps, gate_unmet };
+  if (!slots.length) return { ready: false, status: "none", passed, failed, missing, gaps, gate_unmet, na };
   const ready = !failed.length && !missing.length && !gate_unmet.length && passed > 0;
-  return { ready, status: ready ? "ready" : failed.length ? "failing" : "unverified", passed, failed, missing, gaps, gate_unmet };
+  return { ready, status: ready ? "ready" : failed.length ? "failing" : "unverified", passed, failed, missing, gaps, gate_unmet, na };
 }
 
 /** What a workspace's setup says a request of this type needs first. Only the VPN is known today. */

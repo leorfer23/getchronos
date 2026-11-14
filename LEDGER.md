@@ -18,7 +18,7 @@
 | `request_terminals` | (request, terminal) | `role` · `is_primary` · the window `[linked_at, until)` its hand-offs count in |
 | `request_deliverables` | thing that came back | `kind` (pr · deploy · slack_draft · email_draft · artifact · dashboard · doc · answer) · `ref` (what it is) · `target_hash` (what it is *now*) · `state` |
 | `request_decisions` | question put to him | `action` (merge · deploy · send · review · answer) · bound `target_hash` · `status` (open · held · decided · superseded) · `decision` (yes · no · later · change · answered) + his `words`, `decided_by`, `decided_at`, `hold_until`, `audio_ref` |
-| `request_checks` | verifier check run | `name` · pass/fail/skip · `evidence[]` refs (+ meta: screen, viewport, side) · `target_hash` it ran against · `ran_by`, `ran_at` — written by the verifier (below) |
+| `request_checks` | verifier check run | `name` · pass/fail/skip/na · `evidence[]` refs (+ meta: screen, viewport, side) · `target_hash` it ran against · `ran_by`, `ran_at` — written by the verifier (below) |
 | `request_verifications` | verifier pass | why it ran (`trigger`) · the targets it judged (`target_key`) · `ready` · `reason` · `told` (one of the two rounds) · `round` (migration 158) |
 
 - **A request fans out, a terminal carries on.** A request links to any number of terminals; a terminal can
@@ -37,7 +37,7 @@
 |---|---|---|---|
 | `pr` | PR open, tests green, nothing else broke | merge | tests · regression · pr_ready · matches_request |
 | `ui` | PR + before/after shots per screen and width + a walkthrough | merge | tests · regression · shots · walkthrough · pr_ready · matches_request |
-| `investigation` | an answer in the form asked for — a draft, a page, a dashboard | send · review | queries · crosscheck · assumptions |
+| `investigation` | an answer in the form asked for — a draft, a page, a dashboard | send · review | matches_request · queries · crosscheck · assumptions (the last three only when it states figures from data) |
 | `qa` | a verdict with repro steps | review | exercised · repro_steps |
 | `product` | live: merged, deployed, checked in production; bugs reproduced before, fixed after; replies as drafts | merge · deploy · send | tests · pr_ready · post_deploy · matches_request (+ repro_before · fixed_after for a bug) |
 | `chat` | nothing to finish | — | — |
@@ -274,12 +274,19 @@ code and evidence, never by the terminal's own claim.
   `regression` (skip: not machine-checked). UI: `shots` (before/after per screen at phone AND desktop width,
   labels `before-<screen>-phone` …, evidence meta `{screen, viewport, side}` for the phone's card) and
   `walkthrough` (`mc show` steps). Analysis/QA: the reader judges `queries` · `crosscheck` · `assumptions` /
-  `exercised` · `repro_steps`. Drafts: `draft_bound` — the words on file re-hashed with `draftHash` (the formula
-  `mc hook` uses) and bound, or matched against what the hook bound.
+  `exercised` · `repro_steps`. The analysis three are owed only by figures derived from data
+  (`verify-model.ts` `answerFigures`): when every word of the answer is on file (the hand-off, the drafts, no
+  link but a PR's) and none is a figure — names like R-042 or #311, dates, clock times, labels like
+  "exit 143" and a count restated from the request do not count — they are `na`, decided in code and not asked
+  of the reader. Otherwise the reader judges them true/false, or `"n/a: <why>"` when the answer rests on no
+  figure from data (its numbers are names, dates, restated counts or context); an n/a without a reason is a
+  skip. Drafts: `draft_bound` — the words on file re-hashed with `draftHash` (the formula `mc hook` uses) and
+  bound, or matched against what the hook bound.
 - **Ready** = on the item's CURRENT target: every required slot has a result, none failed, and every gate passed
-  (`pr_ready`, `matches_request`, `shots`, `draft_bound` — a skip is not enough). Other required slots may be
-  skipped with a reason; the queue line says them ("checks pass (not checked: tests, regression)"). A check run
-  against an older head or older words is stale and counts for nothing.
+  (`pr_ready`, `matches_request`, `shots`, `draft_bound` — a skip or an `na` is not enough). Other required
+  slots may be skipped with a reason; the queue line says them ("checks pass (not checked: tests, regression)").
+  An `na` slot does not apply: not missing, not a gap, never a pass, and never told back. A check run against an
+  older head or older words is stale and counts for nothing.
 - **Fail → the terminal.** A fail the terminal can fix is typed into it (`[verifier] Not ready… round n of 2`),
   at most two rounds; after that, and when its terminal is closed, the request surfaces as not ready with the
   reason (`GET /api/ledger/:id` → `verification`, the queue line). Infrastructure trouble (GitHub unreachable, no
