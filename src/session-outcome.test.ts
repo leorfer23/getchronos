@@ -395,3 +395,32 @@ test("mc show uploads every image as bytes — a directory's in order, name=file
   assert.equal(s.hits.length, before, "a refused show uploads nothing");
 });
 
+
+test("a data PR's before/after numbers ride on the hand-off: read leniently, filed by mc outcome --data-diff, kept through a --shipped re-file", async () => {
+  const o = normalizeOutcome("s1", { summary: "totals fixed", data_diff: { range: "2026-10-01..2026-10-07", models: [{ name: "fct_orders", rows: { before: "1,200", after: 1188 }, aggregates: [{ name: "sum(amount)", before: 1, after: 2 }], cmd: "select 1" }] } });
+  assert.equal(o.data_diff?.models[0].rows?.before, 1200);
+  assert.equal("data_diff" in normalizeOutcome("s1", { summary: "x", data_diff: "not one" }), false, "no data diff: no field at all");
+  const top = { ...ho("Totals fixed.", { prs: [PR] }), data_diff: o.data_diff };
+  const r = fileOutcome(top, [], ho("Totals fixed and merged.", { prs: [PR], shipped: ["merged #12"], ask: "none" }, "2026-10-28T10:20:00.000Z"), null);
+  assert.deepEqual(r.latest.data_diff, o.data_diff, "a --shipped re-file keeps it");
+  // mc: a file, or the JSON itself; malformed JSON or a shape that is not a data diff is refused before anything is sent.
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mc-dd-")), "diff.json");
+  const diff = { range: "2026-10-01..2026-10-07", models: [{ name: "fct_orders", rows: { before: 1200, after: 1188 }, aggregates: [{ name: "sum(amount)", before: 52340, after: 52101 }], cmd: "select 1" }], tests: [{ cmd: "dbt build -s fct_orders", result: "PASS=3" }] };
+  fs.writeFileSync(file, JSON.stringify(diff));
+  const s = await stub((h) => [201, { changes: [], proof: [], prs: [], shots: [], shipped: [], ...h.body }]);
+  const filed = await s.run(["outcome", "Totals fixed.", "--data-diff", file, "--pr", PR, "--ask", "merge"]);
+  assert.equal(filed.code, 0, filed.stderr);
+  assert.deepEqual(s.hits[0].body.data_diff, diff);
+  assert.match(filed.stdout, /a data diff over 1 model/);
+  const inline = await s.run(["outcome", "Totals fixed.", "--data-diff", JSON.stringify(diff)]);
+  assert.equal(inline.code, 0, inline.stderr);
+  assert.deepEqual(s.hits[1].body.data_diff, diff);
+  const bad = await s.run(["outcome", "x", "--data-diff", "{not json"]);
+  const shape = await s.run(["outcome", "x", "--data-diff", '{"range":"2026-10-01"}']);
+  s.close();
+  assert.notEqual(bad.code, 0);
+  assert.match(bad.stderr, /not valid JSON/);
+  assert.notEqual(shape.code, 0);
+  assert.match(shape.stderr, /--data-diff wants/);
+  assert.equal(s.hits.length, 2, "nothing sent for the refused ones");
+});

@@ -3,7 +3,9 @@
  * dark wakes included (`kern.waketime`). Time the brain spent asleep is never anybody's absence:
  *   - host-failover.ts: a host is never "offline for 5 minutes" before the brain has been awake that
  *     long (2026-09-30: a sweep in a dark wake moved four live terminals off a host that was fine);
- *   - term-status.ts: a terminal is never "silent for 3 minutes mid-turn" when the Mac slept through them.
+ *   - term-status.ts: a terminal is never "silent for 3 minutes mid-turn" when the Mac slept through them;
+ *   - runner.ts: a run's timeout counts awake time only (awakeTimeout);
+ *   - scheduler.ts: a cron fire waits until the Mac has been awake a minute, not a 2-second dark wake.
  *
  * Node's clocks cannot tell: its monotonic clock keeps counting through sleep (checked: hrtime 30.5h vs
  * CLOCK_UPTIME_RAW 17.6h on the same boot), so a sleep looks like a slow timer. No imports beyond
@@ -46,6 +48,32 @@ export function brainAwakeSince(nowMs = Date.now()): number {
     noteBrainWake();
   }
   return awakeSince;
+}
+
+/**
+ * setTimeout on awake time: time the Mac slept does not count toward `ms`. A run's watchdog the Mac slept
+ * through fired on the next wake and killed a run that had been awake for 4 seconds (2026-11-12,
+ * reap-stale-worktrees-chronos). A tick that comes late across a wake counts only the time since that
+ * wake; the awake time before the sleep (under one tick) is dropped. Returns the cancel.
+ */
+export function awakeTimeout(fn: () => void, ms: number, tickMs = 10_000): () => void {
+  let left = ms;
+  let last = Date.now();
+  let t: ReturnType<typeof setTimeout>;
+  const arm = () => {
+    t = setTimeout(tick, Math.max(1, Math.min(tickMs, left)));
+    t.unref?.();
+  };
+  const tick = () => {
+    const now = Date.now();
+    const w = now - last > 2 * tickMs ? lastWake() : null;
+    left -= w !== null && w > last && w <= now ? now - w : now - last;
+    last = now;
+    if (left > 0) return arm();
+    fn();
+  };
+  arm();
+  return () => clearTimeout(t);
 }
 
 /** Tests (and host-failover's own reset): a boot time and a fake "last wake". */

@@ -23,6 +23,8 @@ finishes or blocks, and opens the next one himself.
   changing — see `mc worktree` below.
 - `MC_HOST_ID` / `MC_HOST_NAME` / `MC_HOST_BRAIN` — the computer you run on (`local` and `1` = the
   operator's main Mac, the brain). See *Running on another computer* below.
+- `MC_DOWNLOADS` — this workspace's folder in the operator's Downloads: every file for him goes here
+  (see *The hand-off*). Other workspaces' agents are walled out of it. Not set on another computer.
 - **Workspace vars** — tokens, API keys, URLs, IDs the operator set for this workspace. **Need a
   credential or config value? Run `mc vars` FIRST** — before asking the operator, grepping `.env`
   files or declaring yourself blocked. See *Shared vars* below for how to load them safely.
@@ -103,9 +105,9 @@ mc goal                                                    # goal, Done when, wh
 
 mc progress 2/5 "running the migrations" --eta 15m        # the operator's progress bar + time left
 mc state working "bisecting the 3am failure"               # the line under your title while you grind
-mc state waiting "CI on PR #214" --on ci --eta 12m         # BEFORE you stop to wait on anything that isn't the operator
+mc state waiting "full test suite" --on command --eta 8m   # a short wait running in the background — BEFORE you stop
 mc state waiting "the export terminal (a1b2c3d4)" --on terminal
-mc when pr <url> --until approved --note "merge it"           # waiting hours/days? park it — Chronos continues you when it happens
+mc when pr <url> --until checks --note "fix it if red"      # a long wait (CI, a review, a reply)? park it — Chronos continues you when it happens
 mc pr checks <url>                                         # a PR's CI, review and mergeable — not `gh pr checks` (a workspace's own GitHub token cannot read check runs)
 mc state blocked "need write access to the prod bucket" --reason auth   # a wall
 mc state decide "drop the legacy view or keep it? I'd drop it"          # only when mc ask-robert doesn't fit
@@ -129,12 +131,16 @@ takes `10`, `10m`, `2h`.
    **Shape of work** (`--kind`) is your finish line: `pr` = a pull request open, tests green ·
    `investigation` = an answer with evidence, no code changes unless asked · `qa` = a verdict: what
    passed, what failed, how to reproduce.
-2. **Never stop silently while you wait.** Silence reads 🟠 *your turn* — the operator opens you,
-   finds nothing to do, and learns to ignore your card. Launched background subagents? The hooks
-   count them for you. Waiting on CI, a deploy, a long command, another terminal? `mc state waiting`
-   with what and roughly how long, *then* stop. Waiting on something that takes **hours or days** — a
-   PR review, a person's reply, an email, another terminal's result? **`mc when`** (below): the daemon
-   watches it and continues your work when it happens, even if this terminal is closed by then.
+2. **Never stop silently while you wait — and never hold your turn open for a wait.** Silence reads
+   🟠 *your turn* — the operator opens you, finds nothing to do, and learns to ignore your card.
+   - **A short wait** (a test run, a build, a query of a few minutes): run it in the background (your
+     shell's background mode or a background subagent), `mc state waiting "…" --on command --eta 5m`,
+     and end your turn. The task wakes you the moment it exits, as long as this terminal stays open,
+     and the operator can talk to you meanwhile. Background subagents are counted for you by the hooks.
+   - **A long wait** — CI, a PR review, a person's reply, an email, another terminal, a query of ten
+     minutes or more — or one that must survive a daemon restart (a deploy) or the Mac sleeping, both
+     of which end background tasks: **`mc when`** (below). The daemon watches it and continues your
+     work when it happens, even if this terminal is closed by then.
 3. **`mc ask-robert` for a decision you can't make** (see below) — your card reads 🔵 *waiting on
    Robert* while he triages and 🟣 *decide* once it reaches the operator. **`mc state blocked` for a
    wall, not a question** — say what you need in the label.
@@ -178,6 +184,13 @@ takes `10`, `10m`, `2h`.
    steps** only when there are any. The `**Summary:**` paragraph is one or two plain sentences; it IS
    the entry the operator reads tomorrow, and its first sentence is your ✅ card's line. Write for a
    human on a phone: plain words, short, to the point — no filler, no recap of steps they watched.
+
+   **A different goal after that?** One terminal, one goal: a long mixed context costs more and blurs
+   what each piece of work did. When `mc goal set` replaces a goal you finished with a different one,
+   it prints the one command that opens a fresh terminal with your hand-off (`mc session new --from
+   <your id> --goal "…"`). Offer it to the operator in one line — he or Robert runs it, you cannot —
+   and carry on here if he keeps you. A follow-up on the goal you finished (its PR, a question about
+   it, its continuation) stays here.
 9. **Robert reads your card when you stop.** A finished turn, ✅ review, 🟣 decide, a declared 🔴
    blocked or `waiting --on robert` wakes him about a minute and a half later (unless the operator is
    already typing into you). He looks at your last `Summary:` / narration and either sends you the next
@@ -245,11 +258,32 @@ mc outcome clear       # drop it (a new `mc outcome` replaces the last one anywa
   head; a second model reads the diff against what he asked; backend work needs a test in the diff. A fail
   is typed back into you as `[verifier] Not ready…` — fix it, push, and file `mc outcome` again (two rounds,
   then it goes to him as not ready).
+- **Code review findings** (`code_review: R1 … R2 …`): another engine read your full diff against the repo's
+  review memory. Fix each (push) or justify it, and put one line per finding on the new hand-off:
+  `--proof "R1 fixed: <how>"` · `--proof "R2 justified: <why>"`. A pushed head is read again; a "fixed"
+  with no new push is not a fix.
+- **Data PRs** — models, SQL or transforms in a dbt or Airflow repo: before the hand-off, measure each
+  changed model or table before vs after with this workspace's own warehouse tools and vars (`mc vars`):
+  row counts and 1–3 key aggregates over a bounded range, the query behind them, and in dbt
+  `dbt build -s <models>` (compile is not a test). File it with `--data-diff diff.json`:
+  `{"range":"2026-10-01..2026-10-07","models":[{"name":"fct_orders","rows":{"before":1200,"after":1188},"aggregates":[{"name":"sum(amount)","before":52340,"after":52101}],"cmd":"<query>"}],"tests":[{"cmd":"dbt build -s fct_orders","result":"PASS=12 ERROR=0"}]}`.
+  A number that moves past the workspace's threshold (±20% unless set otherwise) needs `"explain"` on its
+  entry — why it is right — or the hand-off goes back to you.
 - **`--ask`**: what you need from the operator — `merge`, `deploy`, `merge+deploy`, `review` (just read
-  it) or `none`. The card turns it into buttons; a click types `Approved: …` into you. Then do exactly
-  that, and run `mc outcome --shipped "<what you shipped>"`.
+  it) or `none`. The card turns it into buttons; a click types `Approved by the operator on the Desk card
+  (approval ap-…): merge PR #24 (<url>) at head 1a2b3c4 …` into you — the PR and the exact commit he
+  approved. Merge only that PR at that commit (`gh pr merge <url> --match-head-commit <sha>`); if its head
+  moved since, do not merge: file a fresh `mc outcome` for the new head. Then run
+  `mc outcome --shipped "<what you shipped>"`.
 - Already allowed to ship (`mc goal` says merge/deploy)? Ship, then file the hand-off with
   `--shipped "merged #24" --shipped "deployed"` and `--ask none` (or `deploy` if you may only merge).
+- **Deliver where it was asked.** A file he will send or share (xlsx, csv, pdf, zip, html export, chart
+  png) goes in `$MC_DOWNLOADS` (on another computer: `mc file put` it). A reply to someone is a draft
+  where they asked: a Slack thread or DM → a Slack draft there; an email → an email draft in that
+  thread. When the work came from the operator himself and has no thread to answer in, send him a Slack
+  DM in his self-DM with the summary, paths and links. That DM is the only message you may send. If the
+  send tool is refused, leave the same text as a draft in his self-DM. Name each one on the hand-off:
+  `--change "file: /full/path/report.xlsx"`, `--change "draft: <where it waits>"`, `--change "DM sent"`.
 
 ## Showing images — `mc show`
 
@@ -585,7 +619,9 @@ When your work is blocked on something outside you that will take a while, park 
 instead of spinning or stopping silently. The daemon watches it; when it is met (or times out) it
 continues **this** work: typed into this terminal if it is still open and idle, otherwise this terminal
 is reopened on the same transcript with the news as its next prompt (a fresh terminal with a handoff
-only when that is impossible). Your card shows ⏳ *waiting · <condition>* meanwhile.
+only when that is impossible). Your card shows ⏳ *waiting · <condition>* meanwhile. A short wait on a
+background task of your own needs none of this: the task wakes you when it exits — but only while
+this terminal lives.
 
 ```bash
 mc when pr https://github.com/o/r/pull/12 --until approved --note "merge, then deploy staging"
@@ -710,6 +746,7 @@ mc prose add --channel jira --draft "<your draft>" "<what he sent instead>"   # 
 - **You never send — drafts only.** No agent sends an email, Slack message, comment, review or invite,
   ever; the send tools are switched off. Write the draft (`slack_send_message_draft`, Gmail
   `create_draft`, or the text here), then tell the operator where it is (`mc state review "draft ready: …"`).
+  The one exception is the DM to his own self-DM under *The hand-off*.
 - **Short, human, to the point — always, every workspace.** Every Slack draft (DM or
   channel), comment and email: the point in the first line, 1–4 short lines, no preamble, recap, headers,
   bold labels or sign-off. Link the PR/doc instead of pasting it. Reads like a report? Cut it in half.

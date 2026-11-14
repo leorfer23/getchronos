@@ -10,20 +10,27 @@
  *
  * - Grace: a row must sit `new` for `graceSec` first, so a tracker self-resolve, a dedupe or his own
  *   ✕ wins the race.
+ * - One thread, one terminal (src/inbox-dispatch.ts): a row whose thread a live terminal of the client
+ *   is already working is typed into that terminal — no first pass (that terminal judges it), no seat,
+ *   no second terminal. A terminal mid-turn or mid-question keeps it waiting until it can take it.
  * - Cap: at most `perWorkspace` live inbox terminals per client; the rest wait and open as those close.
  * - Only rows filed after the feature first ran (kv `inbox.auto.after` = rowid then): turning it on
  *   never floods the Desk with the old backlog.
  * - A row whose terminal fails to open three times stays `new` for his hand.
+ *
+ * - Network: nothing is judged or opened while the network is down (net-up.ts) — the first pass and
+ *   the terminal both need it; the next tick tries again.
  *
  * Event-driven (inbox.updated, session.ended) plus a cheap 60s store-only tick for the grace timer.
  */
 import { bus, type BusEvent } from "./bus.js";
 import { CONFIG } from "./config.js";
 import { inbox, kv, workspaces, type InboxItem } from "./store.js";
-import { dispatchInboxItem } from "./inbox-dispatch.js";
+import { dispatchInboxItem, followUpWait, threadOwner, type FollowUpDeps } from "./inbox-dispatch.js";
 import { saveVerdict, savedVerdict, triageInboxItem, type Verdict } from "./inbox-triage.js";
 import { setting } from "./settings.js";
 import { openSession } from "./terminal.js";
+import { networkUp } from "./net-up.js";
 
 const AFTER_KEY = "inbox.auto.after";
 const MAX_FAILS = 3;
@@ -38,6 +45,9 @@ export type AutoDeps = {
   enabled?: (wsId: string) => boolean;
   triage?: (item: InboxItem) => Promise<Verdict | null>;
   triageOn?: (wsId: string) => boolean;
+  netUp?: () => Promise<boolean>;
+  /** How a follow-up is typed into its thread's live terminal — a test has no pty. */
+  follow?: FollowUpDeps;
 };
 
 export function createAutoDispatcher(deps: AutoDeps = {}) {
@@ -45,6 +55,7 @@ export function createAutoDispatcher(deps: AutoDeps = {}) {
   const enabled = deps.enabled ?? ((ws: string) => setting<boolean>("inbox.auto_dispatch", ws) !== false);
   const triage = deps.triage ?? ((i: InboxItem) => triageInboxItem(i));
   const triageOn = deps.triageOn ?? ((ws: string) => setting<boolean>("inbox.triage", ws) !== false);
+  const netUp = deps.netUp ?? networkUp;
   const firstSeen = new Map<string, number>();
   const fails = new Map<string, number>();
   const triageFails = new Map<string, number>();
@@ -75,6 +86,25 @@ export function createAutoDispatcher(deps: AutoDeps = {}) {
     return v;
   }
 
+  /**
+   * A row whose thread a live terminal of this client already works is typed into that terminal once
+   * it can take it — "typed", or "waiting" for it. Null: no live terminal has the thread.
+   */
+  async function followUp(c: InboxItem): Promise<"typed" | "waiting" | null> {
+    const owner = threadOwner(c).live;
+    if (!owner) return null;
+    if (!workspaces.get(c.workspace_id) || !enabled(c.workspace_id)) return "waiting";
+    if (followUpWait(owner.id, true, deps.follow)) return "waiting";
+    try {
+      await dispatchInboxItem(c.id, deps.opener ?? openSession, { model: null, task: null }, deps.follow);
+    } catch (e: any) {
+      console.warn(`[inbox-auto] follow-up ${c.id.slice(0, 8)} → ${owner.id.slice(0, 8)}: ${e?.message ?? e}`);
+      return "waiting";
+    }
+    firstSeen.delete(c.id);
+    return "typed";
+  }
+
   const after = (): number => {
     const v = kv.get(AFTER_KEY);
     if (v != null && v !== "") return Number(v) || 0;
@@ -93,10 +123,15 @@ export function createAutoDispatcher(deps: AutoDeps = {}) {
       const cands = inbox.autoCandidates(after());
       const seen = new Set(cands.map((c) => c.id));
       for (const id of firstSeen.keys()) if (!seen.has(id)) firstSeen.delete(id);
+      let online: boolean | null = null; // looked at once, and only when a row is ready to go
       for (const c of cands) {
         if (!firstSeen.has(c.id)) firstSeen.set(c.id, t);
         if (t - firstSeen.get(c.id)! < CONFIG.inboxAuto.graceSec * 1000) continue;
         if ((fails.get(c.id) ?? 0) >= MAX_FAILS) continue;
+        // A typed follow-up starts an agent turn too: not into a dead network (net-up.ts).
+        if ((online ??= await netUp()) === false) break;
+        const f = await followUp(c);
+        if (f) { if (f === "typed") opened.push(c.id); continue; }
         if (!workspaces.get(c.workspace_id) || !enabled(c.workspace_id)) continue;
         // Judged before the seat check, so a full client still closes its noise as it arrives.
         const v = await judge(c);
@@ -130,8 +165,7 @@ export function createAutoDispatcher(deps: AutoDeps = {}) {
 
   function onEvent(e: BusEvent): void {
     if (e.topic === "session.ended") {
-      const row = inbox.closeForSession(e.session_id);
-      if (row) bus.publish({ topic: "inbox.updated", workspace_id: row.workspace_id, item_id: row.id });
+      for (const row of inbox.closeForSession(e.session_id)) bus.publish({ topic: "inbox.updated", workspace_id: row.workspace_id, item_id: row.id });
       void pump();
     } else if (e.topic === "inbox.updated") {
       setTimeout(() => void pump(), CONFIG.inboxAuto.graceSec * 1000 + 500).unref?.();

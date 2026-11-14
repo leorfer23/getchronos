@@ -143,6 +143,11 @@ export function derivedWriteRefusal(req: express.Request): string | null {
   }
   if ((pattern === "/repos/:id" && req.method === "PATCH") || (pattern === "/workspaces/:id/repos" && req.method === "POST")) {
     for (const f of REPO_COMMAND_FIELDS) if (has(body, f) && filled(body[f])) return operatorOnly(`${f} (the daemon runs it as a shell command, unsandboxed)`);
+    // Saying a repo is a data repo only adds a check; saying it is not (or going back to auto on an
+    // existing repo) takes the verifier's data diff off its PRs — data-diff.ts classifyDataRepo.
+    if (has(body, "data_repo") && body.data_repo !== true && !(req.method === "POST" && body.data_repo === null)) {
+      return operatorOnly("data_repo (it takes the verifier's data diff off this repo's PRs)");
+    }
   }
   if (pattern === "/settings" && (req.method === "PUT" || req.method === "POST")) {
     const key = String(body.key ?? "");

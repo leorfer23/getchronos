@@ -71,6 +71,7 @@ import { slugOfRemote } from "./pr-ownership.js";
 import { db, inbox, jobs, repos, runs, sessions, skills, workspaces, wsTriggers, type InboxItem } from "./store.js";
 import { isLive, openSession, sendInput } from "./terminal.js";
 import { statusOf } from "./term-status.js";
+import { networkUp } from "./net-up.js";
 import { parseCheckResult, prMet, runInWorkspace, scriptTail, snapPr, type PrSnap, type WorkspaceCommandRun } from "./continuations.js";
 import type { WsFireOutcome, WsTrigger, WsTriggerAction, WsTriggerFire, WsTriggerKind } from "./store/ws-triggers.js";
 import type { Job, Repo, Session } from "./types.js";
@@ -481,9 +482,9 @@ const DEFAULTS: TriggerDeps = {
   phase: (id) => statusOf(id)?.phase ?? null,
   alive: isLive,
   awakeForMs: (nowMs) => nowMs - brainAwakeSince(nowMs),
-  // The seam for PR #119's shared network check (src/net-up.ts networkUp). Until it lands nothing here
-  // can tell an outage, so a look made offline fails like any failed look.
-  online: async () => true,
+  // The shared network check (src/net-up.ts, #119): a look made while offline waits and retries
+  // instead of failing like any failed look.
+  online: networkUp,
 };
 let overrides: Partial<TriggerDeps> = {};
 /** Swap any dependency (tests, or the network check once it exists). Null restores the real ones. */

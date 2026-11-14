@@ -19,6 +19,7 @@ import { startMonitor } from "./monitor.js";
 import { startFollowUps } from "./jot-followup.js";
 import { startContinuations } from "./continuations.js";
 import { startWorkspaceTriggers } from "./ws-triggers.js";
+import { startNetNudge } from "./net-nudge.js";
 import { startAutoPlan } from "./autoplan.js";
 import { startBurnGuard } from "./burn-guard.js";
 import { startIdeas } from "./ideas.js";
@@ -191,6 +192,7 @@ startAwake();
 startWatches();
 startFollowUps();
 startContinuations();
+startNetNudge();
 // Workspace triggers (`mc trigger`): standing "when X happens here, open the right work" rules.
 startWorkspaceTriggers();
 startDayHeartbeat();
