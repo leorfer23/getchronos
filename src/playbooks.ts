@@ -284,6 +284,9 @@ export function validateSteps(ws: Workspace, steps: PlaybookStep[]): string[] {
       } else if (!SERVICE_READS.has(svc[1])) {
         errors.push(`${at}: a playbook deploys or restarts one of this workspace's services per step — \`mc service deploy|restart <name>\` alone on the line`);
       }
+    } else if (/(?:^|[;&|(]\s*)mc\s+service\s+(?:deploy|restart)\b/.test(run)) {
+      // Inside a longer command the agent's own `mc` would run it — and be refused: it is the daemon's.
+      errors.push(`${at}: \`mc service deploy|restart <name>\` goes alone on its own line — the daemon carries it out there`);
     }
     if (s.kind === "mc" || /(^|[\s;&|(])mc\s/.test(run)) {
       for (const m of run.matchAll(MC_WS_FLAG)) {

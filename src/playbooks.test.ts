@@ -141,6 +141,7 @@ test("a step never reaches outside its workspace: a cd elsewhere, another worksp
     { kind: "agent", run: "merge the PR", gate: "merge" },
     { kind: "shell", run: "echo {{token}}", gate: null },
     { kind: "shell", run: "cd ../../elsewhere && make", gate: null },
+    { kind: "shell", run: "make release && mc service deploy bot", gate: null },
   ];
   const errors = P.validateSteps(A, P.normalizeSteps(bad));
   const has = (re: RegExp) => assert.ok(errors.some((e) => re.test(e)), `${re} in:\n${errors.join("\n")}`);
@@ -153,6 +154,7 @@ test("a step never reaches outside its workspace: a cd elsewhere, another worksp
   has(/step 7: a merge is the command itself/);
   has(/step 8: \{\{token\}\} is not a template/);
   has(/step 9: `cd \.\.\/\.\.\/elsewhere` climbs out with \.\./);
+  has(/step 10: `mc service deploy\|restart <name>` goes alone on its own line/);
   // A message is the last step, and there is one at most.
   const msgs = P.validateSteps(A, [
     { kind: "message", run: "hi", to: "x", channel: "slack", gate: null },
