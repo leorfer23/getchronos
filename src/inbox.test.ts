@@ -296,6 +296,12 @@ test("inboxBrief for a Slack row names no tracker task", () => {
   assert.match(b, /From: Ana/);
 });
 
+test("inboxBrief: the reply is drafted where it was asked, never DMed to him", () => {
+  const b = inboxBrief({ id: "x", workspace_id: "w", source: "slack", kind: "mention", external_key: "k", ref: "C1:1", title: "t", why: null, body: null, url: null, actor: "Ana", urgent: 0, state: "new", snooze_until: null, dispatched_session: null, created_at: "2026-09-24T10:00:00.000Z", updated_at: "" }, "Acme", null);
+  assert.match(b, /the draft reply where it was asked — a Slack item gets a Slack draft in that thread or DM; a tracker task gets the text in your hand-off/);
+  assert.doesNotMatch(b, /self-DM/, "someone else asked: the answer goes back to them, as a draft");
+});
+
 test("only the dispatch route and the auto-dispatcher call dispatchInboxItem, and filing/syncing itself opens no terminal", async () => {
   const src = path.join(import.meta.dirname);
   const callers: string[] = [];
