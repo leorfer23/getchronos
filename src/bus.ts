@@ -203,6 +203,11 @@ export type BusEvent = (
   // or handed to a fresh terminal (`fired`, how = typed|resumed|opened).
   | { topic: "continuation.updated"; continuation_id: string; workspace_id: string; session_id: string | null }
   | { topic: "continuation.fired"; continuation_id: string; workspace_id: string; session_id: string; how: string; outcome: string; label: string }
+  // Workspace triggers (src/ws-triggers.ts, `mc trigger`): one was added, removed, switched on/off or
+  // paused itself (`updated` — never per routine look, every event here is an activity row), and one
+  // acted on an event (`fired`, outcome = opened|appended|filed|playbook|pending|skipped|failed).
+  | { topic: "ws_trigger.updated"; trigger_id: string; workspace_id: string; enabled?: boolean }
+  | { topic: "ws_trigger.fired"; trigger_id: string; workspace_id: string; outcome: string; session_id: string | null; label: string }
   /** The workspace inbox changed (src/inbox.ts): a row filed, dismissed, snoozed or dispatched. */
   | { topic: "inbox.updated"; workspace_id: string; item_id: string }
   | { topic: "launch.updated"; launch_id: string; workspace_id: string }

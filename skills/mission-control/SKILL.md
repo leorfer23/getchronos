@@ -622,6 +622,27 @@ mc when cancel <id8> "why"
 - A `script` is exactly what you could run yourself: same sandbox, same secrets. Keep it a quick,
   read-only probe (≤60s), print one line of evidence, and never write or send anything from it.
 
+## Standing rules for the workspace — `mc trigger`
+
+`mc when` brings back YOUR work once. A trigger is the workspace's standing rule: every time something
+happens, it opens the right work (a terminal with a goal and optionally a skill, a playbook, or an
+inbox item). It re-arms after every look and fires on NEW events only.
+
+```bash
+mc trigger test pr web --on failing --goal "find why CI broke on {subject}"   # dry run first: nothing opens
+mc trigger add  pr web --on failing --goal "find why CI broke on {subject}"   # conditions: pr | slack | email | check | command | metric
+mc trigger add metric "./bin/rows-today" --band 1000..5000 --cron "0 9 * * *" --skill rows-explainer
+mc trigger list · show <id8> · pause <id8> "why"
+```
+
+- **What you add is saved OFF.** It opens work with nobody watching, so the operator (or Robert) turns
+  it on. Say in your Summary that you proposed one and what it does.
+- You may pause a trigger of your workspace (the safe direction); turning one on or removing it is the
+  operator's / Robert's.
+- Its commands run in this workspace's sandbox with its `mc vars` — like `mc when script`: quick (≤60s),
+  read-only, one line of evidence. A metric prints its number alone on the last line.
+- Repos and skills it names must be this workspace's own.
+
 ## Other terminals
 
 ```bash

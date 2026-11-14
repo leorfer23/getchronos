@@ -341,6 +341,27 @@ defineSetting({
   help: "On: when the daily job check finds a failed job, a terminal opens right away to find why, fix it and re-run it — without asking. Off: the check tells you which jobs failed and asks first (Inbox → Stalled, Telegram, `mc recover`); your yes opens that terminal.",
   default: () => process.env.CHRONOS_JOB_CHECK_AUTO_RERUN === "1",
 });
+// Workspace triggers (src/ws-triggers.ts, `mc trigger`): the switch for all of them here, and the hours
+// they keep quiet. Each trigger also has its own on/off (⏰ Open loops → Triggers).
+defineSetting({
+  key: "triggers.enabled", group: "Autonomy", level: "both", type: "bool", env: "CHRONOS_TRIGGERS",
+  label: "Triggers open work",
+  help: "Triggers (`mc trigger`) watch for a PR event, a Slack message, an email, a command or a metric and open the right terminal when it happens. Off: no trigger here looks at anything or opens work; they keep their own on/off for when this is back on.",
+  default: () => process.env.CHRONOS_TRIGGERS !== "0",
+});
+defineSetting({
+  key: "triggers.quiet_hours", group: "Autonomy", level: "both", type: "string", env: "CHRONOS_TRIGGER_QUIET_HOURS",
+  label: "Trigger quiet hours",
+  help: "Local hours when triggers neither look nor open work, start-end (\"22-07\" wraps midnight). What happened meanwhile is seen once they end. Empty: no quiet hours.",
+  default: () => process.env.CHRONOS_TRIGGER_QUIET_HOURS ?? "",
+  check: (v) => {
+    const s = String(v ?? "").trim();
+    if (!s) return "";
+    const m = /^(\d{1,2})\s*-\s*(\d{1,2})$/.exec(s);
+    if (!m || Number(m[1]) > 23 || Number(m[2]) > 23 || Number(m[1]) === Number(m[2])) throw new Error('two different hours, start-end ("22-07"), or empty for none');
+    return `${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+  },
+});
 // First in his group, so it is the first thing the page shows under his name.
 defineSetting({
   key: "assistant.name", group: "Robert", level: "global", type: "string",

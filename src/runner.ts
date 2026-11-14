@@ -61,7 +61,8 @@ const execFileAsync = promisify(execFile);
 // (PER-35 / run 239abc1e), same class of omission as grade: before it.
 // dream: is the per-workspace memory pass (dream.ts) — read-only on code, writes memory only via mc.
 // when-check: is a continuation probe (continuations.ts) — reads Slack/mail/trackers, answers met or not-yet.
-const READONLY_RUN_PREFIXES = ["plan:", "review:", "distill:", "grade:", "ideas:", "intake:", "dream:", "when-check:"];
+// trigger-check: is the same probe for a workspace trigger (ws-triggers.ts: email / check conditions).
+const READONLY_RUN_PREFIXES = ["plan:", "review:", "distill:", "grade:", "ideas:", "intake:", "dream:", "when-check:", "trigger-check:"];
 export function isReadOnlyRun(name?: string | null): boolean {
   const base = baseJobName(name);
   return !!base && READONLY_RUN_PREFIXES.some((p) => base.startsWith(p));

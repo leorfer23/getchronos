@@ -60,6 +60,39 @@ keeps it on.
 
 Run it yourself any time: `mc job check`. Turn it off with `CHRONOS_JOB_CHECK=0`.
 
+## When something happens: workspace triggers
+
+A job runs on a clock. A **workspace trigger** waits for an event and then opens the right work in that
+project: "when a PR on web fails CI, open a terminal to fix it", "when the daily cost leaves its usual
+range, open the cost explainer", "when a client's message arrives, draft the answer".
+
+```bash
+mc trigger add pr web --on failing --goal "find why CI broke on {subject} and fix it on its branch"
+mc trigger add metric "./bin/cost-today" --within 25% --cron "0 9 * * *" --skill cost-explainer
+mc trigger add slack --from ana --goal "read what Ana asked and draft the answer"
+mc trigger add command "ls ~/Shared/drop" --lines --goal "load {subject}"
+mc trigger add email --from billing@vendor.example --inbox
+mc trigger test <id8>          # dry run: what it sees now, and what each event would do
+mc trigger list | show <id8> | pause <id8> | resume <id8> | rm <id8>
+```
+
+- **Conditions:** a PR event on one of the project's own repos; a Slack DM or @mention (from the inbox
+  the Slack triage fills — no model cost); an email from a sender or anything in words (a short
+  read-only probe, which costs a model call per look); a command that succeeds, or prints new lines
+  (a new file in a folder); a **metric** — a command that prints a number, checked against a band
+  (`--band 100..250`) or against its trailing 7-day median (`--within 25%`).
+- **Actions:** a terminal with a goal and optionally one of the project's skills (default), a playbook,
+  or an inbox item.
+- **New events only, one piece of work per event.** The first look is a baseline. While the terminal a
+  trigger opened is still open, the next event is typed into it (after its current turn) instead of
+  opening another; `--dedupe subject` gives each PR, person or file its own. `--rate 3/day` (the
+  default) caps the new work it starts; past it events are recorded, not acted on. Nothing is retried.
+- **It respects the machine:** nothing is looked at or opened while the Mac is asleep, in a dark wake
+  or offline, or in the project's quiet hours (⚙ Settings → Autonomy → *Trigger quiet hours*).
+- **Safe by default:** commands run in the project's sandbox with its own `mc vars`; the terminals a
+  trigger opens are boxed like inbox terminals (drafts only, no merge, deploy or message). A trigger an
+  agent adds is saved **off** until you turn it on: ⏰ Open loops → *When it happens*.
+
 ## Same engine as everything else
 
 Jobs run on the same engine as ticket builds: sandbox, timeouts, retries, rate-limit resume, budgets
@@ -69,4 +102,5 @@ and the burn guard all apply.
 
 **Under the hood:** scheduler `src/scheduler.ts` (Croner, the DB is the source of truth) ·
 `src/dispatcher.ts` → `src/runner.ts` · webhook route in `src/api.ts` (`/triggers/hook/:token`) ·
-job check `src/job-check.ts` · `mc job` in `scripts/mc` · the assistant's side `agents/_blocks/jobs.md`.
+job check `src/job-check.ts` · `mc job` in `scripts/mc` · the assistant's side `agents/_blocks/jobs.md` ·
+workspace triggers `src/ws-triggers.ts` + `src/ws-trigger-routes.ts` (`mc trigger`).

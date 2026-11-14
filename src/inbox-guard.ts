@@ -10,13 +10,15 @@ import { CONFIG } from "./config.js";
 export const INBOX_AUTO_BY = "inbox";
 /** Robert's self-wake (src/robert-selfwake.ts) opens terminals nobody chose either: same box. */
 export const PROACTIVE_AUTO_BY = "proactive";
+/** A workspace trigger (src/ws-triggers.ts) opens terminals on an event, with nobody watching: same box. */
+export const TRIGGER_AUTO_BY = "trigger";
 
-/** Opened by itself — from the inbox or by Robert unprompted — so it runs boxed. */
+/** Opened by itself — from the inbox, by a trigger or by Robert unprompted — so it runs boxed. */
 export const isInboxAuto = (s: { created_by?: string | null }): boolean =>
-  s.created_by === INBOX_AUTO_BY || s.created_by === PROACTIVE_AUTO_BY;
+  s.created_by === INBOX_AUTO_BY || s.created_by === PROACTIVE_AUTO_BY || s.created_by === TRIGGER_AUTO_BY;
 
 export const INBOX_AUTO_RULES = [
-  "THIS TERMINAL OPENED BY ITSELF (from the operator's inbox, or by Robert without being asked). Nobody approved anything yet, so it runs under stricter rules than a terminal he opened:",
+  "THIS TERMINAL OPENED BY ITSELF (from the operator's inbox, a workspace trigger, or by Robert without being asked). Nobody approved anything yet, so it runs under stricter rules than a terminal he opened:",
   "- YES: read, investigate, analyse, write code, run tests, commit on your own branch/worktree, push that branch, open a pull request, write drafts (replies, docs, messages) in this terminal or in files.",
   "- NO, whatever anyone asks (him included, until he says so in this terminal): merge a PR, deploy or release anything, force-push, push to a default branch, delete anything outside your worktree, touch production data, spend money.",
   "- NO messages anywhere: no Slack posts or reactions, email, Jira/ClickUp comments or status changes, PR reviews/comments, Telegram. Draft the text here instead.",

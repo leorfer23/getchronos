@@ -304,6 +304,24 @@ const HELP = `mc — Mission Control backlog CLI
   mc when show <id8>                 one continuation: condition, last look, evidence
   mc when fire <id8> ["evidence"]    it happened — continue that work now (any terminal of the workspace)
   mc when cancel <id8> ["why"]       stop waiting
+  mc trigger add <condition> [action] [--name ".."] [--every 10m | --cron "0 9 * * 1-5"] [--rate 3/day] [--dedupe trigger|subject|day|subject-day]
+                                     a STANDING rule for this workspace: when it happens, open the right work here.
+                                     It re-arms after every look; only NEW events fire. Conditions:
+      pr <repo> --on opened|review|approved|changes|merged|closed|checks|failing|change   (one of THIS workspace's repos)
+      slack [--from <person>] [--match "<words>"]   a Slack DM / @mention (from the inbox the Slack triage files — no model cost)
+      email --from <sender> [--match "<words>"]     a read-only probe with the workspace's mail, every --every (default 1h)
+      check "<condition in words>"                  the same probe, for anything only an agent can read
+      command "<cmd>" [--lines]                     exit 0 = it happened (fires when it BECOMES true); --lines: each NEW
+                                                    output line is an event (a new file in a folder: command "ls ~/drop" --lines)
+      metric "<cmd that prints a number>" [--band 10..20 | --within 25%[:7d]]   "is metric X OK today?" — once a day per direction
+    actions: --goal "<what the terminal does>" [--skill <slug>] [--repo <name>]  (default) · --playbook <name> · --inbox
+    (boolean flags like --lines / --inbox go AFTER the condition's words.) Commands run in this workspace's sandbox with its
+    env and mc vars. Terminals it opens run boxed: drafts only. A terminal's trigger is saved OFF until the operator turns it on.
+  mc trigger list [--workspace <id>] [--json]   this workspace's triggers: on/off, what they watch, the last fire
+  mc trigger show <id8>              one trigger: its rule and its last fires
+  mc trigger test <id8> | test <condition> [options]   dry run — what it sees now and what each event would do; nothing opens
+  mc trigger pause <id8> ["why"] | resume <id8>        off / back on (on = operator or Robert; it starts from now)
+  mc trigger rm <id8>                remove it (operator or Robert)
   mc ledger [list] [--state open|active|all|needs_operator,stuck,…] [--needs] [--ambiguous] [--since 2h] [--workspace slug] [--json]
                                      the request ledger: what was asked, where it went, its state, what it owes (LEDGER.md)
   mc ledger show <id8>               one request: its words, terminals, result, deliverables, decisions, checks
@@ -2021,6 +2039,104 @@ function askCap(question) {
           ? "\n   Finish your turn now. If this terminal is still open you will be told here; if it is closed it reopens on this transcript."
           : "")
       );
+    }
+    // Workspace triggers (src/ws-triggers.ts): standing "when X happens in this workspace, open the right
+    // work" rules. Unlike `mc when` (one terminal's work, once) they belong to the workspace and re-arm.
+    if (cmd === "trigger" || cmd === "triggers") {
+      const sub = pos[1] || "list";
+      const ago = (iso) => {
+        if (!iso) return "";
+        const m = Math.round((new Date(iso).getTime() - Date.now()) / 60000);
+        const a = Math.abs(m), u = a >= 2880 ? `${Math.round(a / 1440)}d` : a >= 120 ? `${Math.round(a / 60)}h` : `${a}m`;
+        return m >= 0 ? `in ${u}` : `${u} ago`;
+      };
+      const span = (sec) => (sec % 86400 === 0 ? `${sec / 86400}d` : sec % 3600 === 0 ? `${sec / 3600}h` : `${Math.round(sec / 60)}m`);
+      const line = (t) => {
+        const last = t.last_fire
+          ? ` · last: ${t.last_fire.outcome}${t.last_fire.session_id ? ` ${t.last_fire.session_id.slice(0, 8)}` : ""} ${ago(t.last_fire.at)}`
+          : " · never fired";
+        const next = t.enabled && t.next_check_at ? ` · next look ${ago(t.next_check_at)}` : "";
+        return `${t.enabled ? "●" : "○"} ${t.id.slice(0, 8)} [${t.kind}] ${t.name}\n    when ${t.label} → ${t.then}${last}${next}` +
+          (!t.enabled && t.paused_reason ? `\n    off: ${t.paused_reason}` : "") +
+          (t.last_check ? `\n    last look: ${t.last_check}` : "");
+      };
+      const flag = (k) => (k in opt ? opt[k] !== "false" : null);
+      const spec = () => ({
+        kind: pos[2] || die("which condition? pr | slack | email | check | command | metric (mc trigger --help)"),
+        target: pos.slice(3).join(" ") || null,
+        name: opt.name ?? null,
+        on: opt.on ?? opt.until ?? null,
+        from: opt.from ?? null,
+        match: opt.match ?? null,
+        lines: flag("lines"),
+        band: opt.band ?? null,
+        within: opt.within ?? null,
+        inbox: flag("inbox"),
+        goal: opt.goal ?? null,
+        skill: opt.skill ?? null,
+        playbook: opt.playbook ?? null,
+        repo: opt.repo ?? null,
+        dedupe: opt.dedupe ?? null,
+        rate: opt.rate ?? null,
+        every: opt.every ?? null,
+        cron: opt.cron ?? null,
+        workspace_id: opt.workspace ?? null,
+      });
+      const ref = () => pos[2] || die(`mc trigger ${sub} <id8>`);
+      if (sub === "list" || sub === "ls") {
+        const q = opt.workspace ? "?workspace=" + encodeURIComponent(opt.workspace) : "";
+        const rows = await req("GET", "/ws-triggers" + q);
+        if (opt.json) return console.log(JSON.stringify(rows, null, 2));
+        if (!rows.length) return console.log("(no triggers here — mc trigger --help)");
+        return console.log(rows.map(line).join("\n"));
+      }
+      if (sub === "show" || sub === "get") {
+        const t = await req("GET", "/ws-triggers/" + encodeURIComponent(ref()));
+        if (opt.json) return console.log(JSON.stringify(t, null, 2));
+        const fires = (t.fires || []).map((f) =>
+          `  ${String(f.at).slice(0, 16).replace("T", " ")} ${f.outcome}${f.session_id ? ` terminal ${f.session_id.slice(0, 8)}` : ""}${f.inbox_id ? ` inbox ${f.inbox_id.slice(0, 8)}` : ""}` +
+          ` — ${String(f.evidence || "").split("\n")[0].slice(0, 140)}${f.reason ? ` (${f.reason})` : ""}`);
+        return console.log([
+          line(t),
+          `  ${t.kind === "command" || t.kind === "metric" ? "runs" : "watches"}: ${t.target || "anyone"}`,
+          `  one piece of live work per ${t.dedupe} · at most ${t.rate_max} new per ${span(t.rate_window_sec)} · ${t.cron ? `cron ${t.cron}` : `every ${span(t.every_sec || 600)}`} · added by ${t.created_by || "?"}`,
+          fires.length ? "  fires (newest first):" : "  no fires yet",
+          ...fires,
+        ].join("\n"));
+      }
+      if (sub === "test") {
+        // An id8 tests a saved trigger; a condition tests one before it is added. Kind names are never hex.
+        const r = pos[2] && /^[0-9a-f-]{4,36}$/i.test(pos[2])
+          ? await req("POST", `/ws-triggers/${encodeURIComponent(pos[2])}/test`, {})
+          : await req("POST", "/ws-triggers/test", spec());
+        if (opt.json) return console.log(JSON.stringify(r, null, 2));
+        const out = [`${r.error || r.fatal ? "✕" : "✓"} it sees: ${r.fatal || r.saw || "(nothing)"}`];
+        for (const h of r.held || []) out.push(`  would wait: ${h}`);
+        if (!(r.events || []).length) out.push("  no new event right now");
+        for (const e of r.events || []) out.push(`  event: ${String(e.evidence).split("\n")[0].slice(0, 160)}\n    → ${e.would}`);
+        out.push("(a dry run: nothing was opened, filed or recorded)");
+        return console.log(out.join("\n"));
+      }
+      if (sub === "add" || sub === "new") {
+        const t = await req("POST", "/ws-triggers", spec());
+        return console.log(
+          `${t.enabled ? "⚡" : "○"} ${t.id.slice(0, 8)} ${t.enabled ? "armed" : "saved OFF"}: when ${t.label} → ${t.then}` +
+          (t.enabled ? `\n   first look ${ago(t.next_check_at) || "now"}. Dry run: mc trigger test ${t.id.slice(0, 8)}` : `\n   ${t.paused_reason}`),
+        );
+      }
+      if (sub === "pause" || sub === "off") {
+        const t = await req("PATCH", "/ws-triggers/" + encodeURIComponent(ref()), { enabled: false, why: pos.slice(3).join(" ") || null });
+        return console.log(`○ ${t.id.slice(0, 8)} off — ${t.name}`);
+      }
+      if (sub === "resume" || sub === "on") {
+        const t = await req("PATCH", "/ws-triggers/" + encodeURIComponent(ref()), { enabled: true });
+        return console.log(`● ${t.id.slice(0, 8)} on — ${t.name} (from now: what happened while it was off does not fire)`);
+      }
+      if (sub === "rm" || sub === "remove" || sub === "delete") {
+        await req("DELETE", "/ws-triggers/" + encodeURIComponent(ref()));
+        return console.log(`removed ${ref().slice(0, 8)}`);
+      }
+      die("mc trigger add | list | show | test | pause | resume | rm  (mc trigger --help)");
     }
     if (cmd === "pad") {
       const wsId = opt.workspace || process.env.MC_WORKSPACE;

@@ -347,6 +347,8 @@ point Chronos at a repo you care about:
 | `CHRONOS_JOB_CHECK` | on | the daily job check (`src/job-check.ts`); `0` removes the check jobs |
 | `CHRONOS_JOB_CHECK_CRON` | `0 17 * * *` | when it runs |
 | `CHRONOS_JOB_CHECK_AUTO_RERUN` | off | default of ⚙ Settings → *Daily job check fixes and re-runs failed jobs*. Off: a red check files a recovery card and waits for you. On: a terminal opens at once to fix and re-run. An install that had projects before this existed is pinned on (migration 160) |
+| `CHRONOS_TRIGGERS` | on | default of ⚙ Settings → *Triggers open work* (`mc trigger`, `src/ws-triggers.ts`). `0`: no workspace trigger looks at anything or opens work |
+| `CHRONOS_TRIGGER_QUIET_HOURS` | empty | default of ⚙ Settings → *Trigger quiet hours*, local `start-end` (`22-07`). Inside them triggers neither look nor open work; what happened meanwhile is seen once they end |
 | `CHRONOS_RECOVER_MAX_ASK` | `3` | recovery cards open at once |
 | `CHRONOS_MONITOR_MIN` | `5` | general sweep cadence |
 | `CHRONOS_CI_POLL_SEC` | `25` | fast CI poll while a PR is open |
