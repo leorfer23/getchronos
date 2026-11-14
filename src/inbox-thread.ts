@@ -23,7 +23,7 @@
 import type { InboxItem } from "./store/inbox.js";
 import { similarity } from "./text-similarity.js";
 
-/** A Slack message ts: seconds, a dot, microseconds ("1794248726.385579"). */
+/** A Slack message ts: seconds, a dot, microseconds ("1794200000.000100"). */
 const TS = /^\d{9,11}\.\d{1,6}$/;
 const CHANNEL = /^[A-Z][A-Z0-9]{0,19}$/;
 export const THREAD_CAP = 200;
