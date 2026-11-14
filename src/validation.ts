@@ -1137,9 +1137,14 @@ export const NewInboxItemSchema = z.object({
   actor: z.string().trim().max(200).optional(),
   ref: z.string().trim().max(120).optional(),
   urgent: z.boolean().optional(),
+  // The conversation, when the feed names it (a Slack `<channel id>:<thread root ts>`). Otherwise it is
+  // read off the permalink / key / ref (src/inbox-thread.ts).
+  thread: z.string().trim().max(300).optional(),
 });
 // Close a row whose ask already happened — the triage/cleanup job's reason is what the Desk shows.
 export const InboxResolveSchema = z.object({ reason: z.string().trim().min(1).max(300) });
+// The operator's Merge on the Desk's "same conversation?" suggestion: the row this one folds into.
+export const InboxMergeSchema = z.object({ into: z.string().trim().min(8).max(64) });
 // The cleanup job's ranking of one client's open inbox rows and notes, most important first.
 const RankEntry = z.object({
   id: z.string().trim().min(8).max(64),

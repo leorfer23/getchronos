@@ -350,3 +350,25 @@ test("migration 160: a new install (no workspace) gets the new defaults; one wit
   assert.equal(kvGet(chose, "defaults.kept_at"), undefined);
   chose.close();
 });
+
+test("migration 161: inbox rows already filed get their thread key from what they hold, so an open thread folds after the upgrade", () => {
+  const db = new Database(":memory:");
+  applyUpTo(db, 160);
+  const ts = "2026-11-10T00:00:00.000Z";
+  db.prepare(`INSERT INTO workspaces (id,slug,name,config_dir,created_at,updated_at) VALUES ('ws1','acme','Acme','/tmp/acme',@ts,@ts)`).run({ ts });
+  const put = db.prepare(
+    `INSERT INTO inbox_items (id,workspace_id,source,kind,external_key,ref,title,url,created_at,updated_at) VALUES (@id,'ws1',@source,@kind,@key,@ref,'t',@url,@ts,@ts)`,
+  );
+  const reply = "https://acme.slack.com/archives/C0AAA11111/p1794300000000200?thread_ts=1794200000.000100&cid=C0AAA11111";
+  put.run({ id: "reply", source: "slack", kind: "dm", key: "C0AAA11111:1794300000.000200", ref: null, url: reply, ts });
+  put.run({ id: "root", source: "slack", kind: "mention", key: "C0AAA11111:1794200000.000100", ref: null, url: null, ts });
+  put.run({ id: "task", source: "jira", kind: "comment", key: "jira:ANA-1:comment:c1", ref: "ANA-1", url: null, ts });
+  put.run({ id: "loose", source: "slack", kind: "dm", key: "k", ref: null, url: null, ts });
+  applyUpTo(db, 161);
+  const row = (id: string) => ({ ...(db.prepare("SELECT thread_key, merged_into FROM inbox_items WHERE id=?").get(id) as object) });
+  assert.deepEqual(row("reply"), { thread_key: "C0AAA11111:1794200000.000100", merged_into: null });
+  assert.deepEqual(row("root"), { thread_key: "C0AAA11111:1794200000.000100", merged_into: null }, "a root and its reply: one thread");
+  assert.deepEqual(row("task"), { thread_key: "ANA-1", merged_into: null });
+  assert.deepEqual(row("loose"), { thread_key: null, merged_into: null }, "nothing names its thread: it stands alone");
+  db.close();
+});

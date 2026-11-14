@@ -1190,6 +1190,14 @@
   .ib-row .acts .btn { padding:1px 10px; font-size:13.5px; }
   .ib-row .acts .ib-hours { width:84px; padding:1px 8px; font-size:13.5px; }
   .ib-row .e { grid-column:2 / span 2; font-size:13px; color:var(--danger); overflow-wrap:anywhere; }
+  /* One thread, one row: the later messages folded into it, and where its Dispatch goes. */
+  .ib-row .asks { grid-column:2 / span 2; display:flex; flex-direction:column; gap:1px; font-size:13.5px; color:var(--muted); }
+  .ib-row .asks div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ib-row .asks a { color:inherit; text-decoration:none; }
+  .ib-row .asks a:hover { text-decoration:underline; }
+  .ib-row .asks span { color:var(--faint); margin-left:6px; }
+  .ib-row .thr { grid-column:2 / span 2; font-size:13px; color:var(--faint); display:flex; gap:8px; align-items:center; }
+  .ib-row .thr .btn { padding:0 8px; font-size:12.5px; }
   .ib-row.urgent .t::before { content:"● "; color:var(--danger); }
   .ib-row.pri-high { box-shadow:inset 2px 0 0 var(--accent); }
   .ib-row.pri-low .t, .ib-row.pri-low .w { opacity:.62; }
@@ -7926,6 +7934,17 @@ function renderInboxClosed() {
       `<div class="acts"><button class="btn" data-a="reopen" title="It still needs you — put it back">↩ Reopen</button></div></div>`;
   }).join("");
 }
+// One thread, one row (src/inbox-thread.ts): the later messages of its thread folded into it, the live
+// terminal its Dispatch types it into, or — never merged on its own — a row it may continue, with Merge.
+function ibThread(i) {
+  const asks = (i.asks || []).map((a) => `<div>+ ${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.title)} ↗</a>` : esc(a.title)}<span>${a.actor ? esc(a.actor) + " · " : ""}${esc(age(a.created_at))}</span></div>`).join("");
+  const thr = i.followup_to
+    ? `<div class="thr">↪ Its thread's terminal is open — Dispatch types it there: ${esc(i.followup_to.goal || i.followup_to.session_id.slice(0, 8))}</div>`
+    : i.related
+    ? `<div class="thr" title="${esc(i.related.why)}">Looks like the same conversation as “${esc(i.related.title)}”${i.related.session_id ? " — its terminal is open" : ""} <button class="btn" data-a="merge" data-into="${esc(i.related.id)}" title="Fold this into that one — never done without your press">Merge</button></div>`
+    : "";
+  return (asks ? `<div class="asks">${asks}</div>` : "") + thr;
+}
 function ibRow(i) {
   const title = i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer" title="Open in ${esc(i.source)}">${esc(i.title)} ↗</a>` : esc(i.title);
   const back = `<button class="icon" data-a="back" title="Back">‹</button>`;
@@ -7937,7 +7956,7 @@ function ibRow(i) {
     ? `<input class="ib-hours" type="number" min="0" step="0.25" inputmode="decimal" placeholder="hours" value="${esc(IB.hours)}" title="Hours spent — optional · ⏎ closes"><button class="btn primary" data-a="close" title="Close the ${where} task${i.source === "jira" ? " " + esc(i.ref) : ""}">✓ Close in ${where}</button>${back}`
     : mode === "more"
     ? `<button class="btn" data-a="wontdo" title="Mute this task — nothing about it lands here again. Nothing is written to ${i.source === "slack" ? "Slack" : where}.">Won't do</button>${back}`
-    : `<button class="btn primary" data-a="go" title="Open a terminal in this client that investigates and proposes — it answers no one">Dispatch</button>` +
+    : `<button class="btn primary" data-a="go" title="${i.followup_to ? "Type it into its thread's open terminal — no new terminal" : "Open a terminal in this client that investigates and proposes — it answers no one"}">Dispatch</button>` +
       `<button class="btn" data-a="done" title="${ibTracker(i) ? `Close the ${where} task — asks for your hours` : "Resolve it"}">✓ Done</button>` +
       `<button class="btn" data-a="later" title="Snooze">Later</button><button class="icon" data-a="more" title="More">⋯</button><button class="icon" data-a="dismiss" title="Dismiss">✕</button>`;
   const err = IB.err[i.id] ? `<div class="e">${esc(IB.err[i.id])}</div>` : "";
@@ -7945,7 +7964,7 @@ function ibRow(i) {
   const rankTip = i.priority ? `${PRI_LABEL[i.priority] || i.priority}${i.rank_why ? " — " + i.rank_why : ""}` : "Not ranked yet — arrived after the last cleanup";
   return `<div class="ib-row${i.urgent ? " urgent" : ""}${pri}" data-id="${esc(i.id)}" title="${esc(rankTip)}"><span class="src" title="${esc(i.source)} · ${esc(i.kind)}">${IB_ICON[i.source] || "•"}</span>` +
     `<div class="t">${title}</div><div class="m">${i.actor ? esc(i.actor) + " · " : ""}${esc(age(i.created_at))}</div>` +
-    `<div class="w" title="${esc(i.why || "")}">${esc(i.why || "")}</div><div class="acts">${acts}</div>${err}</div>`;
+    `<div class="w" title="${esc(i.why || "")}">${esc(i.why || "")}</div><div class="acts">${acts}</div>${ibThread(i)}${err}</div>`;
 }
 // ✓ Done: POST /inbox/:id/done. A tracker refusal (a Done screen that wants hours, a status that does
 // not exist) stays on the row; a close that went through but whose comment/time entry did not says so.
@@ -7985,10 +8004,14 @@ qs("#ib-list").onclick = async (e) => {
       .catch((err) => ibFail(id, err));
   }
   try {
-    if (a === "go") {
-      const { session } = await api("/inbox/" + id + "/dispatch", { method: "POST", body: "{}" });
+    if (a === "go" || a === "merge") {
+      const r = a === "go"
+        ? await api("/inbox/" + id + "/dispatch", { method: "POST", body: "{}" })
+        : await api("/inbox/" + id + "/merge", { method: "POST", body: JSON.stringify({ into: b.dataset.into }) });
+      if (r.followup) toast("Typed into its thread's terminal — no new terminal");
+      if (!r.session) return loadInbox();
       qs("#dlg-inbox").close();
-      await load(); select(session.id);
+      await load(); select(r.session.id);
       return;
     }
     if (a === "dismiss") await api("/inbox/" + id + "/dismiss", { method: "POST", body: "{}" });

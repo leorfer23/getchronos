@@ -453,9 +453,10 @@ const HELP = `mc — Mission Control backlog CLI
   mc tell <ticket|run|agent> "message"   send a message to a worker's mailbox (no MC_RUN needed)
                                      ticket key is preferred — durable across park/resume/retry
   mc inbox                          manual mailbox check for this run (rarely needed — see 📨 above)
-  mc inbox add --kind dm|mention|self_note --title "…" --key <dedup> [--why "…"] [--url <link>] [--actor NAME] [--body "…"|-] [--source slack] [--urgent]
+  mc inbox add --kind dm|mention|self_note --title "…" --key <dedup> [--why "…"] [--url <link>] [--actor NAME] [--body "…"|-] [--source slack] [--thread <channel:root ts>] [--urgent]
                                      file a "needs you" row in this workspace's inbox (a notification only —
-                                     work starts when the operator presses Dispatch; --urgent pings his phone)
+                                     work starts when the operator presses Dispatch; --urgent pings his phone).
+                                     A message from a thread that already has an open row becomes an ask on it
   mc inbox list [--open|--all] [--json]   this workspace's inbox (every client's from the operator's shell);
                                      --open = new + snoozed, what a re-check looks at
   mc inbox resolve <id> "<why>"      close a row whose ask already happened (he replied, it was fixed) —
@@ -3797,9 +3798,12 @@ function askCap(question) {
           source: opt.source || "slack", kind, key, title,
           ...(opt.why ? { why: opt.why } : {}), ...(body ? { body } : {}), ...(opt.url ? { url: opt.url } : {}),
           ...(opt.actor ? { actor: opt.actor } : {}), ...(opt.ref ? { ref: opt.ref } : {}),
+          ...(opt.thread ? { thread: opt.thread } : {}),
           ...(opt.urgent === "true" ? { urgent: true } : {}),
         }, tok ? { "x-mc-admin": tok } : undefined);
-        return console.log(r.duplicate ? "already in the inbox" : `inbox ✓ ${r.id.slice(0, 8)}${r.urgent ? " (urgent — pushed)" : ""}`);
+        if (r.duplicate) return console.log("already in the inbox");
+        const pushed = r.urgent ? " (urgent — pushed)" : "";
+        return console.log(r.merged ? `inbox ✓ ${r.ask_id.slice(0, 8)} — same thread as ${r.id.slice(0, 8)}, added to it as an ask${pushed}` : `inbox ✓ ${r.id.slice(0, 8)}${pushed}`);
       }
       const q = new URLSearchParams({ ...(opt.all ? { all: "1" } : {}), ...(opt.open ? { open: "1" } : {}) });
       const r = wsId
@@ -3811,6 +3815,7 @@ function askCap(question) {
         const st = i.state === "new" ? "" : ` [${i.state}]`;
         console.log(`${i.id.slice(0, 8)}  ${i.source.padEnd(7)} ${i.kind.padEnd(9)} ${i.title.slice(0, 70)}${st}${i.actor ? "  — " + i.actor : ""}`);
         if (i.why) console.log(`          ${i.why.slice(0, 110)}`);
+        for (const a of i.asks || []) console.log(`          + ${a.title.slice(0, 100)}${a.actor ? "  — " + a.actor : ""}`);
       }
       return;
     }

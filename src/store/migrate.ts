@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { randomBytes } from "node:crypto";
 import { CONFIG } from "../config.js";
+import { threadKeyOf } from "../inbox-thread.js";
 
 // Real migrations, tracked via SQLite's `PRAGMA user_version`. Each entry runs at most once, in
 // order, inside its own transaction (DDL is transactional in SQLite — a mid-migration crash rolls
@@ -2546,6 +2547,31 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       const put = db.prepare("INSERT INTO kv (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
       put.run("settings:global", JSON.stringify(g));
       put.run("defaults.kept_at", new Date().toISOString());
+    },
+  },
+
+  {
+    version: 161,
+    name: "inbox_items.thread_key + merged_into — one row (and one terminal) per source thread",
+    // thread_key: the conversation a row belongs to (src/inbox-thread.ts) — a Slack `<channel>:<root ts>`
+    // or a tracker task id. A new ask from a thread that has an open row is filed as that row's ask
+    // (state `merged`, merged_into = the row) instead of a row of its own; one whose thread has a live
+    // terminal is typed into it at dispatch (src/inbox-dispatch.ts). The ask keeps its own external_key,
+    // so the UNIQUE key still makes a re-run of the feed a duplicate. Rows already filed get their key
+    // from what they hold (permalink, key, ref), so a thread open at upgrade folds too.
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE inbox_items ADD COLUMN thread_key TEXT;
+        ALTER TABLE inbox_items ADD COLUMN merged_into TEXT;
+        CREATE INDEX IF NOT EXISTS idx_inbox_items_thread ON inbox_items(workspace_id, source, thread_key);
+        CREATE INDEX IF NOT EXISTS idx_inbox_items_merged ON inbox_items(merged_into);`);
+      const set = db.prepare("UPDATE inbox_items SET thread_key=? WHERE id=?");
+      const rows = db.prepare("SELECT id, source, external_key, ref, url FROM inbox_items").all() as
+        { id: string; source: string; external_key: string; ref: string | null; url: string | null }[];
+      for (const r of rows) {
+        const k = threadKeyOf(r);
+        if (k) set.run(k, r.id);
+      }
     },
   },
 
