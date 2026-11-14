@@ -9,7 +9,7 @@
  * computing, no check command configured, the reader unavailable): it is recorded with its reason
  * and the item is not passed off as checked.
  */
-import type { CheckName, CheckStatus, Evidence } from "./ledger-model.js";
+import { deliveredLinks, type CheckName, type CheckStatus, type Evidence } from "./ledger-model.js";
 import type { GoalKind } from "./types.js";
 
 export type CheckResult = {
@@ -199,12 +199,19 @@ export function judgeWalkthrough(shown: Array<{ caption: string; shots: Array<{ 
 
 // ───────────────────────────── the second reader ─────────────────────────────
 
-/** What the reader is asked to judge beyond "does it do what was asked", per work type, as check names. */
-export const ASPECTS: Partial<Record<GoalKind, Array<{ name: CheckName; ask: string }>>> = {
+/**
+ * What the reader is asked to judge beyond "does it do what was asked", per work type, as check names.
+ * `figures`: owed only by figures the answer derives from data — an answer with none (a cause, a yes/no,
+ * a drafted request) has it as `na`, never as a pass (judgeAspects).
+ */
+export const ASPECTS: Partial<Record<GoalKind, Array<{ name: CheckName; ask: string; figures?: boolean }>>> = {
   investigation: [
-    { name: "queries", ask: "the queries or sources behind each number are stated, so someone could re-run them" },
-    { name: "crosscheck", ask: "a headline number is reproduced a second way, or the answer says how it was cross-checked" },
-    { name: "assumptions", ask: "what was assumed or left out is stated" },
+    { name: "queries", ask: "the queries or sources behind each number are stated, so someone could re-run them", figures: true },
+    { name: "crosscheck", ask: "a headline number is reproduced a second way, or the answer says how it was cross-checked", figures: true },
+    // Assumptions go with the figures too: what was assumed in getting the numbers (a filter, a window, a
+    // definition). Without numbers it is a generic "state your caveats", and a wrong premise is the
+    // reader's matches_request to fail.
+    { name: "assumptions", ask: "what was assumed or left out is stated", figures: true },
   ],
   qa: [
     { name: "exercised", ask: "it says what was actually run, and where" },
@@ -212,7 +219,122 @@ export const ASPECTS: Partial<Record<GoalKind, Array<{ name: CheckName; ask: str
   ],
 };
 
-export type ReviewVerdict = { pass: boolean; reasons: string[]; risks: string[]; aspects: Record<string, boolean> };
+// ───────────────────────────── figures: what the analysis slots are owed by ─────────────────────────────
+
+const MONTHS = new Set("jan january feb february mar march apr april may jun june jul july aug august sep sept september oct october nov november dec december".split(" "));
+/** A word before a number that makes it a name, not a quantity: "step 2", "exit 143", "PR 194". */
+const LABELS = new Set("step round phase part item source page line row col column version ver pr issue ticket no option point stage level tier chapter section exit code status http port pid rule case attempt task week day id".split(" "));
+/** A word after a number that makes it a clock time: "9 am", "2 UTC". */
+const CLOCK = new Set("am pm a.m p.m utc gmt pst pdt edt cet cest".split(" "));
+/** Quantities said in words. "one" is left out: "the OAuth one", "one of them". */
+const QUANTITY_WORD = /^(?:zero|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundreds?|thousands?|millions?|billions?|dozens?|half|halved|doubled|tripled|twice|percent|percentage|majority|average|median)$/i;
+const VALUE = String.raw`[$€£¥]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:[.,]\d+)?(?:%|pp|bps|x|×|bn|[kmb]|ms|s|secs?|mins?|h|hrs?|d|days?|w|wks?|mo|y|yrs?|[kmgt]i?b)?`;
+/** A quantity: 412 · 12% · $4.5k · ~60% · 1.5-2.5% · 148/148 · $120/day. Any other token with a digit is a name (R-042, v12, Q3, #311). */
+const QUANTITY = new RegExp(String.raw`^[~≈+±<>≤≥-]*${VALUE}(?:[-–—/](?:${VALUE}|[a-z]+))?$`, "i");
+/** Dates and clock times, which read like quantities. A bare year is judged with the word after it. */
+const DATE_OR_TIME = [
+  /^(?:19|20)\d{2}[-/.](?:0?[1-9]|1[0-2])\b/, // 2026-10, 2026-10-02
+  /^(?:0?[1-9]|1[0-2])[./](?:19|20)\d{2}$/, // 10.2026
+  /^(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\b/, // 20261101, 20261101-20261201
+  /^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}$/, // 4/28/25
+  /^\d{1,2}:\d{2}/, // 10:22, 16:20:21Z
+  /^\d{1,2}(?:am|pm)$/i, // 9am
+  /^\d{10,}(?:\.\d+)?$/, // an epoch or an id: 1700000000.123456
+];
+const TRIM = /^[()[\]{}<>"'“”‘’`*_,;:!?…—–]+|[()[\]{}<>"'“”‘’`*_,;:!?….—–]+$/g;
+const bare = (t: string) => t.replace(TRIM, "").replace(/['’]s$/i, "");
+const word = (t: string | undefined) => (t ?? "").toLowerCase().replace(/[^a-z.]/g, "").replace(/\.$/, "");
+/** What carries no claim: code (a query, a file, a column), links, chat mentions, emoji. */
+const scrub = (t: string) =>
+  t.replace(/```[\s\S]*?```/g, " ").replace(/`[^`\n]*`/g, " ").replace(/<[@#!][^<>\s|]*(?:\|[^<>]*)?>/g, " ").replace(/https?:\/\/\S+/g, " ").replace(/:(?:[a-z][\w+-]*|[+-]1):/gi, " ");
+
+/**
+ * The figures these texts state, in order, at most 8: numbers that are quantities (counts, money, rates,
+ * percentages, ranges, ratios) or quantities in words. Not figures: names with digits (R-042, #311, v12),
+ * dates and clock times, list markers, a number labelled by the word before it ("step 2", "exit 143"),
+ * and a count restated from the request with its article ("the 3 connections" when he asked about "the 3
+ * connections"). Pure — it decides only whether there is anything for queries to re-run.
+ */
+export function figuresIn(texts: Array<string | null | undefined>, said = ""): string[] {
+  // The request's own counts: "<article> <count> <word>", as he said them.
+  const restatable = new Set<string>();
+  for (const line of String(said).split("\n")) {
+    const toks = line.split(/\s+/).filter(Boolean);
+    toks.forEach((t, i) => { if (i > 0 && ["the", "these", "those"].includes(word(toks[i - 1]))) restatable.add(`${bare(t).toLowerCase()} ${word(toks[i + 1])}`); });
+  }
+  const out: string[] = [];
+  for (const text of texts) {
+    for (const line of scrub(String(text ?? "")).split("\n")) {
+      const toks = line.split(/\s+/).filter(Boolean);
+      for (let i = 0; i < toks.length && out.length < 8; i++) {
+        const t = bare(toks[i]);
+        if (!t) continue;
+        const prev = word(toks[i - 1]);
+        const next = word(toks[i + 1]);
+        const restated = ["the", "these", "those"].includes(prev) && restatable.has(`${t.toLowerCase()} ${next}`);
+        if (!/\d/.test(t)) {
+          if (QUANTITY_WORD.test(t) && !restated && !out.includes(t.toLowerCase())) out.push(t.toLowerCase());
+          continue;
+        }
+        if (i === 0 && /^\(?\d{1,2}[.)]$/.test(toks[i])) continue; // a list marker
+        if (!QUANTITY.test(t) || DATE_OR_TIME.some((re) => re.test(t))) continue;
+        if (/^(?:19|20)\d{2}$/.test(t) && !/^[a-z]{3,}s$/.test(next)) continue; // a year, unless it counts something ("2000 rows")
+        // "Oct 2", "11 Nov" ("412 may be low" is no date), "step 2", "9 am".
+        if (MONTHS.has(prev) || (MONTHS.has(next) && next !== "may") || LABELS.has(prev) || CLOCK.has(next) || restated) continue;
+        if (!out.includes(t)) out.push(t);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The figures an answer states — its hand-off and the drafts the reader is shown. None found is [] only
+ * when the code saw the whole answer; it is null when part of it is out of sight: a draft whose words are
+ * not on file, a link other than a PR's (a page, document or dashboard may hold the numbers), or nothing
+ * at all. [] = the figure slots do not apply, and the reader is not asked them.
+ */
+export function answerFigures(inp: Pick<ReviewInput, "words" | "outcome" | "drafts">): string[] | null {
+  const texts: string[] = [];
+  if (inp.outcome) texts.push(inp.outcome.summary, ...inp.outcome.changes, ...inp.outcome.proof);
+  for (const d of inp.drafts) texts.push(d.subject ?? "", d.text ?? "");
+  const found = figuresIn(texts, inp.words);
+  if (found.length) return found;
+  const unseen = inp.drafts.some((d) => d.text == null) || !texts.some((t) => String(t ?? "").trim()) || texts.some((t) => deliveredLinks({ summary: t }).length > 0);
+  return unseen ? null : [];
+}
+
+/** The note on a figure slot when the code read the whole answer and it states no figures. */
+export const NO_FIGURES = "n/a: the answer states no figures derived from data — no number to re-run, cross-check or qualify (decided from its text, not by the reader)";
+
+/**
+ * The reader's aspects as checks. A figure slot is `na` — never a pass — when the code read the whole
+ * answer and found no figures (whatever the reader said), or when the reader says "n/a" and why. A
+ * reader's "n/a" with no reason, or on a slot that is not a figure slot (QA's), is not counted: a skip.
+ * true/false stay a pass and a fail the terminal is told.
+ */
+export function judgeAspects(kind: GoalKind | null | undefined, figures: string[] | null, verdict: ReviewVerdict | null): CheckResult[] {
+  return ((kind && ASPECTS[kind]) || []).map((a): CheckResult => {
+    if (a.figures && figures && !figures.length) return { name: a.name, status: "na", note: NO_FIGURES };
+    if (!verdict) return { name: a.name, status: "skip", note: "the second reader gave no verdict" };
+    const v = verdict.aspects[a.name];
+    if (typeof v === "boolean") return v ? { name: a.name, status: "pass", note: a.ask } : { name: a.name, status: "fail", tellable: true, note: `missing: ${a.ask}` };
+    const why = a.figures ? verdict.na[a.name] : undefined;
+    if (why) return { name: a.name, status: "na", note: `n/a, says the reader: ${why}` };
+    return { name: a.name, status: "skip", note: why === "" ? "the reader said n/a without saying why — not counted" : "the reader did not judge it" };
+  });
+}
+
+export type ReviewVerdict = {
+  pass: boolean;
+  reasons: string[];
+  risks: string[];
+  aspects: Record<string, boolean>;
+  /** Aspects the reader said do not apply ("n/a: <why>"), with its reason — "" when it gave none. */
+  na: Record<string, string>;
+};
+
+const NOT_APPLICABLE = /^\s*(?:n\/?a|not applicable)\b[\s:.,;—–-]*/i;
 
 /**
  * The reader's last `VERDICT {json}` line (falling back to the last JSON object with a "pass" key).
@@ -241,8 +363,14 @@ export function parseReview(text: string | null | undefined): ReviewVerdict | nu
       if (typeof o?.pass !== "boolean") continue;
       const list = (v: unknown) => (Array.isArray(v) ? v.map((x) => one(x, 300)).filter(Boolean).slice(0, 8) : typeof v === "string" && v.trim() ? [one(v, 300)] : []);
       const aspects: Record<string, boolean> = {};
-      if (o.aspects && typeof o.aspects === "object") for (const [k, v] of Object.entries(o.aspects)) if (typeof v === "boolean") aspects[k] = v;
-      return { pass: o.pass, reasons: list(o.reasons), risks: list(o.risks), aspects };
+      const na: Record<string, string> = {};
+      if (o.aspects && typeof o.aspects === "object") {
+        for (const [k, v] of Object.entries(o.aspects)) {
+          if (typeof v === "boolean") aspects[k] = v;
+          else if (typeof v === "string" && NOT_APPLICABLE.test(v)) na[k] = one(v.replace(NOT_APPLICABLE, ""), 300);
+        }
+      }
+      return { pass: o.pass, reasons: list(o.reasons), risks: list(o.risks), aspects, na };
     } catch { /* next */ }
   }
   return null;
@@ -265,7 +393,9 @@ export type ReviewInput = {
  */
 export function reviewerPrompt(inp: ReviewInput): string {
   const fence = (s: string) => s.replace(/```/g, "ˋˋˋ");
-  const aspects = (inp.kind && ASPECTS[inp.kind]) || [];
+  const figures = answerFigures(inp);
+  // An answer read whole that states no figures owes no figure slot: they are not asked (judgeAspects sets them n/a).
+  const aspects = ((inp.kind && ASPECTS[inp.kind]) || []).filter((a) => !(a.figures && figures?.length === 0));
   const parts: string[] = [];
   parts.push(
     "REQUEST VERIFICATION (read-only). You are a second reader: you did not do this work. Judge whether it does what the operator asked, and what it could break.",
@@ -298,6 +428,14 @@ export function reviewerPrompt(inp: ReviewInput): string {
   );
   if (aspects.length) {
     parts.push("Also judge each of these true/false in \"aspects\":", ...aspects.map((a) => `- ${a.name}: ${a.ask}`));
+    const owed = aspects.filter((a) => a.figures).map((a) => a.name);
+    if (owed.length) {
+      parts.push(
+        `${owed.join(", ")}: owed only when the answer rests on figures derived from data — counts, sums, money, rates, percentages, measured or read from a source` +
+          (figures?.length ? ` (it states what may be such figures: ${figures.join(", ")})` : "") +
+          `. If it rests on none — its numbers are identifiers, dates, versions, counts restated from the request, or context it does not rest on — give each of them "n/a: <why>" instead of true/false. A figure the answer rests on is never n/a.`,
+      );
+    }
   }
   const example = aspects.length ? `,"aspects":{${aspects.map((a) => `"${a.name}":true`).join(",")}}` : "";
   parts.push("End your reply with exactly one line, nothing after it:", `VERDICT {"pass":true,"reasons":["…"],"risks":["…"]${example}}`);
@@ -329,13 +467,17 @@ export function pickReviewer(
 
 export const MAX_ROUNDS = 2;
 
-/** One line typed into the terminal: what failed, and what to do. Rounds are counted from 1. */
+/** Room for one reason in the line: a list (the code review's findings, a data diff's gaps) gets more than a sentence. */
+const REASON_CAP: Partial<Record<CheckName, number>> = { code_review: 1500, data_diff: 1000 };
+const LINE_CAP = 2800;
+
+/** One line typed into the terminal: what failed, and what to do. Rounds are counted from 1. What to do is never cut. */
 export function tellLine(round: number, reasons: string[]): string {
   const last = round >= MAX_ROUNDS;
-  return one(
-    `[verifier] Not ready for the operator yet (round ${round} of ${MAX_ROUNDS}): ${reasons.map((r) => one(r, 300)).join(" · ")}. ` +
-      `Fix it, push, and file \`mc outcome\` again — it is re-checked on the new hand-off.` +
-      (last ? " This is the last round: after it, the request goes to the operator as not ready, with this reason." : ""),
-    1800,
-  );
+  const head = `[verifier] Not ready for the operator yet (round ${round} of ${MAX_ROUNDS}): `;
+  const tail =
+    `. Fix it, push, and file \`mc outcome\` again — it is re-checked on the new hand-off.` +
+    (last ? " This is the last round: after it, the request goes to the operator as not ready, with this reason." : "");
+  const body = reasons.map((r) => one(r, REASON_CAP[r.split(":")[0] as CheckName] ?? 300)).join(" · ");
+  return head + one(body, LINE_CAP - head.length - tail.length) + tail;
 }

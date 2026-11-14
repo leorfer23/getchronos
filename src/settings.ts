@@ -572,6 +572,12 @@ defineSetting({
   help: "A hand-off asking for your yes is checked first: the PR is open, mergeable and up to date, the repo's checks re-run, a second model reads it against what you asked, UI changes carry before/after shots, drafts are bound to their exact words. Failures go back to the terminal (two rounds). Off: items reach you unverified.",
   default: () => process.env.CHRONOS_VERIFIER !== "0",
 });
+defineSetting({
+  key: "verifier.data_swing_pct", group: "Safety", level: "both", type: "number", min: 1, max: 1000, env: "CHRONOS_VERIFIER_DATA_SWING_PCT",
+  label: "Data PRs: largest unexplained swing (%)",
+  help: "A PR that changes models, SQL or transforms in a data repo hands off before/after numbers per changed table. A row count or key aggregate that moves more than this must carry its explanation on the hand-off, or the verifier sends it back.",
+  default: () => Number(process.env.CHRONOS_VERIFIER_DATA_SWING_PCT) || 20,
+});
 
 // Alerts (src/stuck-alerts.ts): work that is stuck reaches the operator once, on the first channel
 // that answers — his live voice call, then his phone, then Telegram. Event-driven; silent when

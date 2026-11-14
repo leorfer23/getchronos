@@ -211,6 +211,9 @@ export const SessionOutcomeSchema = z.object({
   shots: z.array(z.object({ name: z.string().max(80), label: z.string().max(80).optional() })).max(8).optional(),
   ask: z.enum(["merge", "deploy", "merge+deploy", "review", "none"]).optional(),
   shipped: z.array(z.string().max(400)).max(6).optional(),
+  // A data PR's before/after numbers (`mc outcome --data-diff`); its shape is read leniently by
+  // data-diff.ts normalizeDataDiff, so here only its size is bounded.
+  data_diff: z.record(z.string(), z.unknown()).refine((v) => JSON.stringify(v).length <= 40_000, "data_diff is capped at 40 000 characters").optional(),
 });
 /** One screenshot for a hand-off, as base64 (≤6 MB decoded — the app-wide JSON limit is 16 MB). */
 export const SessionShotSchema = z.object({
@@ -561,6 +564,8 @@ const repoFields = {
   review_min_difficulty: z.number().int().min(0).max(5).nullable().optional(),
   post_merge_cmd: z.string().nullable().optional(),
   ideas_enabled: z.boolean().optional(),
+  // Is it a data repo (its PRs owe the verifier a data diff)? null = decide from the checkout.
+  data_repo: z.boolean().nullable().optional(),
 };
 const repoObject = z.object(repoFields);
 

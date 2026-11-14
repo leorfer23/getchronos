@@ -18,7 +18,7 @@
 | `request_terminals` | (request, terminal) | `role` · `is_primary` · the window `[linked_at, until)` its hand-offs count in |
 | `request_deliverables` | thing that came back | `kind` (pr · deploy · slack_draft · email_draft · artifact · dashboard · doc · answer) · `ref` (what it is) · `target_hash` (what it is *now*) · `state` |
 | `request_decisions` | question put to him | `action` (merge · deploy · send · review · answer) · bound `target_hash` · `status` (open · held · decided · superseded) · `decision` (yes · no · later · change · answered) + his `words`, `decided_by`, `decided_at`, `hold_until`, `audio_ref` |
-| `request_checks` | verifier check run | `name` · pass/fail/skip · `evidence[]` refs (+ meta: screen, viewport, side) · `target_hash` it ran against · `ran_by`, `ran_at` — written by the verifier (below) |
+| `request_checks` | verifier check run | `name` · pass/fail/skip/na · `evidence[]` refs (+ meta: screen, viewport, side) · `target_hash` it ran against · `ran_by`, `ran_at` — written by the verifier (below) |
 | `request_verifications` | verifier pass | why it ran (`trigger`) · the targets it judged (`target_key`) · `ready` · `reason` · `told` (one of the two rounds) · `round` (migration 158) |
 
 - **A request fans out, a terminal carries on.** A request links to any number of terminals; a terminal can
@@ -35,11 +35,11 @@
 
 | kind | done means | decisions | evidence slots (required) |
 |---|---|---|---|
-| `pr` | PR open, tests green, nothing else broke | merge | tests · regression · pr_ready · matches_request |
-| `ui` | PR + before/after shots per screen and width + a walkthrough | merge | tests · regression · shots · walkthrough · pr_ready · matches_request |
-| `investigation` | an answer in the form asked for — a draft, a page, a dashboard | send · review | queries · crosscheck · assumptions |
+| `pr` | PR open, tests green, nothing else broke | merge | tests · regression · goal_test · data_diff · code_review · pr_ready · matches_request |
+| `ui` | PR + before/after shots per screen and width + a walkthrough | merge | tests · regression · shots · walkthrough · data_diff · code_review · pr_ready · matches_request |
+| `investigation` | an answer in the form asked for — a draft, a page, a dashboard | send · review | matches_request · queries · crosscheck · assumptions (the last three only when it states figures from data) |
 | `qa` | a verdict with repro steps | review | exercised · repro_steps |
-| `product` | live: merged, deployed, checked in production; bugs reproduced before, fixed after; replies as drafts | merge · deploy · send | tests · pr_ready · post_deploy · matches_request (+ repro_before · fixed_after for a bug) |
+| `product` | live: merged, deployed, checked in production; bugs reproduced before, fixed after; replies as drafts | merge · deploy · send | tests · pr_ready · post_deploy · data_diff · code_review · matches_request (+ repro_before · fixed_after for a bug) |
 | `chat` | nothing to finish | — | — |
 
   `prereqs` holds what must hold before the work can run: today an analysis or QA request in a workspace
@@ -274,12 +274,53 @@ code and evidence, never by the terminal's own claim.
   `regression` (skip: not machine-checked). UI: `shots` (before/after per screen at phone AND desktop width,
   labels `before-<screen>-phone` …, evidence meta `{screen, viewport, side}` for the phone's card) and
   `walkthrough` (`mc show` steps). Analysis/QA: the reader judges `queries` · `crosscheck` · `assumptions` /
-  `exercised` · `repro_steps`. Drafts: `draft_bound` — the words on file re-hashed with `draftHash` (the formula
-  `mc hook` uses) and bound, or matched against what the hook bound.
+  `exercised` · `repro_steps`. The analysis three are owed only by figures derived from data
+  (`verify-model.ts` `answerFigures`): when every word of the answer is on file (the hand-off, the drafts, no
+  link but a PR's) and none is a figure — names like R-042 or #311, dates, clock times, labels like
+  "exit 143" and a count restated from the request do not count — they are `na`, decided in code and not asked
+  of the reader. Otherwise the reader judges them true/false, or `"n/a: <why>"` when the answer rests on no
+  figure from data (its numbers are names, dates, restated counts or context); an n/a without a reason is a
+  skip. Drafts: `draft_bound` — the words on file re-hashed with `draftHash` (the formula `mc hook` uses) and
+  bound, or matched against what the hook bound.
+- **Code review** (`code_review`, every PR; `src/code-review.ts`, `src/repo-memory.ts`). One more read before
+  he hears it, by an engine that did not write the PR (`pickReviewer`; the writer's model is the terminal's,
+  else its workspace's default), over the full diff (150k characters, the rest from the files), as a `review:`
+  run (`review:code-…`, read-only like the second reader). It is given the repo's **review memory** and the
+  operator's own corrections, and reports only what should stop a merge — each finding numbered (`R1`, `R2`,
+  … across the PR's life). Findings are a fail told back in the same rounds as every other fail; the terminal
+  fixes each or justifies it and its new hand-off says which (`R1 fixed: …` / `R2 justified: …`). **One review
+  per head SHA** (`code_reviews`, per workspace + PR + head): a new head is read again, with the findings still
+  open and what the hand-off says of each, so the reviewer judges each fix and justification; a new head
+  with byte-for-byte the last reviewed diff (a clean rebase) carries that review over unread; while the head
+  does not move nothing is re-read — an open finding is settled by a justification on the hand-off (it is on
+  the check's evidence for him), never by a "fixed" the diff cannot hold, never by a justification the
+  reviewer already turned down at this head. Same engine as the writer, no verdict, no diff: `skip` (a gap
+  said with the yes, not a gate). The reviewer posts nothing: no Bash, no web, no writes.
+- **Review memory** (`repo_review_memory`, per workspace + repo — two workspaces with a repo of the same name
+  or remote never share one): at most 12 one-line rules learned from human review of the repo's past PRs —
+  review summaries, inline comments and conversation on its 25 most recently updated PRs, from people, not
+  bots, not the PR's own author — read with the workspace's own GitHub read access (`ghReadEnv`, one GraphQL
+  query, only for the workspace's own repo) and distilled by its own helper model. GitHub is asked at most
+  hourly, when a review is about to use the memory; comments it has not folded in rewrite the whole list
+  (never appended; a failed or empty rewrite keeps the old list). Beside it the reviewer gets the operator's
+  corrections: the review-feedback lessons already learned from his changes-requested notes (`lessons`, this
+  repo's and the workspace-wide ones) and his latest `change` answers on this repo's PRs in the ledger.
+- **Data diff** (`data_diff`, every PR; `src/data-diff.ts`). A **data repo** has a `dbt_project.yml` or an
+  Airflow `dags/` directory at its root or one level down, or the operator says so (`repos.data_repo`,
+  `mc repo patch <id> --data-repo yes|no|auto`; a Robert credential may only set it to yes). A PR there that
+  changes models, SQL or transforms (`.sql`, dbt python models, seeds, DAG code — not tests or docs) hands off
+  with `mc outcome --data-diff diff.json`: per changed model or table, rows and 1–3 key aggregates before vs
+  after over a bounded range, the query behind them, and in a dbt project the model's own tests run
+  (`dbt build`/`dbt test` — `dbt compile` is not a test; a green dbt CI check on the PR counts). Every changed
+  dbt model must be in it. A row count or aggregate that moves past `verifier.data_swing_pct` (⚙ Safety,
+  ±20% by default) carries its `explain`, or it fails. The agent measures with its workspace's own warehouse
+  tools and vars; the daemon reads only what the hand-off filed, never a warehouse. Not a data repo, or no
+  such file in the diff: `na` (the executor does not count an `na` slot as owed).
 - **Ready** = on the item's CURRENT target: every required slot has a result, none failed, and every gate passed
-  (`pr_ready`, `matches_request`, `shots`, `draft_bound` — a skip is not enough). Other required slots may be
-  skipped with a reason; the queue line says them ("checks pass (not checked: tests, regression)"). A check run
-  against an older head or older words is stale and counts for nothing.
+  (`pr_ready`, `matches_request`, `shots`, `draft_bound` — a skip or an `na` is not enough). Other required
+  slots may be skipped with a reason; the queue line says them ("checks pass (not checked: tests, regression)").
+  An `na` slot does not apply: not missing, not a gap, never a pass, and never told back. A check run against an
+  older head or older words is stale and counts for nothing.
 - **Fail → the terminal.** A fail the terminal can fix is typed into it (`[verifier] Not ready… round n of 2`),
   at most two rounds; after that, and when its terminal is closed, the request surfaces as not ready with the
   reason (`GET /api/ledger/:id` → `verification`, the queue line). Infrastructure trouble (GitHub unreachable, no
@@ -299,4 +340,7 @@ code and evidence, never by the terminal's own claim.
 - Dashboards and documents are read from links in the hand-off's text: the hand-off has no link field of its own
   yet, and nothing tells an agent to name its deliverable's link (KIND_CONTRACT for `investigation` is unchanged).
 - Migration 156 lands next to 155 and 157 from parallel work: deploy them in order — a database that reaches 156
-  before 155 exists would skip 155. Likewise 159 (the executor) after 158 (the verifier).
+  before 155 exists would skip 155. Likewise 159 (the executor) after 158 (the verifier), and 163 (code
+  review, review memory, `repos.data_repo`) after 161 and 162.
+- The review memory has no page or route of its own yet: what it learned is on each `code_review` check
+  (the rule count) and in the reviewer run's prompt.

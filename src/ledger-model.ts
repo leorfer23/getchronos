@@ -72,9 +72,11 @@ export const CHECK_NAMES = [
   "tests", "regression", "pr_ready", "matches_request", "shots", "walkthrough",
   "queries", "crosscheck", "assumptions", "exercised", "repro_steps",
   "repro_before", "fixed_after", "post_deploy", "goal_test", "draft_bound",
+  "data_diff", "code_review",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
-export const CHECK_STATUSES = ["pass", "fail", "skip"] as const;
+/** `na` = the slot does not apply to this answer (an analysis that states no figures): never a pass, never missing. */
+export const CHECK_STATUSES = ["pass", "fail", "skip", "na"] as const;
 export type CheckStatus = (typeof CHECK_STATUSES)[number];
 /** One piece of evidence a check points at: a run, a file, a shot, a URL. `meta` = e.g. {screen, viewport, side}. */
 export type Evidence = { ref: string; label?: string | null; meta?: Record<string, string | number | boolean> | null };
@@ -109,6 +111,9 @@ const TESTS: ExpectedCheck = { name: "tests", required: true, what: "the repo's 
 const PR_READY: ExpectedCheck = { name: "pr_ready", required: true, gate: true, what: "the PR exists, is open, mergeable and up to date with its base" };
 const MATCHES: ExpectedCheck = { name: "matches_request", required: true, gate: true, what: "a reader that did not write it says the change does what was asked" };
 const DRAFT_BOUND: ExpectedCheck = { name: "draft_bound", required: true, gate: true, what: "the words, recipient and channel he hears are the ones a yes is bound to" };
+/** Every PR, so the slot list is the same for all of them: `na` where it does not apply (not a data repo, no model changed). */
+const DATA_DIFF: ExpectedCheck = { name: "data_diff", required: true, what: "a data PR (models, SQL, transforms in a data repo): rows and key aggregates of each changed model before vs after over a bounded range, the commands, the model's own tests run, any large swing explained" };
+const CODE_REVIEW: ExpectedCheck = { name: "code_review", required: true, what: "an engine that did not write it read the full diff with the repo's review memory; each finding fixed or justified on the hand-off" };
 
 /**
  * A request's work type IS a terminal's goal kind (types.ts GoalKind) — one vocabulary, set where it
@@ -125,6 +130,8 @@ export const WORK: Record<GoalKind, WorkType> = {
       TESTS,
       { name: "regression", required: true, what: "the wider suite and the paths around the change still pass" },
       { name: "goal_test", required: true, what: "a test tied to the goal changed in the diff (fails before, passes after)" },
+      DATA_DIFF,
+      CODE_REVIEW,
       PR_READY,
       MATCHES,
     ],
@@ -139,20 +146,24 @@ export const WORK: Record<GoalKind, WorkType> = {
       { name: "regression", required: true, what: "the screens around the change still render and behave" },
       { name: "shots", required: true, gate: true, what: "before/after per screen, per viewport (meta: screen, viewport, side)" },
       { name: "walkthrough", required: true, what: "the user flow it changes, a recording or a shot per step" },
+      DATA_DIFF,
+      CODE_REVIEW,
       PR_READY,
       MATCHES,
     ],
   },
   investigation: {
     label: "an analysis",
-    done: "An answer in the form he asked for — a draft, a page, a dashboard — with the queries behind it, a cross-check and the assumptions stated.",
+    done: "An answer in the form he asked for — a draft, a page, a dashboard. When it states figures from data: the queries behind them, a cross-check and the assumptions stated.",
     deliverables: ["answer", "slack_draft", "email_draft", "artifact", "dashboard", "doc"],
     actions: ["send", "review"],
+    // The last three are owed by figures derived from data; an answer with none (a cause, a yes/no, a
+    // drafted request) has them as `na`, never as a pass (verify-model.ts judgeAspects).
     evidence: [
       { ...MATCHES, what: "a reader that did not do the work says the answer addresses the question, in the form asked" },
-      { name: "queries", required: true, what: "every query or source behind each number, re-runnable" },
-      { name: "crosscheck", required: true, what: "the headline numbers reproduced another way" },
-      { name: "assumptions", required: true, what: "what was assumed or left out, stated" },
+      { name: "queries", required: true, what: "every query or source behind each number, re-runnable (n/a when it states no figures from data)" },
+      { name: "crosscheck", required: true, what: "the headline numbers reproduced another way (n/a when it states no figures from data)" },
+      { name: "assumptions", required: true, what: "what was assumed or left out in getting the numbers, stated (n/a when it states no figures from data)" },
     ],
   },
   qa: {
@@ -176,6 +187,8 @@ export const WORK: Record<GoalKind, WorkType> = {
       { name: "repro_before", required: false, what: "a bug: the failure reproduced before the fix" },
       { name: "fixed_after", required: false, what: "a bug: the same steps passing after it" },
       { name: "post_deploy", required: true, what: "checked in production after the deploy" },
+      DATA_DIFF,
+      CODE_REVIEW,
       MATCHES,
     ],
   },
@@ -230,6 +243,8 @@ export type Readiness = {
   gaps: Array<{ name: CheckName; note: string | null }>;
   /** Gates that were only skipped: why it is not ready even though nothing failed. */
   gate_unmet: Array<{ name: CheckName; note: string | null }>;
+  /** Slots that do not apply to this answer, each with why: not missing, not a gap, and never counted as a pass. */
+  na: Array<{ name: CheckName; note: string | null }>;
 };
 
 /**
@@ -241,11 +256,13 @@ export function readiness(slots: SlotStatus[]): Readiness {
   const failed = slots.filter((s) => s.status === "fail").map((s) => ({ name: s.name, note: s.note ?? null }));
   const missing = req.filter((s) => s.status === "missing").map((s) => s.name);
   const gaps = req.filter((s) => s.status === "skip" && !s.gate).map((s) => ({ name: s.name, note: s.note ?? null }));
-  const gate_unmet = req.filter((s) => s.gate && s.status === "skip").map((s) => ({ name: s.name, note: s.note ?? null }));
+  // A gate needs a pass: one only skipped, or said not to apply, is unmet.
+  const gate_unmet = req.filter((s) => s.gate && (s.status === "skip" || s.status === "na")).map((s) => ({ name: s.name, note: s.note ?? null }));
+  const na = slots.filter((s) => s.status === "na" && !s.gate).map((s) => ({ name: s.name, note: s.note ?? null }));
   const passed = slots.filter((s) => s.status === "pass").length;
-  if (!slots.length) return { ready: false, status: "none", passed, failed, missing, gaps, gate_unmet };
+  if (!slots.length) return { ready: false, status: "none", passed, failed, missing, gaps, gate_unmet, na };
   const ready = !failed.length && !missing.length && !gate_unmet.length && passed > 0;
-  return { ready, status: ready ? "ready" : failed.length ? "failing" : "unverified", passed, failed, missing, gaps, gate_unmet };
+  return { ready, status: ready ? "ready" : failed.length ? "failing" : "unverified", passed, failed, missing, gaps, gate_unmet, na };
 }
 
 /** What a workspace's setup says a request of this type needs first. Only the VPN is known today. */
