@@ -20,21 +20,34 @@ import { CONFIG } from "./config.js";
 import { db, robertWakes, sessions, workspaces } from "./store.js";
 import { enqueueWake, QUIET_REPLY, SWEEP_KEY, WAKE_ATTEMPT_CAP } from "./wake-queue.js";
 import { isStopped } from "./robert-drive.js";
-import { statusOf, type TermStatus } from "./term-status.js";
+import { goalReachedStands, statusOf, type TermStatus } from "./term-status.js";
+import { sessionActivity } from "./terminal.js";
 import { settingOn } from "./settings.js";
 import { selfwakeOnce } from "./robert-selfwake.js";
 
 type Probe = (id: string) => TermStatus | null;
 let probe: Probe = (id) => statusOf(id);
 export function setSweepProbe(fn: Probe): void { probe = fn; }
+/** Last keystroke into the terminal, the daemon's own typing excluded. Tests script it. */
+let lastInOf = (id: string): number | null => sessionActivity(id).last_in;
+export function setSweepLastIn(fn: (id: string) => number | null): void { lastInOf = fn; }
 
 const goalOf = (s: { goal?: string | null; spawn_goal?: string | null }) => (s.goal ?? s.spawn_goal ?? "").trim();
 
-/** Live terminals in this workspace that are working right now. */
-export function workingIn(wsId: string): number {
+/**
+ * Live terminals in this workspace that are working right now.
+ *
+ * A terminal that ticked its goal off with nothing typed to it since is finished work, whatever its
+ * hooks and pty say. statusOf reads "working" a minute after the tick when a Stop never lands or the
+ * screen keeps repainting, and that alone queued a sweep — Robert's tokens — every interval for hours
+ * on a terminal whose work was merged and live (Collage d139188e, 2026-11-01). Typing to it, or a new
+ * goal (`mc goal set` clears the tick), puts it back in the count.
+ */
+export function workingIn(wsId: string, now = Date.now()): number {
   return sessions
     .list({ workspace_id: wsId, status: "live", limit: 200 })
     .filter((s) => !!goalOf(s))
+    .filter((s) => !goalReachedStands(Date.parse(s.goal_done_at ?? "") || null, lastInOf(s.id), false, now))
     .filter((s) => {
       const st = probe(s.id);
       return !!st && !isStopped(st);
