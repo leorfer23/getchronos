@@ -992,6 +992,10 @@
   .lp-opts button:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
   .lp-opts input { flex:1; min-width:180px; height:30px; padding:0 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font:inherit; font-size:13.5px; }
   .lp-none { padding:18px 6px; font-size:14.5px; color:var(--faint); }
+  /* Workspace triggers in Open loops (static/desk-triggers.js): one switch per row; an off row reads dimmed. */
+  .tg-off .lp-t, .tg-off .lp-then { color:var(--faint); }
+  .lp-acts button.tg-sw { min-width:52px; }
+  .lp-acts button.tg-sw.on { border-color:var(--ok); color:var(--ok); background:var(--accent-soft); }
   .var-rows { display:flex; flex-direction:column; gap:6px; max-height:44vh; overflow:auto; }
   .var-row { display:flex; align-items:center; gap:8px; padding:7px 9px; border:1px solid var(--line); border-radius:9px; background:var(--bg); }
   .var-row .nm { font:14.5px ui-monospace,Menlo,monospace; font-weight:600; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
@@ -2194,6 +2198,7 @@
 <script src="/desk-companion.js"></script>
 <script src="/desk-quick-actions.js"></script>
 <script src="/desk-scope.js"></script>
+<script src="/desk-triggers.js"></script>
 <script src="/voice-alerts.js"></script>
 <script src="/ask-card.js"></script>
 <script src="/artifact-view.js"></script>
@@ -6175,7 +6180,9 @@ qs("#log-close").onclick = () => qs("#dlg-log").close();
 // questions nobody has answered (an ask outlives its terminal), and what runs on a clock (cron jobs,
 // folded). 2026-10-30: "super important to me to see what things are still open and need
 // follow-ups". Read from the routes those features already serve; the ⏰ count is the first three.
-const LOOPS = { waits: [], asks: [], jobs: [], busy: false, jobsOpen: false, arm: "", armT: 0 };
+// Triggers (`mc trigger`, static/desk-triggers.js) are standing rules, not open loops: folded under the
+// rest like the jobs on a clock, and not counted in ⏰.
+const LOOPS = { waits: [], asks: [], jobs: [], trig: [], busy: false, jobsOpen: false, trigOpen: false, arm: "", armT: 0 };
 const WAIT_ICON = { pr: "⇡", terminal: "▣", ask: "?", at: "⏰", script: "⚙", check: "👁", manual: "✋" };
 const spanWord = (m) => (m < 60 ? m + "m" : m < 48 * 60 ? Math.round(m / 60) + "h" : Math.round(m / 1440) + "d");
 // "today 16:02 · in 3h" / "Mon 2 Nov 09:00 · in 3d" / "today 09:10 · 40m ago".
@@ -6193,11 +6200,13 @@ async function loopsLoad() {
   if (LOOPS.busy) return;
   LOOPS.busy = true;
   try {
-    const [w, a, j] = await Promise.all([
+    const [w, a, j, tg] = await Promise.all([
       api("/continuations").catch(() => null),
       api("/asks?status=open").catch(() => null),
       api("/jobs?kind=operator").catch(() => null),
+      api("/ws-triggers").catch(() => null),
     ]);
+    if (Array.isArray(tg)) LOOPS.trig = DeskTriggers.sort(tg);
     if (Array.isArray(w)) LOOPS.waits = w.sort((x, y) => waitNext(x) - waitNext(y));
     if (Array.isArray(a)) LOOPS.asks = a.sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)));
     if (Array.isArray(j)) LOOPS.jobs = j.filter((x) => x.enabled && x.next_run).sort((x, y) => x.next_run.localeCompare(y.next_run));
@@ -6272,6 +6281,11 @@ function loopsRender() {
   if (fu.length) parts.push(sec("Follow-ups", fu.length), ...fu.map(followRow));
   if (LOOPS.asks.length) parts.push(sec("Unanswered", LOOPS.asks.length), ...LOOPS.asks.map(askRow));
   if (!parts.length) parts.push(`<div class="lp-none">Nothing open — no parked work, follow-ups or unanswered questions.</div>`);
+  if (LOOPS.trig.length) {
+    const off = LOOPS.trig.filter((t) => !t.enabled).length;
+    parts.push(`<div class="lp-sec"><button type="button" data-ltrigs>When it happens ${LOOPS.trigOpen ? "▾" : "▸"}</button><span class="n">${LOOPS.trig.length}${off ? ` · ${off} off` : ""}</span></div>`,
+      ...(LOOPS.trigOpen ? LOOPS.trig.map((t) => DeskTriggers.row(t, { wsBit, when: loopWhen })) : []));
+  }
   if (LOOPS.jobs.length)
     parts.push(`<div class="lp-sec"><button type="button" data-ljobs>On a clock ${LOOPS.jobsOpen ? "▾" : "▸"}</button><span class="n">${LOOPS.jobs.length}</span></div>`, ...(LOOPS.jobsOpen ? LOOPS.jobs.map(jobRow) : []));
   const body = qs("#loops-body");
@@ -6296,6 +6310,22 @@ qs("#loops-body").addEventListener("click", async (e) => {
   const b = e.target.closest("button, input, .lp-row");
   if (!b || b.tagName === "INPUT") return;
   if (b.dataset.ljobs != null) { LOOPS.jobsOpen = !LOOPS.jobsOpen; return loopsRender(); }
+  if (b.dataset.ltrigs != null) { LOOPS.trigOpen = !LOOPS.trigOpen; return loopsRender(); }
+  if (b.dataset.tgsw) {
+    const on = b.dataset.on !== "1";
+    try {
+      await api("/ws-triggers/" + b.dataset.tgsw, { method: "PATCH", body: JSON.stringify(on ? { enabled: true } : { enabled: false, why: "switched off from the Desk" }) });
+      toast(on ? "on — it starts from now" : "off — it stops looking");
+    } catch (err) { toast(String(err.message).slice(0, 120)); }
+    return loopsLoad();
+  }
+  if (b.dataset.ltg) {
+    // The row: its last terminal, when that one is still open.
+    const s = b.dataset.tgsess && byId(b.dataset.tgsess);
+    if (s && s.live) { qs("#dlg-loops").close(); select(s.id); }
+    else toast(b.dataset.tgsess ? "its last terminal has ended" : "it has not opened a terminal yet");
+    return;
+  }
   if (b.dataset.lfire) {
     try { await api("/continuations/" + b.dataset.lfire + "/fire", { method: "POST", body: JSON.stringify({ evidence: "fired by hand from the Desk" }) }); toast("fired — the work continues"); }
     catch (err) { toast(String(err.message).slice(0, 120)); }
@@ -7870,7 +7900,7 @@ const ibMode = (id) => IB.open && IB.open.id === id ? IB.open.mode : null;
 // A client's weight for ordering groups: how many high-priority rows it holds, then how many rows.
 const wsWeight = (items) => [items.filter((i) => i.priority === "high").length, items.length];
 const byWeight = ([, a], [, b]) => { const x = wsWeight(a), y = wsWeight(b); return y[0] - x[0] || y[1] - x[1]; };
-const IB_ICON = { slack: "💬", jira: "🔷", clickup: "✅" };
+const IB_ICON = { slack: "💬", jira: "🔷", clickup: "✅", trigger: "⚡" };
 function syncInboxBadge() {
   const n = Object.values(IB.counts).reduce((a, b) => a + b, 0);
   qs("#btn-inbox").textContent = n ? `📥 Inbox log · ${n}` : "📥 Inbox log";
@@ -9121,6 +9151,7 @@ const BUS_TOPICS = [
   "artifact.created", "artifact.updated", "artifact.event",
   "service.changed", "service.alarm", "alert.raised",
   "inbox.updated", "settings.changed",
+  "ws_trigger.updated", "ws_trigger.fired",
 ].join(",");
 function connectBus() {
   if (!TOKEN) return;
@@ -9131,7 +9162,7 @@ function connectBus() {
     if (!DeskScope.passes(e, LOCK)) return;
     if (e.topic === "alert.raised") return vcAlert(e);
     if (DW.topics.has(e.topic)) dwBus(e.topic);
-    if (e.topic === "ask.created" || e.topic === "ask.answered") loopsSoon();
+    if (e.topic === "ask.created" || e.topic === "ask.answered" || e.topic === "ws_trigger.updated" || e.topic === "ws_trigger.fired") loopsSoon();
     AskCard.onEvent(e);
     if (AskCard.TOPICS.includes(e.topic)) return;
     if (ArtifactView.TOPICS.includes(e.topic)) {

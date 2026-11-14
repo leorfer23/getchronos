@@ -109,6 +109,7 @@ import * as inboxRoutes from "./inbox-routes.js";
 import * as artifactRoutes from "./artifact-routes.js";
 import * as fileRoutes from "./file-routes.js";
 import * as continuationRoutes from "./continuation-routes.js";
+import * as wsTriggerRoutes from "./ws-trigger-routes.js";
 import { cockpitRoute } from "./desk-cockpit.js";
 import { inbox } from "./store/inbox.js";
 import { openConflicts } from "./memory-conflicts.js";
@@ -189,6 +190,7 @@ import {
   NewWorkspaceVarSchema, PatchWorkspaceVarSchema,
   NewIdeaSchema, PromoteIdeaSchema, PromoteIdeasSchema, KillIdeasSchema, GenerateIdeasSchema,
   NewContinuationSchema, FireContinuationSchema, CancelContinuationSchema,
+  NewWsTriggerSchema, PatchWsTriggerSchema,
   NewJotSchema, JotPatchSchema, JotAppendSchema, JotFollowUpSchema, JotResolveSchema, JOT_BODY_MAX, RunJotSchema, ReorderJotsSchema, PlanNextDaySchema, StartDaySchema,
   NewTicketSchema, PatchTicketSchema, TicketLinkSchema, TicketNoteSchema, PushCommentSchema, PushStatusSchema, PushHoursSchema,
   DeclareStepsSchema, SetStepSchema, NewAskSchema, AnswerAskSchema, EscalateAskSchema, HoldSchema, WatchSchema, ClipboardSchema, NewSharedFileSchema, SharedFileChunkSchema, SharedFileCompleteSchema, ClaimWorktreeSchema, ShareRepoSchema, RemoveWorktreeSchema, NewMessageSchema,
@@ -2162,6 +2164,17 @@ export function startServer() {
   api.get("/continuations/:id", continuationRoutes.getRoute);
   api.post("/continuations/:id/fire", validate(FireContinuationSchema), continuationRoutes.fireRoute);
   api.post("/continuations/:id/cancel", validate(CancelContinuationSchema), continuationRoutes.cancelRoute);
+
+  // Workspace triggers (src/ws-triggers.ts, src/ws-trigger-routes.ts): `mc trigger` — when a PR event,
+  // a Slack message, an email, a command or a metric happens in a workspace, open the right work there.
+  // Per workspace; arming one is the operator's / Robert's hand, a terminal only proposes.
+  api.post("/ws-triggers", validate(NewWsTriggerSchema), wsTriggerRoutes.createRoute);
+  api.post("/ws-triggers/test", validate(NewWsTriggerSchema), wsTriggerRoutes.testSpecRoute);
+  api.get("/ws-triggers", wsTriggerRoutes.listRoute);
+  api.get("/ws-triggers/:id", wsTriggerRoutes.getRoute);
+  api.patch("/ws-triggers/:id", validate(PatchWsTriggerSchema), wsTriggerRoutes.patchRoute);
+  api.post("/ws-triggers/:id/test", wsTriggerRoutes.testRoute);
+  api.delete("/ws-triggers/:id", wsTriggerRoutes.deleteRoute);
 
   // Pairs of remembered facts a judge found to disagree. Read-only and workspace-walled, same as
   // recall: a conflict quotes two pieces of this workspace's memory.

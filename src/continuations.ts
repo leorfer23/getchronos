@@ -558,14 +558,19 @@ export function scriptVerdict(code: number | null, stdout: string, stderr: strin
   return { met: false, error: true, out: `exit ${code ?? "?"}${scriptTail(stdout, stderr) ? `: ${scriptTail(stdout, stderr)}` : ""}` };
 }
 
+/** How one command ended: its exit code (null = it never exited normally), its output, and whether it was cut off. */
+export type WorkspaceCommandRun = { code: number | null; stdout: string; stderr: string; timedOut: boolean };
+
 /**
- * Run the command the way one of the workspace's own terminals would: its sandbox mode (clamped to
+ * Run a command the way one of the workspace's own terminals would: its sandbox mode (clamped to
  * the workspace floor), its isolation walls (other clients' dirs denied, main checkouts read-only),
- * its secrets env file, plus its `mc vars` and MC_* env so `mc` works inside it.
+ * its secrets env file, plus its `mc vars` and MC_* env so `mc` works inside it. Null when the
+ * workspace is gone. Shared by `mc when script` and workspace triggers (src/ws-triggers.ts) — one
+ * wall, one place to keep it.
  */
-const realRunScript: RunScriptFn = async (c) => {
-  const ws = workspaces.get(c.workspace_id);
-  if (!ws) return { met: false, error: true, out: "workspace is gone" };
+export async function runInWorkspace(wsId: string, command: string, extraEnv: Record<string, string> = {}): Promise<WorkspaceCommandRun | null> {
+  const ws = workspaces.get(wsId);
+  if (!ws) return null;
   // Owned + shared-in (repo_shares), exactly as a terminal of this workspace gets them: every main
   // checkout among them read-only below, so a borrower's script reads the shared repo, never writes it.
   const repoPaths = repos.accessible(ws.id).map((r) => r.path).filter((p) => p && fs.existsSync(p));
@@ -573,16 +578,22 @@ const realRunScript: RunScriptFn = async (c) => {
   const mode = clampSandbox(ws.sandbox_mode as SandboxMode, ws.id);
   const { cmd, cmdArgs } = sandboxWrap(
     mode, cwd, repoPaths.filter((p) => p !== cwd), ws.config_dir, workspaces.isolationDenyDirs(ws.id),
-    "/bin/sh", ["-c", c.target!], egressLocked(ws.id), mainCheckouts(repoPaths), workspaceSandboxAllow(ws.sandbox_allow),
+    "/bin/sh", ["-c", command], egressLocked(ws.id), mainCheckouts(repoPaths), workspaceSandboxAllow(ws.sandbox_allow),
   );
-  const env = { ...childEnv(ws), ...workspaceVars.active(ws.id), ...mcEnv(ws.id), MC_CONTINUATION: c.id };
+  const env = { ...childEnv(ws), ...workspaceVars.active(ws.id), ...mcEnv(ws.id), ...extraEnv };
   try {
     const { stdout, stderr } = await execFileTimed(cmd, cmdArgs, { cwd, env, encoding: "utf8", timeout: SCRIPT_TIMEOUT_MS, maxBuffer: 256 * 1024 });
-    return scriptVerdict(0, stdout, stderr);
+    return { code: 0, stdout, stderr, timedOut: false };
   } catch (e: any) {
     const timedOut = !!e?.killed || e?.signal === "SIGTERM";
-    return scriptVerdict(typeof e?.code === "number" ? e.code : null, String(e?.stdout ?? ""), String(e?.stderr ?? e?.message ?? ""), timedOut);
+    return { code: typeof e?.code === "number" ? e.code : null, stdout: String(e?.stdout ?? ""), stderr: String(e?.stderr ?? e?.message ?? ""), timedOut };
   }
+}
+
+const realRunScript: RunScriptFn = async (c) => {
+  const r = await runInWorkspace(c.workspace_id, c.target!, { MC_CONTINUATION: c.id });
+  if (!r) return { met: false, error: true, out: "workspace is gone" };
+  return scriptVerdict(r.code, r.stdout, r.stderr, r.timedOut);
 };
 let runScript: RunScriptFn = realRunScript;
 /** Swap the script runner for tests. Pass null to restore. */

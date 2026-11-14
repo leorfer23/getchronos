@@ -6,8 +6,10 @@ import { now } from "./util.js";
  * The workspace inbox (migration 138, src/inbox.ts): "something needs you", per client. A row is a
  * notification; the operator's Dispatch or auto-dispatch (src/inbox-autodispatch.ts) turns it into a terminal.
  */
-export const INBOX_SOURCES = ["slack", "jira", "clickup"] as const;
-export const INBOX_KINDS = ["dm", "mention", "self_note", "assigned", "comment", "status"] as const;
+/** `trigger`: a workspace trigger filed it (src/ws-triggers.ts) — kind `alert`. Daemon-only: the
+ *  POST route's own enum keeps `mc inbox add` to slack/jira/clickup. */
+export const INBOX_SOURCES = ["slack", "jira", "clickup", "trigger"] as const;
+export const INBOX_KINDS = ["dm", "mention", "self_note", "assigned", "comment", "status", "alert"] as const;
 /** `done`: he closed it (the tracker task too, for a tracker row). `muted`: Won't do — its ref files nothing again. */
 export const INBOX_STATES = ["new", "snoozed", "dismissed", "dispatched", "resolved", "done", "muted"] as const;
 export const PRIORITIES = ["high", "normal", "low"] as const;
@@ -168,6 +170,17 @@ export const inbox = {
   /** A claimed row whose terminal could not open goes back to what it was: still needs him. */
   unclaim(id: string): void {
     db.prepare("UPDATE inbox_items SET state='new', updated_at=? WHERE id=? AND state='dispatched' AND dispatched_session IS NULL").run(now(), id);
+  },
+  /**
+   * Add a line to a row that still needs him (a trigger's next event of the same key joins its open
+   * item instead of filing another). Capped like a filed body; a row that left `new`/`snoozed` is
+   * untouched. True when it was added.
+   */
+  append(id: string, line: string, cap = 4000): boolean {
+    return db.prepare(
+      `UPDATE inbox_items SET body = substr(CASE WHEN body IS NULL OR body = '' THEN @line ELSE body || char(10) || @line END, 1, @cap),
+        updated_at = @at WHERE id = @id AND state IN ('new','snoozed')`,
+    ).run({ id, line, cap, at: now() }).changes > 0;
   },
   dispatchedTo(id: string, session_id: string): InboxItem | undefined {
     db.prepare("UPDATE inbox_items SET dispatched_session=?, updated_at=? WHERE id=?").run(session_id, now(), id);

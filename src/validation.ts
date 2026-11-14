@@ -1215,6 +1215,33 @@ export const NewContinuationSchema = z.object({
 });
 export const FireContinuationSchema = z.object({ evidence: z.string().max(2000).nullable().optional(), by: z.string().max(80).nullable().optional() });
 export const CancelContinuationSchema = z.object({ why: z.string().max(400).nullable().optional() });
+// Workspace triggers (src/ws-triggers.ts, `mc trigger`). Shape only — parseTrigger reads the meaning and
+// says what is wrong in words; resolveTrigger checks every name against the workspace.
+const optText = (n: number) => z.string().max(n).nullable().optional();
+export const NewWsTriggerSchema = z.object({
+  kind: z.string().trim().min(1).max(20),
+  target: optText(4000),
+  name: optText(80),
+  on: optText(20),
+  until: optText(20),
+  from: optText(200),
+  match: optText(200),
+  lines: z.boolean().nullable().optional(),
+  band: optText(60),
+  within: optText(20),
+  action: optText(20),
+  inbox: z.boolean().nullable().optional(),
+  goal: optText(400),
+  skill: optText(80),
+  playbook: optText(80),
+  repo: optText(200),
+  dedupe: optText(80),
+  rate: optText(20),
+  every: z.union([z.string().max(20), z.number()]).nullable().optional(),
+  cron: optText(80),
+  workspace_id: optText(64),
+});
+export const PatchWsTriggerSchema = z.object({ enabled: z.boolean(), why: optText(300) });
 /** ✓ Done on an inbox row: his hours on the task (Jira Hours Spent / a ClickUp time entry) and an optional comment. */
 export const InboxDoneSchema = z.object({
   hours: z.number().positive().max(999).optional(),

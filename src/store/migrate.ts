@@ -2549,6 +2549,73 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     },
   },
 
+  {
+    version: 161,
+    name: "ws_triggers + ws_trigger_fires — when X happens in this workspace, open the right work",
+    // `mc trigger` (src/ws-triggers.ts). Not `triggers` (HTTP webhooks bound to a job). A row is a
+    // standing rule: workspace + condition (kind/target/config) + action (terminal | playbook | inbox)
+    // + dedupe template + rate limit + its own cadence (every_sec or cron). It re-arms after every
+    // look, so next_check_at is the one clock a single timer sleeps to. `state` is what the condition
+    // is compared against (PR snapshots, the inbox cursor, the lines last seen, metric readings), so
+    // only NEW events fire. A fire row records what the rule did with one event: the seen set, the
+    // rate limit's count, and which live terminal or inbox item the next event of its key joins.
+    up: (db) => db.exec(`
+      CREATE TABLE ws_triggers (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        target TEXT,
+        config TEXT,
+        label TEXT NOT NULL,
+        action TEXT NOT NULL DEFAULT 'terminal',
+        goal TEXT,
+        skill TEXT,
+        playbook TEXT,
+        repo_id TEXT,
+        dedupe TEXT NOT NULL DEFAULT '{trigger}',
+        rate_max INTEGER NOT NULL DEFAULT 3,
+        rate_window_sec INTEGER NOT NULL DEFAULT 86400,
+        every_sec INTEGER,
+        cron TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        paused_reason TEXT,
+        state TEXT,
+        next_check_at TEXT,
+        last_check_at TEXT,
+        last_check TEXT,
+        checks INTEGER NOT NULL DEFAULT 0,
+        errors INTEGER NOT NULL DEFAULT 0,
+        check_run_id TEXT,
+        last_fired_at TEXT,
+        fire_count INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_ws_triggers_due ON ws_triggers(enabled, next_check_at);
+      CREATE INDEX idx_ws_triggers_ws ON ws_triggers(workspace_id, kind);
+      CREATE TABLE ws_trigger_fires (
+        id TEXT PRIMARY KEY,
+        trigger_id TEXT NOT NULL REFERENCES ws_triggers(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        at TEXT NOT NULL,
+        event_key TEXT NOT NULL,
+        dedupe_key TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        session_id TEXT,
+        inbox_id TEXT,
+        run_id TEXT,
+        subject TEXT,
+        evidence TEXT,
+        reason TEXT,
+        retry_at TEXT
+      );
+      CREATE INDEX idx_ws_trigger_fires_event ON ws_trigger_fires(trigger_id, event_key);
+      CREATE INDEX idx_ws_trigger_fires_key ON ws_trigger_fires(trigger_id, dedupe_key, at);
+      CREATE INDEX idx_ws_trigger_fires_pending ON ws_trigger_fires(outcome, retry_at);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
