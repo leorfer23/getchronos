@@ -46,8 +46,16 @@ import {
 } from "./store.js";
 import type { Workspace } from "./types.js";
 
-/** `created_by` of the terminals a run opens. */
+/** Who a run's own writes and typing are from, on the bus and in the activity log. */
 export const PLAYBOOK_BY = "playbook";
+/**
+ * `created_by` of the terminal a run's OK opens: the operator's. It opens because he clicked OK — his
+ * hand, which the machine governor never refuses (terminal.ts openSession: "when he opens a terminal by
+ * hand, that IS the priority"). An agent-labelled open would be turned away on a busy Mac, and the one
+ * OK would then do nothing until he came back to give it again. Robert still does not drive it unless
+ * the operator lets him (sessions.robert defaults off for it).
+ */
+export const RUN_OPENED_BY = "operator";
 export const MAX_STEPS = 30;
 export const MAX_RUN_CHARS = 4000;
 /** A run nobody OK'd within this long is void. */
@@ -838,7 +846,7 @@ export async function okRun(run: PlaybookRun, b: OkBody, nowMs = Date.now()): Pr
       goal: `Playbook ${r.name}${r.pr_url ? ` · ${prRef(r)}` : ""}`.slice(0, 400),
       goal_source: "human",
       description: runBrief(r, ws.name),
-      created_by: PLAYBOOK_BY,
+      created_by: RUN_OPENED_BY,
       role: "human",
       ...(pb?.repo_id ? { repo_id: pb.repo_id } : {}),
       ...(ws.default_backend ? { backend: ws.default_backend } : {}),
@@ -858,7 +866,8 @@ function progressCard(r: PlaybookRun): void {
   if (!r.session_id) return;
   const counted = r.steps.filter((s) => s.status !== "skipped");
   const done = counted.filter((s) => s.status === "done").length;
-  const cur = r.steps.find((s) => s.status === "active") ?? r.steps.find((s) => s.status === "todo");
+  // The step that matters now: the one that failed, else the one under way, else the next.
+  const cur = r.steps.find((s) => s.status === "failed") ?? r.steps.find((s) => s.status === "active") ?? r.steps.find((s) => s.status === "todo");
   try {
     deps.card(r.session_id, { progress: { n: done, of: counted.length || 1, label: `${r.name}${cur ? ` · ${cur.idx}. ${stepLabel(cur)}` : ""}`.slice(0, 120) } });
   } catch { /* a card is a courtesy */ }
@@ -926,7 +935,7 @@ export async function startStep(run: PlaybookRun, n: number, nowMs = Date.now())
     // A daemon-carried step still active means the carry-out never finished (a daemon restart): it is
     // not run twice on its own — it fails, and he decides.
     if (svc) return { ok: true, run: failStep(r, n, "it was being carried out when the daemon stopped — check the service before running it again", nowMs), step, command: null, carried: { ok: false, detail: "interrupted" } };
-    return { ok: true, run: r, step, command: step.kind === "shell" || step.kind === "mc" ? renderRun(step, t) : null, carried: null };
+    return { ok: true, run: r, step, command: step.kind === "shell" || step.kind === "mc" ? step.ran ?? renderRun(step, t) : null, carried: null };
   }
   if (step.gate) {
     const g = (r.ok_gates ?? []).find((x) => x.idx === n);
@@ -957,7 +966,8 @@ export async function startStep(run: PlaybookRun, n: number, nowMs = Date.now())
       }
     }
   }
-  const started = setStep(r, n, { status: "active", started_at: iso(nowMs) });
+  const ran = step.kind === "shell" || step.kind === "mc" ? renderRun(step, t) : null;
+  const started = setStep(r, n, { status: "active", started_at: iso(nowMs), ran });
   if (!started) return stateRefusal(playbookRuns.get(r.id) ?? r);
   r = started;
   publish(r, { step: n, step_status: "active" });
@@ -974,7 +984,7 @@ export async function startStep(run: PlaybookRun, n: number, nowMs = Date.now())
       return { ok: true, run: failStep(r, n, why, Date.now()), step, command: null, carried: { ok: false, detail: why } };
     }
   }
-  return { ok: true, run: r, step, command: step.kind === "shell" || step.kind === "mc" ? renderRun(step, t) : null, carried: null };
+  return { ok: true, run: r, step, command: ran, carried: null };
 }
 
 /** Step `n` worked (done) or did not (failed). A failure ends the run and asks the operator; it is never retried here. */
@@ -1018,7 +1028,7 @@ export function stopRun(run: PlaybookRun, by: string, why: string | null, nowMs 
 
 function stepView(s: PlaybookRunStep | (PlaybookStep & { idx: number }), t: Target) {
   return {
-    idx: s.idx, kind: s.kind, gate: s.gate, label: stepLabel(s), run: s.kind === "shell" || s.kind === "mc" ? renderRun(s, t) : s.run,
+    idx: s.idx, kind: s.kind, gate: s.gate, label: stepLabel(s), run: s.kind === "shell" || s.kind === "mc" ? ("ran" in s && s.ran ? s.ran : renderRun(s, t)) : s.run,
     to: s.to ?? null, channel: s.channel ?? null, carried: !!serviceAction(s),
     ...("status" in s ? { status: s.status, note: s.note, started_at: s.started_at, ended_at: s.ended_at } : {}),
   };
@@ -1057,22 +1067,29 @@ export function playbookView(pb: Playbook, last?: PlaybookRun | null) {
 /** The run's terminal brief: the steps as they will run, the gates the OK covered, and the protocol. */
 export function runBrief(r: PlaybookRun, wsName: string): string {
   const t = targetOf(r);
+  const byIdx = new Map(r.steps.map((s) => [s.idx, s]));
   const gates = (r.ok_gates ?? pendingGates(r).map((s) => ({ idx: s.idx, gate: s.gate as GateKind, hash: "" })));
+  const mark: Record<string, string> = { done: "(done) ", failed: "(FAILED) ", active: "(started) " };
   const line = (s: PlaybookRunStep) => {
-    const head = `${s.idx}. `;
-    if (s.status === "skipped") return `${head}(not in this run — it starts at step ${r.from_step}) ${stepLabel(s)}`;
+    const head = `${s.idx}. ${mark[s.status] ?? ""}`;
+    if (s.status === "skipped") return `${s.idx}. (not in this run — it starts at step ${r.from_step}) ${stepLabel(s)}`;
     if (s.kind === "message") return indentRest(`${head}(a DRAFT — never send it) ${s.channel ?? "slack"} for ${s.to}: ${s.run}`);
     const g = s.gate ? `[${s.gate}] ` : "";
     if (s.kind === "agent") return indentRest(`${head}${g}(instruction) ${s.run}`);
-    return indentRest(`${head}${g}${renderRun(s, t)}${serviceAction(s) ? "   ← the daemon carries this out when you start it" : ""}`);
+    return indentRest(`${head}${g}${s.ran ?? renderRun(s, t)}${serviceAction(s) ? "   ← the daemon carries this out when you start it" : ""}`);
   };
+  const live = r.state === "running" || r.state === "awaiting_ok" || r.state === "needs_ok";
   const done = r.steps.filter((s) => s.status === "done").map((s) => s.idx);
   const next = r.steps.find((s) => s.status === "todo" || s.status === "active");
+  const target = r.pr_url ? `, for ${r.pr_url} at head ${short(r.ok_sha ?? r.head_sha)}` : "";
   return [
     `The daemon opened this terminal to run the playbook "${r.name}" for ${wsName} — run ${id8(r.id)}.`,
-    ...(done.length ? [`Already done in this run: step${done.length === 1 ? "" : "s"} ${done.join(", ")}. Start at step ${next?.idx ?? "?"} — never redo a done step.`] : []),
-    `The operator gave ONE OK for this run${r.pr_url ? `, for ${r.pr_url} at head ${short(r.ok_sha)}` : ""}. It covers these gates and nothing else:`,
-    ...(gates.length ? gates.map((g) => `  - step ${g.idx}: ${g.gate}`) : ["  (none)"]),
+    ...(!live ? [`This run is ${r.state}${r.reason ? ` — ${r.reason}` : ""}. Do nothing more for it.`] : []),
+    ...(live && done.length ? [`Already done in this run: step${done.length === 1 ? "" : "s"} ${done.join(", ")}. Start at step ${next?.idx ?? "?"} — never redo a done step.`] : []),
+    r.ok_at
+      ? `The operator gave ONE OK for this run${target}. It covers these gates and nothing else:`
+      : `This run waits for the operator's OK${target} — nothing runs before it. His OK will cover these gates and nothing else:`,
+    ...(gates.length ? gates.map((g) => `  - step ${g.idx}: ${g.gate} — ${byIdx.get(g.idx) ? stepLabel(byIdx.get(g.idx)!) : "?"}`) : ["  (none)"]),
     "",
     "## Steps — in this order, exactly as written",
     ...r.steps.map(line),

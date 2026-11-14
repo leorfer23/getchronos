@@ -4229,12 +4229,13 @@ function askCap(question) {
       const runLine = (r) => `${id8(r.id)}  ${String(r.name).padEnd(16)} ${STATE[r.state] || r.state}${r.reason && r.state !== "running" ? ` — ${r.reason}` : ""} · ${r.progress.done}/${r.progress.total} · ${target(r)}`;
       const runFull = (r) => [runLine(r), ...r.steps.map((s) => `  ${ICON[s.status] || "?"} ${s.idx}. ${gate(s.gate)}${s.label}${s.note ? `  (${s.note})` : ""}`)].join("\n");
       const isRunRef = (v) => !!v && /^[0-9a-f-]{6,36}$/i.test(v);
-      // The run a command is about: the one named, else this terminal's live run.
+      // The run a command is about: the one named, else this terminal's latest — whatever its state, so a
+      // refusal is the daemon's own reason (waiting for the OK, failed, stopped) rather than "no run".
       const runOf = async (ref) => {
         if (ref) return ref;
         const sid = process.env.MC_SESSION || die("which run? pass its id (mc playbook runs), or run this from the run's own terminal");
-        const rows = await req("GET", "/playbook-runs?state=live&session=" + encodeURIComponent(sid));
-        if (!rows.length) die("this terminal has no live playbook run — pass the run id (mc playbook runs)");
+        const rows = await req("GET", "/playbook-runs?limit=1&session=" + encodeURIComponent(sid));
+        if (!rows.length) die("this terminal has no playbook run — pass the run id (mc playbook runs)");
         return rows[0].id;
       };
       if (sub === "ls" || sub === "list") {

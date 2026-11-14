@@ -41,6 +41,7 @@ const opened: any[] = [];
 const told: Array<[string, string]> = [];
 const carried: Array<[string, string]> = [];
 const notified: any[] = [];
+const cards: Array<[string, any]> = [];
 let serviceFails: string | null = null;
 P.setPlaybookDeps({
   readPr: async (_ws, url) => {
@@ -59,7 +60,7 @@ P.setPlaybookDeps({
     return `${action} ${svc.name}: ok`;
   },
   notifyAsk: (a) => { notified.push(a); },
-  card: () => {},
+  card: (sid, c) => { cards.push([sid, c]); },
 });
 
 const CHAIN = [
@@ -254,7 +255,7 @@ test("a run waits for ONE OK: nothing starts before it, and the OK must name the
   assert.equal(opened.length, before + 1, "the OK opens its terminal");
   const o = opened.at(-1);
   assert.equal(o.workspace_id, A.id, "in the playbook's own workspace");
-  assert.equal(o.created_by, P.PLAYBOOK_BY);
+  assert.equal(o.created_by, "operator", "his OK opened it: the governor treats it as his own open");
   assert.equal(ok.run.session_id, sessions.list({ workspace_id: A.id }).find((s) => s.goal === o.goal)?.id);
   assert.match(o.description, /step 1: merge[\s\S]*step 3: release[\s\S]*step 4: deploy[\s\S]*step 5: publish/);
   assert.match(o.description, new RegExp(`gh pr merge ${PR} --squash --match-head-commit ${SHA1}`), "the brief shows the merge pinned to the head he OK'd");
@@ -362,12 +363,24 @@ test("a failed step stops the run and asks the operator; nothing after it runs, 
   assert.equal(q[0].workspace_id, A.id);
   assert.match(q[0].question, /stopped at step 2[\s\S]*not release \(step 3\), deploy \(step 4\), publish \(step 5\)/);
   assert.equal(notified.length, notesBefore + 1, "the operator is told");
+  const card = cards.filter(([sid, c]) => sid === run.session_id && c.progress).at(-1)![1];
+  assert.deepEqual([card.progress.n, card.progress.of], [1, 6]);
+  assert.match(card.progress.label, /2\. make release$/, "its card names the step that failed");
+  // The terminal finds its run whatever its state, so what it reads is the daemon's own reason.
+  assert.equal(playbookRuns.list({ session_id: run.session_id!, limit: 1 })[0].id, run.id);
   // Stopped means stopped: no next step, no rewriting the failure, no new run, no new terminal.
   const s3 = await P.startStep(r, 3);
   assert.ok(!s3.ok && s3.stop, JSON.stringify(s3));
   assert.ok(!P.finishStep(r, 2, "done", "actually fine").ok);
   assert.equal(playbookRuns.list({ playbook_id: run.playbook_id }).length, 1);
   assert.equal(opened.length, opensBefore);
+  // Its brief says so, and marks what ran — with the command each step was given.
+  const brief = P.runBrief(r, "Acme");
+  assert.match(brief, /This run is failed — step 2 \(make release\) failed[\s\S]*Do nothing more for it\./);
+  assert.doesNotMatch(brief, /Start at step/);
+  assert.match(brief, new RegExp(`1\\. \\(done\\) \\[merge\\] gh pr merge ${PR} --squash --match-head-commit ${SHA1}`));
+  assert.match(brief, /2\. \(FAILED\) cd .* && make release/);
+  assert.match(brief, /- step 3: release — rclone copy dist\/tool\.zip remote:releases/);
   // Going on is a NEW run, from the failed step, with a new OK.
   const next = await P.createRun(playbooks.get(run.playbook_id)!, { pr: PR, from: 2, by: "operator" });
   assert.ok(next.ok);

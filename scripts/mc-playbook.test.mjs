@@ -57,7 +57,7 @@ test("mc playbook save --from-session drafts from THIS terminal", async () => {
 test("mc playbook step works this terminal's live run and prints exactly what to run", async () => {
   const r = await withApi((m, u) => (m === "GET" ? [200, [run]] : [200, { run, step: 2, command: "make release", carried: null, kind: "shell" }]), ["playbook", "step", "2", "start"]);
   assert.equal(r.code, 0, r.out);
-  assert.equal(r.seen[0].url, "/api/playbook-runs?state=live&session=sess1234-0000");
+  assert.equal(r.seen[0].url, "/api/playbook-runs?limit=1&session=sess1234-0000");
   assert.equal(r.seen[1].url, `/api/playbook-runs/${run.id}/steps/2/start`);
   assert.equal(r.seen[1].session, "sess1234-0000", "the call says which terminal it is");
   assert.match(r.out, /▶ step 2 — do exactly this[\s\S]*\nmake release\n/);

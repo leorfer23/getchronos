@@ -35,6 +35,8 @@ export type PlaybookRunStep = PlaybookStep & {
   note: string | null;
   started_at: string | null;
   ended_at: string | null;
+  /** The command as it was handed out when the step started (its target filled in). */
+  ran?: string | null;
 };
 
 /**
@@ -208,7 +210,8 @@ export const playbookRuns = {
     const vals: unknown[] = [];
     if (f.workspace_id) { where.push("workspace_id=?"); vals.push(f.workspace_id); }
     if (f.playbook_id) { where.push("playbook_id=?"); vals.push(f.playbook_id); }
-    if (f.session_id) { where.push("session_id=?"); vals.push(f.session_id); }
+    // A terminal's runs: the ones it works, and the ones it asked to run in itself (--here) before the OK.
+    if (f.session_id) { where.push("(session_id=? OR (session_id IS NULL AND requested_session=?))"); vals.push(f.session_id, f.session_id); }
     if (f.states?.length) { where.push(`state IN (${f.states.map(() => "?").join(",")})`); vals.push(...f.states); }
     const lim = Math.min(Math.max(f.limit ?? 50, 1), 500);
     const rows = db.prepare(
