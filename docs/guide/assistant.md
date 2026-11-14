@@ -54,8 +54,9 @@ Robert, per project.
 
 ## What he never does
 
-- **Send anything.** No email, Slack message, comment or review goes out from him or any agent. They
-  leave a draft and tell you where it is. The send tools are removed from every agent CLI.
+- **Send anything — except a Slack DM to you.** No email, comment, review or Slack message to anyone
+  else goes out from him or any agent. They leave a draft and tell you where it is. The one send allowed
+  is a DM to you, in a project where you named your Slack ids (see [Safety](safety.md)).
 - **Move your screen.** He names the terminal or ticket; you tap it.
 - **Mix projects.** Work for another project goes to that project's assistant.
 - **Write standing orders.** Those are yours (see [Briefs](briefs.md)).

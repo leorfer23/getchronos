@@ -528,6 +528,9 @@ const HELP = `mc — Mission Control backlog CLI
                                      the secrets. Terminals opened since already have them in their env.
   mc vars set NAME VALUE [--hours N] hand this workspace a var (admin-gated → daemon host; no --hours = forever)
   mc vars rm NAME                    take it back (admin-gated)
+  mc vars set OPERATOR_SLACK_SELF_IDS "U…,D…" --workspace <id>   the operator's own Slack user id + self-DM
+                                     channel there: the ONE send agents may make is a Slack DM to him (in
+                                     their env as MC_OPERATOR_SLACK_DM). Unset = no sends at all, drafts only
   mc clip                            print what the operator last copied (their Mac clipboard, via the daemon)
   mc clip set "text"                 put text ON his clipboard for him to paste elsewhere
   mc file put <path> [--name n] [--note "…"]  put a file on the shelf so ANY computer can get it (yours → the brain)
@@ -753,6 +756,84 @@ async function hook(backend, mode) {
     if (backend === "claude" && name === "userpromptsubmit" && res && res.memory_notice) process.stdout.write(res.memory_notice + "\n");
   }
   reply();
+}
+
+/**
+ * `mc hook send-gate` — the PreToolUse hook on claude's send tools (src/no-send.ts, "THE SEND GATE"). The
+ * one send any agent may make is a Slack DM to the operator himself: slack_send_message / _schedule_message
+ * whose channel_id is one of his own ids in that workspace's Slack. Every other send tool is refused, and so
+ * is anything this cannot read. Prints GATE_PASS or the reason; the hook command turns every other outcome
+ * (a crash, no output) into a refusal, so a bug here can only block a send, never let one out.
+ */
+const SLACK_SELF_SEND = ["slack_send_message", "slack_schedule_message"]; // = SLACK_SELF_SEND_TOOLS in src/no-send.ts
+// What a posting call may carry besides where it goes: the words and how they render. Any other field
+// (draft_id — a stored draft goes wherever IT was addressed) means the gate cannot tell where it lands.
+const SLACK_SELF_FIELDS = ["channel_id", "message", "text", "thread_ts", "reply_broadcast", "unfurl_links", "unfurl_media", "unfurl_app_links"];
+const GATE_PASS = "chronos-send-gate: pass"; // = SEND_GATE_PASS in src/no-send.ts
+const GATE_DRAFT = "Leave a draft instead (slack_send_message_draft, Gmail create_draft, or the text in your terminal) and tell the operator where it is.";
+/** His ids from OPERATOR_SLACK_SELF_IDS — one entry that is not a U…/W…/D… id and the list counts as unset. */
+const slackSelfIds = (raw) => {
+  const parts = String(raw ?? "").split(/[\s,]+/).filter(Boolean);
+  return parts.length && parts.every((p) => /^[UWD][A-Z0-9]{2,}$/.test(p)) ? [...new Set(parts)] : [];
+};
+/** null = it may go; otherwise why not. A pure function of the hook's input and the allowlist. */
+function sendGateVerdict(j, allow) {
+  const tool = j && typeof j === "object" && typeof j.tool_name === "string" ? j.tool_name : "";
+  const m = /^mcp__.+__([A-Za-z0-9_]+)$/.exec(tool);
+  if (!m) return `Chronos blocked this call: the send gate could not read which tool it is. ${GATE_DRAFT}`;
+  if (!SLACK_SELF_SEND.includes(m[1])) return `Chronos blocked ${tool}: agents do not send — the one send allowed is a Slack DM to the operator himself. ${GATE_DRAFT}`;
+  if (!allow.length) return `Chronos blocked ${tool}: this workspace names no Slack DM of the operator's (OPERATOR_SLACK_SELF_IDS), so nothing may be sent from here. ${GATE_DRAFT}`;
+  const input = j.tool_input;
+  if (!input || typeof input !== "object" || Array.isArray(input)) return `Chronos blocked ${tool}: the send gate could not read its input. ${GATE_DRAFT}`;
+  const fields = m[1] === "slack_schedule_message" ? [...SLACK_SELF_FIELDS, "post_at"] : SLACK_SELF_FIELDS;
+  const odd = Object.keys(input).filter((k) => !fields.includes(k));
+  if (odd.length) return `Chronos blocked ${tool}: it carries ${odd.join(", ")}, so the send gate cannot tell where it lands. ${GATE_DRAFT}`;
+  const to = typeof input.channel_id === "string" ? input.channel_id.trim() : "";
+  if (!allow.includes(to)) return `Chronos blocked ${tool}: ${to || "(no channel_id)"} is not the operator's own DM — the only send allowed is to channel_id ${allow.find((i) => i.startsWith("D")) || allow[0]}. ${GATE_DRAFT}`;
+  return null;
+}
+/**
+ * Whose ids: the spawn's own list on the hook's command line (Chronos put it there from the session's
+ * workspace, out of the session's reach); else the session's env (a Chronos process: its own workspace's
+ * var); a Chronos process with neither has none — never a profile's. A session the operator started by
+ * hand asks the daemon for the ids of the workspace that runs on its profile (GET /no-send/self); no
+ * daemon, no admin token, no answer in 3 s: none.
+ */
+async function sendGateAllow(opt) {
+  if (opt.allow !== undefined) return slackSelfIds(opt.allow);
+  if (process.env.OPERATOR_SLACK_SELF_IDS !== undefined) return slackSelfIds(process.env.OPERATOR_SLACK_SELF_IDS);
+  if (process.env.MC_SESSION || process.env.MC_WORKSPACE || process.env.MC_RUN) return [];
+  const token = adminToken();
+  if (!token) return [];
+  const profile = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+  try {
+    const r = await fetch(`${API}/no-send/self?profile=${encodeURIComponent(profile)}`, { headers: { "x-mc-admin": token }, signal: AbortSignal.timeout(3000) });
+    const b = r.ok ? await r.json() : null;
+    return Array.isArray(b?.ids) ? slackSelfIds(b.ids.join(",")) : [];
+  } catch {
+    return [];
+  }
+}
+async function sendGate(opt) {
+  let out;
+  try {
+    const raw = await new Promise((resolve) => {
+      if (process.stdin.isTTY) return resolve("");
+      let d = "";
+      const t = setTimeout(() => { process.stdin.destroy(); resolve(d); }, 2000);
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (c) => (d += c));
+      process.stdin.on("end", () => { clearTimeout(t); resolve(d); });
+    });
+    let j = null;
+    try { j = JSON.parse(raw); } catch {}
+    const tool = /^mcp__.+__([A-Za-z0-9_]+)$/.exec(typeof j?.tool_name === "string" ? j.tool_name : "");
+    const allow = tool && SLACK_SELF_SEND.includes(tool[1]) ? await sendGateAllow(opt) : [];
+    out = sendGateVerdict(j, allow) ?? GATE_PASS;
+  } catch (e) {
+    out = `Chronos blocked this send: the send gate failed (${String(e?.message ?? e).slice(0, 160)}). ${GATE_DRAFT}`;
+  }
+  process.stdout.write(out);
 }
 
 /** What a permission request would do, in the words the operator decides on: the command, the file, the URL. */
@@ -989,6 +1070,7 @@ function askCap(question) {
         || pos.includes("-h") || pos.includes("--help")) {
       return console.log(HELP);
     }
+    if (cmd === "hook" && pos[1] === "send-gate") return await sendGate(opt);
     if (cmd === "hook") return await hook(pos[1] || "claude", pos[2]);
     if (cmd === "statusline") return await statusline();
     if (cmd === "usage") return await usage("json" in opt);
