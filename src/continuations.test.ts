@@ -8,6 +8,7 @@ import {
   LIMITS, RETRY_MS,
 } from "./continuations.js";
 import * as routes from "./continuation-routes.js";
+import { robertToken } from "./authz.js";
 import { isReadOnlyRun } from "./runner.js";
 import type { Continuation } from "./store/continuations.js";
 
@@ -353,6 +354,20 @@ test("a terminal parks its own work, not another's — and never across workspac
   await routes.createRoute(fakeReq(ADMIN(), { body: { kind: "pr", target: PR, session_id: peer.id.slice(0, 8), by: "robert" } }), robert);
   assert.equal(robert.statusCode, 201, JSON.stringify(robert.body));
   assert.equal(robert.body.created_by, "robert");
+});
+
+test("a project's Robert parks his own terminals' work (mc when --for), never another workspace's", async () => {
+  const peer = term();
+  const mine = fakeRes();
+  await routes.createRoute(fakeReq({ "x-mc-admin": robertToken(ws.id, "rw") }, { body: { kind: "manual", note: "CI on the PR is done", session_id: peer.id.slice(0, 8), by: "robert" } }), mine);
+  assert.equal(mine.statusCode, 201, JSON.stringify(mine.body));
+  assert.equal(mine.body.session_id, peer.id);
+  assert.equal(mine.body.created_by, "robert");
+
+  const theirs = fakeRes();
+  await routes.createRoute(fakeReq({ "x-mc-admin": robertToken(other.id, "rw") }, { body: { kind: "manual", session_id: peer.id } }), theirs);
+  assert.equal(theirs.statusCode, 404, "another project's Robert cannot even see it");
+  assert.equal(continuations.list({ session_id: peer.id }).length, 1);
 });
 
 test("a terminal target must be in the same workspace; ids from elsewhere are a 404", async () => {

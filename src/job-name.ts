@@ -19,6 +19,7 @@ export function baseJobName(name?: string | null): string {
 // (Desk `⋯ → Jobs`, `GET /api/jobs?kind=operator`) shows everything else.
 export const INTERNAL_JOB_PREFIXES = [
   "ticket:", "review:", "plan:", "grade:", "distill:", "ideas:", "intake:", "ci-fix:", "merge-gate:", "verify:", "nextday:", "dream:", "prose:", "hygiene:", "note-work:",
+  "retro:",
 ];
 export function isInternalJob(name?: string | null): boolean {
   const base = baseJobName(name);

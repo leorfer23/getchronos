@@ -371,6 +371,17 @@ test("checksGate: the newest run of a check counts, and only a check that names 
   assert.equal(X.checksGate("pr", "other", SHA, all.map((c) => ({ ...c, deliverable_id: "x" })), "refuse", null).ok, false);
 });
 
+test("checksGate: a slot that does not apply (n/a) is not owed — a code PR's data diff never holds its merge; a skip still does", () => {
+  const row = (name: string, status: string) =>
+    ({ id: name, request_id: "r", deliverable_id: "d", name, status, evidence: [], note: null, target_hash: SHA, ran_by: "verifier", ran_at: "2026-01-02", created_at: "2026-01-02" }) as any;
+  assert.ok(PR_CHECKS.includes("data_diff"));
+  const na = PR_CHECKS.map((n) => row(n, n === "data_diff" ? "na" : "pass"));
+  assert.deepEqual(X.checksGate("pr", "d", SHA, na, "refuse", null), { ok: true, override: null });
+  const skipped = X.checksGate("pr", "d", SHA, PR_CHECKS.map((n) => row(n, n === "data_diff" ? "skip" : "pass")), "refuse", null);
+  assert.equal(skipped.ok, false);
+  assert.match((skipped as any).why, /data_diff \(skip\)/);
+});
+
 // ── failures are logged with the error ──────────────────────────────────────────────────────────
 
 test("GitHub refuses the merge: failed, the error text logged, the yes retired and asked again", async () => {

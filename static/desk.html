@@ -992,6 +992,10 @@
   .lp-opts button:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
   .lp-opts input { flex:1; min-width:180px; height:30px; padding:0 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font:inherit; font-size:13.5px; }
   .lp-none { padding:18px 6px; font-size:14.5px; color:var(--faint); }
+  /* Workspace triggers in Open loops (static/desk-triggers.js): one switch per row; an off row reads dimmed. */
+  .tg-off .lp-t, .tg-off .lp-then { color:var(--faint); }
+  .lp-acts button.tg-sw { min-width:52px; }
+  .lp-acts button.tg-sw.on { border-color:var(--ok); color:var(--ok); background:var(--accent-soft); }
   .var-rows { display:flex; flex-direction:column; gap:6px; max-height:44vh; overflow:auto; }
   .var-row { display:flex; align-items:center; gap:8px; padding:7px 9px; border:1px solid var(--line); border-radius:9px; background:var(--bg); }
   .var-row .nm { font:14.5px ui-monospace,Menlo,monospace; font-weight:600; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
@@ -1190,6 +1194,14 @@
   .ib-row .acts .btn { padding:1px 10px; font-size:13.5px; }
   .ib-row .acts .ib-hours { width:84px; padding:1px 8px; font-size:13.5px; }
   .ib-row .e { grid-column:2 / span 2; font-size:13px; color:var(--danger); overflow-wrap:anywhere; }
+  /* One thread, one row: the later messages folded into it, and where its Dispatch goes. */
+  .ib-row .asks { grid-column:2 / span 2; display:flex; flex-direction:column; gap:1px; font-size:13.5px; color:var(--muted); }
+  .ib-row .asks div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ib-row .asks a { color:inherit; text-decoration:none; }
+  .ib-row .asks a:hover { text-decoration:underline; }
+  .ib-row .asks span { color:var(--faint); margin-left:6px; }
+  .ib-row .thr { grid-column:2 / span 2; font-size:13px; color:var(--faint); display:flex; gap:8px; align-items:center; }
+  .ib-row .thr .btn { padding:0 8px; font-size:12.5px; }
   .ib-row.urgent .t::before { content:"● "; color:var(--danger); }
   .ib-row.pri-high { box-shadow:inset 2px 0 0 var(--accent); }
   .ib-row.pri-low .t, .ib-row.pri-low .w { opacity:.62; }
@@ -2254,6 +2266,7 @@
 <script src="/desk-companion.js"></script>
 <script src="/desk-quick-actions.js"></script>
 <script src="/desk-scope.js"></script>
+<script src="/desk-triggers.js"></script>
 <script src="/voice-alerts.js"></script>
 <script src="/ask-card.js"></script>
 <script src="/artifact-view.js"></script>
@@ -2961,13 +2974,11 @@ const EXPECT = {
   investigation: "Lands here when it is done: the answer, and the evidence behind it.",
   qa: "Lands here when it is done: the verdict — what passed, what failed, and how to reproduce each failure.",
 };
-// What the hand-off buttons type into the terminal. Typed, not executed by the page: the agent knows
-// the repo's own way to merge and deploy, and the line is in its transcript as your decision.
-const OK_LINE = {
-  merge: "Approved: merge the PR once its checks are green. Don't deploy. Then run `mc outcome --shipped \"merged #<n>\"`.",
-  "merge+deploy": "Approved: merge the PR once its checks are green, then deploy it. Then run `mc outcome --shipped \"merged #<n>\" --shipped \"deployed\"`.",
-  deploy: "Approved: deploy it. Then run `mc outcome --shipped \"deployed\"`.",
-};
+// What the hand-off buttons approve. The page names only the button; the daemon resolves what it covers —
+// the PRs on that hand-off and the commit each is at — records it, and types a line naming them into the
+// terminal (POST /sessions/:id/approve, src/card-approval-routes.ts). The agent still merges the repo's
+// own way, but only that PR at that commit, and the line is in its transcript as your decision.
+const APPROVE_KINDS = new Set(["merge", "merge+deploy", "deploy"]);
 
 // The goal QUEUE, for a terminal that was given more than one finish line (src/goals.ts). Fetched
 // lazily and only for the terminal on stage: every card already carries its counts, and a wall of
@@ -3830,14 +3841,34 @@ qs("#story").addEventListener("click", (e) => {
   const ok = e.target.closest("[data-ok]");
   if (ok) {
     if (ok.dataset.ok === "changes") { say.value = "Changes needed: "; focusSay(); say.setSelectionRange(say.value.length, say.value.length); return; }
-    const line = OK_LINE[ok.dataset.ok]; if (!line) return;
-    answer(s.id, { text: line, enter: true });
-    // The click does not vanish into the pty: the dock turns into "Merging + deploying…" until it ships.
-    shipStart(s, ok.dataset.ok);
-    renderStory();
-    toast("sent · " + ok.textContent.replace(/^✓\s*/, ""));
+    if (APPROVE_KINDS.has(ok.dataset.ok)) approveHandoff(s, ok.dataset.ok);
   }
 });
+// One approval from the hand-off's dock: which button, and which hand-off the card was drawn from. The
+// daemon refuses a card that moved under you (a newer hand-off, a PR whose head changed — then it asks the
+// terminal to hand off again) and answers with exactly what was approved: the PR and the commit.
+const APPROVING = new Set(); // one click in flight per terminal: GitHub is read before anything is typed
+async function approveHandoff(s, kind) {
+  if (APPROVING.has(s.id)) return;
+  APPROVING.add(s.id);
+  const drawn = D.id === s.id ? (D.outcome?.at ?? null) : null;
+  toast("approving · reading the PR on GitHub…");
+  try {
+    const r = await api("/sessions/" + s.id + "/approve", { method: "POST", headers: { "x-mc-operator": "1" }, body: JSON.stringify({ kind, outcome_at: drawn, surface: "desk" }) });
+    S.answered.set(s.id, Date.now()); S.notifyCount.delete(s.id);
+    renderCounts(); syncBadge();
+    // The click does not vanish into the pty: the dock turns into "Merging + deploying…" until it ships.
+    shipStart(s, kind);
+    renderStory();
+    const a = r?.approval;
+    toast("approved · " + (a ? (a.kind === "merge+deploy" ? "merge + deploy" : a.kind) + a.prs.map((p) => " #" + p.num + (p.sha ? " @" + p.sha.slice(0, 7) : "")).join(",") : kind));
+  } catch (err) {
+    toast(String(errMsg(err)).slice(0, 200));
+    decisionsLoad(s, true);
+  } finally {
+    APPROVING.delete(s.id);
+  }
+}
 // A finish-line check, ticked from the board: the same door `mc goal check` uses.
 async function toggleCheck(s, n) {
   const was = Array.isArray(s.done_checked) ? s.done_checked[n - 1] : null;
@@ -6071,8 +6102,15 @@ qs("#quick").addEventListener("submit", (e) => {
   const ship = qs("#q-ship").dataset.ship;
   if (ship && ship !== "ask") body.ship = ship;
   quickClose();
-  if (!goal) return spawn(body);
-  spawn({ ...body, goal, ...(lead ? { role: "lead" } : {}) });
+  // A refused open puts the line back exactly as he typed it — never cost the operator his words.
+  const restore = () => {
+    quickOpen(lead);
+    qs("#q-ws").value = wsId; quickSyncCli();
+    if (ship) quickShip(ship);
+    const g = qs("#q-goal"); g.value = goal; g.focus(); g.select();
+  };
+  if (!goal) return spawn(body, null, restore);
+  spawn({ ...body, goal, ...(lead ? { role: "lead" } : {}) }, null, restore);
 });
 qs("#q-goal").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); quickClose(); } });
 qs("#q-more").onclick = () => { const wsId = qs("#q-ws").value, ship = qs("#q-ship").dataset.ship; quickClose(); openNew(wsId); qs("#f-ship").value = ship || "ask"; };
@@ -6093,16 +6131,20 @@ function pendingRow(body) {
 }
 qs("#f-cancel").onclick = () => dlg.close("cancel");
 // One door for every spawn; the new terminal lands on the stage.
-async function spawn(body, onOpened) {
+// onFailed runs only when the daemon refused the open — the caller puts back what was typed.
+async function spawn(body, onOpened, onFailed) {
   const ph = pendingRow(body);
+  let s;
   try {
-    const s = await api("/sessions", { method: "POST", body: JSON.stringify({ role: "human", cols: 100, rows: 30, ...body }) });
+    s = await api("/sessions", { method: "POST", body: JSON.stringify({ role: "human", cols: 100, rows: 30, ...body }) });
+  } catch (err) { ph.remove(); renderRail(); toast("open failed: " + err.message); onFailed?.(); return; }
+  try {
     onOpened?.();
     await load();
     ph.remove();
     if (s?.id && byId(s.id)) select(s.id);
     if (s?.duplicate_of) toast(s.duplicate_of.warning);
-  } catch (err) { ph.remove(); renderRail(); toast("open failed: " + err.message); }
+  } catch (err) { ph.remove(); renderRail(); toast(err.message); }
 }
 // Close every terminal whose goal is ticked: they are done, and the rail is for what is not.
 async function closeDone() {
@@ -6174,7 +6216,8 @@ qs("#form-new").addEventListener("submit", async (e) => {
   };
   const cwd = f.get("cwd");
   if (cwd) body.cwd = cwd;
-  await spawn(body, () => e.target.reset());
+  // The form is only reset once the terminal is open; a refusal reopens it with everything still in it.
+  await spawn(body, () => e.target.reset(), () => { if (!dlg.open) dlg.showModal(); });
 });
 
 // ── the day's log ────────────────────────────────────────────────────────────────────────────
@@ -6223,7 +6266,9 @@ qs("#log-close").onclick = () => qs("#dlg-log").close();
 // questions nobody has answered (an ask outlives its terminal), and what runs on a clock (cron jobs,
 // folded). 2026-10-30: "super important to me to see what things are still open and need
 // follow-ups". Read from the routes those features already serve; the ⏰ count is the first three.
-const LOOPS = { waits: [], asks: [], jobs: [], busy: false, jobsOpen: false, arm: "", armT: 0 };
+// Triggers (`mc trigger`, static/desk-triggers.js) are standing rules, not open loops: folded under the
+// rest like the jobs on a clock, and not counted in ⏰.
+const LOOPS = { waits: [], asks: [], jobs: [], trig: [], busy: false, jobsOpen: false, trigOpen: false, arm: "", armT: 0 };
 const WAIT_ICON = { pr: "⇡", terminal: "▣", ask: "?", at: "⏰", script: "⚙", check: "👁", manual: "✋" };
 const spanWord = (m) => (m < 60 ? m + "m" : m < 48 * 60 ? Math.round(m / 60) + "h" : Math.round(m / 1440) + "d");
 // "today 16:02 · in 3h" / "Mon 2 Nov 09:00 · in 3d" / "today 09:10 · 40m ago".
@@ -6241,11 +6286,13 @@ async function loopsLoad() {
   if (LOOPS.busy) return;
   LOOPS.busy = true;
   try {
-    const [w, a, j] = await Promise.all([
+    const [w, a, j, tg] = await Promise.all([
       api("/continuations").catch(() => null),
       api("/asks?status=open").catch(() => null),
       api("/jobs?kind=operator").catch(() => null),
+      api("/ws-triggers").catch(() => null),
     ]);
+    if (Array.isArray(tg)) LOOPS.trig = DeskTriggers.sort(tg);
     if (Array.isArray(w)) LOOPS.waits = w.sort((x, y) => waitNext(x) - waitNext(y));
     if (Array.isArray(a)) LOOPS.asks = a.sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)));
     if (Array.isArray(j)) LOOPS.jobs = j.filter((x) => x.enabled && x.next_run).sort((x, y) => x.next_run.localeCompare(y.next_run));
@@ -6320,6 +6367,11 @@ function loopsRender() {
   if (fu.length) parts.push(sec("Follow-ups", fu.length), ...fu.map(followRow));
   if (LOOPS.asks.length) parts.push(sec("Unanswered", LOOPS.asks.length), ...LOOPS.asks.map(askRow));
   if (!parts.length) parts.push(`<div class="lp-none">Nothing open — no parked work, follow-ups or unanswered questions.</div>`);
+  if (LOOPS.trig.length) {
+    const off = LOOPS.trig.filter((t) => !t.enabled).length;
+    parts.push(`<div class="lp-sec"><button type="button" data-ltrigs>When it happens ${LOOPS.trigOpen ? "▾" : "▸"}</button><span class="n">${LOOPS.trig.length}${off ? ` · ${off} off` : ""}</span></div>`,
+      ...(LOOPS.trigOpen ? LOOPS.trig.map((t) => DeskTriggers.row(t, { wsBit, when: loopWhen })) : []));
+  }
   if (LOOPS.jobs.length)
     parts.push(`<div class="lp-sec"><button type="button" data-ljobs>On a clock ${LOOPS.jobsOpen ? "▾" : "▸"}</button><span class="n">${LOOPS.jobs.length}</span></div>`, ...(LOOPS.jobsOpen ? LOOPS.jobs.map(jobRow) : []));
   const body = qs("#loops-body");
@@ -6344,6 +6396,22 @@ qs("#loops-body").addEventListener("click", async (e) => {
   const b = e.target.closest("button, input, .lp-row");
   if (!b || b.tagName === "INPUT") return;
   if (b.dataset.ljobs != null) { LOOPS.jobsOpen = !LOOPS.jobsOpen; return loopsRender(); }
+  if (b.dataset.ltrigs != null) { LOOPS.trigOpen = !LOOPS.trigOpen; return loopsRender(); }
+  if (b.dataset.tgsw) {
+    const on = b.dataset.on !== "1";
+    try {
+      await api("/ws-triggers/" + b.dataset.tgsw, { method: "PATCH", body: JSON.stringify(on ? { enabled: true } : { enabled: false, why: "switched off from the Desk" }) });
+      toast(on ? "on — it starts from now" : "off — it stops looking");
+    } catch (err) { toast(String(err.message).slice(0, 120)); }
+    return loopsLoad();
+  }
+  if (b.dataset.ltg) {
+    // The row: its last terminal, when that one is still open.
+    const s = b.dataset.tgsess && byId(b.dataset.tgsess);
+    if (s && s.live) { qs("#dlg-loops").close(); select(s.id); }
+    else toast(b.dataset.tgsess ? "its last terminal has ended" : "it has not opened a terminal yet");
+    return;
+  }
   if (b.dataset.lfire) {
     try { await api("/continuations/" + b.dataset.lfire + "/fire", { method: "POST", body: JSON.stringify({ evidence: "fired by hand from the Desk" }) }); toast("fired — the work continues"); }
     catch (err) { toast(String(err.message).slice(0, 120)); }
@@ -8088,7 +8156,7 @@ const ibMode = (id) => IB.open && IB.open.id === id ? IB.open.mode : null;
 // A client's weight for ordering groups: how many high-priority rows it holds, then how many rows.
 const wsWeight = (items) => [items.filter((i) => i.priority === "high").length, items.length];
 const byWeight = ([, a], [, b]) => { const x = wsWeight(a), y = wsWeight(b); return y[0] - x[0] || y[1] - x[1]; };
-const IB_ICON = { slack: "💬", jira: "🔷", clickup: "✅" };
+const IB_ICON = { slack: "💬", jira: "🔷", clickup: "✅", trigger: "⚡" };
 function syncInboxBadge() {
   const n = Object.values(IB.counts).reduce((a, b) => a + b, 0);
   qs("#btn-inbox").textContent = n ? `📥 Inbox log · ${n}` : "📥 Inbox log";
@@ -8144,6 +8212,17 @@ function renderInboxClosed() {
       `<div class="acts"><button class="btn" data-a="reopen" title="It still needs you — put it back">↩ Reopen</button></div></div>`;
   }).join("");
 }
+// One thread, one row (src/inbox-thread.ts): the later messages of its thread folded into it, the live
+// terminal its Dispatch types it into, or — never merged on its own — a row it may continue, with Merge.
+function ibThread(i) {
+  const asks = (i.asks || []).map((a) => `<div>+ ${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.title)} ↗</a>` : esc(a.title)}<span>${a.actor ? esc(a.actor) + " · " : ""}${esc(age(a.created_at))}</span></div>`).join("");
+  const thr = i.followup_to
+    ? `<div class="thr">↪ Its thread's terminal is open — Dispatch types it there: ${esc(i.followup_to.goal || i.followup_to.session_id.slice(0, 8))}</div>`
+    : i.related
+    ? `<div class="thr" title="${esc(i.related.why)}">Looks like the same conversation as “${esc(i.related.title)}”${i.related.session_id ? " — its terminal is open" : ""} <button class="btn" data-a="merge" data-into="${esc(i.related.id)}" title="Fold this into that one — never done without your press">Merge</button></div>`
+    : "";
+  return (asks ? `<div class="asks">${asks}</div>` : "") + thr;
+}
 function ibRow(i) {
   const title = i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer" title="Open in ${esc(i.source)}">${esc(i.title)} ↗</a>` : esc(i.title);
   const back = `<button class="icon" data-a="back" title="Back">‹</button>`;
@@ -8155,7 +8234,7 @@ function ibRow(i) {
     ? `<input class="ib-hours" type="number" min="0" step="0.25" inputmode="decimal" placeholder="hours" value="${esc(IB.hours)}" title="Hours spent — optional · ⏎ closes"><button class="btn primary" data-a="close" title="Close the ${where} task${i.source === "jira" ? " " + esc(i.ref) : ""}">✓ Close in ${where}</button>${back}`
     : mode === "more"
     ? `<button class="btn" data-a="wontdo" title="Mute this task — nothing about it lands here again. Nothing is written to ${i.source === "slack" ? "Slack" : where}.">Won't do</button>${back}`
-    : `<button class="btn primary" data-a="go" title="Open a terminal in this client that investigates and proposes — it answers no one">Dispatch</button>` +
+    : `<button class="btn primary" data-a="go" title="${i.followup_to ? "Type it into its thread's open terminal — no new terminal" : "Open a terminal in this client that investigates and proposes — it answers no one"}">Dispatch</button>` +
       `<button class="btn" data-a="done" title="${ibTracker(i) ? `Close the ${where} task — asks for your hours` : "Resolve it"}">✓ Done</button>` +
       `<button class="btn" data-a="later" title="Snooze">Later</button><button class="icon" data-a="more" title="More">⋯</button><button class="icon" data-a="dismiss" title="Dismiss">✕</button>`;
   const err = IB.err[i.id] ? `<div class="e">${esc(IB.err[i.id])}</div>` : "";
@@ -8163,7 +8242,7 @@ function ibRow(i) {
   const rankTip = i.priority ? `${PRI_LABEL[i.priority] || i.priority}${i.rank_why ? " — " + i.rank_why : ""}` : "Not ranked yet — arrived after the last cleanup";
   return `<div class="ib-row${i.urgent ? " urgent" : ""}${pri}" data-id="${esc(i.id)}" title="${esc(rankTip)}"><span class="src" title="${esc(i.source)} · ${esc(i.kind)}">${IB_ICON[i.source] || "•"}</span>` +
     `<div class="t">${title}</div><div class="m">${i.actor ? esc(i.actor) + " · " : ""}${esc(age(i.created_at))}</div>` +
-    `<div class="w" title="${esc(i.why || "")}">${esc(i.why || "")}</div><div class="acts">${acts}</div>${err}</div>`;
+    `<div class="w" title="${esc(i.why || "")}">${esc(i.why || "")}</div><div class="acts">${acts}</div>${ibThread(i)}${err}</div>`;
 }
 // ✓ Done: POST /inbox/:id/done. A tracker refusal (a Done screen that wants hours, a status that does
 // not exist) stays on the row; a close that went through but whose comment/time entry did not says so.
@@ -8203,10 +8282,14 @@ qs("#ib-list").onclick = async (e) => {
       .catch((err) => ibFail(id, err));
   }
   try {
-    if (a === "go") {
-      const { session } = await api("/inbox/" + id + "/dispatch", { method: "POST", body: "{}" });
+    if (a === "go" || a === "merge") {
+      const r = a === "go"
+        ? await api("/inbox/" + id + "/dispatch", { method: "POST", body: "{}" })
+        : await api("/inbox/" + id + "/merge", { method: "POST", body: JSON.stringify({ into: b.dataset.into }) });
+      if (r.followup) toast("Typed into its thread's terminal — no new terminal");
+      if (!r.session) return loadInbox();
       qs("#dlg-inbox").close();
-      await load(); select(session.id);
+      await load(); select(r.session.id);
       return;
     }
     if (a === "dismiss") await api("/inbox/" + id + "/dismiss", { method: "POST", body: "{}" });
@@ -9338,7 +9421,8 @@ const BUS_TOPICS = [
   "ask.created", "ask.answered",
   "artifact.created", "artifact.updated", "artifact.event",
   "service.changed", "service.alarm", "alert.raised", "playbook.run",
-  "inbox.updated", "settings.changed",
+  "inbox.updated", "settings.changed", "budget.warn",
+  "ws_trigger.updated", "ws_trigger.fired",
 ].join(",");
 function connectBus() {
   if (!TOKEN) return;
@@ -9349,7 +9433,7 @@ function connectBus() {
     if (!DeskScope.passes(e, LOCK)) return;
     if (e.topic === "alert.raised") return vcAlert(e);
     if (DW.topics.has(e.topic)) dwBus(e.topic);
-    if (e.topic === "ask.created" || e.topic === "ask.answered") loopsSoon();
+    if (e.topic === "ask.created" || e.topic === "ask.answered" || e.topic === "ws_trigger.updated" || e.topic === "ws_trigger.fired") loopsSoon();
     AskCard.onEvent(e);
     if (AskCard.TOPICS.includes(e.topic)) return;
     if (ArtifactView.TOPICS.includes(e.topic)) {
@@ -9493,6 +9577,9 @@ function connectBus() {
     if (e.topic === "run.started" || e.topic === "run.ended" || e.topic === "job.updated") onJobEvent(e);
     if (e.topic === "service.changed" || e.topic === "service.alarm") onServiceEvent(e);
     if (e.topic === "playbook.run") onPlaybookEvent(e);
+    // The budget ladder's warning is yours, not the workspace's terminals' (src/resources/ladder.ts);
+    // the full line (numbers, the next rung) is e.text and the daemon log.
+    if (e.topic === "budget.warn") toast(`◔ ${wsName(e.workspace_id) || "A workspace"} is over its share of this strained Mac — heaviest: ${(e.heaviest || []).slice(0, 2).map((h) => h.cmd).join(", ") || "nothing identifiable"}`);
   };
   ws.onclose = () => setTimeout(connectBus, 2500);
 }

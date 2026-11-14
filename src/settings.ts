@@ -341,6 +341,27 @@ defineSetting({
   help: "On: when the daily job check finds a failed job, a terminal opens right away to find why, fix it and re-run it — without asking. Off: the check tells you which jobs failed and asks first (Inbox → Stalled, Telegram, `mc recover`); your yes opens that terminal.",
   default: () => process.env.CHRONOS_JOB_CHECK_AUTO_RERUN === "1",
 });
+// Workspace triggers (src/ws-triggers.ts, `mc trigger`): the switch for all of them here, and the hours
+// they keep quiet. Each trigger also has its own on/off (⏰ Open loops → Triggers).
+defineSetting({
+  key: "triggers.enabled", group: "Autonomy", level: "both", type: "bool", env: "CHRONOS_TRIGGERS",
+  label: "Triggers open work",
+  help: "Triggers (`mc trigger`) watch for a PR event, a Slack message, an email, a command or a metric and open the right terminal when it happens. Off: no trigger here looks at anything or opens work; they keep their own on/off for when this is back on.",
+  default: () => process.env.CHRONOS_TRIGGERS !== "0",
+});
+defineSetting({
+  key: "triggers.quiet_hours", group: "Autonomy", level: "both", type: "string", env: "CHRONOS_TRIGGER_QUIET_HOURS",
+  label: "Trigger quiet hours",
+  help: "Local hours when triggers neither look nor open work, start-end (\"22-07\" wraps midnight). What happened meanwhile is seen once they end. Empty: no quiet hours.",
+  default: () => process.env.CHRONOS_TRIGGER_QUIET_HOURS ?? "",
+  check: (v) => {
+    const s = String(v ?? "").trim();
+    if (!s) return "";
+    const m = /^(\d{1,2})\s*-\s*(\d{1,2})$/.exec(s);
+    if (!m || Number(m[1]) > 23 || Number(m[2]) > 23 || Number(m[1]) === Number(m[2])) throw new Error('two different hours, start-end ("22-07"), or empty for none');
+    return `${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+  },
+});
 // First in his group, so it is the first thing the page shows under his name.
 defineSetting({
   key: "assistant.name", group: "Robert", level: "global", type: "string",
@@ -572,6 +593,12 @@ defineSetting({
   help: "A hand-off asking for your yes is checked first: the PR is open, mergeable and up to date, the repo's checks re-run, a second model reads it against what you asked, UI changes carry before/after shots, drafts are bound to their exact words. Failures go back to the terminal (two rounds). Off: items reach you unverified.",
   default: () => process.env.CHRONOS_VERIFIER !== "0",
 });
+defineSetting({
+  key: "verifier.data_swing_pct", group: "Safety", level: "both", type: "number", min: 1, max: 1000, env: "CHRONOS_VERIFIER_DATA_SWING_PCT",
+  label: "Data PRs: largest unexplained swing (%)",
+  help: "A PR that changes models, SQL or transforms in a data repo hands off before/after numbers per changed table. A row count or key aggregate that moves more than this must carry its explanation on the hand-off, or the verifier sends it back.",
+  default: () => Number(process.env.CHRONOS_VERIFIER_DATA_SWING_PCT) || 20,
+});
 
 // Alerts (src/stuck-alerts.ts): work that is stuck reaches the operator once, on the first channel
 // that answers — his live voice call, then his phone, then Telegram. Event-driven; silent when
@@ -652,6 +679,11 @@ defineSetting({
   key: "memory.dream", group: "Memory", level: "both", type: "bool", env: "CHRONOS_DREAM_HOURS",
   label: "Nightly memory pass", help: "Prune, compact and rank this workspace's memory at the dream hours.",
   default: () => CONFIG.dreamHours.length > 0,
+});
+defineSetting({
+  key: "retro.weekly", group: "Memory", level: "both", type: "bool",
+  label: "Weekly self-retro", help: "Once a week: friction counts and KPIs from this workspace's terminals, and rules for you to approve. Read-only; nothing reaches memory before your tap.",
+  default: () => true,
 });
 
 // Limits

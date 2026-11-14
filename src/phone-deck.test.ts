@@ -163,11 +163,20 @@ test("read out verdict first; a draft is read whole; no text, no yes", () => {
   assert.match(blind.ask, /no puedo aprobarlo/);
 });
 
-test("what Yes does today: merge → the Desk's line into its terminal; never more", async () => {
+// The approval door the Desk uses: which kind, the hand-off the card was drawn from — never a line of text.
+const approveCall = (sid: string, body: Record<string, unknown>) => ({ kind: "api", path: `/sessions/${sid}/approve`, body: { surface: "phone", outcome_at: outcome.at, ...body }, headers: { "x-mc-operator": "1" } });
+
+test("what Yes does today: merge → the daemon's approval door for its terminal, bound to that hand-off; never a typed line", async () => {
   const it = T.handoffItem(sess, outcome);
   await T.decide(it, "yes");
-  assert.deepEqual(plain(calls), [{ kind: "input", id: "s1", body: { text: T.OK_LINE.merge, enter: true } }]);
+  assert.deepEqual(plain(calls), [approveCall("s1", { kind: "merge" })], "the page names the kind and the hand-off — the PR and the commit are the daemon's to resolve");
   assert.equal(T.hidden(it.key), true, "the card leaves the deck");
+  // The card moved under him (a newer hand-off, a PR whose head changed): said so, and the card stays.
+  calls = []; mem.clear();
+  apiImpl = () => { throw Object.assign(new Error("moved"), { status: 409 }); };
+  await assert.rejects(T.decide(T.handoffItem(sess, outcome), "yes"), (e: any) => e.moved === true);
+  assert.equal(calls.length, 1, "one attempt, nothing resent");
+  assert.equal(T.hidden(T.handoffItem(sess, outcome).key), false, "not recorded as decided");
 });
 
 test("what Yes does today: a question is answered on its ask; Later dates it off the live list", async () => {
@@ -193,7 +202,7 @@ test("what Yes does today: a draft is NEVER sent — the yes is a line in the te
 test("the ledger, when the daemon has it: a bound yes is recorded with its target; an unbound merge goes to the terminal; 409 is never resent", async () => {
   const led = (over: any = {}) => ({ ...T.handoffItem(sess, outcome), key: "ledger:i1", src: "ledger", ledger: { item: "i1", request: "r1", target_hash: null, bound: false, action: "merge", ...over } });
   await T.decide(led(), "yes");
-  assert.deepEqual(plain(calls), [{ kind: "input", id: "s1", body: { text: T.OK_LINE.merge, enter: true } }], "unbound: today's way");
+  assert.deepEqual(plain(calls), [approveCall("s1", { kind: "merge", ledger: { request: "r1", item: "i1" } })], "unbound: the Desk's door, naming the item it came from");
   calls = [];
   await T.decide(led({ bound: true, target_hash: "sha:abc" }), "yes", null, null, { voice: true, words: "sí, dale" });
   assert.equal(calls.length, 1);
@@ -224,8 +233,8 @@ test("executed on the decision's answer: true → nothing typed into the termina
   // The executor did not run it: the terminal is told the Desk's way, so the agent still carries it out.
   calls = []; apiImpl = () => ({ ok: true, executed: false });
   await T.decide(led(), "yes");
-  assert.deepEqual(plain(calls).map((c: Call) => c.kind + ":" + (c.path || c.id)), ["api:/ledger/r1/decision", "input:s1"]);
-  assert.equal(calls[1].body.text, T.OK_LINE.merge);
+  assert.deepEqual(plain(calls).map((c: Call) => c.kind + ":" + (c.path || c.id)), ["api:/ledger/r1/decision", "api:/sessions/s1/approve"]);
+  assert.deepEqual(plain(calls[1].body), { kind: "merge", surface: "phone", outcome_at: outcome.at, ledger: { request: "r1", item: "i1" } });
   // No field (the daemon before the executor): recorded, nothing typed — exactly today's behaviour.
   calls = []; apiImpl = () => ({ ok: true });
   const rec = await T.decide(led(), "yes");
@@ -345,7 +354,8 @@ async function readMerge() {
   assert.ok(T.va().askEndedAt != null, "its question was played to the end");
   return it;
 }
-const inputs = () => calls.filter((c) => c.kind === "input");
+// What reached the terminal: a line typed into it, or an approval the daemon types for it (POST /sessions/:id/approve).
+const inputs = () => calls.filter((c) => c.kind === "input" || (c.kind === "api" && /^\/sessions\/[^/]+\/approve$/.test(c.path ?? "")));
 
 test("a strong yes is said back and held; it goes only when the window closes", async () => {
   await readMerge();
@@ -359,7 +369,7 @@ test("a strong yes is said back and held; it goes only when the window closes", 
   assert.equal(typeof hold.act?.fn, "function", "a Cancel on screen too");
   assert.ok(hold.act.ms >= 10_000, "it stays for the whole window, not a 5 s toast");
   await tick(80);
-  assert.deepEqual(plain(inputs()), [{ kind: "input", id: "s1", body: { text: T.OK_LINE.merge, enter: true } }], "only the approval is typed — no transcript");
+  assert.deepEqual(plain(inputs()), [approveCall("s1", { kind: "merge" })], "only the approval goes — no transcript");
   await tick(5);
   assert.match(said.join(" "), /Hecho\. Le dije que mergee\./, "one line after");
   assert.equal(toasts.at(-1)!.msg, "Hecho. Le dije que mergee.", "the Cancel is gone once it went");
@@ -505,7 +515,7 @@ test("a yes while the card is still being read is let go: no restart, no extra l
   const it = { ...T.handoffItem({ ...sess, id: "s1" }, outcome), key: "k-m3", live: true, sid: "s1" };
   const pending: Array<() => void> = [];
   const slow = { ...voice, state: () => (pending.length ? "speaking" : "listening"), say: (text: string) => { said.push(text); return new Promise<boolean>((r) => pending.push(() => r(true))); } };
-  T.setCtx({ lang: () => "es", api: async () => ({}), input: async (id: string, body: any) => { calls.push({ kind: "input", id, body }); }, sessions: () => [], wsName: () => "atlas", wsColor: () => "#000", voice: slow, toast: () => {}, onChange: () => {}, onOpen: () => {} });
+  T.setCtx({ lang: () => "es", api: async (p: string, o: any = {}) => { calls.push({ kind: "api", path: p, body: o.body ? JSON.parse(o.body) : undefined }); return {}; }, input: async (id: string, body: any) => { calls.push({ kind: "input", id, body }); }, sessions: () => [], wsName: () => "atlas", wsColor: () => "#000", voice: slow, toast: () => {}, onChange: () => {}, onOpen: () => {} });
   T.mount([it]);
   T.voiceAnswer("hola", later());          // reading starts; nothing has played yet
   const lines = said.length;

@@ -48,6 +48,19 @@ export type BusEvent = (
   // overseeing agent answering a card on the operator's behalf. Recorded like every other event, so
   // "who told the acme terminal to use the staging schema" has an answer.
   | { topic: "session.input"; session_id: string; by: string; text: string; workspace_id: string | null }
+  // The operator's yes on a terminal's hand-off card (card-approval-routes.ts): the PRs and commits it
+  // covered, or — `moved` — the heads that changed since it was put to him, so no merge was typed.
+  | {
+      topic: "session.approval";
+      session_id: string;
+      workspace_id: string | null;
+      result: "approved" | "moved";
+      approval_id?: string;
+      kind: string;
+      outcome_at: string | null;
+      prs: Array<{ url: string; sha?: string | null; was?: string; now?: string | null }>;
+      surface: string;
+    }
   // An agent left a Slack/Gmail draft (draft-notify.ts). Ids only: every bus event is written to the
   // activity table, and a draft's words are the operator's outgoing mail — the phone reads them from
   // GET /api/drafts instead.
@@ -203,6 +216,11 @@ export type BusEvent = (
   // or handed to a fresh terminal (`fired`, how = typed|resumed|opened).
   | { topic: "continuation.updated"; continuation_id: string; workspace_id: string; session_id: string | null }
   | { topic: "continuation.fired"; continuation_id: string; workspace_id: string; session_id: string; how: string; outcome: string; label: string }
+  // Workspace triggers (src/ws-triggers.ts, `mc trigger`): one was added, removed, switched on/off or
+  // paused itself (`updated` — never per routine look, every event here is an activity row), and one
+  // acted on an event (`fired`, outcome = opened|appended|filed|playbook|pending|skipped|failed).
+  | { topic: "ws_trigger.updated"; trigger_id: string; workspace_id: string; enabled?: boolean }
+  | { topic: "ws_trigger.fired"; trigger_id: string; workspace_id: string; outcome: string; session_id: string | null; label: string }
   /** The workspace inbox changed (src/inbox.ts): a row filed, dismissed, snoozed or dispatched. */
   | { topic: "inbox.updated"; workspace_id: string; item_id: string }
   | { topic: "launch.updated"; launch_id: string; workspace_id: string }
@@ -249,6 +267,8 @@ export type BusEvent = (
   // wakes on — and what one verifier pass concluded. Ids and a reason only, never the work itself.
   | { topic: "ledger.item_raised"; request_id: string; item_id: string; workspace_id: string | null; action: string; deliverable_id: string | null }
   | { topic: "ledger.verified"; request_id: string; workspace_id: string | null; ready: boolean; told: boolean; reason: string | null }
+  // The weekly self-retro (src/retro-pass.ts) gathered, applied, or a proposal was decided. Ids only.
+  | { topic: "retro.updated"; workspace_id: string; run_id?: string | null; proposal_id?: string | null }
   // The executor (src/executor.ts) carried out — or could not carry out — one yes. `say` is what the
   // voice layer speaks ("Mergeado." / "No pude: …"); the audit row is in executor_log.
   | { topic: "executor.result"; request_id: string; item_id: string; approval_id: string | null; workspace_id: string | null; action: string; status: string; code: string; say: { es: string; en: string } }

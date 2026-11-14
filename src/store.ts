@@ -37,6 +37,8 @@ export { notes } from "./store/notes.js";
 export { jots } from "./store/jots.js";
 export { continuations } from "./store/continuations.js";
 export type { Continuation, ContinuationKind, ContinuationStatus, ContinuationOutcome, ContinuationThen, NewContinuation } from "./store/continuations.js";
+export { wsTriggers } from "./store/ws-triggers.js";
+export type { WsTrigger, WsTriggerKind, WsTriggerAction, WsTriggerFire, WsFireOutcome, NewWsTrigger } from "./store/ws-triggers.js";
 export { proseSamples } from "./store/prose.js";
 export type { Jot, NewJot } from "./store/jots.js";
 export { launches } from "./store/launches.js";
@@ -68,6 +70,6 @@ export type { MemoryUsageRow, MemoryUsageKind, MemoryUsageAggregate, MemoryUsage
 export { dreamRuns, memoryClocks } from "./store/dream.js";
 export type { DreamRun, DreamStatus, DreamSource, MemoryClock } from "./store/dream.js";
 export { inbox, INBOX_SOURCES, INBOX_KINDS, INBOX_STATES, PRIORITIES } from "./store/inbox.js";
-export type { InboxItem, NewInboxItem, InboxSource, InboxKind, InboxState, Priority } from "./store/inbox.js";
+export type { InboxItem, InboxAsk, NewInboxItem, InboxSource, InboxKind, InboxState, Priority } from "./store/inbox.js";
 export { artifacts } from "./store/artifacts.js";
 export type { Artifact, ArtifactEvent, ArtifactEventKind, ArtifactStatus, NewArtifact } from "./store/artifacts.js";

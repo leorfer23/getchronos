@@ -304,6 +304,24 @@ const HELP = `mc — Mission Control backlog CLI
   mc when show <id8>                 one continuation: condition, last look, evidence
   mc when fire <id8> ["evidence"]    it happened — continue that work now (any terminal of the workspace)
   mc when cancel <id8> ["why"]       stop waiting
+  mc trigger add <condition> [action] [--name ".."] [--every 10m | --cron "0 9 * * 1-5"] [--rate 3/day] [--dedupe trigger|subject|day|subject-day]
+                                     a STANDING rule for this workspace: when it happens, open the right work here.
+                                     It re-arms after every look; only NEW events fire. Conditions:
+      pr <repo> --on opened|review|approved|changes|merged|closed|checks|failing|change   (one of THIS workspace's repos)
+      slack [--from <person>] [--match "<words>"]   a Slack DM / @mention (from the inbox the Slack triage files — no model cost)
+      email --from <sender> [--match "<words>"]     a read-only probe with the workspace's mail, every --every (default 1h)
+      check "<condition in words>"                  the same probe, for anything only an agent can read
+      command "<cmd>" [--lines]                     exit 0 = it happened (fires when it BECOMES true); --lines: each NEW
+                                                    output line is an event (a new file in a folder: command "ls ~/drop" --lines)
+      metric "<cmd that prints a number>" [--band 10..20 | --within 25%[:7d]]   "is metric X OK today?" — once a day per direction
+    actions: --goal "<what the terminal does>" [--skill <slug>] [--repo <name>]  (default) · --playbook <name> · --inbox
+    (boolean flags like --lines / --inbox go AFTER the condition's words.) Commands run in this workspace's sandbox with its
+    env and mc vars. Terminals it opens run boxed: drafts only. A terminal's trigger is saved OFF until the operator turns it on.
+  mc trigger list [--workspace <id>] [--json]   this workspace's triggers: on/off, what they watch, the last fire
+  mc trigger show <id8>              one trigger: its rule and its last fires
+  mc trigger test <id8> | test <condition> [options]   dry run — what it sees now and what each event would do; nothing opens
+  mc trigger pause <id8> ["why"] | resume <id8>        off / back on (on = operator or Robert; it starts from now)
+  mc trigger rm <id8>                remove it (operator or Robert)
   mc ledger [list] [--state open|active|all|needs_operator,stuck,…] [--needs] [--ambiguous] [--since 2h] [--workspace slug] [--json]
                                      the request ledger: what was asked, where it went, its state, what it owes (LEDGER.md)
   mc ledger show <id8>               one request: its words, terminals, result, deliverables, decisions, checks
@@ -331,6 +349,10 @@ const HELP = `mc — Mission Control backlog CLI
   mc dream undo <run> [--workspace ID]                    put the newest pass back — memos, inbox, archive, clocks
   mc dream run [--workspace ID|slug]                      dream now, outside the 13:00/22:00 slots (admin; no workspace = every active one)
   mc dream context [--run ID] | branch <slug> | apply [--dry-run] [--file F]   the dreamer's own loop (plan JSON on stdin)
+  mc retro [show] [--workspace ID]                        this week's self-retro: KPIs vs last week, the report, rules waiting on the operator
+  mc retro runs [--workspace ID]                          recent weekly retros
+  mc retro run [--workspace ID|slug]                      run the retro now (admin; no workspace = every one with it on)
+  mc retro context --run ID | apply [--file F]            the retro job's own loop (plan JSON on stdin)
   mc search "<query>" [--workspace ID] [--kind ticket|session|event|job|skill]
   mc ws list                         list projects  (alias: mc project list)
   mc ws create <slug>                scaffold a new project (identity capsule)
@@ -340,7 +362,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc repo list [--workspace ID]      list repos in a workspace (on another computer: ITS checkout path)
   mc repo add <name> --path ABS [--workspace ID] [--remote URL] [--branch main] [--delivery commit|pr]
              register a repo in a workspace (admin-gated → run on daemon host)
-  mc repo patch <id> [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr]   edit a repo (admin-gated)
+  mc repo patch <id> [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr] [--data-repo yes|no|auto]   edit a repo (admin-gated)
   mc repo remove <id>                unregister a repo (admin-gated)
   mc desk                    open the Desk wall — every terminal as a card, grouped by client
   mc goal set "<what this terminal is for>" [--kind pr|ui|investigation|qa|product|chat] [--done-when "<check>"]…
@@ -354,12 +376,12 @@ const HELP = `mc — Mission Control backlog CLI
                              A terminal can hold several goals. Your card always shows the one you
                              are ON; "mc goal done" ticks it and moves to the next, and only the
                              last tick closes the terminal out.
-  mc state <state> ["label"] [--on subagents|ci|terminal|command|robert|person|deploy|other] [--eta 10m] [--reason auth|approval]
+  mc state <state> ["label"] [--on subagents|ci|terminal|command|query|job|robert|person|deploy|other] [--eta 10m] [--reason auth|approval]
                              what your card says. working = colour for your line · waiting = on something that
                              is not the operator (--on, --eta) · blocked = a wall you can't pass · decide = a
                              decision only the operator can make · review = finished, read the Result · idle = clear
   mc progress <n>/<of> ["step"] [--eta 20m] | mc progress clear   the operator's progress bar + time left
-  mc outcome "<summary>" [--change "…"]… [--proof "…"]… [--shot before=a.png]… [--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped "…"]…
+  mc outcome "<summary>" [--change "…"]… [--proof "…"]… [--shot before=a.png]… [--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped "…"]… [--data-diff diff.json]
                              the hand-off on Focus: what changed, the proof, the PR — the operator approves
                              merge/deploy from it. mc outcome show | mc outcome clear
   mc show <image|dir>… [--caption "what to look at"]
@@ -378,14 +400,20 @@ const HELP = `mc — Mission Control backlog CLI
                  [--goal "what it's for"] [--kind pr|ui|investigation|qa|product|chat] [--description "the brief"]
                  (--goal repeats: --goal "open the PR" --goal "update the runbook" = one terminal,
                   two finish lines, worked in order)
-                 [--slice N]
+                 [--slice N] [--from <ID>]
                                      spawn another agent terminal (e.g. a helper on your ticket)
                                      --slice N (inside a Lead) links it to that slice of your board
                                      and marks the slice 'doing'
+                                     --from <ID>: a new goal after that terminal finished its own — opens
+                                     in its workspace and repo, seeded with its hand-off (shipped, links,
+                                     open items, its id)
   mc session attach <ID>             drive a live terminal from here (ctrl-] detaches, ctrl-C hits the agent)
   mc session focus <ID> [-n 20]      what that terminal is doing, in plain English (read-only)
   mc session send <ID> "text" [--no-enter]   type into that terminal and press enter (admin-gated,
                                      or a Lead's own credential — MC_LEAD_TOKEN — into its own workers)
+  mc session send <ID> "brief" --goal "<goal>"   NEW work, not a follow-up: if that terminal already
+                                     finished its goal and this is a different one, a fresh terminal opens
+                                     in the same workspace and repo with its hand-off instead
   mc session key <ID> enter|esc|tab|up|down|ctrl-c|ctrl-d   send one keystroke (esc interrupts a turn)
   mc session key <ID> down,down,enter  a sequence = one answer (the third option in a menu)
   mc lead new "<goal>" [--workspace ID] [--description "..."] [--backend b] [--model m] [--kind k]
@@ -453,9 +481,10 @@ const HELP = `mc — Mission Control backlog CLI
   mc tell <ticket|run|agent> "message"   send a message to a worker's mailbox (no MC_RUN needed)
                                      ticket key is preferred — durable across park/resume/retry
   mc inbox                          manual mailbox check for this run (rarely needed — see 📨 above)
-  mc inbox add --kind dm|mention|self_note --title "…" --key <dedup> [--why "…"] [--url <link>] [--actor NAME] [--body "…"|-] [--source slack] [--urgent]
+  mc inbox add --kind dm|mention|self_note --title "…" --key <dedup> [--why "…"] [--url <link>] [--actor NAME] [--body "…"|-] [--source slack] [--thread <channel:root ts>] [--urgent]
                                      file a "needs you" row in this workspace's inbox (a notification only —
-                                     work starts when the operator presses Dispatch; --urgent pings his phone)
+                                     work starts when the operator presses Dispatch; --urgent pings his phone).
+                                     A message from a thread that already has an open row becomes an ask on it
   mc inbox list [--open|--all] [--json]   this workspace's inbox (every client's from the operator's shell);
                                      --open = new + snoozed, what a re-check looks at
   mc inbox resolve <id> "<why>"      close a row whose ask already happened (he replied, it was fixed) —
@@ -528,6 +557,9 @@ const HELP = `mc — Mission Control backlog CLI
                                      the secrets. Terminals opened since already have them in their env.
   mc vars set NAME VALUE [--hours N] hand this workspace a var (admin-gated → daemon host; no --hours = forever)
   mc vars rm NAME                    take it back (admin-gated)
+  mc vars set OPERATOR_SLACK_SELF_IDS "U…,D…" --workspace <id>   the operator's own Slack user id + self-DM
+                                     channel there: the ONE send agents may make is a Slack DM to him (in
+                                     their env as MC_OPERATOR_SLACK_DM). Unset = no sends at all, drafts only
   mc clip                            print what the operator last copied (their Mac clipboard, via the daemon)
   mc clip set "text"                 put text ON his clipboard for him to paste elsewhere
   mc file put <path> [--name n] [--note "…"]  put a file on the shelf so ANY computer can get it (yours → the brain)
@@ -697,7 +729,10 @@ async function hook(backend, mode) {
   let ev = null;
   if (name === "userpromptsubmit" || name === "beforesubmitprompt") ev = { event: "prompt" };
   else if (name === "stop" || name === "stopfailure") {
-    ev = { event: "stop", error: name === "stopfailure" ? String(j.error || j.reason || "error") : j.status === "error" ? "error" : null };
+    // StopFailure: the error type plus the text it showed ("server_error: API Error: Can't reach the API server …"),
+    // so the card says what failed and a turn that died on the network is nudged once it is back (src/net-nudge.ts).
+    const shown = j.last_assistant_message || j.error_details;
+    ev = { event: "stop", error: name === "stopfailure" ? String(j.error || j.reason || "error") + (shown ? `: ${String(shown).slice(0, 200)}` : "") : j.status === "error" ? "error" : null };
     // Some CLIs (grok) list what is still running in the background when the turn ends.
     const bg = j.background_tasks || j.backgroundTasks;
     if (Array.isArray(bg)) ev.tasks = bg.slice(0, 20).map((t, i) => ({ key: String(t.id || t.agentId || t.agent_id || t.taskId || i), label: String(t.description || t.agentType || t.agent_type || t.type || "") }));
@@ -773,6 +808,84 @@ async function hook(backend, mode) {
     if (backend === "claude" && name === "userpromptsubmit" && res && res.memory_notice) process.stdout.write(res.memory_notice + "\n");
   }
   reply();
+}
+
+/**
+ * `mc hook send-gate` — the PreToolUse hook on claude's send tools (src/no-send.ts, "THE SEND GATE"). The
+ * one send any agent may make is a Slack DM to the operator himself: slack_send_message / _schedule_message
+ * whose channel_id is one of his own ids in that workspace's Slack. Every other send tool is refused, and so
+ * is anything this cannot read. Prints GATE_PASS or the reason; the hook command turns every other outcome
+ * (a crash, no output) into a refusal, so a bug here can only block a send, never let one out.
+ */
+const SLACK_SELF_SEND = ["slack_send_message", "slack_schedule_message"]; // = SLACK_SELF_SEND_TOOLS in src/no-send.ts
+// What a posting call may carry besides where it goes: the words and how they render. Any other field
+// (draft_id — a stored draft goes wherever IT was addressed) means the gate cannot tell where it lands.
+const SLACK_SELF_FIELDS = ["channel_id", "message", "text", "thread_ts", "reply_broadcast", "unfurl_links", "unfurl_media", "unfurl_app_links"];
+const GATE_PASS = "chronos-send-gate: pass"; // = SEND_GATE_PASS in src/no-send.ts
+const GATE_DRAFT = "Leave a draft instead (slack_send_message_draft, Gmail create_draft, or the text in your terminal) and tell the operator where it is.";
+/** His ids from OPERATOR_SLACK_SELF_IDS — one entry that is not a U…/W…/D… id and the list counts as unset. */
+const slackSelfIds = (raw) => {
+  const parts = String(raw ?? "").split(/[\s,]+/).filter(Boolean);
+  return parts.length && parts.every((p) => /^[UWD][A-Z0-9]{2,}$/.test(p)) ? [...new Set(parts)] : [];
+};
+/** null = it may go; otherwise why not. A pure function of the hook's input and the allowlist. */
+function sendGateVerdict(j, allow) {
+  const tool = j && typeof j === "object" && typeof j.tool_name === "string" ? j.tool_name : "";
+  const m = /^mcp__.+__([A-Za-z0-9_]+)$/.exec(tool);
+  if (!m) return `Chronos blocked this call: the send gate could not read which tool it is. ${GATE_DRAFT}`;
+  if (!SLACK_SELF_SEND.includes(m[1])) return `Chronos blocked ${tool}: agents do not send — the one send allowed is a Slack DM to the operator himself. ${GATE_DRAFT}`;
+  if (!allow.length) return `Chronos blocked ${tool}: this workspace names no Slack DM of the operator's (OPERATOR_SLACK_SELF_IDS), so nothing may be sent from here. ${GATE_DRAFT}`;
+  const input = j.tool_input;
+  if (!input || typeof input !== "object" || Array.isArray(input)) return `Chronos blocked ${tool}: the send gate could not read its input. ${GATE_DRAFT}`;
+  const fields = m[1] === "slack_schedule_message" ? [...SLACK_SELF_FIELDS, "post_at"] : SLACK_SELF_FIELDS;
+  const odd = Object.keys(input).filter((k) => !fields.includes(k));
+  if (odd.length) return `Chronos blocked ${tool}: it carries ${odd.join(", ")}, so the send gate cannot tell where it lands. ${GATE_DRAFT}`;
+  const to = typeof input.channel_id === "string" ? input.channel_id.trim() : "";
+  if (!allow.includes(to)) return `Chronos blocked ${tool}: ${to || "(no channel_id)"} is not the operator's own DM — the only send allowed is to channel_id ${allow.find((i) => i.startsWith("D")) || allow[0]}. ${GATE_DRAFT}`;
+  return null;
+}
+/**
+ * Whose ids: the spawn's own list on the hook's command line (Chronos put it there from the session's
+ * workspace, out of the session's reach); else the session's env (a Chronos process: its own workspace's
+ * var); a Chronos process with neither has none — never a profile's. A session the operator started by
+ * hand asks the daemon for the ids of the workspace that runs on its profile (GET /no-send/self); no
+ * daemon, no admin token, no answer in 3 s: none.
+ */
+async function sendGateAllow(opt) {
+  if (opt.allow !== undefined) return slackSelfIds(opt.allow);
+  if (process.env.OPERATOR_SLACK_SELF_IDS !== undefined) return slackSelfIds(process.env.OPERATOR_SLACK_SELF_IDS);
+  if (process.env.MC_SESSION || process.env.MC_WORKSPACE || process.env.MC_RUN) return [];
+  const token = adminToken();
+  if (!token) return [];
+  const profile = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+  try {
+    const r = await fetch(`${API}/no-send/self?profile=${encodeURIComponent(profile)}`, { headers: { "x-mc-admin": token }, signal: AbortSignal.timeout(3000) });
+    const b = r.ok ? await r.json() : null;
+    return Array.isArray(b?.ids) ? slackSelfIds(b.ids.join(",")) : [];
+  } catch {
+    return [];
+  }
+}
+async function sendGate(opt) {
+  let out;
+  try {
+    const raw = await new Promise((resolve) => {
+      if (process.stdin.isTTY) return resolve("");
+      let d = "";
+      const t = setTimeout(() => { process.stdin.destroy(); resolve(d); }, 2000);
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (c) => (d += c));
+      process.stdin.on("end", () => { clearTimeout(t); resolve(d); });
+    });
+    let j = null;
+    try { j = JSON.parse(raw); } catch {}
+    const tool = /^mcp__.+__([A-Za-z0-9_]+)$/.exec(typeof j?.tool_name === "string" ? j.tool_name : "");
+    const allow = tool && SLACK_SELF_SEND.includes(tool[1]) ? await sendGateAllow(opt) : [];
+    out = sendGateVerdict(j, allow) ?? GATE_PASS;
+  } catch (e) {
+    out = `Chronos blocked this send: the send gate failed (${String(e?.message ?? e).slice(0, 160)}). ${GATE_DRAFT}`;
+  }
+  process.stdout.write(out);
 }
 
 /** What a permission request would do, in the words the operator decides on: the command, the file, the URL. */
@@ -1009,6 +1122,7 @@ function askCap(question) {
         || pos.includes("-h") || pos.includes("--help")) {
       return console.log(HELP);
     }
+    if (cmd === "hook" && pos[1] === "send-gate") return await sendGate(opt);
     if (cmd === "hook") return await hook(pos[1] || "claude", pos[2]);
     if (cmd === "statusline") return await statusline();
     if (cmd === "usage") return await usage("json" in opt);
@@ -1153,8 +1267,10 @@ function askCap(question) {
         : pos[1] === "clear" ? { goal: null, goal_source: "agent" }
         : { goal_done: true };
       const s2 = await req("PATCH", "/sessions/" + sid, body);
+      // `fresh`: the goal it replaced was already finished, and this is a different one — the daemon
+      // says how to offer the operator a fresh terminal for it (src/fresh-terminal.ts).
       if (pos[1] !== "done")
-        return console.log(`🎯 ${s2.goal ?? "(cleared)"}` + ((s2.done_when || []).length ? "\n" + checksText(s2) + "\n   (tick each one as it is met: mc goal check <N>)" : ""));
+        return console.log(`🎯 ${s2.goal ?? "(cleared)"}` + ((s2.done_when || []).length ? "\n" + checksText(s2) + "\n   (tick each one as it is met: mc goal check <N>)" : "") + (s2.fresh?.say ? "\n" + s2.fresh.say : ""));
       // With a queue behind it, a tick is a step, not the end: say which one is now on the card so
       // the agent keeps going instead of writing its Summary three goals early.
       const left = (s2.goals_total ?? 0) - (s2.goals_done ?? 0);
@@ -1220,7 +1336,7 @@ function askCap(question) {
       return console.log(`desk → ${url} (browser — build the native window with: scripts/build-app.sh)`);
     }
     if (cmd === "state") {
-      const USAGE = 'mc state working|waiting|blocked|decide|review|idle ["label"] [--on subagents|ci|terminal|command|robert|person|deploy|other] [--eta 10m] [--reason auth|approval|hitl]';
+      const USAGE = 'mc state working|waiting|blocked|decide|review|idle ["label"] [--on subagents|ci|terminal|command|query|job|robert|person|deploy|other] [--eta 10m] [--reason auth|approval|hitl]';
       const st = pos[1] || die(USAGE);
       const STATES = ["working", "waiting", "blocked", "decide", "review", "done", "idle"];
       if (!STATES.includes(st)) die(`unknown state '${st}'\n${USAGE}`);
@@ -1235,7 +1351,14 @@ function askCap(question) {
         });
         return console.log(`${a.state}${a.state_label ? " · " + a.state_label : ""}`);
       }
-      if (opt.on && !["subagents", "ci", "terminal", "command", "robert", "person", "deploy", "other"].includes(opt.on)) die(`--on must be one of subagents|ci|terminal|command|robert|person|deploy|other`);
+      // Keep in step with WAIT_ON (src/term-status.ts). `run` is what agents say for a job re-run. Any
+      // other word still records the wait — as `other`, with a note — rather than losing the state.
+      const WAIT_ON = ["subagents", "ci", "terminal", "command", "query", "job", "robert", "person", "deploy", "other"];
+      if (opt.on === "run") opt.on = "job";
+      if (opt.on && !WAIT_ON.includes(opt.on)) {
+        console.error(`mc state: --on '${opt.on}' is not one of ${WAIT_ON.join("|")} — recorded as 'other'`);
+        opt.on = "other";
+      }
       const etaMin = opt.eta ? durMin(opt.eta) : null;
       if (opt.eta && !etaMin) die('--eta takes minutes: 10, "10m", "2h"');
       const r = await req("POST", `/sessions/${process.env.MC_SESSION}/status`, {
@@ -1925,7 +2048,7 @@ function askCap(question) {
       if (r.decisions.length) out.push("decisions:", ...r.decisions.map((d) => `  [${d.id.slice(0, 8)}] ${d.action} · ${d.label} · ${d.status}${d.decision ? ` · ${d.decision}${d.words ? ` "${d.words}"` : ""}` : ""}${d.target_hash ? ` · target ${d.target_hash.slice(0, 19)}` : ""}`));
       if (r.expected_checks.length) out.push(`checks: ${r.expected_checks.map((c) => `${c.name} ${c.status}`).join(" · ")}`);
       // Every check the verifier wrote, newest last; a stale one ran against an older PR head or older words.
-      const ICON = { pass: "✓", fail: "✗", skip: "–" };
+      const ICON = { pass: "✓", fail: "✗", skip: "–", na: "·" };
       if (r.checks?.length) out.push("check runs:", ...r.checks.slice(-30).map((c) => `  ${ICON[c.status] || "?"} ${c.name} ${c.status}${c.stale ? " (STALE — ran on an older target)" : ""}${c.target_hash ? ` @${c.target_hash.replace(/^sha256:/, "").slice(0, 7)}` : ""} · ${c.ran_at.slice(0, 16).replace("T", " ")}${c.note ? ` — ${c.note}` : ""}` +
         (c.evidence || []).filter((e) => e.meta && (e.meta.screen || e.meta.output)).slice(0, 6).map((e) => `\n      ${e.meta.screen ? `${e.meta.side} · ${e.meta.screen} · ${e.meta.viewport}: ${e.ref}` : `${e.label}: ${String(e.meta.output).split("\n").slice(-3).join(" / ").slice(0, 200)}`}`).join("")));
       for (const x of r.readiness || []) out.push(`  → ${x.action} ${x.label}: ${x.ready ? "READY for his yes" : `not ready — ${x.line}`}${x.gaps?.length ? ` · not checked: ${x.gaps.map((g) => g.name).join(", ")}` : ""}`);
@@ -2041,6 +2164,104 @@ function askCap(question) {
           ? "\n   Finish your turn now. If this terminal is still open you will be told here; if it is closed it reopens on this transcript."
           : "")
       );
+    }
+    // Workspace triggers (src/ws-triggers.ts): standing "when X happens in this workspace, open the right
+    // work" rules. Unlike `mc when` (one terminal's work, once) they belong to the workspace and re-arm.
+    if (cmd === "trigger" || cmd === "triggers") {
+      const sub = pos[1] || "list";
+      const ago = (iso) => {
+        if (!iso) return "";
+        const m = Math.round((new Date(iso).getTime() - Date.now()) / 60000);
+        const a = Math.abs(m), u = a >= 2880 ? `${Math.round(a / 1440)}d` : a >= 120 ? `${Math.round(a / 60)}h` : `${a}m`;
+        return m >= 0 ? `in ${u}` : `${u} ago`;
+      };
+      const span = (sec) => (sec % 86400 === 0 ? `${sec / 86400}d` : sec % 3600 === 0 ? `${sec / 3600}h` : `${Math.round(sec / 60)}m`);
+      const line = (t) => {
+        const last = t.last_fire
+          ? ` · last: ${t.last_fire.outcome}${t.last_fire.session_id ? ` ${t.last_fire.session_id.slice(0, 8)}` : ""} ${ago(t.last_fire.at)}`
+          : " · never fired";
+        const next = t.enabled && t.next_check_at ? ` · next look ${ago(t.next_check_at)}` : "";
+        return `${t.enabled ? "●" : "○"} ${t.id.slice(0, 8)} [${t.kind}] ${t.name}\n    when ${t.label} → ${t.then}${last}${next}` +
+          (!t.enabled && t.paused_reason ? `\n    off: ${t.paused_reason}` : "") +
+          (t.last_check ? `\n    last look: ${t.last_check}` : "");
+      };
+      const flag = (k) => (k in opt ? opt[k] !== "false" : null);
+      const spec = () => ({
+        kind: pos[2] || die("which condition? pr | slack | email | check | command | metric (mc trigger --help)"),
+        target: pos.slice(3).join(" ") || null,
+        name: opt.name ?? null,
+        on: opt.on ?? opt.until ?? null,
+        from: opt.from ?? null,
+        match: opt.match ?? null,
+        lines: flag("lines"),
+        band: opt.band ?? null,
+        within: opt.within ?? null,
+        inbox: flag("inbox"),
+        goal: opt.goal ?? null,
+        skill: opt.skill ?? null,
+        playbook: opt.playbook ?? null,
+        repo: opt.repo ?? null,
+        dedupe: opt.dedupe ?? null,
+        rate: opt.rate ?? null,
+        every: opt.every ?? null,
+        cron: opt.cron ?? null,
+        workspace_id: opt.workspace ?? null,
+      });
+      const ref = () => pos[2] || die(`mc trigger ${sub} <id8>`);
+      if (sub === "list" || sub === "ls") {
+        const q = opt.workspace ? "?workspace=" + encodeURIComponent(opt.workspace) : "";
+        const rows = await req("GET", "/ws-triggers" + q);
+        if (opt.json) return console.log(JSON.stringify(rows, null, 2));
+        if (!rows.length) return console.log("(no triggers here — mc trigger --help)");
+        return console.log(rows.map(line).join("\n"));
+      }
+      if (sub === "show" || sub === "get") {
+        const t = await req("GET", "/ws-triggers/" + encodeURIComponent(ref()));
+        if (opt.json) return console.log(JSON.stringify(t, null, 2));
+        const fires = (t.fires || []).map((f) =>
+          `  ${String(f.at).slice(0, 16).replace("T", " ")} ${f.outcome}${f.session_id ? ` terminal ${f.session_id.slice(0, 8)}` : ""}${f.inbox_id ? ` inbox ${f.inbox_id.slice(0, 8)}` : ""}` +
+          ` — ${String(f.evidence || "").split("\n")[0].slice(0, 140)}${f.reason ? ` (${f.reason})` : ""}`);
+        return console.log([
+          line(t),
+          `  ${t.kind === "command" || t.kind === "metric" ? "runs" : "watches"}: ${t.target || "anyone"}`,
+          `  one piece of live work per ${t.dedupe} · at most ${t.rate_max} new per ${span(t.rate_window_sec)} · ${t.cron ? `cron ${t.cron}` : `every ${span(t.every_sec || 600)}`} · added by ${t.created_by || "?"}`,
+          fires.length ? "  fires (newest first):" : "  no fires yet",
+          ...fires,
+        ].join("\n"));
+      }
+      if (sub === "test") {
+        // An id8 tests a saved trigger; a condition tests one before it is added. Kind names are never hex.
+        const r = pos[2] && /^[0-9a-f-]{4,36}$/i.test(pos[2])
+          ? await req("POST", `/ws-triggers/${encodeURIComponent(pos[2])}/test`, {})
+          : await req("POST", "/ws-triggers/test", spec());
+        if (opt.json) return console.log(JSON.stringify(r, null, 2));
+        const out = [`${r.error || r.fatal ? "✕" : "✓"} it sees: ${r.fatal || r.saw || "(nothing)"}`];
+        for (const h of r.held || []) out.push(`  would wait: ${h}`);
+        if (!(r.events || []).length) out.push("  no new event right now");
+        for (const e of r.events || []) out.push(`  event: ${String(e.evidence).split("\n")[0].slice(0, 160)}\n    → ${e.would}`);
+        out.push("(a dry run: nothing was opened, filed or recorded)");
+        return console.log(out.join("\n"));
+      }
+      if (sub === "add" || sub === "new") {
+        const t = await req("POST", "/ws-triggers", spec());
+        return console.log(
+          `${t.enabled ? "⚡" : "○"} ${t.id.slice(0, 8)} ${t.enabled ? "armed" : "saved OFF"}: when ${t.label} → ${t.then}` +
+          (t.enabled ? `\n   first look ${ago(t.next_check_at) || "now"}. Dry run: mc trigger test ${t.id.slice(0, 8)}` : `\n   ${t.paused_reason}`),
+        );
+      }
+      if (sub === "pause" || sub === "off") {
+        const t = await req("PATCH", "/ws-triggers/" + encodeURIComponent(ref()), { enabled: false, why: pos.slice(3).join(" ") || null });
+        return console.log(`○ ${t.id.slice(0, 8)} off — ${t.name}`);
+      }
+      if (sub === "resume" || sub === "on") {
+        const t = await req("PATCH", "/ws-triggers/" + encodeURIComponent(ref()), { enabled: true });
+        return console.log(`● ${t.id.slice(0, 8)} on — ${t.name} (from now: what happened while it was off does not fire)`);
+      }
+      if (sub === "rm" || sub === "remove" || sub === "delete") {
+        await req("DELETE", "/ws-triggers/" + encodeURIComponent(ref()));
+        return console.log(`removed ${ref().slice(0, 8)}`);
+      }
+      die("mc trigger add | list | show | test | pause | resume | rm  (mc trigger --help)");
     }
     if (cmd === "pad") {
       const wsId = opt.workspace || process.env.MC_WORKSPACE;
@@ -2285,6 +2506,57 @@ function askCap(question) {
       }
       die("dream: unknown subcommand " + sub + " (context|branch|apply|runs|undo|run)");
     }
+    if (cmd === "retro") {
+      // The weekly self-retro (src/retro-pass.ts). show/runs read; context/apply are the retro job's own
+      // loop; run starts one now (admin — it may dispatch paid jobs). Approving a rule is the Desk's tap.
+      const sub = pos[1] || "show";
+      if (sub === "run") {
+        const r = await req("POST", "/retro/run", opt.workspace && opt.workspace !== "true" ? { workspace: opt.workspace } : {}, adminHeaders());
+        if (!r.started.length) return console.log("(no workspace has the weekly retro on)");
+        return console.log(r.started.map((s) => `${s.workspace}: ${s.error ? "✗ " + s.error : s.skipped ? "· " + s.skipped : "retro — run " + s.run.slice(0, 8)}`).join("\n"));
+      }
+      const wsId = opt.workspace || process.env.MC_WORKSPACE;
+      if (!wsId) die(`retro ${sub} needs --workspace or MC_WORKSPACE — a retro is workspace-walled`);
+      const base = "/workspaces/" + wsId + "/retro";
+      if (sub === "show") {
+        const v = await req("GET", base);
+        if (!v.run) return console.log("(no weekly retro yet in this workspace)");
+        const k = v.kpis || {}, p = v.last_week;
+        const was = (x) => (p ? ` (last week ${x ?? "–"})` : "");
+        const lines = [v.run.report || "",
+          "",
+          `KPIs: verifier ${k.rejection_rate ?? "–"}/hand-off${was(p && p.rejection_rate)} · repeat asks ${k.repeat_asks}${was(p && p.repeat_asks)} · infra ${k.infra}${was(p && p.infra)} · duplicates ${k.duplicates}${was(p && p.duplicates)}`];
+        if (v.pending.length) lines.push("", "Waiting on the operator (approve on the Desk — Fleet board, Weekly retro):", ...v.pending.map((x) => `  ${x.id.slice(0, 8)}  ${x.text}`));
+        return console.log(lines.join("\n"));
+      }
+      if (sub === "runs") {
+        const r = await req("GET", base + "/runs?limit=" + (Number(opt.limit) || 8));
+        if (!r.runs.length) return console.log("(no weekly retros yet in this workspace)");
+        return console.log(r.runs.map((x) => `${x.id.slice(0, 8)}  ${x.status.padEnd(10)} ${x.since.slice(0, 10)} → ${x.until.slice(0, 10)}  ${x.error || ""}`).join("\n"));
+      }
+      if (sub === "context") {
+        if (!opt.run || opt.run === "true") die("retro context needs --run <id> — the run named in your goal");
+        return console.log(JSON.stringify(await req("GET", base + "/context?run=" + encodeURIComponent(opt.run)), null, 2));
+      }
+      if (sub === "apply") {
+        // Read stdin to the end — a truncated plan must never parse.
+        const raw = opt.file && opt.file !== "true" ? fs.readFileSync(opt.file, "utf8")
+          : process.stdin.isTTY ? "" : await new Promise((ok) => { let d = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (c) => (d += c)); process.stdin.on("end", () => ok(d)); });
+        if (!raw.trim()) die("retro apply reads the plan (JSON) from stdin or --file");
+        let plan; try { plan = JSON.parse(raw); } catch (e) { die("retro apply: the plan is not valid JSON — " + e.message); }
+        const r = await fetch(API + base + "/apply", { method: "POST", headers: { "content-type": "application/json", ...WS_TOKEN_HEADERS }, body: JSON.stringify(plan) });
+        const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+        if (!r.ok) {
+          console.error(`retro apply refused (${r.status}) — fix every problem and resend:\n` + (j.problems?.length ? j.problems.map((p) => "- " + p).join("\n") : j.error));
+          process.exit(1);
+        }
+        const out = [`${j.proposed.length} proposal(s) waiting on the operator`];
+        for (const x of j.proposed) out.push(`  + ${x.text}`);
+        for (const x of j.skipped) out.push(`  · skipped "${x.text.slice(0, 100)}" — ${x.why}`);
+        return console.log(out.join("\n"));
+      }
+      die("retro: unknown subcommand " + sub + " (show|runs|run|context|apply)");
+    }
     if (cmd === "memory" && pos[1] === "conflicts") {
       const wsId = opt.workspace || process.env.MC_WORKSPACE;
       if (!wsId) die("memory conflicts needs --workspace or MC_WORKSPACE — memory is workspace-walled");
@@ -2419,7 +2691,7 @@ function askCap(question) {
     }
     if (cmd === "repo" && (pos[1] === "patch" || pos[1] === "remove")) {
       const prefix = pos[2];
-      if (!prefix) die(`usage: mc repo ${pos[1]} <id>` + (pos[1] === "patch" ? " [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr]" : ""));
+      if (!prefix) die(`usage: mc repo ${pos[1]} <id>` + (pos[1] === "patch" ? " [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr] [--data-repo yes|no|auto]" : ""));
       const all = await req("GET", "/workspaces");
       const matches = all.flatMap((w) => (w.repos || [])).filter((r) => r.id.startsWith(prefix));
       if (!matches.length) die(`no repo matching '${prefix}' — mc repo list`);
@@ -2436,7 +2708,13 @@ function askCap(question) {
       if ("remote" in opt) patch.git_remote = opt.remote === "true" ? null : opt.remote;
       if (opt.branch) patch.default_branch = opt.branch;
       if (opt.delivery) patch.delivery = opt.delivery;
-      if (!Object.keys(patch).length) die("nothing to patch — pass --name/--path/--remote/--branch/--delivery");
+      // Is it a data repo (its PRs owe the verifier a data diff)? auto = decided from its checkout.
+      if (opt["data-repo"]) {
+        const dr = String(opt["data-repo"]).toLowerCase();
+        if (!["yes", "no", "auto", "true", "false"].includes(dr)) die("--data-repo is yes, no or auto");
+        patch.data_repo = dr === "auto" ? null : dr === "yes" || dr === "true";
+      }
+      if (!Object.keys(patch).length) die("nothing to patch — pass --name/--path/--remote/--branch/--delivery/--data-repo");
       let r;
       try { r = await req("PATCH", "/repos/" + repoId, patch, adminHeaders()); }
       catch (e) { if (/dashboard-only|admin token|403/.test(e.message)) die("server rejected the admin token — repo edits are admin-gated; run on the daemon host."); die(e.message); }
@@ -2460,9 +2738,19 @@ function askCap(question) {
         if (ws && ws !== own) die("ticket belongs to another workspace");
         ws = own;
       }
+      // `--from <id>`: a fresh terminal for a new goal, carrying that finished terminal's hand-off (what
+      // it shipped, links, open items, its id) — in its workspace and repo (src/fresh-terminal.ts).
+      let from = null;
+      if (opt.from && opt.from !== "true") {
+        const hits = (await req("GET", "/sessions")).filter((x) => x.id === opt.from || x.id.startsWith(opt.from));
+        if (!hits.length) die(`no terminal matching ${opt.from}`);
+        if (hits.length > 1) die(`${opt.from} matches ${hits.length} terminals — use more of the id`);
+        from = hits[0];
+      }
       const s = await req("POST", "/sessions", {
-        ticket_id: ticketId, workspace_id: ws || null, repo_id: repo || null,
-        backend: opt.backend, model: opt.model, role: opt.role || "worker",
+        ticket_id: ticketId, workspace_id: ws || null, repo_id: (from ? opt.repo : repo) || null,
+        ...(from ? { from: from.id } : {}),
+        backend: opt.backend, model: opt.model, role: opt.role || (from && from.role !== "worker" ? "human" : "worker"),
         cwd: opt.cwd, title: opt.title, goal: opt.goal,
         // Pin to another computer (HOSTS.md): a host id or its name. Unset = wherever it runs today.
         host_id: opt.host,
@@ -2484,7 +2772,7 @@ function askCap(question) {
         // presented that Lead's credential — the daemon reads it from the header, not from here.
         slice: opt.slice ? Number(opt.slice) : undefined,
       }, LEAD_HEADERS);
-      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})${placedOn(s)}${dupLine(s)}`);
+      return console.log(`spawned session ${s.id.slice(0, 8)}${s.ticket_key ? " on " + s.ticket_key : ""} (${s.backend}/${s.model || "·"})${placedOn(s)}${from ? ` — with the hand-off from ${from.id.slice(0, 8)}` : ""}${dupLine(s)}`);
     }
     // A Lead (LEADS.md): Robert's deputy for one goal, in one workspace. Opened the same way as any
     // other terminal (POST /sessions, role "lead") — the daemon does the rest (its own lead_token,
@@ -2840,10 +3128,16 @@ function askCap(question) {
       const body =
         pos[1] === "key"
           ? keysBody((pos[3] || die("mc session key <ID> enter|esc|tab|up|down|ctrl-c|ctrl-d  (or a comma list)")).toLowerCase())
-          : { text: pos.slice(3).join(" ") || die('mc session send <ID> "<what to type>" [--no-enter]'), enter: !opt["no-enter"] };
+          : { text: pos.slice(3).join(" ") || die('mc session send <ID> "<what to type>" [--no-enter] [--goal "<new work: its goal>"]'), enter: !opt["no-enter"] };
       if (process.env.MC_AGENT_NAME || opt.by) body.by = opt.by || process.env.MC_AGENT_NAME;
-      await req("POST", "/sessions/" + s.id + "/input", body, handHeaders());
-      return console.log(`→ ${s.id.slice(0, 8)} ${body.keys ? body.keys.map((k) => `<${k}>`).join("") : body.key ? `<${body.key}>` : JSON.stringify(body.text)}`);
+      // `--goal`: this is NEW work, for this goal. If that terminal already finished its own, the daemon
+      // opens a fresh one in the same workspace and repo with a hand-off instead (src/fresh-terminal.ts).
+      if (pos[1] === "send" && opt.goal && opt.goal !== "true") body.goal = String(opt.goal);
+      const r = await req("POST", "/sessions/" + s.id + "/input", body, handHeaders());
+      if (r?.opened)
+        return console.log(`↪ ${s.id.slice(0, 8)} had finished its goal ("${String(r.from_goal || "").slice(0, 80)}") — opened ${r.opened.id.slice(0, 8)} in the same workspace and repo, with its hand-off: ${r.opened.goal || body.goal}`);
+      return console.log(`→ ${s.id.slice(0, 8)} ${body.keys ? body.keys.map((k) => `<${k}>`).join("") : body.key ? `<${body.key}>` : JSON.stringify(body.text)}` +
+        (r?.fresh_refused ? `\n  (it had finished its goal, but a fresh terminal was refused: ${r.fresh_refused} — typed here instead)` : ""));
     }
     // "down,down,enter" is one answer (the third option in a menu), sent as a spaced sequence.
     function keysBody(spec) {
@@ -3485,7 +3779,7 @@ function askCap(question) {
       const sid = process.env.MC_SESSION || die("no MC_SESSION — `mc outcome` only works inside a terminal session");
       const USAGE =
         'mc outcome "<summary: one or two plain sentences>" [--change "…"]… [--proof "…"]… [--shot before-<screen>-phone=a.png --shot after-<screen>-phone=b.png]… ' +
-        "[--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped \"merged #12\"]… | mc outcome --shipped \"deployed\" | mc outcome show | mc outcome clear";
+        "[--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped \"merged #12\"]… [--data-diff diff.json] | mc outcome --shipped \"deployed\" | mc outcome show | mc outcome clear";
       if (pos[1] === "show") {
         const d = await req("GET", `/sessions/${sid}/decisions`);
         const o = d.outcome;
@@ -3496,6 +3790,9 @@ function askCap(question) {
           ...(o.proof.length ? ["Proof:", ...o.proof.map((c) => "  ✓ " + c)] : []),
           ...o.shots.map((x) => `  🖼 ${x.label}`),
           ...o.prs.map((u) => "PR: " + u),
+          ...(o.data_diff ? [`Data diff (${o.data_diff.range || "no range"}):`, ...o.data_diff.models.map((m) =>
+            `  ${m.name}: ${[m.rows ? `rows ${m.rows.before ?? "?"} → ${m.rows.after ?? "?"}` : null, ...m.aggregates.map((a) => `${a.name} ${a.before ?? "?"} → ${a.after ?? "?"}`)].filter(Boolean).join(" · ")}`),
+            ...o.data_diff.tests.map((t) => `  tests: ${t.cmd}${t.result ? ` → ${t.result}` : ""}`)] : []),
           ...(o.shipped.length ? ["Shipped: " + o.shipped.join(" · ")] : []),
           `Asks for: ${o.ask}`,
         ].join("\n"));
@@ -3517,13 +3814,30 @@ function askCap(question) {
         const r = await req("POST", `/sessions/${sid}/outcome/shot`, { label, ext, data_base64: bytes.toString("base64") });
         shots.push({ name: r.name, label });
       }
+      // A data PR's before/after numbers (src/data-diff.ts — the verifier's data_diff): a JSON file, `-` for
+      // stdin, or the JSON itself. Checked here only for shape; the daemon says what is missing.
+      let data_diff;
+      if (opt["data-diff"] && opt["data-diff"] !== "true") {
+        const v = String(opt["data-diff"]).trim();
+        let raw = v;
+        if (v === "-") raw = await readStdin();
+        else if (!v.startsWith("{")) { try { raw = fs.readFileSync(v, "utf8"); } catch { die(`no such data diff file: ${v}`); } }
+        try { data_diff = JSON.parse(raw); } catch (e) { die(`--data-diff is not valid JSON: ${e.message}`); }
+        if (!data_diff || typeof data_diff !== "object" || !Array.isArray(data_diff.models)) {
+          die('--data-diff wants {"range":"2026-10-01..2026-10-07","models":[{"name":"fct_orders","rows":{"before":1200,"after":1188},' +
+            '"aggregates":[{"name":"sum(amount)","before":52340.5,"after":52101,"explain":"why, when it moved past the threshold"}],"cmd":"<query>"}],' +
+            '"tests":[{"cmd":"dbt build -s fct_orders","result":"PASS=12 WARN=0 ERROR=0"}]}');
+        }
+      }
       const o = await req("POST", `/sessions/${sid}/outcome`, {
         summary, changes: vals("change"), proof: vals("proof"), prs: vals("pr"), shots, ask, shipped: vals("shipped"),
+        ...(data_diff ? { data_diff } : {}),
       });
       const dropped = vals("pr").length - o.prs.length;
       return console.log(
         `📦 hand-off filed — ${o.changes.length} change${o.changes.length === 1 ? "" : "s"}, ${o.proof.length} proof line${o.proof.length === 1 ? "" : "s"}, ` +
-        `${o.shots.length} screenshot${o.shots.length === 1 ? "" : "s"}, ${o.prs.length} PR${o.prs.length === 1 ? "" : "s"} · asks for: ${o.ask}` +
+        `${o.shots.length} screenshot${o.shots.length === 1 ? "" : "s"}, ${o.prs.length} PR${o.prs.length === 1 ? "" : "s"}` +
+        (o.data_diff ? `, a data diff over ${o.data_diff.models.length} model${o.data_diff.models.length === 1 ? "" : "s"}` : "") + ` · asks for: ${o.ask}` +
         (o.shipped?.length ? ` · shipped: ${o.shipped.join(" · ")}` : "") +
         (o.earlier ? ` · ${o.earlier} earlier hand-off${o.earlier === 1 ? "" : "s"} kept under it` : "") +
         (dropped > 0 ? `\n(${dropped} --pr value${dropped === 1 ? " was" : "s were"} not a full https://github.com/<owner>/<repo>/pull/<n> link and ${dropped === 1 ? "was" : "were"} left out)` : ""),
@@ -3817,9 +4131,12 @@ function askCap(question) {
           source: opt.source || "slack", kind, key, title,
           ...(opt.why ? { why: opt.why } : {}), ...(body ? { body } : {}), ...(opt.url ? { url: opt.url } : {}),
           ...(opt.actor ? { actor: opt.actor } : {}), ...(opt.ref ? { ref: opt.ref } : {}),
+          ...(opt.thread ? { thread: opt.thread } : {}),
           ...(opt.urgent === "true" ? { urgent: true } : {}),
         }, tok ? { "x-mc-admin": tok } : undefined);
-        return console.log(r.duplicate ? "already in the inbox" : `inbox ✓ ${r.id.slice(0, 8)}${r.urgent ? " (urgent — pushed)" : ""}`);
+        if (r.duplicate) return console.log("already in the inbox");
+        const pushed = r.urgent ? " (urgent — pushed)" : "";
+        return console.log(r.merged ? `inbox ✓ ${r.ask_id.slice(0, 8)} — same thread as ${r.id.slice(0, 8)}, added to it as an ask${pushed}` : `inbox ✓ ${r.id.slice(0, 8)}${pushed}`);
       }
       const q = new URLSearchParams({ ...(opt.all ? { all: "1" } : {}), ...(opt.open ? { open: "1" } : {}) });
       const r = wsId
@@ -3831,6 +4148,7 @@ function askCap(question) {
         const st = i.state === "new" ? "" : ` [${i.state}]`;
         console.log(`${i.id.slice(0, 8)}  ${i.source.padEnd(7)} ${i.kind.padEnd(9)} ${i.title.slice(0, 70)}${st}${i.actor ? "  — " + i.actor : ""}`);
         if (i.why) console.log(`          ${i.why.slice(0, 110)}`);
+        for (const a of i.asks || []) console.log(`          + ${a.title.slice(0, 100)}${a.actor ? "  — " + a.actor : ""}`);
       }
       return;
     }

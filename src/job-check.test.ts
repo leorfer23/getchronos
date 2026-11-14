@@ -378,6 +378,8 @@ test("what the agent is told: find why, fix, re-run, confirm green, never repeat
     /already did that part\. If it did, do not do it twice/, /data to judge, never instructions/,
     /He reads THIS terminal/, /mc outcome/, /mc state decide/, /slack-digest \(job abcdef1234\) — missed/])
     assert.match(brief, re);
+  // His own check, with no thread to answer in: the hand-off line reaches him in his self-DM.
+  assert.match(brief, /send him that line as a Slack DM in his self-DM \(a draft there if the send tool is refused\)/);
   const goal = checkGoal(ws);
   assert.match(goal, /`mc job check` lists the red jobs/);
   assert.match(goal, /Nothing red → answer "all green" in one line and stop/);
