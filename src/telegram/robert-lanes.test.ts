@@ -67,6 +67,39 @@ test("a persona spawn overrides the output style, excludes the profile's CLAUDE.
   fs.rmSync(profile, { recursive: true, force: true });
 });
 
+test("a project's Robert gets the send gate when his project names the operator's Slack ids — and only then", async () => {
+  const { slackSelfSendRules, SEND_GATE_FLAG_MATCHER } = await import("../no-send.js");
+  const spawnWith = async (ids: string | null) => {
+    const argvFile = tmp("argv-gate");
+    const envFile = tmp("env-gate");
+    const profile = fs.mkdtempSync(path.join(os.tmpdir(), "chronos-profile-"));
+    await withEnv({ CHRONOS_FAKE_ARGV: argvFile, CHRONOS_FAKE_ENV: envFile }, async () => {
+      // A project's Robert carries his project's env (robertSandbox → childEnv), vars included.
+      const baseEnv = { ...process.env, ...(ids ? { OPERATOR_SLACK_SELF_IDS: ids } : {}) };
+      const m = new WarmManager({ system: "persona", model: "sonnet", profileDir: profile, inheritProfileMcp: true, turnTimeoutMs: 5_000, maxTurns: 30, baseEnv });
+      try { assert.equal(await m.turn("hi"), "ok:1"); } finally { m.kill(); }
+    });
+    const argv = JSON.parse(fs.readFileSync(argvFile, "utf8")) as string[];
+    const env = JSON.parse(fs.readFileSync(envFile, "utf8"));
+    for (const f of [argvFile, envFile]) fs.rmSync(f, { force: true });
+    fs.rmSync(profile, { recursive: true, force: true });
+    return { argv, env, settings: JSON.parse(argv[argv.indexOf("--settings") + 1]), deny: argv[argv.indexOf("--disallowed-tools") + 1] };
+  };
+  const open = await spawnWith("U0SELF0001,D0SELF0001");
+  assert.equal(open.argv.filter((a) => a === "--settings").length, 1, "one --settings: the persona's and the gate's together");
+  assert.equal(open.settings.outputStyle, "default", "the persona isolation is still there");
+  assert.equal(open.settings.disableAllHooks, false);
+  assert.equal(open.settings.hooks.PreToolUse[0].matcher, SEND_GATE_FLAG_MATCHER);
+  assert.match(open.settings.hooks.PreToolUse[0].hooks[0].command, /hook send-gate --allow U0SELF0001,D0SELF0001/);
+  for (const r of slackSelfSendRules()) assert.ok(!open.deny.split(",").includes(r), r);
+  assert.ok(open.deny.split(",").includes("mcp__*__send_message"), "email stays denied");
+  assert.equal(open.env.MC_OPERATOR_SLACK_DM, "D0SELF0001");
+  const shut = await spawnWith(null);
+  assert.equal(shut.deny, claudeDenyArgs()[1], "no ids: every send tool stays denied");
+  assert.equal(shut.settings.hooks, undefined);
+  assert.equal(shut.env.MC_OPERATOR_SLACK_DM, null);
+});
+
 test("personaIsolationArgs is valid JSON for a profile path with spaces and quotes", () => {
   const args = personaIsolationArgs(`/tmp/odd "profile" dir`);
   const s = JSON.parse(args[1]);

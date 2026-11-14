@@ -686,9 +686,12 @@ mc prose add --channel slack "<text he actually sent>"            # he pasted hi
 mc prose add --channel jira --draft "<your draft>" "<what he sent instead>"   # he rewrote you: save the pair
 ```
 
-- **You never send — drafts only.** No agent sends an email, Slack message, comment, review or invite,
-  ever; the send tools are switched off. Write the draft (`slack_send_message_draft`, Gmail
+- **Drafts everywhere; the one send is a Slack DM to him.** No agent sends an email, comment, review,
+  invite or Slack message to anyone else, ever. Write the draft (`slack_send_message_draft`, Gmail
   `create_draft`, or the text here), then tell the operator where it is (`mc state review "draft ready: …"`).
+  The only send allowed: a Slack DM to the operator himself — `slack_send_message` with `channel_id` set to
+  `$MC_OPERATOR_SLACK_DM` (his own DM in this workspace's Slack). Empty or unset means no send at all:
+  draft. A gate refuses every other channel, person or thread.
 - **Short, human, to the point — always, every workspace.** Every Slack draft (DM or
   channel), comment and email: the point in the first line, 1–4 short lines, no preamble, recap, headers,
   bold labels or sign-off. Link the PR/doc instead of pasting it. Reads like a report? Cut it in half.

@@ -18,6 +18,8 @@ import { accelStatus } from "./accel/status.js";
 import { buildGraphify, queryGraphify, GraphifyError } from "./accel/graphify.js";
 import { postToBoard } from "./board.js";
 import { nameError as varNameError, expiryFromHours } from "./store/workspace-vars.js";
+import { childEnv } from "./child-env.js";
+import { operatorSlackIds, profileSelfSend } from "./no-send.js";
 import { answerAsk, notifyAskCreated, resolveAsk, waitForAskAnswer } from "./asks.js";
 import { holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { operatorAnswered, operatorKeys } from "./ask-in-terminal.js";
@@ -3677,6 +3679,15 @@ export function startServer() {
     if (!cur || cur.workspace_id !== req.params.id) return res.status(404).json({ error: "not found" });
     workspaceVars.remove(req.params.varId);
     res.json({ ok: true });
+  });
+
+  // The send gate's allowlist for a Claude session the operator started by hand (no Chronos env): the ids
+  // of the one workspace that runs on that profile (no-send.ts profileSelfSend), or none. His own admin
+  // token only — his shell's `mc hook send-gate` holds it; no agent and no Robert credential gets an answer.
+  api.get("/no-send/self", (req, res) => {
+    if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) return res.status(403).json({ error: "the operator's admin token only" });
+    const wss = workspaces.list().map((w) => ({ config_dir: w.config_dir, ids: operatorSlackIds(childEnv(w)) }));
+    res.json(profileSelfSend(String(req.query.profile ?? ""), wss));
   });
 
   // ───────────────────────────── Mission Control: skills (procedural memory) ─────────────────────

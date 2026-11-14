@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { INBOX_AUTO_RULES, inboxAutoDenyArgs, isInboxAuto } from "./inbox-guard.js";
-import { ensureCursorNoSend, mergeDeny, NO_SEND_RULE } from "./no-send.js";
+import { ensureCursorNoSend, installClaudeSendGate, mergeDeny, NO_SEND_RULE, openSlackSelfSend, operatorSlackIds } from "./no-send.js";
 import path from "node:path";
 import os from "node:os";
 import type { WebSocket } from "ws";
@@ -917,6 +917,11 @@ export async function openSession(
     if (isInboxAuto(row) && backend.name === "claude-code") mergeDeny(iArgs, inboxAutoDenyArgs()[1]);
     // What every request of this terminal re-sends before it has done anything (lean-prompt.ts).
     if (backend.name === "claude-code") iArgs.push(...leanClaudeArgs(configDir, opts.workspace_id ?? null));
+    // The one send (no-send.ts): a Slack DM to the operator, when this workspace names his ids — after
+    // leanClaudeArgs, so the gate's hook joins the one --settings. Never in a terminal that opened by itself.
+    const selfDm = backend.name === "claude-code" && !isInboxAuto(row)
+      ? openSlackSelfSend(iArgs, operatorSlackIds(childEnv(ws)), { profileDir: configDir })
+      : null;
     // Credential stores this client is trusted with (Globex ↔ ~/.config/gcloud, so `bq` can auth).
     // Empty for every workspace that hasn't been given one explicitly.
     const allowSecrets = workspaceSandboxAllow(ws?.sandbox_allow);
@@ -932,6 +937,8 @@ export async function openSession(
       ...backend.env({} as any, configDir),
       ...(backend.name === "claude-code" ? leanClaudeEnv(opts.workspace_id ?? null) : {}),
       ...mcEnv(opts.workspace_id, opts.repo_id, row.ticket_id),
+      // Where its one allowed send goes (no-send.ts): unset = the gate is shut, so it drafts.
+      ...(selfDm ? { MC_OPERATOR_SLACK_DM: selfDm } : {}),
       // Lets the agent talk about ITSELF: `mc state working|blocked|done`, `mc goal set "…"`.
       MC_SESSION: row.id,
       ...egressEnv(opts.workspace_id),
@@ -1793,14 +1800,26 @@ export function focusEvents(id: string): FocusEvent[] {
 function installCardHooks(backend: string, configDir: string, cursorDir?: string) {
   if (process.env.CHRONOS_TEST) return; // tests spawn with real profile dirs; never rewrite the operator's configs
   try {
-    if (backend === "claude-code") installClaudeHooks(configDir);
-    else if (backend === "cursor-agent") {
+    if (backend === "claude-code") {
+      installClaudeHooks(configDir);
+      installClaudeSendGate(configDir); // no-send.ts — the same gate his own sessions in this profile get
+    } else if (backend === "cursor-agent") {
       installCursorHooks(path.join(os.homedir(), ".cursor"));
       if (cursorDir) installCursorHooks(cursorDir);
     } else if (backend === "grok") installGrokHooks(grokHome());
   } catch (e: any) {
     console.warn(`[terminal] ${backend} card hooks install failed:`, e?.message ?? e);
   }
+}
+
+// The send gate into every Claude profile's settings.json (no-send.ts): a session the operator starts by
+// hand (`claude-<profile>`) carries no deny flag, so this hook is what holds it to the rule. Merged,
+// backed up once, idempotent; tests never touch the real profiles.
+function installAllSendGates() {
+  if (process.env.CHRONOS_TEST) return;
+  const dirs = new Set<string>(Object.values(CONFIG.profiles).filter(Boolean));
+  for (const w of workspaces.list()) if (w.config_dir) dirs.add(w.config_dir);
+  for (const d of dirs) installClaudeSendGate(d);
 }
 
 // Install the skill into every config dir we know about (workspaces + profile map + default).
@@ -1834,6 +1853,7 @@ export async function startTerminals() {
     console.warn("[terminal] rtk-rewrite install failed:", e?.message ?? e);
   }
   installAllMcSkills();
+  installAllSendGates();
   await syncAllAgentsMd();
   // Only this machine's: a terminal on another host did not die with this daemon (HOSTS.md,
   // "Reconnect and restarts") and is re-attached, never revived here. All of them, until hosts ship.

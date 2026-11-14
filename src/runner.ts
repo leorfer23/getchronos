@@ -85,7 +85,7 @@ import { worktreeSandboxDirs } from "./worktree-core.js";
 import { ensureRoot, mainCheckouts } from "./hostd/resolve.js";
 import { sharedReposBlock } from "./shared-repos.js";
 import { routeConfigDir, routeProfileForHost } from "./profile-route.js";
-import { ensureCursorNoSend } from "./no-send.js";
+import { ensureCursorNoSend, openSlackSelfSend, operatorSlackIds } from "./no-send.js";
 export { worktreeSandboxDirs };
 
 // Pure decision extracted for unit testing (the real check lives inline in the close handler, where
@@ -407,6 +407,11 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
   let child: ProcHandle;
   // cursor has no deny flag: its deny rules and send hook live in its config dir (no-send.ts).
   if (!remote && backend.name === "cursor-agent") ensureCursorNoSend(childEnv(ws).CURSOR_CONFIG_DIR);
+  // The one send (no-send.ts): a Slack DM to the operator, when this run's workspace names his ids. A run
+  // on another computer keeps every send denied (its host builds its own argv).
+  const selfDm = !remote && backend.name === "claude-code"
+    ? openSlackSelfSend(args, operatorSlackIds(childEnv(ws)), { profileDir, keep: job.disallowed_tools })
+    : null;
   if (!remote) {
     // Same credential grant a terminal in this workspace gets — a headless `bq` run needs gcloud just
     // as much as an interactive one, and the two diverging would be its own confusing bug.
@@ -428,7 +433,7 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
       // MC_RUN: lets `mc steps`/`mc step` (unlike ticket/workspace/repo, sessions have no run — so this
       // is set here, not inside mcEnv) address this run's progress checklist without the CLI knowing its
       // own run id any other way.
-      env: { ...childEnv(ws), ...backend.env(job, profileDir), ...mcEnv(job.workspace_id, null, job.ticket_id), MC_RUN: runId, ...egressEnv(job.workspace_id) },
+      env: { ...childEnv(ws), ...backend.env(job, profileDir), ...mcEnv(job.workspace_id, null, job.ticket_id), MC_RUN: runId, ...egressEnv(job.workspace_id), ...(selfDm ? { MC_OPERATOR_SLACK_DM: selfDm } : {}) },
       stdin: steerMode,
     });
   } else {
