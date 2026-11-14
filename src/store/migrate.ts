@@ -2549,6 +2549,52 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     },
   },
 
+  {
+    version: 163,
+    name: "code_reviews + repo_review_memory + repos.data_repo — the verifier's independent review and data diff",
+    // `code_reviews`: one row per (workspace, PR, head SHA) — the findings an engine that did not write
+    // the PR left on that head, so a head is read once (src/code-review.ts, src/request-verifier.ts).
+    // `repo_review_memory`: one row per (workspace, repo) — the rules learned from human review of that
+    // repo's past PRs, rewritten whole and capped (src/repo-memory.ts). Both are keyed by workspace: two
+    // workspaces with a repo of the same name or remote never share a row.
+    // `repos.data_repo`: the operator's word on whether a repo is a data repo (1 / 0); NULL = decided from
+    // its checkout (dbt_project.yml, an Airflow dags/ directory) — src/data-diff.ts.
+    // 161 and 162 belong to other branches in flight; deploy in order. Every statement is re-runnable.
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS code_reviews (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          repo_id TEXT,
+          pr_url TEXT NOT NULL,
+          head_sha TEXT NOT NULL,
+          diff_hash TEXT,
+          findings TEXT NOT NULL DEFAULT '[]',
+          engine TEXT NOT NULL,
+          run_id TEXT,
+          rules INTEGER NOT NULL DEFAULT 0,
+          carried_from TEXT,
+          created_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_code_reviews_head ON code_reviews(workspace_id, pr_url, head_sha);
+        CREATE INDEX IF NOT EXISTS idx_code_reviews_pr ON code_reviews(workspace_id, pr_url, created_at);
+
+        CREATE TABLE IF NOT EXISTS repo_review_memory (
+          workspace_id TEXT NOT NULL,
+          repo_id TEXT NOT NULL,
+          slug TEXT,
+          rules TEXT NOT NULL DEFAULT '[]',
+          comments_seen INTEGER NOT NULL DEFAULT 0,
+          seen_through TEXT,
+          checked_at TEXT,
+          refreshed_at TEXT,
+          PRIMARY KEY (workspace_id, repo_id)
+        );`);
+      const cols = db.prepare("SELECT name FROM pragma_table_info('repos')").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "data_repo")) db.exec("ALTER TABLE repos ADD COLUMN data_repo INTEGER");
+    },
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

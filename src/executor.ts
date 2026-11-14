@@ -220,7 +220,8 @@ export function checksGate(
   const failed = [...latest.values()].filter((c) => c.status === "fail").map((c) => c.name);
   if (failed.length) return { ok: false, code: "checks_failed", why: `failed: ${failed.join(", ")}` };
   const required = expectedChecks(kind ?? null, [...latest.values()]).filter((c) => c.required);
-  const missing = required.filter((c) => c.status !== "pass").map((c) => (c.status === "missing" ? c.name : `${c.name} (${c.status})`));
+  // `na` = the slot does not apply to this PR (a data diff in a repo that is not a data repo): not owed.
+  const missing = required.filter((c) => c.status !== "pass" && c.status !== "na").map((c) => (c.status === "missing" ? c.name : `${c.name} (${c.status})`));
   if (missing.length) return { ok: false, code: "checks_missing", why: `required and not passed: ${missing.join(", ")}` };
   if (!required.length && ![...latest.values()].some((c) => c.status === "pass")) return { ok: false, code: "checks_missing", why: "no check passed for this version" };
   return { ok: true, override: null };

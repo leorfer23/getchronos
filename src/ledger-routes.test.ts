@@ -167,7 +167,7 @@ test("one request in full: terminals, result, deliverables, decisions, checks an
   assert.equal(d.result[0].outcome.summary, "redirect loop gone");
   assert.deepEqual(d.deliverables.map((x: any) => x.kind).sort(), ["pr", "slack_draft"]);
   assert.deepEqual(d.checks, []);
-  assert.deepEqual(d.expected_checks.map((c: any) => [c.name, c.status]), [["tests", "missing"], ["regression", "missing"], ["goal_test", "missing"], ["pr_ready", "missing"], ["matches_request", "missing"]]);
+  assert.deepEqual(d.expected_checks.map((c: any) => [c.name, c.status]), [["tests", "missing"], ["regression", "missing"], ["goal_test", "missing"], ["data_diff", "missing"], ["code_review", "missing"], ["pr_ready", "missing"], ["matches_request", "missing"]]);
   assert.equal(d.terminals[0].role, "opened");
 });
 

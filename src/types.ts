@@ -1,3 +1,5 @@
+import type { DataDiff } from "./data-diff.js";
+
 export type TriggerType = "cron" | "manual" | "webhook" | "once";
 
 // Event-driven triggers: a reusable object that fires a job when a matching event arrives.
@@ -199,6 +201,9 @@ export interface Repo {
   review_min_difficulty: number | null;
   post_merge_cmd: string | null; // shell command run in repo root after the ticket's PR merges to main; e.g. "npm run build"
   ideas_enabled: number; // 1 = AI idea feeders may attribute ideas to this repo (workspace feeders still gate)
+  // The operator's word on whether it is a data repo (1/0): its PRs that change models, SQL or transforms
+  // owe the verifier a data diff. NULL = decided from the checkout (dbt_project.yml, an Airflow dags/ dir).
+  data_repo?: number | null;
   created_at: string;
 }
 
@@ -362,6 +367,7 @@ export interface NewRepo {
   review_min_difficulty?: number | null;
   post_merge_cmd?: string | null;
   ideas_enabled?: boolean;
+  data_repo?: boolean | null;
 }
 
 export type TicketStatus =
@@ -740,6 +746,8 @@ export interface Outcome {
   ask: "merge" | "deploy" | "merge+deploy" | "review" | "none";
   /** What it already did on its own, under the permission it had (`ship`): merged, deployed. */
   shipped: string[];
+  /** A data PR's before/after numbers (`mc outcome --data-diff`), judged by the verifier's data_diff check. */
+  data_diff?: DataDiff | null;
   at: string;
 }
 /** Images a terminal put in front of the operator mid-work (`mc show`): one call, one caption. */

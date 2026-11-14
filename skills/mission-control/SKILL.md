@@ -245,6 +245,17 @@ mc outcome clear       # drop it (a new `mc outcome` replaces the last one anywa
   head; a second model reads the diff against what he asked; backend work needs a test in the diff. A fail
   is typed back into you as `[verifier] Not ready…` — fix it, push, and file `mc outcome` again (two rounds,
   then it goes to him as not ready).
+- **Code review findings** (`code_review: R1 … R2 …`): another engine read your full diff against the repo's
+  review memory. Fix each (push) or justify it, and put one line per finding on the new hand-off:
+  `--proof "R1 fixed: <how>"` · `--proof "R2 justified: <why>"`. A pushed head is read again; a "fixed"
+  with no new push is not a fix.
+- **Data PRs** — models, SQL or transforms in a dbt or Airflow repo: before the hand-off, measure each
+  changed model or table before vs after with this workspace's own warehouse tools and vars (`mc vars`):
+  row counts and 1–3 key aggregates over a bounded range, the query behind them, and in dbt
+  `dbt build -s <models>` (compile is not a test). File it with `--data-diff diff.json`:
+  `{"range":"2026-10-01..2026-10-07","models":[{"name":"fct_orders","rows":{"before":1200,"after":1188},"aggregates":[{"name":"sum(amount)","before":52340,"after":52101}],"cmd":"<query>"}],"tests":[{"cmd":"dbt build -s fct_orders","result":"PASS=12 ERROR=0"}]}`.
+  A number that moves past the workspace's threshold (±20% unless set otherwise) needs `"explain"` on its
+  entry — why it is right — or the hand-off goes back to you.
 - **`--ask`**: what you need from the operator — `merge`, `deploy`, `merge+deploy`, `review` (just read
   it) or `none`. The card turns it into buttons; a click types `Approved: …` into you. Then do exactly
   that, and run `mc outcome --shipped "<what you shipped>"`.

@@ -217,7 +217,7 @@ test("draftHash: stable over recipient spelling, changes with a word, channel or
 
 test("every work type is described, and its evidence slots read as missing until checks exist", () => {
   for (const k of GOAL_KINDS) assert.ok(WORK[k]?.label && WORK[k].done, k);
-  assert.deepEqual(WORK.ui.evidence.filter((e) => e.required).map((e) => e.name), ["tests", "regression", "shots", "walkthrough", "pr_ready", "matches_request"]);
+  assert.deepEqual(WORK.ui.evidence.filter((e) => e.required).map((e) => e.name), ["tests", "regression", "shots", "walkthrough", "data_diff", "code_review", "pr_ready", "matches_request"]);
   assert.deepEqual(WORK.investigation.actions, ["send", "review"]);
   assert.ok(WORK.product.deliverables.includes("deploy") && WORK.product.deliverables.includes("email_draft"));
   const slots = expectedChecks("pr", [

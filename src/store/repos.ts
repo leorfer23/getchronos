@@ -25,8 +25,8 @@ export const repos = {
     const id = randomUUID();
     db.transaction(() => {
       db.prepare(
-        `INSERT INTO repos (id,workspace_id,parent_id,name,path,git_remote,default_branch,delivery,done_criteria,verify_cmd,gate_cmds,risk_paths,human_gate,review_min_difficulty,post_merge_cmd,ideas_enabled,created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        `INSERT INTO repos (id,workspace_id,parent_id,name,path,git_remote,default_branch,delivery,done_criteria,verify_cmd,gate_cmds,risk_paths,human_gate,review_min_difficulty,post_merge_cmd,ideas_enabled,data_repo,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       ).run(
         id,
         r.workspace_id,
@@ -44,6 +44,7 @@ export const repos = {
         r.review_min_difficulty ?? null, // null = inherit the workspace's threshold
         r.post_merge_cmd ?? null,
         r.ideas_enabled === false ? 0 : 1,
+        r.data_repo === true ? 1 : r.data_repo === false ? 0 : null, // null = decided from the checkout (data-diff.ts)
         now(),
       );
       syncLocalCheckout(id, r.path);
@@ -66,6 +67,7 @@ export const repos = {
       review_min_difficulty?: number | null;
       post_merge_cmd?: string | null;
       ideas_enabled?: boolean | number;
+      data_repo?: boolean | number | null;
     },
   ): Repo | undefined {
     const sets: string[] = [];
@@ -78,6 +80,10 @@ export const repos = {
     if (p.ideas_enabled !== undefined) {
       sets.push("ideas_enabled=@ideas_enabled");
       vals.ideas_enabled = p.ideas_enabled === false || p.ideas_enabled === 0 ? 0 : 1;
+    }
+    if (p.data_repo !== undefined) {
+      sets.push("data_repo=@data_repo");
+      vals.data_repo = p.data_repo === null ? null : p.data_repo === true || p.data_repo === 1 ? 1 : 0;
     }
     if (!sets.length) return this.get(id);
     db.transaction(() => {

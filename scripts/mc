@@ -340,7 +340,7 @@ const HELP = `mc — Mission Control backlog CLI
   mc repo list [--workspace ID]      list repos in a workspace (on another computer: ITS checkout path)
   mc repo add <name> --path ABS [--workspace ID] [--remote URL] [--branch main] [--delivery commit|pr]
              register a repo in a workspace (admin-gated → run on daemon host)
-  mc repo patch <id> [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr]   edit a repo (admin-gated)
+  mc repo patch <id> [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr] [--data-repo yes|no|auto]   edit a repo (admin-gated)
   mc repo remove <id>                unregister a repo (admin-gated)
   mc desk                    open the Desk wall — every terminal as a card, grouped by client
   mc goal set "<what this terminal is for>" [--kind pr|ui|investigation|qa|product|chat] [--done-when "<check>"]…
@@ -359,7 +359,7 @@ const HELP = `mc — Mission Control backlog CLI
                              is not the operator (--on, --eta) · blocked = a wall you can't pass · decide = a
                              decision only the operator can make · review = finished, read the Result · idle = clear
   mc progress <n>/<of> ["step"] [--eta 20m] | mc progress clear   the operator's progress bar + time left
-  mc outcome "<summary>" [--change "…"]… [--proof "…"]… [--shot before=a.png]… [--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped "…"]…
+  mc outcome "<summary>" [--change "…"]… [--proof "…"]… [--shot before=a.png]… [--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped "…"]… [--data-diff diff.json]
                              the hand-off on Focus: what changed, the proof, the PR — the operator approves
                              merge/deploy from it. mc outcome show | mc outcome clear
   mc show <image|dir>… [--caption "what to look at"]
@@ -2399,7 +2399,7 @@ function askCap(question) {
     }
     if (cmd === "repo" && (pos[1] === "patch" || pos[1] === "remove")) {
       const prefix = pos[2];
-      if (!prefix) die(`usage: mc repo ${pos[1]} <id>` + (pos[1] === "patch" ? " [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr]" : ""));
+      if (!prefix) die(`usage: mc repo ${pos[1]} <id>` + (pos[1] === "patch" ? " [--name N] [--path ABS] [--remote URL] [--branch B] [--delivery commit|pr] [--data-repo yes|no|auto]" : ""));
       const all = await req("GET", "/workspaces");
       const matches = all.flatMap((w) => (w.repos || [])).filter((r) => r.id.startsWith(prefix));
       if (!matches.length) die(`no repo matching '${prefix}' — mc repo list`);
@@ -2416,7 +2416,13 @@ function askCap(question) {
       if ("remote" in opt) patch.git_remote = opt.remote === "true" ? null : opt.remote;
       if (opt.branch) patch.default_branch = opt.branch;
       if (opt.delivery) patch.delivery = opt.delivery;
-      if (!Object.keys(patch).length) die("nothing to patch — pass --name/--path/--remote/--branch/--delivery");
+      // Is it a data repo (its PRs owe the verifier a data diff)? auto = decided from its checkout.
+      if (opt["data-repo"]) {
+        const dr = String(opt["data-repo"]).toLowerCase();
+        if (!["yes", "no", "auto", "true", "false"].includes(dr)) die("--data-repo is yes, no or auto");
+        patch.data_repo = dr === "auto" ? null : dr === "yes" || dr === "true";
+      }
+      if (!Object.keys(patch).length) die("nothing to patch — pass --name/--path/--remote/--branch/--delivery/--data-repo");
       let r;
       try { r = await req("PATCH", "/repos/" + repoId, patch, adminHeaders()); }
       catch (e) { if (/dashboard-only|admin token|403/.test(e.message)) die("server rejected the admin token — repo edits are admin-gated; run on the daemon host."); die(e.message); }
@@ -3465,7 +3471,7 @@ function askCap(question) {
       const sid = process.env.MC_SESSION || die("no MC_SESSION — `mc outcome` only works inside a terminal session");
       const USAGE =
         'mc outcome "<summary: one or two plain sentences>" [--change "…"]… [--proof "…"]… [--shot before-<screen>-phone=a.png --shot after-<screen>-phone=b.png]… ' +
-        "[--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped \"merged #12\"]… | mc outcome --shipped \"deployed\" | mc outcome show | mc outcome clear";
+        "[--pr <url>]… [--ask merge|deploy|merge+deploy|review|none] [--shipped \"merged #12\"]… [--data-diff diff.json] | mc outcome --shipped \"deployed\" | mc outcome show | mc outcome clear";
       if (pos[1] === "show") {
         const d = await req("GET", `/sessions/${sid}/decisions`);
         const o = d.outcome;
@@ -3476,6 +3482,9 @@ function askCap(question) {
           ...(o.proof.length ? ["Proof:", ...o.proof.map((c) => "  ✓ " + c)] : []),
           ...o.shots.map((x) => `  🖼 ${x.label}`),
           ...o.prs.map((u) => "PR: " + u),
+          ...(o.data_diff ? [`Data diff (${o.data_diff.range || "no range"}):`, ...o.data_diff.models.map((m) =>
+            `  ${m.name}: ${[m.rows ? `rows ${m.rows.before ?? "?"} → ${m.rows.after ?? "?"}` : null, ...m.aggregates.map((a) => `${a.name} ${a.before ?? "?"} → ${a.after ?? "?"}`)].filter(Boolean).join(" · ")}`),
+            ...o.data_diff.tests.map((t) => `  tests: ${t.cmd}${t.result ? ` → ${t.result}` : ""}`)] : []),
           ...(o.shipped.length ? ["Shipped: " + o.shipped.join(" · ")] : []),
           `Asks for: ${o.ask}`,
         ].join("\n"));
@@ -3497,13 +3506,30 @@ function askCap(question) {
         const r = await req("POST", `/sessions/${sid}/outcome/shot`, { label, ext, data_base64: bytes.toString("base64") });
         shots.push({ name: r.name, label });
       }
+      // A data PR's before/after numbers (src/data-diff.ts — the verifier's data_diff): a JSON file, `-` for
+      // stdin, or the JSON itself. Checked here only for shape; the daemon says what is missing.
+      let data_diff;
+      if (opt["data-diff"] && opt["data-diff"] !== "true") {
+        const v = String(opt["data-diff"]).trim();
+        let raw = v;
+        if (v === "-") raw = await readStdin();
+        else if (!v.startsWith("{")) { try { raw = fs.readFileSync(v, "utf8"); } catch { die(`no such data diff file: ${v}`); } }
+        try { data_diff = JSON.parse(raw); } catch (e) { die(`--data-diff is not valid JSON: ${e.message}`); }
+        if (!data_diff || typeof data_diff !== "object" || !Array.isArray(data_diff.models)) {
+          die('--data-diff wants {"range":"2026-10-01..2026-10-07","models":[{"name":"fct_orders","rows":{"before":1200,"after":1188},' +
+            '"aggregates":[{"name":"sum(amount)","before":52340.5,"after":52101,"explain":"why, when it moved past the threshold"}],"cmd":"<query>"}],' +
+            '"tests":[{"cmd":"dbt build -s fct_orders","result":"PASS=12 WARN=0 ERROR=0"}]}');
+        }
+      }
       const o = await req("POST", `/sessions/${sid}/outcome`, {
         summary, changes: vals("change"), proof: vals("proof"), prs: vals("pr"), shots, ask, shipped: vals("shipped"),
+        ...(data_diff ? { data_diff } : {}),
       });
       const dropped = vals("pr").length - o.prs.length;
       return console.log(
         `📦 hand-off filed — ${o.changes.length} change${o.changes.length === 1 ? "" : "s"}, ${o.proof.length} proof line${o.proof.length === 1 ? "" : "s"}, ` +
-        `${o.shots.length} screenshot${o.shots.length === 1 ? "" : "s"}, ${o.prs.length} PR${o.prs.length === 1 ? "" : "s"} · asks for: ${o.ask}` +
+        `${o.shots.length} screenshot${o.shots.length === 1 ? "" : "s"}, ${o.prs.length} PR${o.prs.length === 1 ? "" : "s"}` +
+        (o.data_diff ? `, a data diff over ${o.data_diff.models.length} model${o.data_diff.models.length === 1 ? "" : "s"}` : "") + ` · asks for: ${o.ask}` +
         (o.shipped?.length ? ` · shipped: ${o.shipped.join(" · ")}` : "") +
         (o.earlier ? ` · ${o.earlier} earlier hand-off${o.earlier === 1 ? "" : "s"} kept under it` : "") +
         (dropped > 0 ? `\n(${dropped} --pr value${dropped === 1 ? " was" : "s were"} not a full https://github.com/<owner>/<repo>/pull/<n> link and ${dropped === 1 ? "was" : "were"} left out)` : ""),

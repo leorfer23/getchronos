@@ -396,6 +396,16 @@ export const requests = {
   setHold(id: string, until: string | null): boolean {
     return db.prepare("UPDATE request_decisions SET status = 'held', hold_until = ?, updated_at = ? WHERE id = ? AND status IN ('open','held')").run(until, now(), id).changes > 0;
   },
+  /** His "change" answers on PRs in one workspace, newest first: his words, and the PR they were about. Never another workspace's. */
+  changeNotes(workspaceId: string, limit = 30): Array<{ words: string; ref: string; decided_at: string }> {
+    return db.prepare(
+      `SELECT d.words, dl.ref, d.decided_at FROM request_decisions d
+         JOIN request_deliverables dl ON dl.id = d.deliverable_id
+         JOIN requests r ON r.id = d.request_id
+       WHERE r.workspace_id = ? AND d.decision = 'change' AND dl.kind = 'pr' AND d.words IS NOT NULL
+       ORDER BY d.decided_at DESC LIMIT ?`,
+    ).all(workspaceId, limit) as Array<{ words: string; ref: string; decided_at: string }>;
+  },
   /** Held items whose date has come. */
   holdsDue(nowIso: string): DecisionItem[] {
     return db.prepare("SELECT * FROM request_decisions WHERE status = 'held' AND hold_until IS NOT NULL AND hold_until <= ?").all(nowIso) as DecisionItem[];
