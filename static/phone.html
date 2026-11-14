@@ -1094,7 +1094,7 @@ function rememberCli(wsId, backend, model, cwd) {
   if (backend) store.set("desk-model:" + backend, model || "");
   if (wsId && cwd !== undefined) store.set("desk-cwd:" + wsId, cwd || "");
 }
-function newTermSheet(wsId) {
+function newTermSheet(wsId, prefill) {
   const w0 = S.workspaces.find((w) => w.id === wsId) || S.workspaces[0];
   const b = sheet(`<h3>New terminal</h3>
     <div class="field"><label>Project</label>${wsChips(w0?.id)}</div>
@@ -1141,24 +1141,36 @@ function newTermSheet(wsId) {
       ...(focus ? { focus_only: true } : {}),
     };
   };
-  qs("#f-blank", b).onclick = () => spawn(bodyFrom({ blank: true }));
-  qs("#f-open", b).onclick = () => spawn(bodyFrom());
+  // What was typed, snapshotted before the sheet closes: a refused open reopens it with all of it.
+  if (prefill) { qs("#f-goal", b).value = prefill.goal; qs("#f-desc", b).value = prefill.desc; qs("#f-kind", b).value = prefill.kind; }
+  // closeSheet() queued a history.back(); reopening before its popstate lands would let it close the new sheet.
+  const keep = () => {
+    const v = { goal: qs("#f-goal", b).value, desc: qs("#f-desc", b).value, kind: qs("#f-kind", b).value };
+    const reopen = () => newTermSheet(cur, v);
+    return () => (USE_HISTORY && history.state?.sheet ? window.addEventListener("popstate", () => setTimeout(reopen), { once: true }) : reopen());
+  };
+  qs("#f-blank", b).onclick = () => spawn(bodyFrom({ blank: true }), keep());
+  qs("#f-open", b).onclick = () => spawn(bodyFrom(), keep());
   qs("#f-lead", b).onclick = () => {
     const goal = qs("#f-goal", b).value.trim();
     if (!goal) { fx.fail(); return toast("a Lead needs a goal"); }
     if (goal.split("\n").filter((l) => l.trim()).length > 1) { fx.fail(); return toast("a Lead is for one goal"); }
-    spawn(bodyFrom({ lead: true }));
+    spawn(bodyFrom({ lead: true }), keep());
   };
   setTimeout(() => qs("#f-goal", b).focus(), 80);
 }
-async function spawn(body) {
+// onFailed runs only when the daemon refused the open — it reopens the sheet with what was typed.
+async function spawn(body, onFailed) {
   closeSheet();
+  let r;
   try {
-    const r = await api("/sessions", { method: "POST", body: JSON.stringify({ role: "human", cols: 100, rows: 30, ...body }) });
+    r = await api("/sessions", { method: "POST", body: JSON.stringify({ role: "human", cols: 100, rows: 30, ...body }) });
+  } catch (err) { fx.fail(); toast("open failed: " + err.message); onFailed?.(); return; }
+  try {
     fx.success(); toast("opening…"); await load();
     const id = r?.id || r?.session_id || r?.session?.id;
     if (id) openFocus(id);
-  } catch (err) { fx.fail(); toast("open failed: " + err.message); }
+  } catch (err) { toast(err.message); }
 }
 qs("#btn-new").onclick = () => { fx.tap(); newTermSheet(null); };
 
