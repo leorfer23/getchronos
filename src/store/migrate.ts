@@ -2548,6 +2548,67 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       put.run("defaults.kept_at", new Date().toISOString());
     },
   },
+  {
+    version: 161,
+    name: "input_marks + retro_runs + retro_proposals — who typed each line, and the weekly self-retro",
+    // input_marks: one row per line the daemon typed into a terminal (src/turn-source.ts) — its kind and
+    // a hash of its first words, never the text — because a CLI transcript records every typed line as
+    // the operator's. retro_runs / retro_proposals: src/retro-pass.ts. `findings` is the only column
+    // that may be read across workspaces, and it holds enum → count only.
+    up: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS input_marks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        workspace_id TEXT,
+        kind TEXT NOT NULL,
+        by TEXT,
+        text_key TEXT NOT NULL,
+        at TEXT NOT NULL
+      )`);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_input_marks_session ON input_marks(session_id, at)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_input_marks_at ON input_marks(at)");
+      db.exec(`CREATE TABLE IF NOT EXISTS retro_runs (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        slot TEXT,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL,
+        since TEXT NOT NULL,
+        until TEXT NOT NULL,
+        stats TEXT,
+        findings TEXT,
+        candidates TEXT,
+        report TEXT,
+        aggregate TEXT,
+        job_id TEXT,
+        run_id TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        gathered_at TEXT,
+        finished_at TEXT
+      )`);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_retro_runs_ws ON retro_runs(workspace_id, created_at)");
+      db.exec(`CREATE TABLE IF NOT EXISTS retro_proposals (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        run_id TEXT,
+        kind TEXT NOT NULL,
+        source TEXT NOT NULL,
+        key TEXT NOT NULL,
+        text TEXT NOT NULL,
+        detail TEXT,
+        match TEXT,
+        evidence INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        decided_at TEXT,
+        decided_by TEXT,
+        ref TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (workspace_id, key)
+      )`);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_retro_proposals_ws ON retro_proposals(workspace_id, status)");
+    },
+  },
 
 ];
 

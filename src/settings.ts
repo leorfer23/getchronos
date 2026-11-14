@@ -653,6 +653,11 @@ defineSetting({
   label: "Nightly memory pass", help: "Prune, compact and rank this workspace's memory at the dream hours.",
   default: () => CONFIG.dreamHours.length > 0,
 });
+defineSetting({
+  key: "retro.weekly", group: "Memory", level: "both", type: "bool",
+  label: "Weekly self-retro", help: "Once a week: friction counts and KPIs from this workspace's terminals, and rules for you to approve. Read-only; nothing reaches memory before your tap.",
+  default: () => true,
+});
 
 // Limits
 defineSetting({
