@@ -50,6 +50,7 @@ import { isClosedTicketStatus, type GoalKind, type NewSession, type Session, typ
 import { goalLines, setGoals, splitGoalText } from "./goals.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "./agent-prep.js";
 import { routeConfigDir, routeProfileForHost } from "./profile-route.js";
+import { claudeDirFor, loginDeadFor } from "./login-dead.js";
 import { setting, settingOn } from "./settings.js";
 import { dupGoal, tellRobertDup, type DupGoal } from "./dup-goal.js";
 
@@ -661,6 +662,28 @@ export async function openSession(
       }
     }
   }
+  // A claude login known to be dead for this workspace (login-dead.ts, marked by the last terminal that
+  // hit the wall): an agent's NEW terminal goes where a walled one fails over to, or is refused — never
+  // onto the dead profile to paint the same wall again. Like a failover stand-in, the reroute is the
+  // operator's own degrade chain, so the picker allowlist below does not strand it. Never the
+  // operator's own open (that terminal is how he logs in again), a reopen, or a stand-in.
+  let loginRerouted = false;
+  if (
+    !remote && openedBy && openedBy !== "operator" && !opts.resumeId && !opts.replaces && !opts.movedFrom && !opts.agentSessionId &&
+    getBackend(opts.backend).name === "claude-code"
+  ) {
+    const dead = loginDeadFor(opts.workspace_id, claudeDirFor(opts.workspace_id));
+    if (dead) {
+      const { loginDeadFallback } = await import("./terminal-failover.js");
+      const fb = loginDeadFallback(opts.workspace_id);
+      if ("why" in fb) {
+        throw new Error(`refused: this workspace's Claude login is dead ("${dead.line}") and no fallback can take the terminal (${fb.why}) — the operator has to log in again`);
+      }
+      console.log(`[login-dead] new terminal (${openedBy}) → ${fb.to}${fb.model ? "/" + fb.model : ""}: this workspace's Claude login is dead ("${dead.line}")`);
+      opts = { ...opts, backend: fb.to, model: fb.model };
+      loginRerouted = true;
+    }
+  }
   // Which CLIs this client may run. Enforced HERE rather than only in the Desk picker, because the
   // picker is one of several ways a terminal gets opened (`mc session new`, Robert, the API), and
   // the reason is a client boundary rather than a preference: cursor, grok and opencode have no
@@ -669,7 +692,7 @@ export async function openSession(
   // Failover stand-ins (`replaces`) are exempt: the degrade ladder is an explicit operator choice
   // (workspace.fallback_backend + CHRONOS_TERMINAL_FALLBACK_BACKENDS) and must not be stranded by the
   // Desk picker's allowlist — same rule as terminal-failover.failoverUsable.
-  if (opts.workspace_id && opts.backend && !opts.replaces) {
+  if (opts.workspace_id && opts.backend && !opts.replaces && !loginRerouted) {
     const ws0 = workspaces.get(opts.workspace_id);
     if (ws0 && !backendAllowed(ws0.backends, opts.backend)) {
       throw new Error(

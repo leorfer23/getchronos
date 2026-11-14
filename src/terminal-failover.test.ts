@@ -15,6 +15,7 @@ import path from "node:path";
 import { backendInstalled, backendReady } from "./backends/index.js";
 import type { DeskPrompt } from "./desk-prompt.js";
 import type { Session } from "./types.js";
+import { claudeDirFor, loginDeadFor, resetLoginDead } from "./login-dead.js";
 import {
   CONTINUE_TEXT,
   classifyWall,
@@ -25,6 +26,7 @@ import {
   failoverPlan,
   failoverUsable,
   fallbackChain,
+  loginDeadFallback,
   onTerminalQuiet,
   originalBrief,
   resetFailoverState,
@@ -265,12 +267,15 @@ let events: BusEvent[];
 let timers: Array<{ ms: number; fn: () => void }>;
 let installed: Set<string>;
 let openFails: Set<string>;
+let usageOut: Map<string, number>;
 
 bus.on("event", (e: BusEvent) => { if (e.topic === "session.failover") events.push(e); });
 
 beforeEach(() => {
   db.exec("DELETE FROM sessions; DELETE FROM workspaces;");
   resetFailoverState();
+  resetLoginDead();
+  usageOut = new Map();
   fakes = new Map(); sent = []; opened = []; killed = []; wakes = []; notes = []; events = []; timers = [];
   installed = new Set(["grok", "cursor"]);
   openFails = new Set();
@@ -304,6 +309,7 @@ beforeEach(() => {
     hostCanRun: (_hostId, backend) => installed.has(backend),
     wake: (w) => { wakes.push(w); },
     notify: (text) => { notes.push(text); },
+    usageOut: (id) => usageOut.get(id) ?? 0,
     later: (ms, fn) => { timers.push({ ms, fn }); return setTimeout(() => {}, 0); },
   });
 });
@@ -536,4 +542,85 @@ test("detectLoginWall: an agent talking about logins, or a login line with work 
   assert.equal(detectLoginWall(["Not logged in · Please run /login", ...WORK, ...COMPOSER]), null, "work under it: it moved on");
   assert.equal(detectLoginWall([...WORK, "Not logged in · Please run /login", "✻ Thinking… (esc to interrupt)", ...COMPOSER]), null, "a running turn");
   assert.equal(detectLoginWall([...WORK, ...COMPOSER]), null);
+});
+
+// ── a login known to be dead (login-dead.ts): remembered, alerted once, cleared by a real reply ──
+const LOGIN_WALL = frame("  ⎿  Login reached its time limit · Please run /login");
+
+test("a login wall marks the workspace's profile dead and alerts once per profile — not once per terminal", async () => {
+  const a = terminal({}, { frame: LOGIN_WALL });
+  assert.equal(await onTerminalQuiet(a.id, T0 + 10_000), "no-wall", "the walled terminal itself is still not moved");
+  assert.equal(opened.length, 0);
+  const dead = loginDeadFor(a.workspace_id, claudeDirFor(a.workspace_id), T0 + 10_000);
+  assert.equal(dead?.line, "Login reached its time limit · Please run /login");
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /Claude login dead/);
+  assert.match(notes[0], /New agent terminals there open on grok/);
+  // A second terminal in the same workspace on the same dead login: no second alert.
+  const b = terminal({ workspace_id: a.workspace_id }, { frame: LOGIN_WALL });
+  await onTerminalQuiet(b.id, T0 + 20_000);
+  await onTerminalQuiet(a.id, T0 + 30_000);
+  assert.equal(notes.length, 1, "one alert per profile until it is fixed");
+});
+
+test("another workspace never reads this workspace's dead login, even on the same profile dir", async () => {
+  const a = terminal({}, { frame: LOGIN_WALL });
+  await onTerminalQuiet(a.id, T0 + 10_000);
+  const other = terminal();
+  assert.equal(claudeDirFor(other.workspace_id), claudeDirFor(a.workspace_id), "same dir on purpose");
+  assert.equal(loginDeadFor(other.workspace_id, claudeDirFor(other.workspace_id), T0 + 10_000), null);
+  // Its own wall is its own alert.
+  const b = terminal({ workspace_id: other.workspace_id }, { frame: LOGIN_WALL });
+  await onTerminalQuiet(b.id, T0 + 20_000);
+  assert.equal(notes.length, 2);
+});
+
+test("a real reply in a claude terminal opened AFTER the wall clears the mark and re-arms the alert; an older one does not", async () => {
+  const a = terminal({}, { frame: LOGIN_WALL, started_at: T0 });
+  await onTerminalQuiet(a.id, T0 + 10_000);
+  const dir = claudeDirFor(a.workspace_id);
+  // Older than the wall, still answering on an old token: proves nothing about new spawns.
+  const old = terminal({ workspace_id: a.workspace_id }, { frame: frame(), started_at: T0 - 60_000 });
+  usageOut.set(old.id, 500);
+  await onTerminalQuiet(old.id, T0 + 20_000);
+  assert.ok(loginDeadFor(a.workspace_id, dir, T0 + 20_000), "still dead");
+  // Opened after the wall, no reply yet (the frame is clean but nothing was produced): still dead.
+  const fresh = terminal({ workspace_id: a.workspace_id }, { frame: frame(), started_at: T0 + 15_000 });
+  await onTerminalQuiet(fresh.id, T0 + 25_000);
+  assert.ok(loginDeadFor(a.workspace_id, dir, T0 + 25_000));
+  // …and once it answered: the login works.
+  usageOut.set(fresh.id, 120);
+  fakes.get(fresh.id)!.last_out = T0 + 26_000;
+  await onTerminalQuiet(fresh.id, T0 + 30_000);
+  assert.equal(loginDeadFor(a.workspace_id, dir, T0 + 30_000), null);
+  // Dead again later: a new alert.
+  const c = terminal({ workspace_id: a.workspace_id }, { frame: LOGIN_WALL });
+  await onTerminalQuiet(c.id, T0 + 40_000);
+  assert.equal(notes.length, 2);
+});
+
+test("a non-claude terminal or one on another computer never marks the brain's claude profile", async () => {
+  const g = terminal({ backend: "grok" }, { frame: LOGIN_WALL });
+  await onTerminalQuiet(g.id, T0 + 10_000);
+  const r = terminal({ host_id: "h_m2" } as any, { frame: LOGIN_WALL });
+  await onTerminalQuiet(r.id, T0 + 10_000);
+  assert.equal(loginDeadFor(g.workspace_id, claudeDirFor(g.workspace_id), T0 + 10_000), null);
+  assert.equal(loginDeadFor(r.workspace_id, claudeDirFor(r.workspace_id), T0 + 10_000), null);
+  assert.equal(notes.length, 0);
+});
+
+test("loginDeadFallback: the failover chain on this Mac; nowhere when it is off or nothing is signed in", () => {
+  const s = terminal();
+  assert.deepEqual(loginDeadFallback(s.workspace_id), { to: "grok", model: "grok-4.5" });
+  installed = new Set(["cursor"]);
+  assert.deepEqual(loginDeadFallback(s.workspace_id), { to: "cursor", model: null });
+  installed = new Set();
+  assert.ok("why" in loginDeadFallback(s.workspace_id));
+  installed = new Set(["grok"]);
+  CONFIG.terminalFailover = false;
+  try {
+    assert.deepEqual(loginDeadFallback(s.workspace_id), { why: "failover is off for this workspace" });
+  } finally {
+    CONFIG.terminalFailover = true;
+  }
 });

@@ -24,6 +24,7 @@
  */
 import { setting, settingOn } from "./settings.js";
 import fs from "node:fs";
+import path from "node:path";
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
 import { LOCAL_HOST_ID, sessions, tickets, workspaces } from "./store.js";
@@ -33,6 +34,8 @@ import { placementCandidates } from "./hosts/candidates.js";
 import { cliFor } from "./hosts/placement.js";
 import { isAuthError, isCreditWallError, isProviderLimitError } from "./manager-fallback.js";
 import { renderLinesReplay } from "./replay.js";
+import { claudeDirFor, loginDeadKnown, loginWorks, markLoginDead } from "./login-dead.js";
+import { sessionUsage } from "./session-usage.js";
 import {
   focusEvents, killSession, openSession, sendInput, sessionActivity, sessionPrompt, sessionScreen,
   type NamedKey,
@@ -164,8 +167,9 @@ export function loginLine(row: string): string | null {
 /**
  * A settled frame stopped on a login wall, or null. NOT a wall failover moves: neither another model
  * nor waiting fixes a logged-out account, and putting the work on another account is the operator's
- * call — so onTerminalQuiet never sees it (detectWall stays credit/limit only), and stuck-alerts tells
- * him instead.
+ * call — so the walled terminal stays put (detectWall stays credit/limit only) and stuck-alerts tells
+ * him. What onTerminalQuiet does with it is remember the profile is dead (login-dead.ts), so the NEXT
+ * agent terminal for that workspace is not spawned onto it (loginDeadFallback).
  */
 export function detectLoginWall(frame: string[] | null | undefined): { kind: "login"; line: string } | null {
   const hit = bottomCliLine(frame, loginLine);
@@ -337,6 +341,8 @@ export interface FailoverOps {
   installed(backend: string): boolean;
   /** Does this computer have the CLI (and login) for the backend? Defaults to hostHasCli. */
   hostCanRun(hostId: string, backend: string, cursorKey: boolean): boolean;
+  /** Output tokens this terminal's transcript records — a real reply, so its login works. */
+  usageOut(id: string): number;
   wake(w: { topic: string; key: string; subject?: string | null; workspace_id?: string | null; payload?: unknown }): void;
   notify(text: string, level: "info" | "alert"): void;
   later(ms: number, fn: () => void): NodeJS.Timeout;
@@ -354,6 +360,7 @@ const defaultOps: FailoverOps = {
   // screen is a second walled terminal, not a stand-in.
   installed: backendReady,
   hostCanRun: hostHasCli,
+  usageOut: (id) => sessionUsage(id)?.tokens_out ?? 0,
   // Lazy: wake-queue pulls in Robert's whole agent, and this module is imported by terminal-prompts.
   wake: (w) => void import("./wake-queue.js").then((m) => m.enqueueWake(w)).catch(() => {}),
   notify: (text, level) =>
@@ -429,6 +436,7 @@ export async function onTerminalQuiet(id: string, now = Date.now()): Promise<Qui
   if (!act.live || !act.quiet) return "not-live";
   const s = sessions.get(id);
   if (!s || s.status !== "live") return "not-live";
+  noteLogin(s, act.started_at, now);
   if (!terminalFailoverEnabled(s.workspace_id)) return "off";
   const st = stateFor(id, s.backend);
   if (st.done) return "done";
@@ -463,9 +471,7 @@ export async function onTerminalQuiet(id: string, now = Date.now()): Promise<Qui
     chain: fallbackChain(ws, setting<string[]>("failover.backends", s.workspace_id)),
     tried: st.lineage.tried,
     usable: (b) => failoverUsable(b, ws, ops.installed, s.host_id, ops.hostCanRun),
-    modelFor: (b) =>
-      (ws?.fallback_backend && canonBackend(ws.fallback_backend) === canonBackend(b) ? ws.fallback_model ?? null : null) ??
-      (CONFIG.agent.fallbackBackend && canonBackend(CONFIG.agent.fallbackBackend) === canonBackend(b) ? CONFIG.agent.fallbackModel ?? null : null),
+    modelFor: (b) => fallbackModelFor(ws, b),
   });
 
   if (step.step === "model") return swapModel(s, st, wall, model, step.to, now);
@@ -483,6 +489,70 @@ export async function onTerminalQuiet(id: string, now = Date.now()): Promise<Qui
     return giveUp(s, st, wall, model, why);
   }
   return handOff(s, st, wall, model, step, ws);
+}
+
+/** The model a fallback backend runs with: the workspace's own fallback model, else the global one. */
+function fallbackModelFor(ws: Workspace | null | undefined, b: string): string | null {
+  return (ws?.fallback_backend && canonBackend(ws.fallback_backend) === canonBackend(b) ? ws.fallback_model ?? null : null) ??
+    (CONFIG.agent.fallbackBackend && canonBackend(CONFIG.agent.fallbackBackend) === canonBackend(b) ? CONFIG.agent.fallbackModel ?? null : null);
+}
+
+// ──────────────────────────── a login known to be dead (login-dead.ts) ────────────────────────────
+
+/**
+ * At every quiet flip of a local claude terminal: a login wall marks its workspace's profile dead (and
+ * tells the operator, once per profile until fixed); a real reply in a terminal opened after the mark
+ * clears it. Reads only the frame and, when a mark exists, the transcript — never a probe.
+ */
+function noteLogin(s: Session, openedAt: number | null, now: number): void {
+  if (canonBackend(s.backend) !== "claude-code") return;
+  if (s.host_id && s.host_id !== LOCAL_HOST_ID) return; // a host reports its own logins (robert-host-drive)
+  const dir = claudeDirFor(s.workspace_id);
+  if (!dir) return;
+  const login = detectLoginWall(ops.frame(s.id));
+  if (login) {
+    if (markLoginDead(s.workspace_id, dir, { line: login.line, session_id: s.id }, now)) alertLoginDead(s, dir, login.line);
+    return;
+  }
+  if (loginDeadKnown(s.workspace_id, dir) && ops.usageOut(s.id) > 0 && loginWorks(s.workspace_id, dir, openedAt))
+    console.log(`[login-dead] ${path.basename(dir)}: ${id8(s.id)} got a reply — new claude terminals open there again`);
+}
+
+function alertLoginDead(s: Session, dir: string, line: string): void {
+  const ws = s.workspace_id ? workspaces.get(s.workspace_id) : undefined;
+  const fb = loginDeadFallback(s.workspace_id);
+  const next = "to" in fb ? `New agent terminals there open on ${fb.to} until it works again.` : `New agent terminals there are refused until it works again (${fb.why}).`;
+  console.warn(`[login-dead] ${ws?.name ?? "-"} (${path.basename(dir)}): ${line} — ${next}`);
+  ops.notify(
+    `🔐 <b>Claude login dead</b> — ${esc(ws?.name ?? "no workspace")} (${esc(path.basename(dir))}): ${esc(line)}. ${esc(next)} ` +
+      `Log in again (/login in a Claude terminal you open there).`,
+    "alert",
+  );
+}
+
+/**
+ * Where a NEW agent terminal goes when its workspace's claude login is known dead: the chain a walled
+ * terminal fails over to (workspace.fallback_backend, then ⚙ Settings → Failover), on this Mac. `why`
+ * = nowhere: failover is off for the workspace, or nothing in the chain is installed and signed in.
+ */
+export function loginDeadFallback(wsId: string | null | undefined): { to: string; model: string | null } | { why: string } {
+  if (!terminalFailoverEnabled(wsId)) return { why: "failover is off for this workspace" };
+  const ws = wsId ? workspaces.get(wsId) : undefined;
+  const step = decideFailover({
+    wall: "limit",
+    backend: "claude-code",
+    model: null,
+    modelTried: true,
+    attempts: 0,
+    max: setting<number>("failover.max", wsId),
+    modelFallback: null,
+    chain: fallbackChain(ws, setting<string[]>("failover.backends", wsId)),
+    tried: [],
+    usable: (b) => failoverUsable(b, ws, ops.installed, LOCAL_HOST_ID, ops.hostCanRun),
+    modelFor: (b) => fallbackModelFor(ws, b),
+  });
+  if (step.step === "backend") return { to: step.to, model: step.model };
+  return { why: step.step === "give_up" ? step.why : "no fallback backend" };
 }
 
 function swapModel(s: Session, st: TermState, wall: Wall, from: string | null, to: string, now: number): QuietOutcome {
