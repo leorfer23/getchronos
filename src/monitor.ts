@@ -17,6 +17,7 @@ import { maybeDream } from "./dream.js";
 import { maybeRetro } from "./retro.js";
 import { networkUp } from "./net-up.js";
 import { maybeLearnProse } from "./prose.js";
+import { maybeLearnStyle } from "./house-style.js";
 import { maybeExpireIdeas, maybeMineIdeas } from "./ideas.js";
 import { pollDeliveries } from "./delivery.js";
 import { harvestSessionPrs, pollSessionPrs } from "./terminal-automerge.js";
@@ -607,6 +608,7 @@ export function startMonitor() {
       // Weekly, caught up after sleep; gathers in the background so a slow week never stalls this tick.
       void maybeRetro({ network: networkUp }).catch((e) => console.warn("[retro]", e?.message ?? e));
       maybeLearnProse();
+      maybeLearnStyle();
       reapEphemeralJobs();
       maybeExpireIdeas();
       await maybeMineIdeas();

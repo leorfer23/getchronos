@@ -71,7 +71,7 @@ export const FINAL_DELIVERABLE: ReadonlySet<DeliverableState> = new Set<Delivera
 export const CHECK_NAMES = [
   "tests", "regression", "pr_ready", "matches_request", "shots", "walkthrough",
   "queries", "crosscheck", "assumptions", "exercised", "repro_steps",
-  "repro_before", "fixed_after", "post_deploy", "goal_test", "draft_bound",
+  "repro_before", "fixed_after", "post_deploy", "goal_test", "draft_bound", "visual",
   "data_diff", "code_review",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
@@ -111,6 +111,11 @@ const TESTS: ExpectedCheck = { name: "tests", required: true, what: "the repo's 
 const PR_READY: ExpectedCheck = { name: "pr_ready", required: true, gate: true, what: "the PR exists, is open, mergeable and up to date with its base" };
 const MATCHES: ExpectedCheck = { name: "matches_request", required: true, gate: true, what: "a reader that did not write it says the change does what was asked" };
 const DRAFT_BOUND: ExpectedCheck = { name: "draft_bound", required: true, gate: true, what: "the words, recipient and channel he hears are the ones a yes is bound to" };
+/**
+ * The visual critic (visual-critic.ts), on a hand-off that delivered a page, a dashboard or a document:
+ * not required — a hand-off with nothing visual has nothing to miss — but a fail is a fail.
+ */
+const VISUAL: ExpectedCheck = { name: "visual", required: false, what: "a critic that did not make it saw it rendered at desktop and phone width and read it against the workspace's house style" };
 /** Every PR, so the slot list is the same for all of them: `na` where it does not apply (not a data repo, no model changed). */
 const DATA_DIFF: ExpectedCheck = { name: "data_diff", required: true, what: "a data PR (models, SQL, transforms in a data repo): rows and key aggregates of each changed model before vs after over a bounded range, the commands, the model's own tests run, any large swing explained" };
 const CODE_REVIEW: ExpectedCheck = { name: "code_review", required: true, what: "an engine that did not write it read the full diff with the repo's review memory; each finding fixed or justified on the hand-off" };
@@ -224,8 +229,8 @@ export function slotsFor(kind: GoalKind | null | undefined, deliverable: Deliver
   }
   if (deliverable === "slack_draft" || deliverable === "email_draft") return [DRAFT_BOUND, MATCHES];
   if (deliverable === "deploy") return [];
-  if (k === "investigation" || k === "qa") return WORK[k].evidence;
-  return [MATCHES];
+  if (k === "investigation" || k === "qa") return [...WORK[k].evidence, VISUAL];
+  return [MATCHES, VISUAL];
 }
 
 /** One slot as the newest current check left it (`expectedChecks` over the checks for this target). */

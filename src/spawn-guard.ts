@@ -5,6 +5,7 @@ import { repos } from "./store/repos.js";
 import { workspaces } from "./store/workspaces.js";
 import { wsTicketsDir, type SandboxMode } from "./sandbox.js";
 import { CONFIG } from "./config.js";
+import { resolveCriticDir } from "./repo-root.js";
 
 // Hardens the inputs an API caller (or a compromised/buggy internal flow) can hand to a job/session
 // spawn — cwd, add_dirs, sandbox mode — so none of them can point a headless agent or PTY outside its
@@ -51,6 +52,13 @@ function allowedRoots(workspaceId?: string | null): Root[] {
       roots.push({ path: fs.realpathSync(ticketsDir) });
     } catch {
       // tickets dir doesn't exist yet; skip it
+    }
+    // What the visual critic rendered of this workspace's pages (visual-critic.ts): its judge runs in a
+    // pass's directory there, reading the renders. Its own only — every other workspace's is denied.
+    try {
+      roots.push({ path: fs.realpathSync(path.join(resolveCriticDir(), ws.id)) });
+    } catch {
+      // nothing rendered for it yet; skip it
     }
   }
   return roots;
