@@ -7929,7 +7929,7 @@ function ibThread(i) {
   const thr = i.followup_to
     ? `<div class="thr">↪ Its thread's terminal is open — Dispatch types it there: ${esc(i.followup_to.goal || i.followup_to.session_id.slice(0, 8))}</div>`
     : i.related
-    ? `<div class="thr" title="${esc(i.related.why)}">Same conversation as “${esc(i.related.title)}”${i.related.session_id ? " (its terminal is open)" : ""}? <button class="btn" data-a="merge" data-into="${esc(i.related.id)}" title="Fold this into that one — never done without your press">Merge</button></div>`
+    ? `<div class="thr" title="${esc(i.related.why)}">Looks like the same conversation as “${esc(i.related.title)}”${i.related.session_id ? " — its terminal is open" : ""} <button class="btn" data-a="merge" data-into="${esc(i.related.id)}" title="Fold this into that one — never done without your press">Merge</button></div>`
     : "";
   return (asks ? `<div class="asks">${asks}</div>` : "") + thr;
 }
