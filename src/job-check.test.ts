@@ -2,14 +2,15 @@
  * The daily job check (src/job-check.ts): the daemon judges a client's last 24 hours of jobs, records
  * the check as a zero-cost run, and only red opens a terminal (or, refused, the job's headless run).
  */
-import { test, beforeEach, afterEach } from "node:test";
+import { test, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { db, jobs, kv, runs, workspaces } from "./store.js";
 import { CONFIG } from "./config.js";
-import { cronSkipReason, reloadSchedules } from "./scheduler.js";
+import { cronSkipReason, fireCronWhenAwake, lastCronSkip, registerCronGate, reloadSchedules } from "./scheduler.js";
+import { resetBrainAwake } from "./brain-awake.js";
 import {
   AUTO_RERUN, JOB_CHECK_PREFIX, checkBrief, checkGoal, cronFires, ensureCheckJob, healthLine, healthRequest,
   jobCheckDeps, jobHealth, openCheckTerminal, recordCheck, sayKeptDefaults,
@@ -116,6 +117,36 @@ test("a fire skipped on purpose is not missed; a refused one is red", () => {
   // A skip recorded before the latest fire says nothing about it.
   kv.set("cron.skip." + gated.id, JSON.stringify({ at: h(30), kind: "gate", why: "nothing open" }));
   assert.ok(jobHealth(ws.id, { now: NOW }).red.some((x) => x.job_name === "gated" && x.kind === "missed"));
+});
+
+test("a fire held for the Mac to wake is not missed — it is released in the same wake as the check", () => {
+  // 2026-11-15: the check's fire and inbox-cleanup's were both held through the Mac's sleep and released a minute
+  // into the 18:34 wake; the check went first and called inbox-cleanup missed, then its gate skipped it.
+  registerCronGate("held-test:", () => "gated in test");
+  const j = mkJob(ws.id, { name: "held-test:cleanup" });
+  mock.timers.enable({ apis: ["setTimeout", "Date"], now: NOW.getTime() });
+  resetBrainAwake({ bootAt: NOW.getTime() - 86_400_000, lastWake: () => NOW.getTime() - 1_000 });
+  try {
+    fireCronWhenAwake(j);
+    assert.equal(jobHealth(ws.id, { now: NOW }).red.length, 0, "held: its result is not in yet");
+    mock.timers.tick(60_000);
+    assert.equal(lastCronSkip(j.id)?.kind, "gate", "released a minute into the wake");
+    assert.equal(jobHealth(ws.id, { now: NOW }).red.length, 0);
+  } finally { mock.timers.reset(); resetBrainAwake(); }
+});
+
+test("a held fire only spares the missed verdict — an earlier failed run in the window is still red", () => {
+  registerCronGate("held-test:", () => "gated in test");
+  const j = mkJob(ws.id, { name: "held-test:sync", cron_expr: "0 9,15 * * *" });
+  mkRun(j.id, "failed", AT_FIRE, { error: "ENOTFOUND" });
+  mock.timers.enable({ apis: ["setTimeout", "Date"], now: NOW.getTime() });
+  resetBrainAwake({ bootAt: NOW.getTime() - 86_400_000, lastWake: () => NOW.getTime() - 1_000 });
+  try {
+    fireCronWhenAwake(j);
+    const [red] = jobHealth(ws.id, { now: NOW }).red;
+    assert.equal(red?.kind, "failed");
+    assert.match(red.detail, /ENOTFOUND/);
+  } finally { mock.timers.tick(60_000); mock.timers.reset(); resetBrainAwake(); }
 });
 
 test("a fire due in the last minutes belongs to tomorrow's check", () => {

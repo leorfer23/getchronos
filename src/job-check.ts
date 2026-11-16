@@ -27,7 +27,7 @@ import { Cron } from "croner";
 import { CONFIG } from "./config.js";
 import { db, jobs, kv, repos, runs, workspaces } from "./store.js";
 import { dispatch } from "./dispatcher.js";
-import { lastCronSkip, registerCronGate, reloadSchedules } from "./scheduler.js";
+import { cronFireHeld, lastCronSkip, registerCronGate, reloadSchedules } from "./scheduler.js";
 import { openSession } from "./terminal.js";
 import { baseJobName, isInternalJob } from "./job-name.js";
 import { FAILED_STATUSES } from "./jobs-board.js";
@@ -166,10 +166,13 @@ export function jobHealth(wsId: string, opts: { now?: Date; hours?: number } = {
     const ended = rs.filter((r) => !LIVE.has(r.status) && !willResume(r, now));
     const bad = ended.filter((r) => BAD.has(r.status));
     const last = ended[0];
+    // Its fire is held until the Mac has been awake a minute (fireCronWhenAwake): released in this same wake,
+    // often the same second as the check (2026-11-15: the check went first and called inbox-cleanup missed).
+    const held = members.some((j) => cronFireHeld(j.id));
 
     // 1. The latest due fire has no run: refused by dispatch, or never fired at all.
     const lastFire = fires[fires.length - 1];
-    if (lastFire && !live && !rs.some((r) => r.started_at && Date.parse(r.started_at) >= lastFire.getTime() - SLACK_MS)) {
+    if (lastFire && !held && !live && !rs.some((r) => r.started_at && Date.parse(r.started_at) >= lastFire.getTime() - SLACK_MS)) {
       const skip = lastCronSkip(primary.id);
       const skipped = skip && Date.parse(skip.at) >= lastFire.getTime() - SLACK_MS ? skip : null;
       if (skipped?.kind === "refused") { red("refused", `due ${at(lastFire)}, Chronos refused to start it: ${firstLine(skipped.why)}`, bad); continue; }
