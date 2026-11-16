@@ -5,7 +5,8 @@
  *    profile dir (login + MCP) and the never-send deny list;
  *  - an idle hour frees the operator's process but keeps his conversation, and a stale resume id still
  *    recovers on its own;
- *  - wakes run on their own manager and their own --resume session, so his turn never waits behind one.
+ *  - every turn is a new conversation (no --resume) built from our own text; wakes run on their own
+ *    manager, so his turn never waits behind one; he loads only the MCP servers robert.mcp names.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -63,6 +64,10 @@ test("a persona spawn overrides the output style, excludes the profile's CLAUDE.
   const env = JSON.parse(fs.readFileSync(envFile, "utf8"));
   assert.equal(env.CLAUDE_CONFIG_DIR, profile, "the profile dir stays: it holds the login and the MCP tokens");
   assert.equal(env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
+  // Lean like a Desk terminal: no Artifact tool or workflows, and skills listed by name only.
+  assert.equal(env.CLAUDE_CODE_DISABLE_ARTIFACT, "1");
+  assert.equal(env.CLAUDE_CODE_DISABLE_WORKFLOWS, "1");
+  assert.equal(settings.skillOverrides?.dataviz, "name-only");
   for (const f of [argvFile, envFile]) fs.rmSync(f, { force: true });
   fs.rmSync(profile, { recursive: true, force: true });
 });
@@ -104,14 +109,19 @@ test("personaIsolationArgs is valid JSON for a profile path with spaces and quot
   const args = personaIsolationArgs(`/tmp/odd "profile" dir`);
   const s = JSON.parse(args[1]);
   assert.equal(s.claudeMdExcludes[0], `/tmp/odd "profile" dir/CLAUDE.md`);
-  assert.deepEqual(PERSONA_ENV, { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" });
+  assert.deepEqual(PERSONA_ENV, {
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+    CLAUDE_CODE_DISABLE_ARTIFACT: "1",
+    CLAUDE_CODE_DISABLE_WORKFLOWS: "1",
+    CLAUDE_CODE_DISABLE_CRON: "1",
+  });
 });
 
 test("the one-shot manager spawn (Telegram parallel asks) gets the same isolation", () => {
   const src = fs.readFileSync(path.join(process.cwd(), "src/telegram/agent.ts"), "utf8");
   const body = src.slice(src.indexOf("export function spawnManager("), src.indexOf("function spawnAgent("));
   assert.match(body, /\[\.\.\.spec\.args, \.\.\.personaIsolationArgs\(profileDir\)\]/);
-  assert.match(body, /\.\.\.\(claude \? PERSONA_ENV : \{\}\)/);
+  assert.match(body, /\.\.\.\(claude \? \{ \.\.\.PERSONA_ENV, \.\.\.mcp\.env \} : \{\}\)/);
 });
 
 // ── D. an idle hour frees the process, not the conversation ────────────────────────────────────────
@@ -155,7 +165,7 @@ test("lanes never share a kv row", () => {
   for (const f of ["session", "lastTurnAt"] as const) assert.notEqual(op[f], wk[f]);
 });
 
-test("a wake runs on its own manager and resumes its own session; the operator's id is never touched", async () => {
+test("every Robert turn is a new conversation: no --resume on either lane, even with a session id stored", async () => {
   const key = "lanes-e";
   const op = laneKeys("operator", key);
   const wk = laneKeys("wake", key);
@@ -166,18 +176,67 @@ test("a wake runs on its own manager and resumes its own session; the operator's
   const wakeM = robertManagerForTest("wake", key, null);
   assert.notEqual(opM, wakeM, "two processes, not one shared queue");
   await withEnv({ CHRONOS_FAKE_ARGV: argvFile }, async () => {
-    await wakeM.turn("a wake");
+    assert.equal(await wakeM.turn("a wake"), "ok:1");
     let argv = JSON.parse(fs.readFileSync(argvFile, "utf8")) as string[];
-    assert.equal(argv[argv.indexOf("--resume") + 1], "sess-wake");
-    await opM.turn("the operator");
+    assert.ok(!argv.includes("--resume"), "a wake never re-reads an old transcript");
+    assert.equal(await opM.turn("the operator"), "ok:1");
+    assert.equal(await opM.turn("and again"), "ok:1", "the second turn is a new conversation on a new process");
     argv = JSON.parse(fs.readFileSync(argvFile, "utf8")) as string[];
-    assert.equal(argv[argv.indexOf("--resume") + 1], "sess-op");
+    assert.ok(!argv.includes("--resume"));
   });
-  assert.equal(kv.get(op.session), "sess-op");
-  assert.equal(kv.get(wk.session), "sess-wake");
   opM.kill(); wakeM.kill();
   fs.rmSync(argvFile, { force: true });
   for (const k of [op.session, wk.session]) kv.del(k);
+});
+
+test("the chat lane boots its next process when a turn ends; a wake leaves nothing running", async () => {
+  const key = "lanes-prewarm";
+  const log = tmp("spawns");
+  fs.rmSync(log, { force: true });
+  const opM = robertManagerForTest("operator", key, null);
+  const wakeM = robertManagerForTest("wake", key, null);
+  await withEnv({ CHRONOS_FAKE_SPAWN_LOG: log }, async () => {
+    await opM.turn("hola");
+    await new Promise((r) => setTimeout(r, 300)); // the spare's own spawn line
+    assert.equal(fs.readFileSync(log, "utf8").trim().split("\n").length, 2, "the turn's process + the next one, already booted");
+    fs.rmSync(log, { force: true });
+    await wakeM.turn("a wake");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(fs.readFileSync(log, "utf8").trim().split("\n").length, 1, "a wake pays its own boot and keeps no spare");
+  });
+  opM.kill(); wakeM.kill();
+  fs.rmSync(log, { force: true });
+});
+
+test("Robert loads only the MCP servers robert.mcp names (slack by default), strictly, never a connector", async () => {
+  const { writeSetting } = await import("../settings.js");
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "chronos-mcp-profile-"));
+  const slack = { type: "http", url: "https://mcp.slack.com/mcp" };
+  fs.writeFileSync(path.join(profile, ".claude.json"), JSON.stringify({ mcpServers: { slack, metrics: { command: "g" } } }));
+  try {
+    const dflt = agent.robertMcp(profile, null);
+    assert.deepEqual(JSON.parse(dflt.mcpConfig!), { mcpServers: { slack } }, "only slack's own spec, from his profile");
+    assert.deepEqual(dflt.allowedTools, ["mcp__slack"]);
+    assert.equal(dflt.env.ENABLE_CLAUDEAI_MCP_SERVERS, "false", "no claude.ai connectors");
+    writeSetting("robert.mcp", []);
+    const none = agent.robertMcp(profile, null);
+    assert.equal(none.mcpConfig, undefined, "empty: nothing loads");
+    assert.deepEqual(none.allowedTools, []);
+    writeSetting("robert.mcp", ["metrics", "not-in-profile"]);
+    assert.deepEqual(Object.keys(JSON.parse(agent.robertMcp(profile, null).mcpConfig!).mcpServers), ["metrics"]);
+  } finally {
+    writeSetting("robert.mcp", null);
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+  // The manager itself: strict on the command line, connectors off in its env.
+  const argvFile = tmp("argv-mcp");
+  const envFile = tmp("env-mcp");
+  const m = robertManagerForTest("wake", "lanes-mcp", null);
+  await withEnv({ CHRONOS_FAKE_ARGV: argvFile, CHRONOS_FAKE_ENV: envFile }, async () => { await m.turn("a wake"); });
+  m.kill();
+  assert.ok((JSON.parse(fs.readFileSync(argvFile, "utf8")) as string[]).includes("--strict-mcp-config"));
+  assert.equal(JSON.parse(fs.readFileSync(envFile, "utf8")).ENABLE_CLAUDEAI_MCP_SERVERS, "false");
+  for (const f of [argvFile, envFile]) fs.rmSync(f, { force: true });
 });
 
 test("the operator's turn never waits behind a running wake", async () => {

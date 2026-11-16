@@ -1,6 +1,7 @@
 import { humanizeStep, type RobertStep } from "../robert-steps.js";
 import { claudeDenyArgs, openSlackSelfSend, operatorSlackIds } from "../no-send.js";
-import { assistantName, assistantNameLine, onSettingChange } from "../settings.js";
+import { assistantName, assistantNameLine, onSettingChange, setting } from "../settings.js";
+import { skillNames, skillOverrides } from "../lean-prompt.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import os from "node:os";
 import fs from "node:fs";
@@ -665,8 +666,9 @@ export async function runAgent(chat: number, text: string, msgId: number, pick?:
   const runWs = threadWs;
   // Where it landed, when he did not say so himself — the thread is one, the conversations are not.
   const stamp = turn.ws && turn.how !== "tag" && turn.how !== "selected" ? `#${workspaces.get(turn.ws)?.slug ?? "?"} · ` : "";
-  // This project's own thread recap only — never the interleaved one (workspaces never mix).
-  const recap = chatLog.contextBlock({ limit: 12, workspaceId: runWs });
+  // This project's own thread recap only — never the interleaved one (workspaces never mix). Each turn is
+  // a new conversation (stateless managers), so this recap is all he remembers of the thread.
+  const recap = chatLog.contextBlock({ limit: 12, maxChars: RECAP_CHARS, workspaceId: runWs });
   const prompt = fleetLine(runWs) + "\n\n" + (recap || "") + body;
   const ask: Ask = { id, chat, prompt, msgId, ws: runWs };
   asks.set(id, ask);
@@ -806,6 +808,13 @@ export async function runExecAgent(chat: number, execId: string, text: string, m
 }
 
 /**
+ * How much of the thread a Robert turn carries. Every turn starts a new conversation, so this is his
+ * whole memory of it: the last dozen exchanges at up to ~4k tokens, against the 100k–700k a resumed
+ * session re-read on every turn.
+ */
+const RECAP_CHARS = 16_000;
+
+/**
  * One door for every inbound Telegram message — typed, dictated or a photo caption. Robert keeps
  * his propose-and-confirm path; any other active executive answers directly.
  */
@@ -832,6 +841,7 @@ export function spawnManager(opts: {
   const wall = robertSandbox(opts.wsId);
   const profileDir = opts.wsId ? webProfileDir(opts.wsId) : CONFIG.profiles[CONFIG.agent.profile] ?? CONFIG.profiles.claude;
   const cwd = wall.cwd ?? process.cwd();
+  const mcp = robertMcp(profileDir, opts.wsId);
   const spec = backend.oneShot({
     prompt: opts.prompt,
     system: opts.system ?? robertPrompt("telegram"),
@@ -839,9 +849,9 @@ export function spawnManager(opts: {
     configDir: profileDir,
     cwd,
     resumeSessionId: opts.resumeSessionId,
-    allowedTools: [MANAGER_TOOLS, ...profileMcpTools(profileDir)].join(","),
+    allowedTools: [MANAGER_TOOLS, ...mcp.allowedTools].join(","),
     maxBudgetUsd: CONFIG.agent.maxBudgetUsd,
-    inheritProfileMcp: true, // the chief of everything runs on the operator's own MCP inventory
+    mcpConfig: mcp.mcpConfig, // only what robert.mcp names (slack by default), strict
   });
   // Same as the warm managers: his profile's login and MCP, not its output style or CLAUDE.md — and,
   // while he answers (robert-hands.ts), only the built-in tools he declares.
@@ -856,7 +866,7 @@ export function spawnManager(opts: {
     const child = spawn(cmd, cmdArgs, {
       cwd,
       // The operator's personal daemon-level agent keeps the full env; a project's turn gets its workspace's.
-      env: withoutOperatorToken({ ...(wall.baseEnv ?? process.env), ...spec.env, ...(claude ? PERSONA_ENV : {}), ...(opts.extraEnv ?? {}) }),
+      env: withoutOperatorToken({ ...(wall.baseEnv ?? process.env), ...spec.env, ...(claude ? { ...PERSONA_ENV, ...mcp.env } : {}), ...(opts.extraEnv ?? {}) }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     opts.onChild?.(child);
@@ -985,13 +995,60 @@ export function profileMcpTools(profileDir: string): string[] {
  * rebuilds it per request; within one process the text is constant, so the prompt cache still hits.
  */
 export function personaIsolationArgs(profileDir: string): string[] {
+  const overrides = skillOverrides(skillNames(profileDir), []);
   const settings = {
     outputStyle: "default",
     claudeMdExcludes: [path.join(profileDir, "CLAUDE.md"), path.join(profileDir, "rules", "**")],
+    // Lean, like a Desk terminal (lean-prompt.ts): every skill listed by name only. Invoking one still
+    // loads all of it; the full descriptions were thousands of tokens on every request he made.
+    ...(Object.keys(overrides).length ? { skillOverrides: overrides } : {}),
   };
   return ["--settings", JSON.stringify(settings), "--system-prompt-snapshot", "off"];
 }
-export const PERSONA_ENV: Record<string, string> = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" };
+/**
+ * Env every persona manager runs with: no auto memory (above), and none of the tools a persona never
+ * calls but pays for on every request — the claude.ai Artifact tool (~13k tokens of schema), workflows
+ * and session cron. In 14 days of Robert sessions his tools were Bash, Grep and ToolSearch.
+ */
+export const PERSONA_ENV: Record<string, string> = {
+  CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+  CLAUDE_CODE_DISABLE_ARTIFACT: "1",
+  CLAUDE_CODE_DISABLE_WORKFLOWS: "1",
+  CLAUDE_CODE_DISABLE_CRON: "1",
+};
+
+/**
+ * Which MCP servers a Robert loads (setting robert.mcp, per workspace; default `slack`, which carries
+ * his one allowed send — the DM to the operator — and his Slack drafts). Only those servers' specs,
+ * copied from his profile dir, go in a --mcp-config bundle under --strict-mcp-config: their logins
+ * still come from that dir (checked 2026-11-16: slack's tools load with its OAuth), and nothing else
+ * loads — no other server, no plugin server, no claude.ai connector. His tool list is then the same on
+ * every request. Before, every server the profile had loaded; a slow one (a stdio server behind a VPN, a claude.ai connector)
+ * joined mid-turn and left at the next spawn, and each flip re-wrote his whole cached prompt.
+ */
+export function robertMcp(profileDir: string, wsId: string | null | undefined): {
+  mcpConfig?: string;
+  allowedTools: string[];
+  env: Record<string, string>;
+} {
+  const want = new Set((setting<string[]>("robert.mcp", wsId ?? null) ?? []).map((s) => s.trim()).filter(Boolean));
+  const env = { ENABLE_CLAUDEAI_MCP_SERVERS: "false" };
+  let servers: Record<string, unknown> = {};
+  try {
+    servers = JSON.parse(fs.readFileSync(claudeGlobalConfig(profileDir), "utf8"))?.mcpServers ?? {};
+  } catch {
+    // no config dir, or not readable — no servers
+  }
+  const picked = Object.fromEntries(Object.entries(servers).filter(([name]) => want.has(name)));
+  const names = Object.keys(picked);
+  if (!names.length) return { allowedTools: [], env };
+  return { mcpConfig: JSON.stringify({ mcpServers: picked }), allowedTools: names.map((n) => `mcp__${n}`), env };
+}
+/** robertMcp as WarmOpts. A caller with its own extraEnv must add robertMcp(...).env to it. */
+function robertMcpOpts(profileDir: string, wsId: string | null): Pick<WarmOpts, "mcpConfig" | "extraAllowedTools" | "extraEnv"> {
+  const mcp = robertMcp(profileDir, wsId);
+  return { ...(mcp.mcpConfig ? { mcpConfig: mcp.mcpConfig } : {}), extraAllowedTools: mcp.allowedTools, extraEnv: mcp.env };
+}
 
 // Streamed turn progress: kind "text" = reply delta, "thinking" = reasoning delta, "tool" = a tool
 // starting (text = one-line description), "tool_done" = the most recent tool returned. A "tool" delta
@@ -1045,6 +1102,18 @@ type WarmOpts = {
   // a remote server's OAuth token is stored per config dir — a bundle in the repo could only carry
   // the spec, never the login, and several of these servers' specs carry a bearer token besides.
   inheritProfileMcp?: boolean;
+  /** Extra --allowed-tools entries (robertMcp's servers). */
+  extraAllowedTools?: string[];
+  /**
+   * Every turn starts a new conversation: no --resume, ever, and the process ends after its turn. The
+   * caller puts what the agent must know into the turn itself (fleet, thread recap, the message), so
+   * the only thing re-sent each turn is a stable system prompt the cache already holds. A resumed
+   * conversation re-read its whole growing transcript on every turn and re-wrote all of it whenever
+   * the cache went cold or the tool list moved — Robert's wake lane reached 691k tokens on 2026-11-16.
+   */
+  stateless?: boolean;
+  /** stateless: spawn the next turn's process as soon as one ends, so a chat turn never waits on CLI boot. */
+  prewarm?: boolean;
   /**
    * Everything after the stream-json flags, instead of the persona wiring below (the voice front,
    * src/talker.ts cliTalkerArgs: its own system prompt, no tools, no MCP). `--model` is still added.
@@ -1115,7 +1184,7 @@ export class WarmManager {
       "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
       "--include-partial-messages", // stream_event deltas → per-sentence voice streaming (web onDelta)
       "--append-system-prompt", this.opts.system,
-      "--allowed-tools", [this.opts.allowedTools ?? "Bash,Read", ...(this.opts.inheritProfileMcp ? profileMcpTools(profileDir) : [])].join(","),
+      "--allowed-tools", [this.opts.allowedTools ?? "Bash,Read", ...(this.opts.extraAllowedTools ?? (this.opts.inheritProfileMcp ? profileMcpTools(profileDir) : []))].join(","),
       // strict for every executive: whatever the profile dir happens to have configured is never
       // what she runs with — only the bundle her AGENT.md asked for, or nothing. Robert is the one
       // exception (inheritProfileMcp): dropping strict is what lets the config dir's own servers
@@ -1123,7 +1192,7 @@ export class WarmManager {
       ...(this.opts.mcpConfig ? ["--mcp-config", this.opts.mcpConfig] : []),
       ...(this.opts.inheritProfileMcp ? [] : ["--strict-mcp-config"]),
       "--dangerously-skip-permissions",
-      // Robert never sends either (no-send.ts): he loads every profile MCP, so the deny is what stops it.
+      // Robert never sends either (no-send.ts): he loads Slack, so the deny is what stops it.
       ...claudeDenyArgs(),
       // The profile is his login and his MCP, not the operator's output style or CLAUDE.md.
       ...personaIsolationArgs(profileDir),
@@ -1132,7 +1201,7 @@ export class WarmManager {
       // budget covers the whole process lifetime (up to maxTurns turns), not one message
       "--max-budget-usd", String(CONFIG.agent.maxBudgetUsd * this.opts.maxTurns),
     ];
-    if (this.resumeId) args.push("--resume", this.resumeId);
+    if (this.resumeId && !this.opts.stateless) args.push("--resume", this.resumeId);
     // The one send (no-send.ts): a Slack DM to the operator, for a project's Robert whose project names his
     // ids (robertSandbox hands him that project's env). The fleet-wide Robert, with no project, sends nothing.
     const selfDm = !this.opts.customArgs && this.opts.baseEnv
@@ -1214,6 +1283,13 @@ export class WarmManager {
       if (p.session_id && this.opts.onSessionId) { this.opts.onSessionId(p.session_id); this.resumeId = p.session_id; }
       const pend = this.takeOwn(child);
       pend?.resolve(typeof p.result === "string" ? p.result : "");
+      if (this.opts.stateless && this.child === child) {
+        // This conversation is over: the next turn is a new one, on a new process.
+        this.child = null;
+        child.stdin!.end();
+        if (this.opts.prewarm && !this.killed) this.spawn();
+        return;
+      }
       if (this.turns >= this.opts.maxTurns && this.child === child) {
         this.child = null; // graceful exit; next turn respawns (resuming if a session id was captured)
         child.stdin!.end();
@@ -1421,6 +1497,13 @@ export function setWebModel(model: string) {
 
 // The same switch from ⚙ Settings (the setting's kv key IS web.model): restart the warm managers.
 onSettingChange("robert.model", () => dropAllRobertManagers());
+// His MCP set is baked in at spawn: a change reaches every Robert process at its next turn.
+onSettingChange("robert.mcp", () => {
+  dropAllRobertManagers();
+  for (const m of [...tgWarm.values(), ...tgWsWarm.values()]) m.kill();
+  tgWarm.clear();
+  tgWsWarm.clear();
+});
 // What he does himself (robert-hands.ts) changes his sandbox and tool set, both baked in at spawn:
 // every Robert process respawns on its next turn — the desk's (webManager would also catch it at the
 // turn boundary) and Telegram's, which has no such check. Resume ids survive.
@@ -1540,11 +1623,12 @@ function webManager(key: string, wsId: string | null, lane: RobertLane = "operat
   const mgrs = mgrsFor(lane);
   let m = mgrs.get(key);
   const dir = webProfileDir(wsId);
-  // His walls are baked into the sandbox at spawn: a project or repo added, or robert.hands flipped,
-  // recycles him here, at the next turn boundary (the resume id survives), like a memory edit does.
+  // His walls and MCP set are baked in at spawn: a project or repo added, robert.hands flipped or
+  // robert.mcp edited recycles him here, at the next turn boundary, like a memory edit does.
   const walls = robertSandbox(wsId);
   const builtinTools = robertBuiltinTools(wsId, MANAGER_TOOLS);
-  const wallsKey = JSON.stringify([walls.readonlyDirs ?? [], builtinTools]);
+  const mcp = robertMcp(dir, wsId);
+  const wallsKey = JSON.stringify([walls.readonlyDirs ?? [], builtinTools, mcp]);
   if (m && (builtStamp.get(m) !== stampOf("robert") || m.profileDir !== dir || builtWalls.get(m) !== wallsKey)) { dropRobertManager(lane, key); m = undefined; }
   if (!m) {
     m = new WarmManager({
@@ -1561,7 +1645,13 @@ function webManager(key: string, wsId: string | null, lane: RobertLane = "operat
       profileDir: dir,
       allowedTools: MANAGER_TOOLS,
       builtinTools,
-      inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
+      // Only the servers robert.mcp names (slack by default), strict, with their logins from his profile dir.
+      ...(mcp.mcpConfig ? { mcpConfig: mcp.mcpConfig } : {}),
+      extraAllowedTools: mcp.allowedTools,
+      // Each turn is a new conversation built from our own text: the fleet, this thread's recap and the
+      // message (askManagerWeb). The chat lane keeps the next process booted; a wake pays the boot.
+      stateless: true,
+      prewarm: lane === "operator",
       // MC_AGENT_NAME signs what he does through `mc` — a keystroke he types into someone
     // else's terminal lands in the activity trail as "robert", not as the operator.
     // MC_WORKSPACE is which client THIS desk Robert belongs to: there is one warm manager per
@@ -1570,12 +1660,7 @@ function webManager(key: string, wsId: string | null, lane: RobertLane = "operat
     // there is no one right answer and the command should say so rather than guess.
     // CHRONOS_ADMIN is HIS credential — derived per workspace (or the fleet) and per lane, never the operator's
     // token (authz.ts robertToken): the server can always tell his calls from the operator's own devices.
-    extraEnv: { CHRONOS_ADMIN: robertCredential(wsId, "rw", lane), MC_AGENT_NAME: "robert", MC_API: MC_API_URL, ...(wsId ? { MC_WORKSPACE: wsId } : {}) },
-      // Each lane resumes ITS OWN session: the wake lane never writes the operator's id, or the next
-      // operator turn would --resume into a transcript full of wakes.
-      resumeSessionId: getWebSession(key, lane),
-      onSessionId: (id) => setWebSession(key, id, lane),
-      onStaleResume: () => clearWebSession(key, lane),
+    extraEnv: { CHRONOS_ADMIN: robertCredential(wsId, "rw", lane), MC_AGENT_NAME: "robert", MC_API: MC_API_URL, ...(wsId ? { MC_WORKSPACE: wsId } : {}), ...mcp.env },
       turnTimeoutMs: WEB_TURN_TIMEOUT_MS,
       maxTurns: WEB_MAX_TURNS,
     });
@@ -1845,7 +1930,7 @@ export async function askManagerWeb(
   // The live fleet first, then a recap of this workspace's thread (web + any Telegram/briefing rows
   // in it, cut at the last divider), then what he said.
   // This project's own thread recap only — never the interleaved one (workspaces never mix).
-  const recap = chatLog.contextBlock({ limit: 12, workspaceId: realWsId });
+  const recap = chatLog.contextBlock({ limit: 12, maxChars: RECAP_CHARS, workspaceId: realWsId });
   const prompt = fleetLine(realWsId) + "\n\n" + (recap || "") + (opts?.voice ? VOICE_TURN + "\n\n" : "") + text;
   // What he does himself (robert-hands.ts): Chronos itself never counts; the operator's own turn, while
   // Robert answers, gets a few calls of work outside it. Wakes, triage and watch reports carry no budget.
@@ -1983,9 +2068,9 @@ function execManager(id: string): WarmManager {
       ...(def.tools ? { allowedTools: def.tools } : {}),
       ...(def.mcp ? { mcpConfig: def.mcp } : {}),
       ...(def.sandbox ? { sandbox: def.sandbox } : {}),
-      resumeSessionId: kv.get(`${id}.session`) ?? null,
-      onSessionId: (sid) => kv.set(`${id}.session`, sid),
-      onStaleResume: () => kv.del(`${id}.session`),
+      // A new conversation per turn, like Robert's: askExec hands it the recent thread itself.
+      stateless: true,
+      prewarm: true,
       turnTimeoutMs: WEB_TURN_TIMEOUT_MS,
       maxTurns: WEB_MAX_TURNS,
     });
@@ -2070,18 +2155,21 @@ async function askExec(
   if (busy) emit(queuedNotice(busy), "tool");
   kv.set(`${id}.lastTurnAt`, String(Date.now()));
   const model = def.model || CONFIG.agent.voiceModel || "opus";
+  // Every turn is a new conversation (stateless manager): the recent thread rides in the turn itself.
+  const history = execHistory(id);
+  const turnText = history ? `Recent turns of this thread, oldest first — for continuity:\n\n${history}\n\n---\n${text}` : text;
   const reply = await withProviderFallback({
     key: id,
-    primary: () => m.turn(text, emit, opts?.origin ?? "another turn", model),
+    primary: () => m.turn(turnText, emit, opts?.origin ?? "another turn", model),
     model,
-    primaryOn: (alt) => m.turn(text, emit, opts?.origin ?? "another turn", alt),
+    primaryOn: (alt) => m.turn(turnText, emit, opts?.origin ?? "another turn", alt),
     system: m.system,
     prompt: text,
     // The engine may change; who this is must not. Persona rides in `system`; the rest of the
     // declaration (tools, MCP bundle) rides here so a fallback engine honors what it can and is
     // told what it cannot — see capabilityGap.
     agent: { name: def.name, tools: def.tools, mcpConfig: def.mcp },
-    history: execHistory(id),
+    history,
     onFallback: (fb) => emit(fallbackLine(fb), "tool"),
     // Same isolation as the primary process: a fallback must not gain an admin token or a wider
     // sandbox just because the primary backend was rate-limited.
@@ -2117,10 +2205,10 @@ function warmForChat(chat: number): WarmManager {
       profileDir: dir,
       allowedTools: MANAGER_TOOLS,
       builtinTools: robertBuiltinTools(null, MANAGER_TOOLS),
-      inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
-      resumeSessionId: getChatSession(chat) ?? null,
-      onSessionId: (id) => setChatSession(chat, id),
-      onStaleResume: () => clearChatSession(chat),
+      ...robertMcpOpts(dir, null),
+      // A new conversation per message: runAgent puts the fleet and the thread recap in the turn.
+      stateless: true,
+      prewarm: true,
       turnTimeoutMs: CONFIG.agent.timeoutSec * 1000, // opus is slow — Telegram default 180s
       maxTurns: WEB_MAX_TURNS,
     });
@@ -2160,14 +2248,14 @@ function warmForChatWs(chat: number, wsId: string): WarmManager {
       model: CONFIG.agent.model,
       allowedTools: MANAGER_TOOLS,
       builtinTools: robertBuiltinTools(wsId, MANAGER_TOOLS),
-      inheritProfileMcp: true, // his tools are the profile dir's own servers, OAuth tokens and all
-      profileDir: dir, // the workspace's account (or its sibling when walled) + skills + MCP
+      ...robertMcpOpts(dir, wsId),
+      profileDir: dir, // the workspace's account (or its sibling when walled) + skills
       // No CHRONOS_ADMIN: he reads and PROPOSES. His reads carry his project's read-only credential
       // (authz.ts robertToken "ro") — the daemon refuses any write it is used for.
-      extraEnv: { CHRONOS_READ_TOKEN: robertToken(wsId, "ro"), MC_AGENT_NAME: "robert", MC_API: MC_API_URL, MC_WORKSPACE: wsId },
-      resumeSessionId: getWebSession(key),
-      onSessionId: (id) => setWebSession(key, id),
-      onStaleResume: () => clearWebSession(key),
+      extraEnv: { CHRONOS_READ_TOKEN: robertToken(wsId, "ro"), MC_AGENT_NAME: "robert", MC_API: MC_API_URL, MC_WORKSPACE: wsId, ...robertMcp(dir, wsId).env },
+      // Same thread as the Desk through the recap runAgent puts in each turn — not a shared CLI session.
+      stateless: true,
+      prewarm: true,
       turnTimeoutMs: CONFIG.agent.timeoutSec * 1000,
       maxTurns: WEB_MAX_TURNS,
     });

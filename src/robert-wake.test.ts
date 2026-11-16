@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { wakesRobert, buildWakePrompt, robertModelFor } from "./robert-wake.js";
-import { getWebModel, setWebModel } from "./telegram/agent.js";
+import { setWebModel } from "./telegram/agent.js";
 import { tgHtmlToMarkdown } from "./telegram/api.js";
 import { kv } from "./store.js";
+import { writeSetting } from "./settings.js";
 
 test("only review.created, blocked tickets, and ask.created wake Robert", () => {
   assert.equal(wakesRobert({ topic: "review.created", review_id: "r1", run_id: "x", ticket_id: "t1" } as any), true);
@@ -74,20 +75,20 @@ test("review and blocked wakes still say what happened and forbid acting", () =>
   assert.match(blocked, /API-9 just went BLOCKED/);
 });
 
-test("robertModelFor follows the Desk pick and escalates on heavy keywords", () => {
+test("robertModelFor runs wakes on the automatic-turn model, not the Desk pick, and escalates on heavy keywords", () => {
   const prev = kv.get("web.model");
   try {
-    kv.del("web.model");
-    assert.equal(getWebModel(), "opus", "unset preference → voiceModel default (opus)");
-    assert.equal(robertModelFor("what's blocked?"), "opus");
-
-    setWebModel("haiku");
-    assert.equal(robertModelFor("what's blocked?"), "haiku");
+    setWebModel("opus");
+    writeSetting("robert.wake_model", null);
+    assert.equal(robertModelFor("what's blocked?"), "sonnet", "default: a wake is a sonnet turn even with the chat on opus");
     assert.equal(robertModelFor("think hard about the architecture"), "opus");
 
+    writeSetting("robert.wake_model", "haiku");
+    assert.equal(robertModelFor("standup"), "haiku");
     setWebModel("fable");
-    assert.equal(robertModelFor("standup"), "fable");
+    assert.equal(robertModelFor("standup"), "haiku", "the chat's model never leaks into wakes");
   } finally {
+    writeSetting("robert.wake_model", null);
     if (prev == null) kv.del("web.model");
     else kv.set("web.model", prev);
   }

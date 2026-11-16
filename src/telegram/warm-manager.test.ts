@@ -147,3 +147,28 @@ test("a fable credit wall answers the same turn on opus, once, and stays there f
     _resetProviderLimitState();
   }
 });
+
+// A stateless manager runs every turn as a new conversation: the stored session id is never resumed,
+// each turn lands on a fresh process (the fake numbers turns per process, so each answer is ok:1), and
+// prewarm leaves the next process booted.
+test("stateless: no --resume, a new process per turn, and prewarm boots the next one", async () => {
+  const argvFile = path.join(os.tmpdir(), `chronos-wm-stateless-argv-${process.pid}`);
+  const spawns = path.join(os.tmpdir(), `chronos-wm-stateless-spawns-${process.pid}`);
+  fs.rmSync(spawns, { force: true });
+  process.env.CHRONOS_FAKE_ARGV = argvFile;
+  process.env.CHRONOS_FAKE_SPAWN_LOG = spawns;
+  const m = new WarmManager({ system: "t", model: "sonnet", turnTimeoutMs: 5_000, maxTurns: 30, resumeSessionId: "old-session", stateless: true, prewarm: true });
+  try {
+    assert.equal(await m.turn("one"), "ok:1");
+    assert.equal(await m.turn("two"), "ok:1");
+    const argv = JSON.parse(fs.readFileSync(argvFile, "utf8")) as string[];
+    assert.ok(!argv.includes("--resume"));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(fs.readFileSync(spawns, "utf8").trim().split("\n").length, 3, "two turns' processes + the booted spare");
+  } finally {
+    m.kill();
+    delete process.env.CHRONOS_FAKE_ARGV;
+    delete process.env.CHRONOS_FAKE_SPAWN_LOG;
+    for (const f of [argvFile, spawns]) fs.rmSync(f, { force: true });
+  }
+});

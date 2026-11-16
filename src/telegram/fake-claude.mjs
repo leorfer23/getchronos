@@ -14,7 +14,7 @@ if (process.env.CHRONOS_FAKE_ARGV) {
 }
 // CHRONOS_FAKE_ENV=<path> dumps the env keys a test cares about (what the manager put in the env).
 if (process.env.CHRONOS_FAKE_ENV) {
-  const keys = ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "MC_OPERATOR_SLACK_DM"];
+  const keys = ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "MC_OPERATOR_SLACK_DM", "CLAUDE_CODE_DISABLE_ARTIFACT", "CLAUDE_CODE_DISABLE_WORKFLOWS", "ENABLE_CLAUDEAI_MCP_SERVERS"];
   fs.writeFileSync(process.env.CHRONOS_FAKE_ENV, JSON.stringify(Object.fromEntries(keys.map((k) => [k, process.env[k] ?? null]))));
 }
 // CHRONOS_FAKE_WALL_MODEL=<model> answers every turn of a process spawned with that --model with
