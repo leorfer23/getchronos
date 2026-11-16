@@ -136,6 +136,15 @@
     chronos[kind](formObject(f, e.submitter)).catch(fail);
   });
 
+  // ⎋ in the page closes the viewer. The viewer hands the page the keyboard, and WebKit — the engine of
+  // the Desk window — does not pass a key typed inside a frame to the dialog around it, so ⎋ did nothing
+  // there. Checked after the key has gone everywhere: a page that uses ⎋ itself (its own menu, a modal)
+  // calls preventDefault and keeps it.
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape" || e.isComposing || window.parent === window) return;
+    setTimeout(function () { if (!e.defaultPrevented) chronos.close().catch(function () {}); }, 0);
+  });
+
   if (chronos.context.status !== "open") document.documentElement.setAttribute("data-chronos-status", chronos.context.status);
   window.chronos = chronos;
 })();

@@ -996,6 +996,22 @@
   .tg-off .lp-t, .tg-off .lp-then { color:var(--faint); }
   .lp-acts button.tg-sw { min-width:52px; }
   .lp-acts button.tg-sw.on { border-color:var(--ok); color:var(--ok); background:var(--accent-soft); }
+  /* Artifacts (⋯ → 🗂 Artifacts, P — static/desk-artifacts.js): Open-loops rows, sorted the way you pick,
+     dragged into your own order. The line on a row's edge is where a drop lands. */
+  #dlg-arts { width:min(820px,94vw); }
+  #dlg-arts h3 { flex-wrap:wrap; }
+  #dlg-arts h3 .seg { margin-left:auto; }
+  #dlg-arts h3 .seg button { font-size:13.5px; padding:4px 11px; }
+  .arts-q { width:100%; height:34px; padding:0 12px; border-radius:9px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font:inherit; font-size:14px; }
+  .ag-row { grid-template-columns:26px 1fr 18px; }
+  .ag-row:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  .ag-row .lp-ico.ask { color:var(--warn); font-weight:750; }
+  .ag-row .lp-ico.done { color:var(--ok); }
+  .ag-grip { color:var(--faint); opacity:0; cursor:grab; font-size:13px; letter-spacing:-2px; line-height:22px; user-select:none; }
+  .ag-row:hover .ag-grip { opacity:1; }
+  .ag-row.dragging { opacity:.4; }
+  .ag-row.drop-before { box-shadow:inset 0 2px 0 var(--accent); }
+  .ag-row.drop-after { box-shadow:inset 0 -2px 0 var(--accent); }
   .var-rows { display:flex; flex-direction:column; gap:6px; max-height:44vh; overflow:auto; }
   .var-row { display:flex; align-items:center; gap:8px; padding:7px 9px; border:1px solid var(--line); border-radius:9px; background:var(--bg); }
   .var-row .nm { font:14.5px ui-monospace,Menlo,monospace; font-weight:600; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
@@ -1843,6 +1859,7 @@
 <div class="menu" id="menu-bar">
   <button id="btn-tomorrow">🌙 Plan tomorrow</button>
   <button id="btn-log">🗒 Log</button>
+  <button id="btn-arts" title="Every page agents published — sort them, find one, drag them into your own order (P)">🗂 Artifacts</button>
   <button id="btn-inbox" title="Every inbox item already opens its own terminal; this is the log">📥 Inbox log</button>
   <button id="btn-vars">🔑 Shared vars</button>
   <a href="/altitude" id="lnk-altitude">📊 Altitude</a>
@@ -1992,6 +2009,14 @@
   </div>
 </dialog>
 
+<dialog id="dlg-arts">
+  <div class="dlg">
+    <h3>Artifacts <span class="hint" id="arts-n"></span><div class="seg" id="arts-sort"></div><button class="icon" id="arts-close" title="Close (⎋)">✕</button></h3>
+    <input class="arts-q" id="arts-q" type="search" placeholder="Find a page — title, who made it, project" autocomplete="off" spellcheck="false">
+    <div id="arts-body" class="loops"></div>
+  </div>
+</dialog>
+
 <dialog id="dlg-loops">
   <div class="dlg">
     <h3>Open loops <span class="hint" id="loops-sum"></span><button class="icon" id="loops-close" title="Close (⎋)" style="margin-left:auto">✕</button></h3>
@@ -2013,6 +2038,7 @@
       <div><kbd>C</kbd><span>continue a finished turn · <kbd>E</kbd> Esc into it (interrupts the turn)</span></div>
       <div><kbd>N</kbd><span>new terminal: pick CLI + model, type what it should do, ⏎ · empty ⏎ = blank · <kbd>⇧N</kbd> the full dialog</span></div>
       <div><kbd>L</kbd><span>open loops: parked work, follow-ups, unanswered questions, what runs on a clock</span></div>
+      <div><kbd>P</kbd><span>artifacts: every page agents published — sort them, find one, drag them into your own order</span></div>
       <div><kbd>⇧L</kbd><span>new terminal, as a Lead — opens and drives its own terminals for this goal</span></div>
       <div><kbd>X</kbd><span>close the terminal you are in (goal done + kill; twice while it is working)</span></div>
       <div><kbd>⌘K</kbd><span><span data-an="text">Robert</span> · <kbd>⌘⇧K</kbd> full screen ↔ docked (⎋ in his box goes back too)</span></div>
@@ -2270,6 +2296,7 @@
 <script src="/desk-quick-actions.js"></script>
 <script src="/desk-scope.js"></script>
 <script src="/desk-triggers.js"></script>
+<script src="/desk-artifacts.js"></script>
 <script src="/voice-alerts.js"></script>
 <script src="/ask-card.js"></script>
 <script src="/artifact-view.js"></script>
@@ -6416,6 +6443,100 @@ function openLoops() {
 }
 qs("#btn-loops").onclick = openLoops;
 qs("#loops-close").onclick = () => qs("#dlg-loops").close();
+
+// ── artifacts ────────────────────────────────────────────────────────────────────────────────
+// Every page agents published (`mc artifact put|ask`), in the order you pick. 2026-11-16: "where do I see
+// the artifacts I made, easily, in the order I want?" — before this a page lived only as a card in the
+// chat or a pin on the terminal that made it. How rows sort and read is static/desk-artifacts.js;
+// the sort and your own order ("Mine") are this browser's (localStorage), the pages are the daemon's.
+const ARTS = {
+  rows: [], err: "", drag: null, over: null, t: 0,
+  sort: DeskArtifacts.mode(readJson("desk-arts-sort", "recent")),
+  mine: DeskArtifacts.saved(readJson("desk-arts-order", [])),
+};
+const artsSave = () => {
+  try { localStorage.setItem("desk-arts-sort", JSON.stringify(ARTS.sort)); localStorage.setItem("desk-arts-order", JSON.stringify(ARTS.mine)); } catch {}
+};
+qs("#arts-sort").innerHTML = DeskArtifacts.MODES.map((m) => `<button type="button" data-m="${m}" title="${esc(DeskArtifacts.HINT[m])}">${esc(DeskArtifacts.LABEL[m])}</button>`).join("");
+const artsShown = () => {
+  const q = qs("#arts-q").value;
+  return DeskArtifacts.order(ARTS.rows, ARTS.sort, ARTS.mine, wsName).filter((a) => DeskArtifacts.matches(a, q, wsName));
+};
+function artsRender() {
+  qsa("#arts-sort button").forEach((b) => b.classList.toggle("on", b.dataset.m === ARTS.sort));
+  const list = artsShown();
+  const all = ARTS.rows.length;
+  qs("#arts-n").textContent = !all ? "" : list.length < all ? `${list.length} of ${all}` : String(all);
+  qs("#arts-body").innerHTML =
+    ARTS.err ? `<div class="lp-none">${esc(ARTS.err)}</div>` :
+    !all ? '<div class="lp-none">No artifacts yet — an agent publishes one with <code>mc artifact put</code>.</div>' :
+    !list.length ? '<div class="lp-none">Nothing matches.</div>' :
+    DeskArtifacts.render(list, ARTS.sort, { wsBit, wsName, who: rn });
+}
+async function artsLoad() {
+  try { ARTS.rows = await api("/artifacts?limit=500"); ARTS.err = ""; }
+  catch (e) { ARTS.err = "could not read the artifacts: " + errMsg(e); }
+  // Never repaint under a drag: the row being dragged would vanish from under the pointer.
+  if (!ARTS.drag) artsRender();
+}
+function openArtifacts() {
+  const d = qs("#dlg-arts");
+  if (!d.open) { qs("#arts-q").value = ""; artsRender(); d.showModal(); qs("#arts-q").focus(); }
+  return artsLoad();
+}
+// A page published, re-published or answered while the list is open moves in it.
+const artsSoon = () => { if (!qs("#dlg-arts").open) return; clearTimeout(ARTS.t); ARTS.t = setTimeout(artsLoad, 400); };
+qs("#btn-arts").onclick = openArtifacts;
+qs("#arts-close").onclick = () => qs("#dlg-arts").close();
+qs("#arts-q").oninput = artsRender;
+qs("#arts-sort").onclick = (e) => {
+  const b = e.target.closest("button[data-m]"); if (!b) return;
+  ARTS.sort = DeskArtifacts.mode(b.dataset.m); artsSave(); artsRender();
+};
+{
+  const body = qs("#arts-body");
+  const rowOf = (e) => e.target.closest?.("[data-agid]") || null;
+  const unmark = () => qsa(".ag-row.drop-before, .ag-row.drop-after", body).forEach((r) => r.classList.remove("drop-before", "drop-after"));
+  body.addEventListener("click", (e) => { const r = rowOf(e); if (r) ArtifactView.open(r.dataset.agid); });
+  body.addEventListener("keydown", (e) => {
+    const r = rowOf(e); if (!r) return;
+    if (e.key === "Enter") { e.preventDefault(); return ArtifactView.open(r.dataset.agid); }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      // Row to row, over Project's headers.
+      e.preventDefault();
+      const all = qsa("[data-agid]", body);
+      all[all.indexOf(r) + (e.key === "ArrowDown" ? 1 : -1)]?.focus();
+    }
+  });
+  body.addEventListener("dragstart", (e) => {
+    const r = rowOf(e); if (!r) return;
+    ARTS.drag = r.dataset.agid; ARTS.over = null;
+    r.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", ARTS.drag);
+  });
+  body.addEventListener("dragover", (e) => {
+    if (!ARTS.drag) return;
+    e.preventDefault();
+    const r = rowOf(e); if (!r) return;
+    const box = r.getBoundingClientRect();
+    const after = e.clientY > box.top + box.height / 2;
+    if (ARTS.over && ARTS.over.id === r.dataset.agid && ARTS.over.after === after) return;
+    unmark();
+    ARTS.over = { id: r.dataset.agid, after };
+    if (r.dataset.agid !== ARTS.drag) r.classList.add(after ? "drop-after" : "drop-before");
+  });
+  body.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const id = ARTS.drag, over = ARTS.over;
+    if (!id || !over || over.id === id) return;
+    // Dragging in any sort makes the order yours: what is on screen now, with this one moved.
+    ARTS.mine = DeskArtifacts.drop(ARTS.mine, artsShown().map((a) => a.id), id, over.id, over.after);
+    ARTS.sort = "mine";
+    artsSave();
+  });
+  body.addEventListener("dragend", () => { ARTS.drag = null; ARTS.over = null; unmark(); artsRender(); });
+}
 qs("#loops-body").addEventListener("click", async (e) => {
   const b = e.target.closest("button, input, .lp-row");
   if (!b || b.tagName === "INPUT") return;
@@ -9463,6 +9584,7 @@ function connectBus() {
     if (ArtifactView.TOPICS.includes(e.topic)) {
       // This terminal published or re-published a page: pin it now, not on the next 30s poll.
       if (C.id && (e.session_id === C.id || (C.pins.pages || []).some((p) => p.id === e.artifact_id))) compPinsLoad(C.id, true);
+      artsSoon();
       return ArtifactView.onEvent(e);
     }
     if (e.topic === "host.online" || e.topic === "host.offline" || e.topic === "host.updated" || e.topic === "host.inventory") return loadHostsSoon();
@@ -9669,6 +9791,7 @@ document.addEventListener("keydown", (e) => {
   // ⇧L: the quick line, pre-armed to open as a Lead (LEADS.md) — no answer-key meaning to collide with.
   if (e.shiftKey && e.key.toLowerCase() === "l") { e.preventDefault(); return quickOpen(true); }
   if (k === "l") { e.preventDefault(); return openLoops(); }
+  if (k === "p") { e.preventDefault(); return openArtifacts(); }
   if (!f || !f.live) return;
   if (k === "x") { e.preventDefault(); return stageAction("close"); }
   if (k === "t") { e.preventDefault(); return setMode("term"); }
