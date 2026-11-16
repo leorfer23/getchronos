@@ -135,6 +135,20 @@ test("a fire held for the Mac to wake is not missed — it is released in the sa
   } finally { mock.timers.reset(); resetBrainAwake(); }
 });
 
+test("a held fire only spares the missed verdict — an earlier failed run in the window is still red", () => {
+  registerCronGate("held-test:", () => "gated in test");
+  const j = mkJob(ws.id, { name: "held-test:sync", cron_expr: "0 9,15 * * *" });
+  mkRun(j.id, "failed", AT_FIRE, { error: "ENOTFOUND" });
+  mock.timers.enable({ apis: ["setTimeout", "Date"], now: NOW.getTime() });
+  resetBrainAwake({ bootAt: NOW.getTime() - 86_400_000, lastWake: () => NOW.getTime() - 1_000 });
+  try {
+    fireCronWhenAwake(j);
+    const [red] = jobHealth(ws.id, { now: NOW }).red;
+    assert.equal(red?.kind, "failed");
+    assert.match(red.detail, /ENOTFOUND/);
+  } finally { mock.timers.tick(60_000); mock.timers.reset(); resetBrainAwake(); }
+});
+
 test("a fire due in the last minutes belongs to tomorrow's check", () => {
   mkJob(ws.id, { cron_expr: "57 16 * * *" }); // 3 minutes before the check
   mkJob(ws.id, { cron_expr: "0 17 * * *" });  // the same minute as the check
