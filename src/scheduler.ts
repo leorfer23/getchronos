@@ -81,6 +81,8 @@ export function cronFireWait(nowMs: number, awakeSinceMs: number): number {
   return Math.min(AWAKE_BEFORE_FIRE_MS, Math.max(0, AWAKE_BEFORE_FIRE_MS - (nowMs - awakeSinceMs)));
 }
 const waitingToFire = new Set<string>();
+/** A cron fire of this job is held until the Mac has been awake a minute — its run (or skip) is not in yet. */
+export function cronFireHeld(jobId: string): boolean { return waitingToFire.has(jobId); }
 /** The cron fire, held until the Mac has been awake a minute — re-checked each time, so a later dark wake waits again. */
 export function fireCronWhenAwake(job: Job): void {
   const wait = cronFireWait(Date.now(), brainAwakeSince());
