@@ -49,6 +49,10 @@ daemon warns about it at every boot.
   project without the var. Every Claude profile's `settings.json` gets the same hook, so the `claude`
   sessions you start yourself follow the rule too (the first change keeps the original beside it as
   `settings.json.bak-chronos-send-gate`). Other agent CLIs (cursor, grok, opencode) send nothing at all.
+- **Calendar invites wait for your yes.** In a `claude` session you started yourself, creating, changing
+  or answering a calendar event (`create_event`, `update_event`, `respond_to_event`) is not refused:
+  Claude Code shows you the call in a permission prompt, and it goes out only if you approve. Where no
+  one can answer (`claude -p`) it is refused. Agents Chronos starts still cannot send invites; they draft.
 - **Every API call names its caller.** A request to the daemon with no token is refused (only health,
   the push key, webhooks with their own secret and the one-time sign-in code are open). `CHRONOS_TOKENLESS=log`
   lets them through but records each one; `GET /api/authz/tokenless` lists who called.
