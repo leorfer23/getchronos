@@ -6,8 +6,14 @@ inside one project: its sandbox, its account, its memory. The **Desk** (`/desk`)
 ## The Desk
 
 - **The rail** (left) lists live terminals, sorted by who needs you: *needs you* → *to review* →
-  *your turn* → *stalled* → *in flight*. Below it: **Notes** (parked thoughts) and **Recent** (ended
-  terminals you can reopen with their context).
+  *your turn* → *stalled* → *in flight*. Below it: **Background**, **Notes** (parked thoughts) and
+  **Recent** (ended terminals you can reopen with their context).
+- **Background** (folded) holds terminals Chronos opened on its own (the inbox, the job check, Ship,
+  triggers, follow-ups) that need nothing from you yet. One moves up to the rail by itself when it
+  needs you: a question, a wall, a hand-off that asks for something. One that finishes asking nothing
+  closes itself after 10 minutes and shows in Recent with its summary. Type into one and it is yours.
+  ⚙ Settings → Autonomy: *Automatic terminals run in the background* and *Close a finished background
+  terminal after (min)*.
 - **The stage** (right) shows the terminal you picked.
 - **The bar** (top): counts, your CLI usage, ☀️ Start the day, 🤖 the assistant (⌘K), ⏰ open loops,
   ⋯ for Jobs, Briefs, Memory, Settings and the rest.

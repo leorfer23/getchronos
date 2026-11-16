@@ -22,6 +22,7 @@ import { maybeExpireIdeas, maybeMineIdeas } from "./ideas.js";
 import { pollDeliveries } from "./delivery.js";
 import { harvestSessionPrs, pollSessionPrs } from "./terminal-automerge.js";
 import { SHIP_BOOT_GRACE_SEC, shipPass } from "./ship-loop.js";
+import { CLOSE_BOOT_GRACE_SEC, closeQuietBackground } from "./background.js";
 import { reapDoneWorktrees } from "./worktrees.js";
 import { pruneMemoryUsage } from "./memory-usage.js";
 import { sweepColdTier } from "./cold-tier.js";
@@ -597,6 +598,8 @@ export function startMonitor() {
       await maybeDeliveryPoll();
       // Stalled work → an approve/decline card. Asks only; never resumes anything on its own.
       await sweepStalls();
+      // Background terminals that finished asking nothing of him close themselves (src/background.ts).
+      if (process.uptime() > CLOSE_BOOT_GRACE_SEC) await closeQuietBackground();
       // Work in flight with nothing armed to wake Robert is invisible on every other surface.
       await checkSupervision();
       // Holds whose date has arrived come back as the card they came from; undated ones get nudged.

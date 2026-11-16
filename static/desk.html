@@ -1749,6 +1749,9 @@
     <form class="quick" id="quick"><select id="q-ws" title="Client"></select><select id="q-backend" class="cli" title="CLI — Claude, Cursor, Grok…"></select><select id="q-model" class="model" title="Model for that CLI"></select><select id="q-host" title="Which computer it runs on" hidden></select><input id="q-goal" placeholder="what should it do? · ⏎ · empty ⏎ = blank" autocomplete="off" spellcheck="false"><button type="button" class="icon q-ship" id="q-ship" data-ship="ask" title="When it's done: ask me (click: merge → merge + deploy)">ask</button><button type="button" class="icon" id="q-focus" title="Focus only — story and composer, no live terminal">◎</button><button type="button" class="icon" id="q-lead" title="Open as a Lead — it opens and drives its own terminals for this goal">◆</button><button type="button" class="icon" id="q-more" title="With a brief, cwd… (⇧N)">⋯</button></form>
     <div class="rows" id="rows"></div>
     <div class="empty" id="rail-empty" hidden>no open terminals</div>
+    <!-- Terminals the daemon opened on its own that need nothing from you yet (src/background.ts). Folded by
+         default; one comes up onto the rail by itself the moment it needs you. -->
+    <section id="sec-bg" class="fold" hidden><h3 title="Opened on their own (inbox, job check, Ship, triggers, follow-ups) and nothing for you yet. One moves up to the rail by itself when it needs you; one that finishes with nothing for you closes itself and shows in Recent."><span>Background</span><span class="n" id="bg-n"></span><span class="rule"></span></h3><div class="rows" id="bg"></div></section>
     <section id="sec-parked" class="fold"><h3><span>Notes</span><span class="n" id="parked-n"></span><span class="rule"></span><button class="add" id="btn-note" title="Park a thought">+ note</button></h3><input class="parked-q" id="parked-q" type="search" placeholder="Filter notes…" autocomplete="off" hidden><div class="rows" id="parked"></div></section>
     <!-- The terminals that have ended, newest first. Not triage — the rail stays live-only — but the
          20 you most likely want to reread or reopen, folded away until you ask for them. -->
@@ -2474,10 +2477,13 @@ const phaseSince = (s) => (s.status?.since ? s.status.since : rank(s) <= 3 && s.
 // oldest first inside the group — a row keeps its place instead of jumping every time its phase moves.
 // Terminals with no workspace go last.
 const railWs = (s) => (s.workspace_id ? wsName(s.workspace_id) : "");
+const railSort = (a, b) => (!a.workspace_id - !b.workspace_id) || railWs(a).localeCompare(railWs(b)) || (a.workspace_id || "").localeCompare(b.workspace_id || "") || a.created_at.localeCompare(b.created_at);
+// Opened by the daemon, nothing for you yet (src/background.ts): under the Background fold, not on the rail.
+const bgOf = (s) => !!(s && s.live && s.status?.background);
 function railOrder() {
-  return S.sessions.filter((s) => s.live && !S.dismissed.has(s.id))
-    .sort((a, b) => (!a.workspace_id - !b.workspace_id) || railWs(a).localeCompare(railWs(b)) || (a.workspace_id || "").localeCompare(b.workspace_id || "") || a.created_at.localeCompare(b.created_at));
+  return S.sessions.filter((s) => s.live && !S.dismissed.has(s.id) && !bgOf(s)).sort(railSort);
 }
+const bgOrder = () => S.sessions.filter((s) => bgOf(s) && !S.dismissed.has(s.id)).sort(railSort);
 // A Lead's workers fold under it (2026-09-18: sub agents must not bloat the rail). Folded is the
 // default; ▸ N unfolds one Lead. A worker that is blocked or deciding lifts its whole group to that
 // band and turns the fold red, so a wall behind a fold still surfaces.
@@ -2539,7 +2545,7 @@ function render() {
   DeskCockpit.refresh(4000); // a terminal opened or ended: its PRs may have moved (renderCounts repaints the rest)
 }
 function renderCounts() {
-  const live = S.sessions.filter((s) => s.live && !S.dismissed.has(s.id));
+  const live = S.sessions.filter((s) => s.live && !S.dismissed.has(s.id) && !bgOf(s));
   const n = (...ph) => live.filter((s) => ph.includes(phaseOf(s))).length;
   const need = live.filter((s) => needOf(s)).length, blocked = n("blocked"), turn = n("your_turn"), waiting = n("waiting"), working = n("working"), stalled = n("stalled");
   AskCard.recount();
@@ -2691,7 +2697,22 @@ function renderRail() {
     if (b !== null) last = b;
   }
   qs("#rail-empty").hidden = rows.length > 0 || !!qs("#rows .pending");
+  renderBg();
 }
+// The Background fold: its count always, its rows only when you unfold it. Hidden with none.
+function renderBg() {
+  const all = bgOrder();
+  const sec = qs("#sec-bg");
+  const shut = S.fold.bg !== false;
+  sec.hidden = !all.length;
+  sec.classList.toggle("fold", shut);
+  qs("#bg-n").textContent = all.length ? String(all.length) : "";
+  reconcile(qs("#bg"), shut ? [] : all, rowEl, paintRow);
+}
+qs("#sec-bg h3").onclick = () => {
+  S.fold.bg = S.fold.bg === false; localStorage.setItem("desk-fold", JSON.stringify(S.fold));
+  renderBg();
+};
 // The stage holds a live terminal, or the ended one you chose, or — with nothing open — Robert.
 function ensureActive() {
   const cur = S.active && byId(S.active);
@@ -5744,7 +5765,7 @@ const NOTIFY_COOLDOWN_MS = 90_000;
 const NOTIFY_MAX = 3;
 const bridge = () => window.webkit?.messageHandlers?.mc;
 function attention(s) {
-  if (!s.live || S.dismissed.has(s.id)) return;
+  if (!s.live || S.dismissed.has(s.id) || bgOf(s)) return;
   if (document.hasFocus() && !document.hidden) return;
   const last = S.notified.get(s.id) || 0;
   if (Date.now() - last < NOTIFY_COOLDOWN_MS) return;
@@ -9660,7 +9681,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 // Ages drift; nothing else here is on a timer.
-setInterval(() => { for (const s of railOrder()) repaintRow(s.id); if (S.active) renderStage(); renderParked(); }, 30000);
+setInterval(() => { for (const s of [...railOrder(), ...bgOrder()]) repaintRow(s.id); if (S.active) renderStage(); renderParked(); }, 30000);
 // The one clock every indicator blinks to (see .dot.working) — two repaints a second, no animation.
 // The companion's elapsed times ride it: a text compare per field, and the timeline diff is skipped
 // outright when no event has landed since the last paint (compRows' signature).

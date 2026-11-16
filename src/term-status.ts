@@ -27,6 +27,7 @@ import { brainAwakeSince } from "./brain-awake.js";
 import { hostOnline } from "./hosts/index.js";
 import { LOCAL_HOST_ID } from "./store/hosts.js";
 import { assistantName, setting } from "./settings.js";
+import { backgroundOf } from "./background.js";
 
 export const PHASES = ["blocked", "decide", "review", "your_turn", "waiting", "working", "stalled"] as const;
 export type Phase = (typeof PHASES)[number] | "ended";
@@ -88,6 +89,12 @@ export type TermStatus = {
    * menu has been read off the screen.
    */
   permission?: { tool: string; input: string | null; about: string | null; question: string | null; options: PromptOption[] | null };
+  /**
+   * Out of sight (src/background.ts): the daemon opened it, nobody has typed into it, and it does not
+   * need the operator right now. The Desk and the phone keep it off the rail; it comes back the moment
+   * it does. Absent = on the rail.
+   */
+  background?: true;
 };
 
 export const WORD: Record<Phase, string> = {
@@ -442,7 +449,8 @@ export function statusOf(id: string, now = Date.now()): TermStatus | null {
   const since = prev && prev.phase === r.phase ? prev.at : r.phase === "your_turn" && act.last_out ? act.last_out : now;
   if (!prev || prev.phase !== r.phase) { phaseAt.set(id, { phase: r.phase, at: since }); recordPhase(id, r.phase, since); }
   const permission = permissionOf(id, sig);
-  return { ...r, since, ...(mine ? { asks: mine } : {}), ...(permission ? { permission } : {}) };
+  const background = backgroundOf(s, r.phase, mine, act.last_in);
+  return { ...r, since, ...(mine ? { asks: mine } : {}), ...(permission ? { permission } : {}), ...(background ? { background: true as const } : {}) };
 }
 function parseOptions(o: unknown): string[] {
   if (Array.isArray(o)) return o.map(String);
