@@ -18,7 +18,7 @@
  */
 import { CONFIG } from "./config.js";
 import { db, robertWakes, sessions, workspaces } from "./store.js";
-import { enqueueWake, QUIET_REPLY, SWEEP_KEY, WAKE_ATTEMPT_CAP } from "./wake-queue.js";
+import { enqueueWake, lastQuietSweep, QUIET_REPLY, SWEEP_KEY, WAKE_ATTEMPT_CAP } from "./wake-queue.js";
 import { isStopped } from "./robert-drive.js";
 import { statusOf, type TermStatus } from "./term-status.js";
 import { settingOn } from "./settings.js";
@@ -30,16 +30,38 @@ export function setSweepProbe(fn: Probe): void { probe = fn; }
 
 const goalOf = (s: { goal?: string | null; spawn_goal?: string | null }) => (s.goal ?? s.spawn_goal ?? "").trim();
 
-/** Live terminals in this workspace that are working right now. */
-export function workingIn(wsId: string): number {
-  return sessions
-    .list({ workspace_id: wsId, status: "live", limit: 200 })
-    .filter((s) => !!goalOf(s))
-    .filter((s) => {
-      const st = probe(s.id);
-      return !!st && !isStopped(st);
-    }).length;
+/** Live terminals in this workspace that are working right now, with what each one's card says. */
+function workingTerms(wsId: string): { id: string; st: TermStatus }[] {
+  const out: { id: string; st: TermStatus }[] = [];
+  for (const s of sessions.list({ workspace_id: wsId, status: "live", limit: 200 })) {
+    if (!goalOf(s)) continue;
+    const st = probe(s.id);
+    if (st && !isStopped(st)) out.push({ id: s.id, st });
+  }
+  return out;
 }
+
+/** How many live terminals in this workspace are working right now. */
+export function workingIn(wsId: string): number {
+  return workingTerms(wsId).length;
+}
+
+/**
+ * The fleet's shape as a sweep sees it: each working terminal's phase, step and card line. Equal to
+ * the last QUIET sweep's means nothing moved since he looked and found nothing to do.
+ */
+export function workingSig(wsId: string): string {
+  return workingTerms(wsId)
+    .map(({ id, st }) => [id, st.phase, st.since, st.progress?.n ?? "", st.asks ?? 0, st.line].join("|"))
+    .sort()
+    .join("\n");
+}
+
+/**
+ * An unmoved fleet is looked at again after this long anyway: a terminal that stopped making progress
+ * without changing its card is what the stall detector is for, but the sweep still gets a look.
+ */
+export const SWEEP_RECHECK_MS = 30 * 60_000;
 
 export function sweepSay(wsName: string, working: number, everyMin: number): string {
   return (
@@ -53,7 +75,7 @@ export function sweepSay(wsName: string, working: number, everyMin: number): str
 }
 
 /** One pass: queue a sweep for every workspace with work in flight. Returns the workspace ids swept. */
-export function sweepOnce(everyMin = CONFIG.robertSweepMin): string[] {
+export function sweepOnce(everyMin = CONFIG.robertSweepMin, nowMs = Date.now()): string[] {
   const swept: string[] = [];
   // One self-wake per pass across every workspace: the first pass after a deploy sees every fact as
   // new, and eight Robert turns at once is the burst the quiet path exists to avoid. The rest wait
@@ -76,6 +98,11 @@ export function sweepOnce(everyMin = CONFIG.robertSweepMin): string[] {
       continue;
     }
     if (!settingOn("robert.sweep", ws.id)) continue;
+    // Nothing moved since his last look found nothing to do: that look would find nothing again, and a
+    // model turn for it is the most common turn he takes. No model, until the fleet changes or a while passes.
+    const sig = workingSig(ws.id);
+    const quiet = lastQuietSweep(ws.id);
+    if (quiet && quiet.sig === sig && nowMs - quiet.at < SWEEP_RECHECK_MS) continue;
     const key = `${SWEEP_KEY}${ws.id}`;
     // A sweep is a snapshot: one that failed its way to parked is stale, and left unacked it would
     // absorb every later sweep for this workspace (same key) and silence it for good.
@@ -88,7 +115,7 @@ export function sweepOnce(everyMin = CONFIG.robertSweepMin): string[] {
       key,
       subject: null,
       workspace_id: ws.id,
-      payload: { say: sweepSay(ws.name, working, everyMin), working },
+      payload: { say: sweepSay(ws.name, working, everyMin), working, sig },
     });
     swept.push(ws.id);
   }

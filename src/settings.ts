@@ -500,6 +500,24 @@ defineSetting({
   options: () => ["opus", "sonnet", "fable", "haiku"],
   default: () => CONFIG.agent.voiceModel,
 });
+// His automatic turns (sweeps, self-wakes, ask/review triage) mostly read the fleet and answer QUIET.
+// On 2026-11-16 they were 53% of a 5-hour window on Opus; Sonnet reads a fleet just as well at half the price.
+defineSetting({
+  key: "robert.wake_model", group: "Robert", level: "global", type: "enum", env: "CHRONOS_ROBERT_WAKE_MODEL",
+  label: "Model for his automatic turns",
+  help: "Wake-ups, check-ins and triage — the turns nobody typed. A wake whose text asks for deep thinking still runs on opus.",
+  options: () => ["sonnet", "haiku", "opus", "fable"],
+  default: () => process.env.CHRONOS_ROBERT_WAKE_MODEL || "sonnet",
+});
+// Every MCP server he loads puts its tool names on every request, and one that connects late changes his
+// tool list mid-turn — which throws away the cached prompt. In 14 days (1326 Robert sessions) he made 8
+// MCP calls in all (5 slack, 3 atlassian): Bash and `mc` are his tools.
+defineSetting({
+  key: "robert.mcp", group: "Robert", level: "both", type: "list", env: "CHRONOS_ROBERT_MCP",
+  label: "MCP servers Robert loads",
+  help: "Server names from this workspace's Claude profile. slack carries his one send (your DM) and his Slack drafts. Only these load, never a claude.ai connector — terminals have the rest. Empty: none, he works through Bash and `mc`.",
+  default: () => (process.env.CHRONOS_ROBERT_MCP ?? "slack").split(",").map((s) => s.trim()).filter(Boolean),
+});
 
 // Voice (src/talker.ts, src/voice-lang.ts, src/transcribe.ts): the one conversation he has with Robert.
 defineSetting({

@@ -47,6 +47,32 @@ export const QUIET_REPLY = "QUIET";
 /** A turn made only of sweeps that came back QUIET: nothing to show anyone. Pure. */
 export const quietSweep = (rows: Pick<RobertWake, "key">[], text: string): boolean =>
   rows.length > 0 && rows.every((r) => r.key.startsWith(SWEEP_KEY)) && text.replace(/[`*.\s]/g, "").toUpperCase() === QUIET_REPLY;
+/**
+ * The last sweep of a workspace that found nothing to do: the fleet's shape it saw (robert-sweep.ts
+ * workingSig) and when. A sweep over a fleet that has not moved since then would find nothing again,
+ * so the next pass skips the model (robert-sweep.ts sweepOnce). A sweep that acted clears it.
+ */
+const SWEEP_QUIET_KEY = "robert.sweepQuiet:";
+export function lastQuietSweep(scope: string): { sig: string; at: number } | null {
+  try {
+    const v = JSON.parse(kv.get(SWEEP_QUIET_KEY + scope) ?? "null");
+    return v && typeof v.sig === "string" && Number.isFinite(v.at) ? v : null;
+  } catch {
+    return null;
+  }
+}
+function noteSweepOutcome(scope: string, rows: Pick<RobertWake, "key" | "payload">[], quiet: boolean, nowMs: number): void {
+  if (!rows.some((r) => r.key.startsWith(SWEEP_KEY))) return;
+  if (!quiet) { kv.del(SWEEP_QUIET_KEY + scope); return; }
+  // The newest sweep row's view of the fleet (a queued sweep absorbs later ones, so take the last).
+  let sig: string | null = null;
+  for (const r of rows) {
+    if (!r.key.startsWith(SWEEP_KEY) || !r.payload) continue;
+    try { sig = (JSON.parse(r.payload) as { sig?: string }).sig ?? sig; } catch {}
+  }
+  if (sig) kv.set(SWEEP_QUIET_KEY + scope, JSON.stringify({ sig, at: nowMs }));
+}
+
 /** How often the drain loop looks for queued wakes. Also sets the beacon cadence. */
 export const WAKE_DRAIN_MS = 30_000;
 /** Failed turns before a row is parked for a human instead of retried forever. */
@@ -237,7 +263,9 @@ export async function drainScope(scope: string, nowMs = Date.now()): Promise<Dra
       const text = (reply || "").trim();
       // A turn that produced no words still happened; acking it is what keeps an empty reply from
       // re-presenting the same wakes every 30 seconds forever.
-      if (quietSweep(rows, text)) console.log(`[robert-sweep] ${scope}: quiet`);
+      const quiet = quietSweep(rows, text);
+      noteSweepOutcome(scope, rows, quiet, nowMs);
+      if (quiet) console.log(`[robert-sweep] ${scope}: quiet`);
       else if (text || steps?.length) poster({ body: text, ticket_id: rows.length === 1 ? rows[0].subject : null, workspace_id: wsId, steps, turn, engine });
       robertWakes.ackIds(ids, WAKE_ATTEMPT_CAP);
       return "drained";

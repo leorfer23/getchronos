@@ -4,9 +4,9 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { db, sessions, workspaces } from "./store.js";
+import { db, kv, sessions, workspaces } from "./store.js";
 import { drainScope, quietSweep, setWakeAsker, setWakeNotifier, setWakePoster, SWEEP_KEY, WAKE_ATTEMPT_CAP } from "./wake-queue.js";
-import { setSweepProbe, sweepOnce, sweepSay, workingIn } from "./robert-sweep.js";
+import { setSweepProbe, sweepOnce, sweepSay, SWEEP_RECHECK_MS, workingIn } from "./robert-sweep.js";
 import { writeSetting } from "./settings.js";
 import type { TermStatus } from "./term-status.js";
 
@@ -112,9 +112,43 @@ test("drainScope: a QUIET sweep is acked and never posted; a sweep that acted is
   assert.deepEqual(posted, []);
   assert.ok(wakes()[0].acked_at, "acked, so the next interval queues a fresh one");
   setWakeAsker(async () => "Told 1a2b3c4d to open the PR.");
+  for (const v of screens.values()) v.line = "moved on"; // the fleet moved, so the next sweep looks again
   sweepOnce(5);
   assert.equal(await drainScope(w), "drained");
   assert.deepEqual(posted, ["Told 1a2b3c4d to open the PR."]);
+});
+
+test("sweepOnce: after a QUIET look, an unmoved fleet costs no model turn until it moves or half an hour passes", async () => {
+  reset();
+  const w = ws().id;
+  kv.del(`robert.sweepQuiet:${w}`);
+  const t = term(w, "working", { line: "running tests" });
+  let asked = 0;
+  setWakeAsker(async () => { asked++; return "QUIET"; });
+  setWakePoster(() => {});
+  const t0 = Date.now();
+  assert.deepEqual(sweepOnce(5, t0), [w]);
+  await drainScope(w, t0);
+  assert.equal(asked, 1);
+  assert.deepEqual(sweepOnce(5, t0 + 5 * 60_000), [], "nothing moved since he found nothing to do");
+  screens.get(t.id)!.line = "tests passed, opening the PR";
+  assert.deepEqual(sweepOnce(5, t0 + 10 * 60_000), [w], "the card moved: he looks");
+  await drainScope(w, t0 + 10 * 60_000);
+  assert.deepEqual(sweepOnce(5, t0 + 15 * 60_000), []);
+  assert.deepEqual(sweepOnce(5, t0 + 10 * 60_000 + SWEEP_RECHECK_MS), [w], "and an unmoved fleet still gets a look every half hour");
+  kv.del(`robert.sweepQuiet:${w}`);
+});
+
+test("sweepOnce: a sweep that acted never silences the next one", async () => {
+  reset();
+  const w = ws().id;
+  kv.del(`robert.sweepQuiet:${w}`);
+  term(w, "working");
+  setWakeAsker(async () => "Told 1a2b3c4d to rerun CI.");
+  setWakePoster(() => {});
+  sweepOnce(5);
+  await drainScope(w);
+  assert.deepEqual(sweepOnce(5), [w]);
 });
 
 test("sweepSay: tells him the cadence, the count and the QUIET contract", () => {
