@@ -294,3 +294,27 @@ test("a terminal's pages are pinned beside it, and only its own", async () => {
   const pins = await sessionArtifacts(sessions.get(term.id)!, []);
   assert.deepEqual(pins.pages.map((p) => [p.id, p.title, p.status, p.asks]), [[mine.artifact.id, "Mine", "open", false]]);
 });
+
+test("⎋ in a page closes the viewer — unless the page kept ⎋ for itself", () => {
+  // WebKit (the Desk window) does not pass a key typed in the frame to the dialog around it.
+  const sent: any[] = [];
+  const on: Record<string, ((e: any) => void)[]> = {};
+  const timers: (() => void)[] = [];
+  const win: any = { __CHRONOS__: { id: "a1" }, parent: { postMessage: (m: any) => sent.push(m) }, addEventListener() {} };
+  const doc = { addEventListener: (t: string, fn: (e: any) => void) => (on[t] ||= []).push(fn), documentElement: { setAttribute() {} } };
+  vm.runInNewContext(fs.readFileSync(path.join(process.cwd(), "static/artifact-sdk.js"), "utf8"), {
+    window: win, document: doc, console, Promise, setTimeout: (fn: () => void) => { timers.push(fn); return 0; },
+  });
+  const key = (k: string, o: { keep?: boolean; composing?: boolean } = {}) => {
+    const e: any = { key: k, isComposing: !!o.composing, defaultPrevented: false };
+    for (const fn of on.keydown) fn(e);
+    if (o.keep) e.defaultPrevented = true; // the page's own handler, after the SDK's
+    for (const fn of timers.splice(0)) fn();
+  };
+  key("a");
+  key("Escape", { keep: true });
+  key("Escape", { composing: true });
+  assert.equal(sent.filter((m) => m.type === "close").length, 0, "another key, the page's own ⎋, an IME ⎋: nothing");
+  key("Escape");
+  assert.deepEqual(sent.map((m) => m.type), ["close"]);
+});
