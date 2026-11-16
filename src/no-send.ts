@@ -35,7 +35,8 @@
  * profile's settings.json gets the same hook too (installClaudeSendGate), over every send tool: there it
  * is the only thing between an agent and a send. Its allowlist comes from the session's env (a Chronos
  * process: its own workspace's ids) or, outside Chronos, from the daemon — the ids of the one workspace
- * that runs on that profile (profileSelfSend). Nobody else, from anywhere.
+ * that runs on that profile (profileSelfSend). Nobody else, from anywhere. There a calendar invite
+ * (CALENDAR_ASK_TOOLS) is neither refused nor let through: the gate asks him.
  */
 
 import fs from "node:fs";
@@ -73,6 +74,16 @@ const SEND_TOOLS = [
  * stays denied outright. scripts/mc SLACK_SELF_SEND mirrors it (a test keeps them equal).
  */
 export const SLACK_SELF_SEND_TOOLS = ["slack_send_message", "slack_schedule_message"];
+
+/**
+ * Calendar invites, updates and RSVPs (2026-11-16): they go out on the operator's yes. In a session he
+ * started by hand the profile's gate answers Claude Code's "ask" for these, so the permission prompt shows
+ * him the exact call; where no one can answer it (claude -p) Claude Code denies it. Every Chronos spawn
+ * still denies them by flag (they stay in SEND_TOOLS): a Desk terminal runs with
+ * --dangerously-skip-permissions, and whether a hook's "ask" still prompts there is not established.
+ * scripts/mc CALENDAR_ASK mirrors it (a test keeps them equal).
+ */
+export const CALENDAR_ASK_TOOLS = ["create_event", "update_event", "respond_to_event"];
 
 /** Server names in use across the operator's profiles (MCP servers, plugins, claude.ai connectors). */
 const KNOWN_SERVERS = [
@@ -259,22 +270,28 @@ export function slackSelfSendRules(): string[] {
 
 /** The line mc prints when a call may go. The hook passes on this exact line only — never on silence. */
 export const SEND_GATE_PASS = "chronos-send-gate: pass";
+/** How mc's answer for a CALENDAR_ASK_TOOLS call starts and ends: Claude Code's "ask" decision, printed as-is on exit 0. */
+export const SEND_GATE_ASK_HEAD = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"';
+export const SEND_GATE_ASK_TAIL = '"}}';
 const SEND_GATE_FAILED =
   "Chronos blocked this send: the send gate could not check where it goes. Leave a draft instead " +
   "(slack_send_message_draft, Gmail create_draft, or the text in your terminal) and tell the operator where it is.";
 
 /**
- * The hook command. `mc hook send-gate` prints SEND_GATE_PASS or why it refuses ("Chronos blocked …");
- * anything else — mc missing or crashing, an mc older than this gate that prints nothing, any other
- * output — ends in exit 2 with SEND_GATE_FAILED, which Claude Code treats as a refusal (any exit code but
- * 2 would let the call through). `--allow` carries the spawn's own ids, [A-Z0-9] only: nothing to quote.
+ * The hook command. `mc hook send-gate` prints SEND_GATE_PASS, an "ask" for a calendar invite (the JSON
+ * Claude Code reads on exit 0: the operator decides in a permission prompt), or why it refuses ("Chronos
+ * blocked …"); anything else — mc missing or crashing, an mc older than this gate that prints nothing, any
+ * other output — ends in exit 2 with SEND_GATE_FAILED, which Claude Code treats as a refusal (any exit code
+ * but 2 would let the call through). The worst an ask can turn into is a prompt, never a send on its own.
+ * `--allow` carries the spawn's own ids, [A-Z0-9] only: nothing to quote.
  */
 export function sendGateCommand(allow?: string[]): string {
   const ids = (allow ?? []).filter((i) => SLACK_SELF_ID.test(i));
   const a = allow ? ` --allow ${ids.length ? ids.join(",") : '""'}` : "";
   return (
     `o=$("$HOME/.mc/bin/mc" hook send-gate${a} 2>/dev/null) || o=""; [ "$o" = "${SEND_GATE_PASS}" ] && exit 0; ` +
-    `case "$o" in "Chronos blocked "*) ;; *) o="${SEND_GATE_FAILED}" ;; esac; printf '%s\\n' "$o" >&2; exit 2`
+    `case "$o" in '${SEND_GATE_ASK_HEAD}'*'${SEND_GATE_ASK_TAIL}') printf '%s\\n' "$o"; exit 0 ;; ` +
+    `"Chronos blocked "*) ;; *) o="${SEND_GATE_FAILED}" ;; esac; printf '%s\\n' "$o" >&2; exit 2`
   );
 }
 

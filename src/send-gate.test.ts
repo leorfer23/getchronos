@@ -100,6 +100,34 @@ test("refused outright: email, comments and every other send tool, allowlist or 
   }
 });
 
+const asksOf = (out: string) => JSON.parse(out).hookSpecificOutput;
+
+test("a calendar invite, update or RSVP goes to the operator for a yes — on any server, in any session, list or not", async () => {
+  for (const tool of NS.CALENDAR_ASK_TOOLS) {
+    for (const [server, o] of [["claude_ai_Google_Calendar", {}], ["gcal", { allow: SELF }], ["claude_ai_Google_Calendar", { env: { MC_SESSION: "t1" } }]] as const) {
+      const out = await gate(call(`mcp__${server}__${tool}`, { summary: "1:1", attendees: ["someone@example.com"] }), o);
+      assert.ok(out.startsWith(NS.SEND_GATE_ASK_HEAD) && out.endsWith(NS.SEND_GATE_ASK_TAIL), out);
+      const h = asksOf(out);
+      assert.equal(h.permissionDecision, "ask");
+      assert.equal(h.hookEventName, "PreToolUse");
+      assert.match(h.permissionDecisionReason, new RegExp(`mcp__${server}__${tool}`));
+    }
+  }
+  // Only those three: deleting, reading and every other send tool are not asked about.
+  await refuses(call("mcp__claude_ai_Gmail__send_message", { to: "x" }), { allow: SELF }, /agents do not send/);
+  assert.ok(!(await gate(call("mcp__claude_ai_Google_Calendar__create_event_x", {}))).startsWith(NS.SEND_GATE_ASK_HEAD), "a whole-name match only");
+});
+
+test("Chronos spawns still deny calendar invites by flag; a profile's hook routes them through the gate", () => {
+  const rules = new Set(NS.claudeNoSendRules());
+  const re = new RegExp(NS.SEND_GATE_PROFILE_MATCHER);
+  for (const t of NS.CALENDAR_ASK_TOOLS) {
+    assert.ok(rules.has(`mcp__*__${t}`) && rules.has(`mcp__claude_ai_Google_Calendar__${t}`), t);
+    assert.ok(re.test(`mcp__claude_ai_Google_Calendar__${t}`), t);
+    assert.ok(!new RegExp(NS.SEND_GATE_FLAG_MATCHER).test(`mcp__claude_ai_Google_Calendar__${t}`), "the spawn's own gate never sees them");
+  }
+});
+
 test("fails closed: malformed or empty input, a missing or malformed allowlist", async () => {
   await refuses("not json", { allow: SELF });
   await refuses("", { allow: SELF });
@@ -180,11 +208,24 @@ test("the hook command fails closed: only mc's pass line lets a call through (ex
   }
   const missing = hookRun(cmd, "{}");
   assert.equal(missing.status, 2, "no mc at all");
+  // An ask is printed for Claude Code on exit 0 — only whole: a half of one is a refusal.
+  const askLine = `${NS.SEND_GATE_ASK_HEAD}Chronos: approve?${NS.SEND_GATE_ASK_TAIL}`;
+  const ask = hookRun(cmd, "{}", `#!/bin/sh\nprintf '%s' '${askLine}'\n`);
+  assert.equal(ask.status, 0);
+  assert.equal(ask.stdout.trim(), askLine);
+  for (const [what, body] of [["head only", `#!/bin/sh\nprintf '%s' '${NS.SEND_GATE_ASK_HEAD}x'\n`], ["an allow", `#!/bin/sh\nprintf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'\n`]] as const) {
+    const r = hookRun(cmd, "{}", body);
+    assert.equal(r.status, 2, what);
+    assert.equal(r.stdout, "", what);
+  }
   // End to end with the real mc behind it.
   const real = fs.readFileSync(MC, "utf8");
   assert.equal(hookRun(cmd, send({ channel_id: SELF_D, message: "hi" }), real).status, 0);
   assert.equal(hookRun(cmd, send({ channel_id: "C0CHAN0001", message: "hi" }), real).status, 2);
   assert.equal(hookRun(NS.sendGateCommand(), send({ channel_id: SELF_D, message: "hi" }), real).status, 2, "a profile's hook with no list and no daemon: refused");
+  const invite = hookRun(NS.sendGateCommand(), call("mcp__claude_ai_Google_Calendar__create_event", { summary: "sync", attendees: ["a@example.com"] }), real);
+  assert.equal(invite.status, 0, "a profile's hook asks about an invite");
+  assert.equal(asksOf(invite.stdout).permissionDecision, "ask");
 });
 
 test("scripts/mc gates the same posting tools and prints the same pass line as no-send.ts", () => {
@@ -193,6 +234,9 @@ test("scripts/mc gates the same posting tools and prints the same pass line as n
   assert.ok(m, "SLACK_SELF_SEND in scripts/mc");
   assert.deepEqual(JSON.parse(m![1]), NS.SLACK_SELF_SEND_TOOLS);
   assert.ok(src.includes(`const GATE_PASS = ${JSON.stringify(PASS)};`));
+  const c = src.match(/const CALENDAR_ASK = (\[[^\]]*\]);/);
+  assert.ok(c, "CALENDAR_ASK in scripts/mc");
+  assert.deepEqual(JSON.parse(c![1]), NS.CALENDAR_ASK_TOOLS);
 });
 
 // ── the spawn's argv ──────────────────────────────────────────────────────────────────────────────

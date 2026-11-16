@@ -826,16 +826,30 @@ async function hook(backend, mode) {
 
 /**
  * `mc hook send-gate` — the PreToolUse hook on claude's send tools (src/no-send.ts, "THE SEND GATE"). The
- * one send any agent may make is a Slack DM to the operator himself: slack_send_message / _schedule_message
- * whose channel_id is one of his own ids in that workspace's Slack. Every other send tool is refused, and so
- * is anything this cannot read. Prints GATE_PASS or the reason; the hook command turns every other outcome
- * (a crash, no output) into a refusal, so a bug here can only block a send, never let one out.
+ * one send any agent may make on its own is a Slack DM to the operator himself: slack_send_message /
+ * _schedule_message whose channel_id is one of his own ids in that workspace's Slack. A calendar invite
+ * goes to him for a yes (CALENDAR_ASK). Every other send tool is refused, and so is anything this cannot
+ * read. Prints GATE_PASS, the ask, or the reason; the hook command turns every other outcome (a crash, no
+ * output) into a refusal, so a bug here can only block a send, never let one out.
  */
 const SLACK_SELF_SEND = ["slack_send_message", "slack_schedule_message"]; // = SLACK_SELF_SEND_TOOLS in src/no-send.ts
 // What a posting call may carry besides where it goes: the words and how they render. Any other field
 // (draft_id — a stored draft goes wherever IT was addressed) means the gate cannot tell where it lands.
 const SLACK_SELF_FIELDS = ["channel_id", "message", "text", "thread_ts", "reply_broadcast", "unfurl_links", "unfurl_media", "unfurl_app_links"];
 const GATE_PASS = "chronos-send-gate: pass"; // = SEND_GATE_PASS in src/no-send.ts
+/**
+ * Calendar invites go out only on the operator's yes: for these the gate answers Claude Code's "ask", so the
+ * session shows HIM the call (attendees, time) in a permission prompt. Where no one can answer (claude -p),
+ * Claude Code denies it. Chronos spawns still deny these tools by flag; this reaches sessions he starts by hand.
+ */
+const CALENDAR_ASK = ["create_event", "update_event", "respond_to_event"]; // = CALENDAR_ASK_TOOLS in src/no-send.ts
+const calendarAsk = (tool) => JSON.stringify({
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    permissionDecision: "ask",
+    permissionDecisionReason: `Chronos: ${tool} reaches every attendee under your name. Approve to send it; reject and the agent leaves a draft.`,
+  },
+});
 const GATE_DRAFT = "Leave a draft instead (slack_send_message_draft, Gmail create_draft, or the text in your terminal) and tell the operator where it is.";
 /** His ids from OPERATOR_SLACK_SELF_IDS — one entry that is not a U…/W…/D… id and the list counts as unset. */
 const slackSelfIds = (raw) => {
@@ -894,8 +908,11 @@ async function sendGate(opt) {
     let j = null;
     try { j = JSON.parse(raw); } catch {}
     const tool = /^mcp__.+__([A-Za-z0-9_]+)$/.exec(typeof j?.tool_name === "string" ? j.tool_name : "");
-    const allow = tool && SLACK_SELF_SEND.includes(tool[1]) ? await sendGateAllow(opt) : [];
-    out = sendGateVerdict(j, allow) ?? GATE_PASS;
+    if (tool && CALENDAR_ASK.includes(tool[1])) out = calendarAsk(tool[0]);
+    else {
+      const allow = tool && SLACK_SELF_SEND.includes(tool[1]) ? await sendGateAllow(opt) : [];
+      out = sendGateVerdict(j, allow) ?? GATE_PASS;
+    }
   } catch (e) {
     out = `Chronos blocked this send: the send gate failed (${String(e?.message ?? e).slice(0, 160)}). ${GATE_DRAFT}`;
   }
