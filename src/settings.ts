@@ -332,6 +332,19 @@ defineSetting({
   help: "A quick first pass reads each item before its terminal opens. Thanks, FYIs, shared links and repeats of a live terminal close in the Inbox log instead (Reopen there opens one). Off: every item opens.",
   default: () => process.env.CHRONOS_INBOX_TRIAGE !== "0",
 });
+// Terminals the daemon opens on its own run out of sight until they need you (src/background.ts).
+defineSetting({
+  key: "desk.background", group: "Autonomy", level: "both", type: "bool", env: "CHRONOS_DESK_BACKGROUND",
+  label: "Automatic terminals run in the background",
+  help: "Terminals opened by the inbox, the job check, Ship, triggers, follow-ups or Robert on his own stay off the rail (one \"N in the background\" line) until they need you: a question, a wall, a hand-off that asks for something. Type into one and it is yours. Off: every terminal shows on the rail.",
+  default: () => process.env.CHRONOS_DESK_BACKGROUND !== "0",
+});
+defineSetting({
+  key: "desk.background_close_min", group: "Autonomy", level: "both", type: "int", min: 0, max: 1440, env: "CHRONOS_DESK_BACKGROUND_CLOSE_MIN",
+  label: "Close a finished background terminal after (min)",
+  help: "A background terminal whose hand-off asks nothing of you closes itself this long after it finished, and shows in Recent with its summary. Never one you typed into or one with uncommitted or unpushed work. 0: they stay open.",
+  default: () => Number(process.env.CHRONOS_DESK_BACKGROUND_CLOSE_MIN ?? 10),
+});
 // The daily job check (src/job-check.ts). Off by default on a new install: a failed job is reported and
 // waits for a yes before anything re-runs it (docs/guide/safety.md). Migration 160 pins it on for an
 // install that already had projects, so upgrading changes nothing there.

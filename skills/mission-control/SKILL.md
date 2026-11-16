@@ -275,7 +275,10 @@ mc outcome clear       # drop it (a new `mc outcome` replaces the last one anywa
   A number that moves past the workspace's threshold (±20% unless set otherwise) needs `"explain"` on its
   entry — why it is right — or the hand-off goes back to you.
 - **`--ask`**: what you need from the operator — `merge`, `deploy`, `merge+deploy`, `review` (just read
-  it) or `none`. The card turns it into buttons; a click types `Approved by the operator on the Desk card
+  it) or `none`. `none` means nothing at all waits on him: no login to redo, no draft for him to send, no
+  job still red, no decision. A terminal that opened by itself (inbox, job check, Ship, a trigger) and
+  hands off with `none` closes on its own and he only sees the summary in Recent — so anything he must
+  do goes in the summary with `--ask review`. The card turns it into buttons; a click types `Approved by the operator on the Desk card
   (approval ap-…): merge PR #24 (<url>) at head 1a2b3c4 …` into you — the PR and the exact commit he
   approved. Merge only that PR at that commit (`gh pr merge <url> --match-head-commit <sha>`); if its head
   moved since, do not merge: file a fresh `mc outcome` for the new head. Then run

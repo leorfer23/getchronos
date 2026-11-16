@@ -860,13 +860,16 @@ function showTerms() {
 
 // ── terminals: needs you → finished → working, answers on the card ──────────
 function renderHome() {
-  const live = S.sessions.filter((s) => s.live && !isWorker(s)).sort(byRank);
+  // Opened by the daemon and nothing for you yet (src/background.ts): counted, never carded — one moves
+  // into "needs you" by itself when it does.
+  const bg = S.sessions.filter((s) => s.live && !isWorker(s) && s.status?.background).length;
+  const live = S.sessions.filter((s) => s.live && !isWorker(s) && !s.status?.background).sort(byRank);
   const needs = live.filter((s) => rank(s) <= 1);
   const fin = live.filter((s) => rank(s) >= 2 && rank(s) <= 4);
   const working = live.filter((s) => rank(s) >= 5);
   const n = needs.length;
-  qs("#brand-sub").textContent = live.length
-    ? [n ? `${n} need${n === 1 ? "s" : ""} you` : "", fin.length ? `${fin.length} finished` : "", working.length ? `${working.length} working` : ""].filter(Boolean).join(" · ")
+  qs("#brand-sub").textContent = live.length || bg
+    ? [n ? `${n} need${n === 1 ? "s" : ""} you` : "", fin.length ? `${fin.length} finished` : "", working.length ? `${working.length} working` : "", bg ? `${bg} in the background` : ""].filter(Boolean).join(" · ")
     : "nothing open";
   // Answer right on the card — a select's first choices, Yes/No, or Enter — so most prompts are
   // handled from the list. A finished one gets its two moves: Continue, or Close for good.

@@ -253,7 +253,8 @@ export function checkBrief(ws: Workspace, h: JobHealth, tz = CONFIG.slackTriageT
     "6. He reads THIS terminal — this is how he hears about it. Do not use `mc ask` or `mc ask-robert` for him.",
     "7. Finish with a hand-off: `mc outcome \"<one line: N fixed and green, M still red>\"` with one `--change` per job " +
       "(\"<job>: <cause> → <fix>\") and one `--proof` per green re-run (\"<job>: run <id8> success\"), `--pr <url>` for any PR, " +
-      "and `--ask none` unless something waits on him. This check is his own, with no thread to answer in: send him that " +
+      "and `--ask none` only when nothing waits on him — a job still red, a login to redo or a draft for him to send is `--ask review`, " +
+      "said in the summary line (a `none` hand-off closes this terminal by itself). This check is his own, with no thread to answer in: send him that " +
       "line as a Slack DM in his self-DM (a draft there if the send tool is refused). Then `mc goal done`.",
   ].join("\n");
 }
