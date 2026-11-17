@@ -56,6 +56,7 @@ import { claudeDirFor, loginDeadFor } from "./login-dead.js";
 import { setting, settingOn } from "./settings.js";
 import { dupGoal, tellRobertDup, type DupGoal } from "./dup-goal.js";
 import { accountNotice } from "./account-hold.js";
+import { modelForKind } from "./kind-model.js";
 
 // Moved to agent-prep.ts (store-free, so `chronos host` runs the same code); re-exported for callers.
 export { excludeChronosArtifacts, gitExcludePath, gitTrackedSync, insideGitRepo, mcSystemText, syncAgentsMd } from "./agent-prep.js";
@@ -579,6 +580,21 @@ export function defaultSessionModel(backend: string | null | undefined, wsDefaul
   return wsDefault ?? CONFIG.defaultModel ?? null;
 }
 
+/**
+ * The model a terminal opened without one starts on: a fresh claude terminal on an investigation gets
+ * the lighter model (src/kind-model.ts); anything else, and a reopen, keeps defaultSessionModel's.
+ */
+export function initialSessionModel(
+  opts: { backend?: string | null; workspace_id?: string | null; goal_kind?: string | null; resumeId?: string; goals?: Array<string | { text: string; kind?: string | null }> | null },
+  wsDefault: string | null | undefined,
+): string | null {
+  const first = opts.goals?.[0];
+  const kind = opts.goal_kind ?? (first && typeof first === "object" ? first.kind ?? null : null);
+  // Claude only, like defaultSessionModel: its aliases mean nothing to the other CLIs.
+  const byKind = !opts.resumeId && getBackend(opts.backend).name === "claude-code" ? modelForKind(kind, opts.workspace_id) : null;
+  return byKind ?? defaultSessionModel(opts.backend, wsDefault);
+}
+
 export async function openSession(
   opts: NewSession & {
     seed?: string;
@@ -720,7 +736,7 @@ export async function openSession(
   // worktree the row was created in (row.cwd) so the transcript and its files stay together.
   const wsEarly = opts.workspace_id ? workspaces.get(opts.workspace_id) : undefined;
   if (!opts.model) {
-    const fallback = defaultSessionModel(opts.backend, wsEarly?.default_model);
+    const fallback = initialSessionModel(opts, wsEarly?.default_model);
     if (fallback) opts = { ...opts, model: fallback };
   }
   let row: Session;

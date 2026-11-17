@@ -171,8 +171,15 @@ export const claudeBackend: AgentBackend = {
   // secrets_file or vars — the disable wins over this.
   // The profile's home comes from parity-env.ts: CLAUDE_CONFIG_DIR for a named profile, nothing for a
   // default profile running with the person's own Claude Code setup (their MCP servers, their login).
-  env(_job, configDir) {
-    return { ...claudeHomeEnv(configDir), CLAUDE_CODE_ARTIFACT: "1" };
+  //
+  // CLAUDE_CODE_PROMPT_CACHE_TTL on headless runs (a job with a name — a Desk terminal passes an empty
+  // one): a one-shot run rarely comes back to its prompt after 5 minutes, and a 1-hour cache write
+  // costs 2x input against 1.25x for a 5-minute one. A replay of 7 days of headless runs (2026-11-17)
+  // priced the 5-minute TTL 8–24% cheaper. CHRONOS_HEADLESS_CACHE_TTL=1h restores the hour; an empty
+  // value leaves the choice to Claude Code. Terminals and the warm executives keep their hour.
+  env(job, configDir) {
+    const ttl = job?.name ? headlessCacheTtl() : null;
+    return { ...claudeHomeEnv(configDir), CLAUDE_CODE_ARTIFACT: "1", ...(ttl ? { CLAUDE_CODE_PROMPT_CACHE_TTL: ttl } : {}) };
   },
 
   parseLine: jsonLine,
@@ -221,3 +228,9 @@ export const claudeBackend: AgentBackend = {
     return null;
   },
 };
+
+/** The prompt-cache TTL headless claude runs ask for: "5m" (default), "1h", or null for Claude Code's own choice. */
+export function headlessCacheTtl(env: NodeJS.ProcessEnv = process.env): "5m" | "1h" | null {
+  const v = (env.CHRONOS_HEADLESS_CACHE_TTL ?? "5m").trim();
+  return v === "5m" || v === "1h" ? v : null;
+}
