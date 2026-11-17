@@ -20,7 +20,7 @@ const { startServer } = await import("./api.js");
 const { CONFIG } = await import("./config.js");
 const { robertToken } = await import("./authz.js");
 const { sessions, workspaces } = await import("./store.js");
-const { autoCloseWord, closeRefusal, closeWhenDone, handoffWants, spawnAutoClose } = await import("./auto-close.js");
+const { autoCloseWord, closeRefusal, closeWhenDone, handoffWants, remoteTreeStrands, spawnAutoClose } = await import("./auto-close.js");
 const { driveSay, reaches } = await import("./robert-drive.js");
 import type { Outcome } from "./types.js";
 
@@ -109,16 +109,17 @@ test("handoffWants: a hand-off still asking him for a merge, deploy or review, o
   assert.match(handoffWants(outcome({ summary: "Done, but it needs you to re-auth Okta." }))!, /waits on the operator/);
 });
 
-test("closeRefusal: only an auto-close terminal, finished, quiet, asking nothing, on this computer", () => {
+test("closeRefusal: only an auto-close terminal, finished, quiet, asking nothing, on a connected computer", () => {
   const row = { auto_close: true, status: "live", host_id: "local", cloud_agent_id: null, outcome: null, role: "human" } as any;
-  const facts = { live: true, quiet: true, phase: "review" as const, openAsks: 0, liveWorkers: 0 };
+  const facts = { live: true, quiet: true, phase: "review" as const, openAsks: 0, liveWorkers: 0, hostOnline: true };
   assert.equal(closeRefusal(row, facts), null);
   assert.equal(closeRefusal(row, { ...facts, phase: "your_turn" }), null);
   assert.match(closeRefusal({ ...row, auto_close: false }, facts)!, /auto-close is off/);
   assert.match(closeRefusal(row, { ...facts, live: false })!, /not running/);
   assert.match(closeRefusal({ ...row, status: "ended" }, facts)!, /not running/);
   assert.match(closeRefusal({ ...row, cloud_agent_id: "c1" }, facts)!, /cloud/);
-  assert.match(closeRefusal({ ...row, host_id: "m2" }, facts)!, /another computer/);
+  assert.equal(closeRefusal({ ...row, host_id: "m2" }, facts), null, "another computer is fine while it is connected");
+  assert.match(closeRefusal({ ...row, host_id: "m2" }, { ...facts, hostOnline: false })!, /offline/);
   assert.match(closeRefusal({ ...row, role: "lead" }, { ...facts, liveWorkers: 2 })!, /Lead with 2/);
   assert.match(closeRefusal(row, { ...facts, quiet: false })!, /still working/);
   assert.match(closeRefusal(row, { ...facts, openAsks: 1 })!, /open question/);
@@ -149,6 +150,38 @@ test("closeWhenDone: past every guard it ticks the goal and ends the terminal wi
   assert.deepEqual(r, { refused: "2 uncommitted file(s) in its worktree" });
   assert.equal(killed.length, 1, "a tree that would strand work is never closed");
   assert.equal(sessions.get(dirty.id)!.goal_done_at, null);
+});
+
+test("remoteTreeStrands: the tree as its computer reports it; unread is not clean", async () => {
+  const rows = [
+    { host_id: "h_m5", path: "/wt/a", dirty: false, dirty_files: 0, unpushed: 0 },
+    { host_id: "h_m5", path: "/wt/b", dirty: true, dirty_files: 3, unpushed: 0 },
+    { host_id: "h_m5", path: "/wt/c", dirty: false, dirty_files: 0, unpushed: 2 },
+    { host_id: "h_other", path: "/wt/d", dirty: false, dirty_files: 0, unpushed: 0 },
+  ];
+  const list = async () => rows;
+  const on = (worktree_path: string | null, host_id = "h_m5") => remoteTreeStrands({ host_id, worktree_path, workspace_id: A.id } as any, list);
+  assert.equal(await on(null), null, "never claimed a tree: nothing to strand");
+  assert.equal(await on("/wt/a"), null);
+  assert.match((await on("/wt/b"))!, /3 uncommitted/);
+  assert.match((await on("/wt/c"))!, /2 commit\(s\)/);
+  assert.match((await on("/wt/d"))!, /could not read/, "the same path on another computer is not its tree");
+  assert.match((await on("/wt/gone"))!, /could not read/);
+});
+
+test("closeWhenDone: a terminal on a connected computer closes past the same guards; an offline one never", async () => {
+  const s = terminal({ auto_close: true, host_id: "h_m5" });
+  const killed: string[] = [];
+  const deps = {
+    activity: () => ({ live: true, quiet: true, last_out: null, last_in: null, started_at: null }),
+    status: () => ({ phase: "review" as const }),
+    strands: async () => null,
+    kill: (id: string) => { killed.push(id); },
+  };
+  assert.deepEqual(await closeWhenDone(s.id, "done", "robert", { ...deps, hostOnline: () => false }), { refused: "its computer is offline — try again once it reconnects" });
+  assert.deepEqual(killed, []);
+  assert.deepEqual(await closeWhenDone(s.id, "done", "robert", { ...deps, hostOnline: () => true }), { closed: true });
+  assert.deepEqual(killed, [s.id]);
 });
 
 // ── Robert's wake ────────────────────────────────────────────────────────────────────────────
