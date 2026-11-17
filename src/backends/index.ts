@@ -38,6 +38,19 @@ export function hasBackend(name: string | null | undefined): boolean {
   return !!(name && REGISTRY[name]);
 }
 
+/**
+ * A backend the operator switched off for this whole install: `CHRONOS_BACKENDS_OFF=grok` (a comma
+ * list; aliases resolve to their CLI). An off backend is never spawned, offered in a picker, failed
+ * over to, or probed. The rows that name it (jobs, workspace fallbacks, allow-lists) are left as they
+ * are, so clearing the variable and restarting resumes it exactly as it was.
+ */
+export function backendOff(name: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.CHRONOS_BACKENDS_OFF;
+  if (!name || !raw?.trim() || !hasBackend(name)) return false;
+  const want = getBackend(name).name;
+  return raw.split(",").some((n) => hasBackend(n.trim()) && getBackend(n.trim()).name === want);
+}
+
 // Models known to fail at spawn (gateway/provider withdrawn). Advisory `models` lists are NOT a
 // closed allowlist — opencode accepts any provider/model — so we only reject known-dead strings.
 // Without this, dispatching kimi-k3 produced a 1s exit with "Unexpected server error" and zero events.
@@ -62,6 +75,7 @@ export function validateSpawnTarget(
   repo?: { name?: string | null; git_remote?: string | null; delivery?: "commit" | "pr" | null } | null,
 ): string | null {
   if (backend && !hasBackend(backend)) return `unknown backend: ${backend}`;
+  if (backendOff(backend)) return `backend switched off: ${backend} (CHRONOS_BACKENDS_OFF)`;
   if (model && RETIRED_MODELS.has(model)) return `retired model (no longer served): ${model}`;
   if (backend === "cursor-cloud") {
     if (!repo) {
@@ -89,6 +103,7 @@ export function listBackends(): Array<{ name: string; kind: BackendKind; models?
     // Resolvable by name (tests, deliberate smoke jobs) but never advertised: in the UI picker or
     // as a fallback_backend it would fake a verified, reviewed success with zero work done.
     if (b === mockBackend) continue;
+    if (backendOff(b.name)) continue;
     out.push({ name: b.name, kind: b.kind ?? "local", models: b.models, supportsResume: b.supportsResume, supportsHeadless: b.supportsHeadless !== false });
   }
   return out;
@@ -148,6 +163,7 @@ export function workspaceBackends(raw: string | null | undefined): string[] {
  */
 export function backendAllowed(raw: string | null | undefined, backend: string | null | undefined): boolean {
   if (!backend) return true; // no explicit ask → the workspace's own default is used
+  if (backendOff(backend)) return false;
   const explicit = explicitList(raw);
   if (!explicit) return true;
   if (!hasBackend(backend)) return false;
@@ -163,7 +179,7 @@ export type { AgentBackend } from "./types.js";
  * looked up on the same PATH the pty inherits (~/.mc/bin + the daemon's), absolute ones checked as is.
  */
 export function backendInstalled(name: string | null | undefined): boolean {
-  if (!hasBackend(name)) return false;
+  if (!hasBackend(name) || backendOff(name)) return false;
   let bin: string;
   try { bin = getBackend(name).bin(); } catch { return false; }
   if (!bin) return false;
