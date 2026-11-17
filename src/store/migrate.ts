@@ -2843,6 +2843,18 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       CREATE INDEX IF NOT EXISTS idx_trial_handoffs_session ON trial_handoffs(session_id, first_handoff_at);`),
   },
 
+  {
+    version: 167,
+    name: "sessions.auto_close — the operator lets Robert close this terminal once its goal is met (src/auto-close.ts)",
+    // 1 = when it says its goal is done, Robert checks it and closes it (POST /sessions/:id/close-when-done),
+    // behind the same guards a Lead's close has. Set only by the operator: the Focus toggle, or the word
+    // `auto-close` in what he typed. Column check keeps a re-run harmless if parallel work renumbers it.
+    up: (db) => {
+      const cols = db.prepare("SELECT name FROM pragma_table_info('sessions')").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "auto_close")) db.exec("ALTER TABLE sessions ADD COLUMN auto_close INTEGER NOT NULL DEFAULT 0");
+    },
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

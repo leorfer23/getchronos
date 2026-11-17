@@ -156,7 +156,7 @@ export async function closeQuietBackground(deps: CloseDeps = {}): Promise<string
 }
 
 /** The same guard a Lead's close uses (leadCloseRefusal): nothing uncommitted, nothing no remote has. */
-async function treeStrands(s: Session): Promise<string | null> {
+export async function treeStrands(s: Session): Promise<string | null> {
   const wt = s.worktree_path;
   if (!wt || !fs.existsSync(wt)) return null; // it never claimed one, or already removed its own
   const repo = s.repo_id ? repos.get(s.repo_id) : null;

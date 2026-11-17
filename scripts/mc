@@ -480,6 +480,10 @@ const HELP = `mc — Mission Control backlog CLI
   mc session reopen <ID>             reopen an ended terminal on its own transcript (context intact)
   mc session goal <ID> "title" [--kind pr|ui|investigation|qa|product|chat]   retitle SOMEONE ELSE'S card
   mc session done <ID>               tick that terminal's goal off — closes its row in the day's log
+  mc session close <ID> "<what landed>"   close an AUTO-CLOSE terminal whose goal you checked is met (Robert /
+                                     operator). Refused, with the reason, if it is still working, has an open
+                                     question, its hand-off still asks the operator for something, or its tree
+                                     holds uncommitted/unpushed work.
   mc session kill <ID>
   mc agents [--ws ID] [--all]        one line per agent: state icon, name, progress, blocked reason, ticket
                                      (--all includes recently-settled agents + pending reviews)
@@ -3799,6 +3803,24 @@ function askCap(question) {
       // so `mc clip > file` and `$(mc clip)` stay clean.
       process.stderr.write(`(clipboard: ${c.describe})\n`);
       return process.stdout.write(c.text.endsWith("\n") ? c.text : c.text + "\n");
+    }
+    // Auto-close (src/auto-close.ts): Robert checked an auto-close terminal's goal and it is met. The daemon
+    // still refuses anything a close would lose, and says why — that reason is what he hands up.
+    if (cmd === "session" && pos[1] === "close") {
+      const ref = pos[2] || die('mc session close <ID> "<what landed>"');
+      const why = pos.slice(3).join(" ").trim() || die('mc session close <ID> "<what landed>" — say in one line what landed');
+      const id = (await req("GET", "/sessions?status=live")).find((x) => x.id === ref || x.id.startsWith(ref))?.id;
+      if (!id) die(`no live session matching ${ref}`);
+      const r = await fetch(API + "/sessions/" + id + "/close-when-done", {
+        method: "POST",
+        // Robert's own credential (CHRONOS_ADMIN) or the operator's — an agent has neither and is refused.
+        headers: { "content-type": "application/json", ...identityHeaders(), ...SESSION_HEADERS, ...(adminToken() ? { "x-mc-admin": adminToken() } : {}) },
+        body: JSON.stringify({ why }),
+      });
+      const out = await r.json().catch(() => ({}));
+      if (r.status === 409) die(`not closed — ${out.error || "refused"}`);
+      if (!r.ok) die(`close failed (${r.status}): ${out.error || r.statusText}`);
+      return console.log(`✓ closed ${id.slice(0, 8)} — ${why}`);
     }
     if (cmd === "session" && pos[1] === "kill") {
       const ref = pos[2] || die("session kill needs an ID");

@@ -80,6 +80,8 @@ export const OpenSessionSchema = z.object({
   focus_only: z.boolean().optional(),
   /** What it may do once green: ask | merge | deploy. Kept only from the operator (api.ts). */
   ship: z.enum(["ask", "merge", "deploy"]).nullable().optional(),
+  /** Robert closes it once its goal is met (src/auto-close.ts). Kept only from the operator (api.ts). */
+  auto_close: z.boolean().optional(),
   /**
    * `mc session new --slice 3` from a Lead: the board slice this worker is being opened for. Read
    * ONLY when the caller presented that Lead's credential, and never stored on the session row — it
@@ -205,6 +207,12 @@ export const SessionPatchSchema = z.object({
   uncheck: z.array(z.number().int().min(1).max(8)).max(8).optional(),
   /** What it may do once green — operator only (api.ts refuses it from any other caller). */
   ship: z.enum(["ask", "merge", "deploy"]).nullable().optional(),
+  /** Robert closes it once its goal is met (src/auto-close.ts) — operator only, like `ship`. */
+  auto_close: z.boolean().optional(),
+});
+/** Robert (or the operator) closing an auto-close terminal whose goal he checked: what landed, one line. */
+export const CloseWhenDoneSchema = z.object({
+  why: z.string().min(1).max(400),
 });
 /** `mc outcome` — the hand-off the operator approves from (src/session-outcome.ts clips it). */
 export const SessionOutcomeSchema = z.object({

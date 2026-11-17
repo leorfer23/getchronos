@@ -564,6 +564,7 @@
   .fx-ship { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:12px; padding-top:10px; border-top:1px solid var(--line); font-size:13.5px; color:var(--muted); }
   .fx-ship .seg button { font-size:13.5px; padding:4px 11px; }
   .fx-ship .seg button.arm { color:var(--warn); }
+  .fx-ship .fx-ac button.on { color:var(--accent); }
   /* Decided so far: the questions already answered. */
   .fx-hist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:7px; }
   .fx-hist li { display:grid; grid-template-columns:44px 1fr; column-gap:8px; font-size:14px; line-height:1.45; color:var(--muted); overflow-wrap:anywhere; }
@@ -3129,7 +3130,10 @@ function focusGoal(s) {
   const ship = s.live
     ? `<div class="fx-ship"><span>When it's done</span><span class="seg">`
       + ["ask", "merge", "deploy"].map((k) => `<button type="button" data-ship="${k}" class="${cur === k ? "on" : ""}${k === "deploy" && armed ? " arm" : ""}" title="${esc(SHIP_TIP[k])}">${k === "deploy" && armed ? "Deploy too? click again" : SHIP_WORD[k]}</button>`).join("")
-      + `</span></div>`
+      + `</span>`
+      // Auto-close (src/auto-close.ts): Robert checks it when it says it is done, and closes it.
+      + `<span class="seg fx-ac"><button type="button" data-autoclose class="${s.auto_close ? "on" : ""}" title="${esc(s.auto_close ? "On: when it says its goal is done, Robert checks it and closes it. Click to keep it open." : "Off: click and Robert closes it once he has checked its goal is met. Typing auto-close to it does the same.")}">${s.auto_close ? "✓ Close when done" : "Close when done"}</button></span>`
+      + `</div>`
     : "";
   return `<section class="fx fx-goal${reached ? " reached" : ""}" style="--nc:${COMP_PH_COLOR[ph] || "var(--line)"}"><div class="fx-top">${top}</div>`
     + `<div class="fx-body" data-keep="goal">` + titleHtml + undefinedNote
@@ -3444,7 +3448,8 @@ function talkSend(s, text, by) {
   }
   // A refused line is not "you said": it leaves Talk, and the caller puts it back in the composer.
   return sent.then((ok) => {
-    if (!ok && T.pending?.text === text) { T.pending = null; renderStory(); }
+    // A bare `auto-close` typed nothing into the agent: there is no answer to wait for.
+    if ((!ok || ok.typed === false) && T.pending?.text === text) { T.pending = null; renderStory(); }
     if (!ok && T.peek?.cmd === text) peekClose();
     return ok;
   });
@@ -3816,6 +3821,14 @@ async function answerAskFromFocus(s, id, text) {
     toast("answered");
   } catch (err) { toast(String(err.message).slice(0, 120)); }
 }
+async function setAutoClose(s) {
+  const on = !s.auto_close;
+  try {
+    Object.assign(s, await api("/sessions/" + s.id, { method: "PATCH", body: JSON.stringify({ auto_close: on }) }));
+    toast(on ? "Robert closes it once its goal is met" : "it stays open when done");
+  } catch (err) { toast(String(err.message).slice(0, 120)); }
+  renderStory();
+}
 async function setShip(s, k) {
   if ((s.ship || "ask") === k) return;
   // Letting it deploy unasked is the one click here that cannot be taken back once it acts: arm it.
@@ -3882,6 +3895,7 @@ qs("#story").addEventListener("click", (e) => {
   const z = e.target.closest("[data-shotzoom]");
   if (z) { const k = z.dataset.shotzoom; if (k && !FX.zoom.delete(k)) FX.zoom.add(k); z.classList.toggle("zoom"); return; }
   const sh = e.target.closest("[data-ship]"); if (sh) return setShip(s, sh.dataset.ship);
+  if (e.target.closest("[data-autoclose]")) return setAutoClose(s);
   if (e.target.closest("[data-fterm]")) return setMode("term");
   const fx = e.target.closest("[data-fexp]"); if (fx && !String(window.getSelection?.() || "")) return focusExpand(fx.dataset.fexp);
   if (e.target.closest("[data-fnext]")) return step(1, true);
@@ -5219,7 +5233,16 @@ async function answer(id, body) {
   if (!s || !s.live) { toast("that terminal is gone"); return false; }
   S.answered.set(id, Date.now()); S.notifyCount.delete(id);
   renderCounts(); syncBadge();
-  try { await api("/sessions/" + id + "/input", { method: "POST", body: JSON.stringify({ by: "operator", ...body }) }); return true; }
+  try {
+    const r = await api("/sessions/" + id + "/input", { method: "POST", body: JSON.stringify({ by: "operator", ...body }) });
+    // `auto-close` / `no auto-close` in what you typed is a word for Chronos (src/auto-close.ts), not the agent.
+    if (r && typeof r.auto_close === "boolean") {
+      s.auto_close = r.auto_close;
+      toast(r.auto_close ? "auto-close on — Robert closes it once its goal is met" : "auto-close off — it stays open when done");
+      render();
+    }
+    return r || true;
+  }
   catch (e) { S.answered.delete(id); toast(String(e.message).slice(0, 120)); return false; }
 }
 async function saveGoal(id, goal) {

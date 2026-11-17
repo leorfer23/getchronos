@@ -160,6 +160,7 @@ import { activeWorkspaceIds, askFleetFanout, askManagerWeb, handFilesTo, warmWeb
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurn, oneRobert, resolveVoiceAsk, setSticky, fansOut } from "./thread-router.js";
 import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type LeadEvent } from "./store.js";
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
+import { autoCloseWord, closeWhenDone, spawnAutoClose } from "./auto-close.js";
 import { finishedGoal, freshHint, noteGoalSet, routeNewWork, sameGoal, withHandoff } from "./fresh-terminal.js";
 import { leadEventPayload, waitForLeadEvents } from "./robert-drive.js";
 import { fileReport, leadEventLines } from "./lead-report.js";
@@ -184,7 +185,7 @@ import { resolveHostRef, sessionHostOffline } from "./remote-terminals.js";
 import { invalidateWatchCache, prepareWatch } from "./watches.js";
 import {
   validate,
-  OpenSessionSchema, ResizeSchema, SessionPatchSchema, SessionGoalsSchema, SessionGoalPatchSchema, SessionInputSchema, SessionStatusSchema, SessionProgressSchema, SessionHookSchema, UsageReportSchema,
+  OpenSessionSchema, ResizeSchema, SessionPatchSchema, CloseWhenDoneSchema, SessionGoalsSchema, SessionGoalPatchSchema, SessionInputSchema, SessionStatusSchema, SessionProgressSchema, SessionHookSchema, UsageReportSchema,
   AgentNameSchema, AgentReportSchema, AgentWaitSchema,
   NewNoteSchema, PatchNoteSchema, LearnSchema, RememberSchema, ProseSampleSchema, ProseGuideSchema, AgentMemoryAppendSchema, BriefAppendSchema, BriefRewriteSchema, AgentMemoryRewriteSchema, StowSchema,
   WorklogEntrySchema, WorklogBackfillSchema, ProactiveOpenSchema,
@@ -771,6 +772,9 @@ export function startServer() {
       const { slice, ...body } = req.body || {};
       // What it may do once green is the operator's to grant — never a Lead's, a worker's or Robert's
       // own `mc session new`: an agent that could open a terminal allowed to deploy could deploy.
+      // Same for letting Robert close it when it is done (src/auto-close.ts) — and only the operator's own
+      // words can carry the keyword: `auto-close` in Robert's or a Lead's goal grants nothing.
+      spawnAutoClose(body, tokenOk(req.get("x-mc-admin"), CONFIG.adminToken));
       if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken)) delete body.ship;
       const openOpts = {
         ...body,
@@ -818,11 +822,12 @@ export function startServer() {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     if (!checkScope(req, res, s.workspace_id)) return;
-    const { goal, goal_done, goal_done_all, goal_kind, goal_source, title, robert, done_when, ship, check, uncheck } = req.body ?? {};
+    const { goal, goal_done, goal_done_all, goal_kind, goal_source, title, robert, done_when, ship, auto_close, check, uncheck } = req.body ?? {};
     // An agent writes its own finish line; only the operator says what it may do once it is green.
     // Checked before anything is written, so a refused permission change leaves the whole patch unapplied.
     const admin = tokenOk(req.get("x-mc-admin"), CONFIG.adminToken);
     if (ship !== undefined && !admin) return res.status(403).json({ error: "only the operator sets what a terminal may ship (x-mc-admin)" });
+    if (auto_close !== undefined && !admin) return res.status(403).json({ error: "only the operator lets a terminal close itself when done (x-mc-admin)" });
     const current = sessionGoals.current(s.id);
     // Read before the write: is the goal being replaced one this terminal already finished? A different
     // goal on the card starts new work (fresh-terminal.ts); a sharpening of the same one does not.
@@ -857,6 +862,7 @@ export function startServer() {
     }
     if (title !== undefined) sessions.setMeta(s.id, { title });
     if (robert !== undefined) sessions.setRobert(s.id, !!robert);
+    if (auto_close !== undefined) sessions.setAutoClose(s.id, !!auto_close);
     if (done_when !== undefined || ship !== undefined) sessions.setFinish(s.id, { done_when, ship });
     // After a rewritten list, so `--done-when` + a tick in one patch ticks the new list.
     if (check?.length) sessions.setChecks(s.id, check, true);
@@ -1142,6 +1148,19 @@ export function startServer() {
       if (routed && "opened" in routed) return res.status(201).json({ ok: true, from: s.id, from_goal: routed.from_goal, opened: routed.opened });
       if (routed) freshRefused = routed.refused;
     }
+    // The operator saying `auto-close` (or `no auto-close`) to it: that is a word for Chronos, not the
+    // agent (src/auto-close.ts). Flip the flag; type in only what is left — a bare keyword types nothing.
+    let autoClose: boolean | undefined;
+    if (admin && by === "operator" && typeof req.body.text === "string" && req.body.enter !== false) {
+      const w = autoCloseWord(req.body.text);
+      if (w) {
+        autoClose = w.on;
+        sessions.setAutoClose(s.id, w.on);
+        bus.publish({ topic: "session.updated", session_id: s.id });
+        if (!w.text) return res.json({ ok: true, auto_close: w.on, typed: false });
+        req.body = { ...req.body, text: w.text };
+      }
+    }
     // Who the line is really from, for the transcript's sake (turn-source.ts) — decided by the
     // credential, never the body: a Lead that sends no name is still a Lead, not the operator.
     const err = sendInput(req.params.id, req.body, by, lead ? "lead" : robert ? "robert" : kindOfBy(by));
@@ -1158,7 +1177,7 @@ export function startServer() {
     const submitted = req.body.enter !== false && (req.body.text || req.body.key === "enter" || req.body.keys?.includes("enter"));
     if (admin && (req.body.by || "operator") === "operator" && submitted)
       void operatorAnswered(s.id, req.body.text ?? "").catch((e) => console.warn("[ask-in-terminal]", e?.message ?? e));
-    res.json(freshRefused ? { ok: true, fresh_refused: freshRefused } : { ok: true });
+    res.json({ ok: true, ...(freshRefused ? { fresh_refused: freshRefused } : {}), ...(autoClose !== undefined ? { auto_close: autoClose } : {}) });
   });
   // A file dragged from Finder onto this terminal on the Desk (or an image pasted into it): raw
   // bytes in, an absolute path out, which the page then types in as a word. The handlers live in
@@ -1503,6 +1522,23 @@ export function startServer() {
     }
     killSession(req.params.id);
     res.json({ ok: true });
+  });
+  // Auto-close (src/auto-close.ts): Robert found an auto-close terminal's goal met and closes it. Only
+  // a terminal the operator marked auto-close, only this workspace's Robert (or the fleet-wide one, or
+  // the operator), and only past closeRefusal + an unstranded tree — a refusal comes back as 409 with
+  // the reason, for Robert to hand up. A Lead, an agent or a workspace token never gets here.
+  api.post("/sessions/:id/close-when-done", validate(CloseWhenDoneSchema), async (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    if (req.get("x-mc-lead")) return res.status(403).json({ error: "agents may not close terminals" });
+    if (!operatorOrRobertOf(req, s.workspace_id, { fleet: true })) {
+      if (robertIdentity(req.get("x-mc-admin"))) return res.status(404).json({ error: "not found" });
+      return res.status(403).json({ error: "closing a done terminal is Robert's or the operator's (x-mc-admin)" });
+    }
+    const by = tokenOk(req.get("x-mc-admin"), CONFIG.adminToken) ? "operator" : "robert";
+    const r = await closeWhenDone(s.id, req.body.why, by);
+    if ("refused" in r) return res.status(409).json({ error: r.refused, closed: false });
+    res.json({ ok: true, closed: true });
   });
   // Resume an ended terminal: reopen a fresh pty that --resumes the same transcript (Focus + history intact).
   // A Lead may reopen ONLY its own workers (`lead_id` stays on the row through revive; openSession
