@@ -131,6 +131,7 @@ import { storyFromEvents } from "./run-story.js";
 import { installSlackMcp, slackStatus, ensureTriageJob } from "./slack.js";
 import { ensureCleanupJob } from "./inbox-cleanup.js";
 import { ensureCheckJob, healthRequest } from "./job-check.js";
+import { listRequest as postmortemList, onDemandRequest as postmortemOnDemand } from "./limit-postmortem-run.js";
 import { syncWorkspace, pushComment, pushStatus, pushHours, pushClose } from "./connectors/index.js";
 import { isStatusDivergent } from "./connectors/types.js";
 import { refresh as refreshCal, refreshAll as refreshCals, importLocalCalendars, ingestLocal } from "./calendar.js";
@@ -2396,6 +2397,16 @@ export function startServer() {
   // Subscription usage as each vendor reports it (usage-meter.ts): the Desk bar's chips + `mc usage`.
   api.get("/usage", requireAdmin, (_req, res) => {
     res.json(usageSnapshot());
+  });
+  // Limit post-mortems (src/limit-postmortem-run.ts): the stored reports, and a read of one window on
+  // demand (writes nothing). A workspace token sees its own Claude account only, whatever ?profile= says.
+  api.get("/limits/postmortems", (req, res) => {
+    const r = postmortemList(callerScope(req), req.query as Record<string, unknown>);
+    res.status(r.status).json(r.body);
+  });
+  api.get("/limits/postmortem", async (req, res) => {
+    const r = await postmortemOnDemand(callerScope(req), req.query as Record<string, unknown>);
+    res.status(r.status).json(r.body);
   });
   // `mc statusline claude` — every Claude session's statusLine hands us its rate_limits.
   api.post("/usage/report", validate(UsageReportSchema), (req, res) => {

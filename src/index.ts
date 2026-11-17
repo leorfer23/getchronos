@@ -45,6 +45,7 @@ import { startAgentLifecycleBridge } from "./agent-lifecycle.js";
 import { startDeskTitles } from "./desk-title.js";
 import { startUsageTicker } from "./session-usage.js";
 import { startCacheKeeper } from "./cache-keeper.js";
+import { startLimitPostmortem } from "./limit-postmortem-run.js";
 import { startTermStatus, statusOf } from "./term-status.js";
 import { startLedger } from "./ledger.js";
 import { startVerifier } from "./request-verifier.js";
@@ -141,6 +142,7 @@ startDeskTitles();
 startWorklog();
 startUsageTicker();
 startCacheKeeper();
+startLimitPostmortem();
 startBoardWatcher();
 startRobertWake();
 // Durable wake queue: every decision event is a row before it is a turn, replayed on boot.
