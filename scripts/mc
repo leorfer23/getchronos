@@ -1120,7 +1120,7 @@ async function browserRun(argv) {
 // opened it never has to go and look.
 const placedOn = (s) => ` → ${s.host_name || "the brain"}${s.placement ? ` (${s.placement})` : ""}`;
 // Same job as a terminal already live in the workspace (src/dup-goal.ts): opened anyway, said out loud.
-const dupLine = (s) => (s.duplicate_of ? `\n⚠ ${s.duplicate_of.warning}` : "");
+const dupLine = (s) => (s.duplicate_of ? `\n⚠ ${s.duplicate_of.warning}` : "") + (s.account_notice ? `\n⚠ ${s.account_notice.warning}` : "");
 
 // The asks API caps a question at ASK_MAX (NewAskSchema in src/validation.ts). Said here in one plain
 // line, before anything is filed, instead of the schema's error dump.
