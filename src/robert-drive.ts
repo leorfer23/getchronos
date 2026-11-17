@@ -58,6 +58,14 @@ export const driveEnabled = (wsId?: string | null): boolean => settingOn("robert
 export const watched = (s: Pick<Session, "robert" | "lead_id" | "workspace_id">): boolean =>
   !!s.robert || !!s.lead_id || settingOn("robert.watch_all", s.workspace_id);
 
+/**
+ * This stop reaches Robert. Beyond the terminals he watches and `waiting --on robert`: an auto-close
+ * terminal (src/auto-close.ts) saying its goal is done, so he can check it and close it — even when the
+ * operator never handed it to him. That wake is a check, not a hand-over (driveSay says which).
+ */
+export const reaches = (s: Pick<Session, "robert" | "lead_id" | "workspace_id"> & { auto_close?: boolean }, kind: DriveKind): boolean =>
+  kind === "robert" || watched(s) || (!!s.auto_close && kind === "review");
+
 /** Seconds a phase must hold before Robert hears about it. */
 export function graceMs(kind: DriveKind): number {
   const turn = Math.max(0, CONFIG.robertDrive.graceSec) * 1000;
@@ -209,7 +217,7 @@ function approvedNote(s: Session, nowMs = Date.now()): string | null {
 }
 
 export function driveSay(
-  s: Pick<Session, "id" | "goal" | "spawn_goal" | "workspace_id"> & { lead_id?: string | null },
+  s: Pick<Session, "id" | "goal" | "spawn_goal" | "workspace_id"> & { lead_id?: string | null; auto_close?: boolean; robert?: boolean },
   kind: DriveKind,
   st: Pick<TermStatus, "line">,
   words: { result: string | null; said: string | null },
@@ -231,10 +239,21 @@ export function driveSay(
   };
   const goal = goalOf(s) || "(no goal)";
   const orphan = orphanLeadLine(s);
-  const follow =
-    `Follow DRIVING THE WALL in your instructions. Look first: \`mc session focus ${id8(s.id)}\`. Then make the ` +
-    `call — tell it the next step (\`mc session send ${id8(s.id)} "..."\`), close it when the goal is truly met, ` +
-    `or hand it to the operator in one line with your recommendation.`;
+  // Auto-close (src/auto-close.ts): the operator wants it closed once its goal is met. On a terminal he
+  // never handed over, this wake is ONLY that check — Robert looks and closes, or says what is missing.
+  const checkOnly = !!s.auto_close && !watched({ robert: !!s.robert, lead_id: s.lead_id ?? null, workspace_id: s.workspace_id });
+  const close = `\`mc session close ${id8(s.id)} "<what landed, one line>"\``;
+  const autoLine = !s.auto_close
+    ? ""
+    : checkOnly
+      ? `AUTO-CLOSE IS ON — the operator wants this terminal closed once its goal is met, and that check is the only reason you are woken for it (he did not hand it to you). ` +
+        `Goal met with evidence (its finish line, its hand-off's proof) → close it: ${close}. Not met, or anything still waits on him → do NOT type into it; tell the operator in one line what is missing.\n`
+      : `AUTO-CLOSE IS ON — the operator wants this terminal closed once its goal is met. When it is, with evidence, close it with ${close} instead of only ticking it.\n`;
+  const follow = checkOnly
+    ? `Look first: \`mc session focus ${id8(s.id)}\`. If Chronos refuses the close, it says why — hand that to the operator in one line.`
+    : `Follow DRIVING THE WALL in your instructions. Look first: \`mc session focus ${id8(s.id)}\`. Then make the ` +
+      `call — tell it the next step (\`mc session send ${id8(s.id)} "..."\`), close it when the goal is truly met, ` +
+      `or hand it to the operator in one line with your recommendation.`;
   return (
     `${head[kind]}\n` +
     `TERMINAL — \`${id8(s.id)}\` · ${wsName} · ${goal}\n` +
@@ -249,6 +268,7 @@ export function driveSay(
       ? `THE OPERATOR ALREADY APPROVED ITS HAND-OFF — ${approved}. That is his decision for exactly that PR at that commit: ` +
         `never countermand it (no stop, hold or revert) and never say he did not approve it.\n`
       : "") +
+    autoLine +
     `ITS CARD SAYS: ${st.line || "(nothing)"}\n` +
     (words.result ? `ITS LAST RESULT: ${words.result}\n` : words.said ? `IT LAST SAID: ${words.said}\n` : "") +
     follow + ` Say in one line what you did.`
@@ -827,7 +847,7 @@ export function fireIfStill(sessionId: string, key: string, nowMs = Date.now()):
   }
   // Which terminals are his (after Lead routing): every one by default, or with robert.watch_all off
   // only those handed to him / under a Lead (watched). `waiting --on robert` always reaches him.
-  if (!watched(s) && kind !== "robert") return null;
+  if (!reaches(s, kind)) return null;
   // Switched off in ⚙ Settings: the stop is the operator's, like any terminal he never handed over.
   if (!driveEnabled(s.workspace_id)) return null;
   // Same stop re-armed (a second status event): the queue absorbs it as a repeat, and it is not a new
@@ -883,7 +903,7 @@ function armTimer(sessionId: string, st: TermStatus, s: Session | undefined): vo
   const kind = s && s.status === "live" && !isShipTerminal(s) ? driveKind(st, context(s)) : null;
   // Not his to watch (see watched) → no timer. Lead-owned workers still arm (Lead inbox / orphan /
   // escalate); waiting-on-robert always arms: that is the agent asking.
-  if (!kind || (s && !watched(s) && kind !== "robert")) {
+  if (!kind || (s && !reaches(s, kind))) {
     if (prev) { clearTimeout(prev.t); timers.delete(sessionId); }
     return;
   }

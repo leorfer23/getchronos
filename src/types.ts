@@ -825,6 +825,8 @@ export interface Session {
   done_checked: (string | null)[];
   /** What the operator lets it do once the work is green (src/session-outcome.ts). Null = ask. */
   ship: Ship | null;
+  /** The operator lets Robert close it once its goal is met (src/auto-close.ts). Operator-set only. */
+  auto_close: boolean;
   /** The agent's hand-off (`mc outcome`) — what the operator decides from. Null = none filed yet. */
   outcome: Outcome | null;
   outcome_at: string | null;
@@ -951,6 +953,8 @@ export interface NewSession {
   host_id?: string | null;
   /** Set at spawn by the operator only (api.ts drops it from any other caller). */
   ship?: Ship | null;
+  /** Robert closes it once its goal is met (src/auto-close.ts). Operator only, like `ship`. */
+  auto_close?: boolean;
 }
 
 // 'workspace' = client-isolated (default). 'global' = operator profile, injected into every

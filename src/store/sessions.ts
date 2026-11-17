@@ -13,6 +13,7 @@ const pub = <T>(r: T): T => {
     delete (r as any).lead_token;
     (r as any).focus_only = !!(r as any).focus_only;
     (r as any).robert = !!(r as any).robert;
+    (r as any).auto_close = !!(r as any).auto_close;
     (r as any).done_when = decodeDoneWhen((r as any).done_when);
     (r as any).done_checked = checkedOf((r as any).done_when, decodeTicks((r as any).done_ticks));
     delete (r as any).done_ticks;
@@ -62,8 +63,8 @@ export const sessions = {
   create(s: NewSession & { id?: string }): Session {
     const id = s.id || randomUUID();
     db.prepare(
-      `INSERT INTO sessions (id,ticket_id,workspace_id,repo_id,title,goal,goal_kind,goal_source,spawn_goal,created_by,lead_id,agent_name,lead_token,backend,model,role,focus_only,cwd,host_id,status,robert,ship,created_at)
-       VALUES (@id,@ticket_id,@workspace_id,@repo_id,@title,@goal,@goal_kind,@goal_source,@spawn_goal,@created_by,@lead_id,@agent_name,@lead_token,@backend,@model,@role,@focus_only,@cwd,@host_id,'live',@robert,@ship,@created_at)`
+      `INSERT INTO sessions (id,ticket_id,workspace_id,repo_id,title,goal,goal_kind,goal_source,spawn_goal,created_by,lead_id,agent_name,lead_token,backend,model,role,focus_only,cwd,host_id,status,robert,ship,auto_close,created_at)
+       VALUES (@id,@ticket_id,@workspace_id,@repo_id,@title,@goal,@goal_kind,@goal_source,@spawn_goal,@created_by,@lead_id,@agent_name,@lead_token,@backend,@model,@role,@focus_only,@cwd,@host_id,'live',@robert,@ship,@auto_close,@created_at)`
     ).run({
       id,
       ticket_id: s.ticket_id ?? null,
@@ -98,6 +99,7 @@ export const sessions = {
       robert: s.robert != null ? (s.robert ? 1 : 0)
         : ((s.created_by ?? "operator") === "robert" || s.role === "lead" ? 1 : 0),
       ship: s.ship ?? null,
+      auto_close: s.auto_close ? 1 : 0,
       created_at: now(),
     });
     return this.get(id)!;
@@ -133,6 +135,10 @@ export const sessions = {
     const r = db.prepare("SELECT shown FROM sessions WHERE id=?").get(id) as { shown: string | null } | undefined;
     if (!r) return;
     db.prepare("UPDATE sessions SET shown=? WHERE id=?").run(JSON.stringify(addShown(decodeShown(r.shown), show)), id);
+  },
+  /** Let Robert close it once its goal is met (src/auto-close.ts), or take that back. Operator only. */
+  setAutoClose(id: string, on: boolean) {
+    db.prepare("UPDATE sessions SET auto_close=? WHERE id=?").run(on ? 1 : 0, id);
   },
   /** Hand this terminal to Robert (or take it back). Drives stops + orange prompts; not the standing watch. */
   setRobert(id: string, on: boolean) {
