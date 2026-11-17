@@ -37,7 +37,7 @@ test("waitsOnOperator: real hand-offs that filed --ask none yet still waited on 
     "2 fixed and green; Kin doc itself not written (Okta login needed)",
     "Draft reply to Jason with all-time block list, DM-off and under-18 totals is in his DM thread, unsent.",
     "Both artifacts are exported, and a Slack draft to Larissa is saved in your DM with her",
-    "2 fixed and green, 1 still red (Medialab Jira Housekeeping, left for next Friday's run)",
+    "2 fixed and green, 1 still red (Acme Jira Housekeeping, left for next Friday's run)",
     "Combined Sept run is still unrun and needs your Touch ID.",
     "A reply to Kyle is drafted in Slack, not sent.",
   ];
