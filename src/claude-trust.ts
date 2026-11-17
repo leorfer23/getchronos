@@ -20,8 +20,21 @@ import { claudeGlobalConfig, readJsonFile, updateClaudeConfig } from "./parity-e
  * that is a brand-new login, which is interactive anyway.
  */
 export function ensureTrustedCwd(configDir: string, cwd: string): "already" | "added" | "skipped" {
+  return ensureTrustedDirs(configDir, [cwd]);
+}
+
+/**
+ * The same answer for every `--add-dir` folder too. Claude Code 2.1.326 asks "Adding a new directory:
+ * … Is this a directory you created or one you trust?" at startup for each added folder it has no
+ * trust record for, defaulting to "No, exit". A seeded terminal has nobody to answer it, so every new
+ * Desk terminal sat on that screen with its brief unsent (2026-11-17, all workspaces). A record on a
+ * folder covers everything below it, so a per-session folder is trusted through its parent (see
+ * claudeTrustTargets). One read, and at most one locked write, for the whole set.
+ */
+export function ensureTrustedDirs(configDir: string, dirs: string[]): "already" | "added" | "skipped" {
   const file = claudeGlobalConfig(configDir);
-  const keys = trustKeys(cwd);
+  const keys = [...new Set(dirs.filter(Boolean).flatMap(trustKeys))];
+  if (!keys.length) return "already";
   const trusted = (state: any, k: string) => { const c = state?.projects?.[k]; return !!c && typeof c === "object" && c.hasTrustDialogAccepted === true; };
   // Most spawns land in a folder trusted long ago: answered from a plain read, no lock taken.
   const seen = readJsonFile(file);
@@ -45,8 +58,33 @@ export function ensureTrustedCwd(configDir: string, cwd: string): "already" | "a
     verdict = "added";
     return state;
   });
-  if (r === "busy") console.warn(`[trust] claude is saving ${file} right now (its lock is held) — ${cwd} not pre-trusted this time`);
+  if (r === "busy") console.warn(`[trust] claude is saving ${file} right now (its lock is held) — ${dirs.join(", ")} not pre-trusted this time`);
   return r === "written" ? "added" : r === "unchanged" ? verdict : "skipped";
+}
+
+/**
+ * Which folders get a trust record for a claude spawn: its cwd and every `--add-dir`, except that a
+ * folder under `dropRoot` is trusted through `dropRoot` itself. Drop dirs are one per terminal, and a
+ * record each would grow the profile's config forever.
+ */
+export function claudeTrustTargets(cwd: string, addDirs: string[], dropRoot: string): string[] {
+  const root = path.resolve(dropRoot);
+  const target = (d: string) => (path.resolve(d).startsWith(root + path.sep) ? root : d);
+  return [...new Set([cwd, ...addDirs.map(target)])];
+}
+
+/**
+ * The `--add-dir` list claude gets, which can be shorter than what the OS sandbox grants. A folder
+ * inside a git repo has its trust keyed on that repo's root. Inside the Chronos sandbox, claude 2.1.326
+ * still asks about the workspace's tickets folder (`~/chronos/tickets/<slug>`, a gitignored dir in the
+ * daemon's own repo), even with a trust record on the folder and on `~/chronos`. Reproduced
+ * 2026-11-17; outside the sandbox it does not ask. Desk terminals run with
+ * `--dangerously-skip-permissions`, so claude reads those files without an `--add-dir` anyway. The
+ * sandbox grant (sandboxWrap's addDirs) stays, and that grant is what actually lets the reads through.
+ */
+export function claudeAddDirs(addDirs: string[], skip: Array<string | null | undefined>): string[] {
+  const drop = new Set(skip.filter((d): d is string => !!d).map((d) => path.resolve(d)));
+  return addDirs.filter((d) => !drop.has(path.resolve(d)));
 }
 
 /**

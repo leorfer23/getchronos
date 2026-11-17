@@ -27,7 +27,7 @@ import { expandHomeRelative, isSpawnSpec, type SpawnSpec } from "../hosts/spawn-
 import type { SpawnReply } from "../hosts/remote.js";
 import { ensureBranchWorktree, tryBranchWorktree, worktreeRootFor } from "../worktree-core.js";
 import { installMcCli, installMcSkill, syncAgentsMd } from "../agent-prep.js";
-import { ensureBypassAccepted, ensureTrustedCwd } from "../claude-trust.js";
+import { claudeTrustTargets, ensureBypassAccepted, ensureTrustedDirs } from "../claude-trust.js";
 import { ensureGrokTrustedCwd } from "../grok-trust.js";
 import { installClaudeHooks, installCursorHooks, installGrokHooks } from "../term-hooks.js";
 import { installClaudeSendGate } from "../no-send.js";
@@ -336,7 +336,7 @@ export class HostTerminals {
     const shared = mainCheckouts(wsRepoPaths);
     const allowSecrets = workspaceSandboxAllow(JSON.stringify(spec.sandbox.allow));
 
-    if (this.o.prepare !== false) await this.prepare(spec, backend.name, profileDir, cwd);
+    if (this.o.prepare !== false) await this.prepare(spec, backend.name, profileDir, cwd, addDirs);
 
     const iArgs = backend.interactiveArgs ? backend.interactiveArgs(spec.model, spec.system, addDirs, spec.cli_session, spec.resume) : [];
     const wrapped = sandboxWrap(spec.sandbox.mode, cwd, addDirs, profileDir, denyDirs, backend.bin(), iArgs, egress.locked, shared, allowSecrets);
@@ -400,7 +400,7 @@ export class HostTerminals {
 
 
   /** HOSTS.md `prepare()`: what terminal.ts does to the brain's own profile before a local spawn. */
-  private async prepare(spec: SpawnSpec, backend: string, profileDir: string, cwd: string): Promise<void> {
+  private async prepare(spec: SpawnSpec, backend: string, profileDir: string, cwd: string, addDirs: string[] = []): Promise<void> {
     installMcSkill(profileDir, this.o.root);
     installMcCli(this.o.root, this.home);
     // Hooks rewrite the CLI's USER config; tests spawn with real-looking profiles and must never.
@@ -415,7 +415,9 @@ export class HostTerminals {
         console.warn(`[host] ${backend} card hooks install failed: ${e?.message ?? e}`);
       }
     }
-    if (backend === "claude-code" && ensureTrustedCwd(profileDir, cwd) === "added") console.log(`[host] pre-trusted ${cwd} in ${path.basename(profileDir)}`);
+    // cwd and every --add-dir: claude 2.1.326 asks about each added folder at startup (claude-trust.ts).
+    if (backend === "claude-code" && ensureTrustedDirs(profileDir, claudeTrustTargets(cwd, addDirs, path.join(this.home, ".mc", "drops"))) === "added")
+      console.log(`[host] pre-trusted ${cwd} (+${addDirs.length} added) in ${path.basename(profileDir)}`);
     if (backend === "claude-code" && ensureBypassAccepted(profileDir) === "added") console.log(`[host] pre-accepted bypass-permissions mode in ${path.basename(profileDir)}`);
     if (backend === "grok" && ensureGrokTrustedCwd(cwd, path.join(this.home, ".grok")) === "added") console.log(`[host] pre-trusted ${cwd} for grok`);
     await syncAgentsMd(cwd, this.o.root, this.home);
