@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ensureBypassAccepted, ensureTrustedCwd } from "./claude-trust.js";
+import { claudeAddDirs, claudeTrustTargets, ensureBypassAccepted, ensureTrustedCwd, ensureTrustedDirs } from "./claude-trust.js";
 
 const profile = (state?: unknown) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-trust-"));
@@ -82,4 +82,26 @@ test("bypass-permissions warning: pre-accepted once, other settings kept, junk l
   assert.equal(ensureBypassAccepted(cfg), "skipped");
   assert.equal(fs.readFileSync(f, "utf8"), "not json");
   assert.equal(ensureBypassAccepted(path.join(cfg, "missing")), "skipped");
+});
+
+// Claude Code 2.1.326 (2026-11-17): every --add-dir with no trust record got an "Adding a new
+// directory" dialog at startup, defaulting to "No, exit", and every seeded Desk terminal sat on it.
+test("every added folder is trusted in one write, alongside the cwd", () => {
+  const dir = profile({ projects: { "/repo": { hasTrustDialogAccepted: true } } });
+  assert.equal(ensureTrustedDirs(dir, ["/repo", "/wt/repo", "/Downloads/Acme"]), "added");
+  const p = read(dir).projects;
+  for (const k of ["/repo", "/wt/repo", "/Downloads/Acme"]) assert.equal(p[k].hasTrustDialogAccepted, true, k);
+  assert.equal(ensureTrustedDirs(dir, ["/repo", "/wt/repo", "/Downloads/Acme"]), "already");
+});
+
+test("a terminal's own drop dir is trusted through the drops root, not one record per terminal", () => {
+  assert.deepEqual(
+    claudeTrustTargets("/repo", ["/wt/repo", "/h/.mc/drops/1b62c18e", "/h/.mc/drops/acdaa98e", "/h/.mc/dropsy"], "/h/.mc/drops"),
+    ["/repo", "/wt/repo", "/h/.mc/drops", "/h/.mc/dropsy"],
+  );
+});
+
+test("the tickets folder stays out of claude's --add-dir list, the rest keep their order", () => {
+  assert.deepEqual(claudeAddDirs(["/wt/repo", "/h/chronos/tickets/acme", "/h/.mc/drops/x"], ["/h/chronos/tickets/acme/"]), ["/wt/repo", "/h/.mc/drops/x"]);
+  assert.deepEqual(claudeAddDirs(["/wt/repo"], [null, undefined]), ["/wt/repo"]);
 });

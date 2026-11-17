@@ -13,9 +13,9 @@ import { pasteOf, seedEnterMsFor, ttyCooked, typeSeed } from "./term-seed.js";
 import { sessions, sessionGoals, workspaces, repos, tickets, runs, jobs, notes as notesStore, kv, hosts } from "./store.js";
 import { backendAllowed, getBackend, workspaceBackends } from "./backends/index.js";
 import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow } from "./sandbox.js";
-import { ensureDropDir } from "./drops.js";
+import { DROP_ROOT, ensureDropDir } from "./drops.js";
 import { claimStaged, dropsBrief } from "./capture.js";
-import { ensureBypassAccepted, ensureTrustedCwd } from "./claude-trust.js";
+import { claudeAddDirs, claudeTrustTargets, ensureBypassAccepted, ensureTrustedCwd, ensureTrustedDirs } from "./claude-trust.js";
 import { ensureGrokTrustedCwd, grokHome } from "./grok-trust.js";
 import { isEarlyDeath, reportEarlyDeath } from "./desk-incidents.js";
 import { inFlightAtRestart, lastActivityState, reviveSeedFor, REVIVE_NUDGE } from "./revive.js";
@@ -895,12 +895,13 @@ export async function openSession(
     // Shared-in repos (repo_shares) count as the workspace's own here — reachable, worktree root
     // writable — and, like every own repo, their main checkout is read-only (sharedCheckouts below).
     const reachable = opts.workspace_id ? repos.accessible(opts.workspace_id) : [];
+    const ticketsDir = ws ? ensureWsTicketsDir(ws.slug) : null;
     const repoDirs = opts.workspace_id
       ? [
           ...reachable.flatMap((r) =>
             r.path && fs.existsSync(r.path) ? [r.path, ensureWorktreeRoot(r.path)].filter((p): p is string => !!p) : [],
           ).filter((p) => p !== cwd),
-          ...(ws ? [ensureWsTicketsDir(ws.slug)] : []),
+          ...(ticketsDir ? [ticketsDir] : []),
         ]
       : [];
     // …and this terminal's own drop dir (src/drops.ts): where a file the operator drags from Finder
@@ -914,6 +915,14 @@ export async function openSession(
     // workspace's folder is in denyDirs (isolationDenyDirs).
     const downloads = opts.workspace_id ? workspaces.ensureDownloadsDir(opts.workspace_id) : null;
     if (downloads) repoDirs.push(downloads);
+    // claude 2.1.326 asks "Adding a new directory … trust?" at startup for every --add-dir it has no
+    // trust record for, and a seeded terminal has nobody to answer (2026-11-17: every new terminal sat
+    // on it, brief unsent). The tickets folder stays a sandbox grant only; claude still asks about it
+    // inside the sandbox whatever the record says. Every folder claude does get is trusted first
+    // (claude-trust.ts).
+    const cliDirs = backend.name === "claude-code" ? claudeAddDirs(repoDirs, [ticketsDir]) : repoDirs;
+    if (backend.name === "claude-code" && ensureTrustedDirs(configDir, claudeTrustTargets(cwd, cliDirs, DROP_ROOT)) === "added")
+      console.log(`[terminal] pre-trusted ${cliDirs.length} added dir(s) in ${path.basename(configDir)}`);
     // CLI session id for transcript: prefer agentSessionId (headless continue), else Chronos row id.
     // Every workspace repo's MAIN checkout is read-only to the agent, whatever it was spawned in. Two
     // terminals pointed at one repo would otherwise share a working tree, and one's `git checkout`
@@ -943,7 +952,7 @@ export async function openSession(
       });
     }
     const iArgs = backend.interactiveArgs
-      ? backend.interactiveArgs(opts.model ?? null, sysArg, repoDirs, spawnSessionId, doResume)
+      ? backend.interactiveArgs(opts.model ?? null, sysArg, cliDirs, spawnSessionId, doResume)
       : [];
     // An auto-opened inbox terminal: the CLI itself refuses merges, deploys and messaging (inbox-guard.ts).
     if (isInboxAuto(row) && backend.name === "claude-code") mergeDeny(iArgs, inboxAutoDenyArgs()[1]);
