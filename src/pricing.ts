@@ -67,3 +67,29 @@ export function pricedOrEstimate(
   const est = estimateUsd(usage);
   return { cost_usd: est, cost_estimated: est != null };
 }
+
+/**
+ * Per-model LIST rates with the cache split, $/MTok — the one table the limit post-mortem
+ * (src/limit-postmortem.ts) weighs a window's requests with. The vendor does not publish how its
+ * subscription windows weigh tokens, so these are weights for SHARES ("$ list-equivalent"), never a
+ * claim about how big a window is. Cache writes: 5-minute = 1.25 × input, 1-hour = 2 × input.
+ * Order matters: the first pattern that matches the model id wins.
+ */
+export interface ListRates { in: number; out: number; cacheRead: number }
+const LIST_RATES: Array<[RegExp, ListRates]> = [
+  [/opus-5-5|opus-5\.5/i, { in: 4, out: 20, cacheRead: 0.2 }],
+  [/sonnet-5/i, { in: 2, out: 10, cacheRead: 0.1 }],
+  [/haiku-5/i, { in: 0.1, out: 0.5, cacheRead: 0.01 }],
+  [/fable/i, { in: 8, out: 40, cacheRead: 0.2 }],
+  [/opus/i, { in: 5, out: 25, cacheRead: 0.5 }],
+  [/sonnet/i, { in: 3, out: 15, cacheRead: 0.3 }],
+  [/haiku/i, { in: 1, out: 5, cacheRead: 0.1 }],
+];
+export const CACHE_WRITE_5M = 1.25;
+export const CACHE_WRITE_1H = 2;
+/** Unknown model ids weigh as the fleet's workhorse, Opus 5.5. */
+export function listRates(model: string | null | undefined): ListRates {
+  const m = model ?? "";
+  for (const [re, r] of LIST_RATES) if (re.test(m)) return r;
+  return LIST_RATES[0][1];
+}

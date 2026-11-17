@@ -146,12 +146,33 @@ function evaluate(m: UsageMeter) {
   }
 }
 
+/** A claude window read at 100% with its reset still ahead — the limit post-mortem's trigger (limit-postmortem-run.ts). */
+export interface ClaudeWallReading { scope: string; window: string; resetsAt: string | null; at: string }
+const wallListeners: ((w: ClaudeWallReading) => void)[] = [];
+/** Called on EVERY such reading (statusLine repaints too): the listener keeps its own once-per-wall dedupe. */
+export function onClaudeWall(fn: (w: ClaudeWallReading) => void): void { wallListeners.push(fn); }
+
 function record(m: UsageMeter) {
   if (!m.windows.length) return;
   const s = load();
   s.meters[key(m)] = m;
   saveSoon();
   evaluate(m);
+  if (m.cli !== "claude") return;
+  const now = Date.parse(m.at ?? "") || Date.now();
+  for (const w of m.windows) {
+    if (w.usedPct < 100 || (w.resetsAt && Date.parse(w.resetsAt) <= now)) continue;
+    for (const fn of wallListeners) {
+      try { fn({ scope: m.scope, window: w.name, resetsAt: w.resetsAt, at: m.at ?? new Date(now).toISOString() }); } catch (e: any) {
+        console.warn("[usage-meter] wall listener:", e?.message ?? e);
+      }
+    }
+  }
+}
+
+/** The last reading of every claude profile, as stored (resets that passed included — the caller decides). */
+export function claudeMeters(): UsageMeter[] {
+  return Object.values(load().meters).filter((m) => m.cli === "claude");
 }
 
 /**

@@ -404,6 +404,10 @@ const HELP = `mc — Mission Control backlog CLI
   mc hook claude|cursor|grok  (run by the CLI's lifecycle hooks — not by hand)
   mc statusline claude        (Claude's statusLine — reports usage-limit %, prints "5h 34% · week 71%")
   mc usage                    subscription usage per CLI/profile (Claude 5h/week, Grok week, Cursor —)
+  mc limits [list] | mc limits show [N]
+                             limit post-mortems: where a Claude account's window went when it hit its wall, and the levers
+  mc limits postmortem [--profile <name>] [--window 5h|week] [--at <iso>] [--json]
+                             read one window now (the current or last one; --at = window end), writes nothing
   mc proactive [--days N] [--workspace S] [--json]
                              terminals the daemon opened on its own, per workspace × kind: opened · engaged
                              (you typed in) · useful (done without you) · ignored · rate; BACKED OFF = stopped
@@ -979,6 +983,40 @@ async function usage(asJson) {
   }
 }
 
+/**
+ * Limit post-mortems (src/limit-postmortem-run.ts): where a Claude account's 5-hour or weekly window went.
+ * `mc limits` lists the stored ones (written when an account hits its wall); `mc limits show [N]` prints one;
+ * `mc limits postmortem` reads a window now and writes nothing. A terminal sees its own account only.
+ */
+async function limits(sub, nth, opt) {
+  const qs = new URLSearchParams();
+  if (opt.profile) qs.set("profile", String(opt.profile));
+  if (sub === "postmortem") {
+    if (opt.window) qs.set("window", String(opt.window));
+    if (opt.at) qs.set("at", String(opt.at));
+    const r = await req("GET", "/limits/postmortem?" + qs.toString());
+    return console.log("json" in opt ? JSON.stringify(r, null, 2) : r.markdown);
+  }
+  if (sub === "list" || sub === "ls" || sub === "show") {
+    if (sub === "show") qs.set("full", "1");
+    const r = await req("GET", "/limits/postmortems?" + qs.toString());
+    if ("json" in opt) return console.log(JSON.stringify(r, null, 2));
+    if (!r.reports.length) return console.log("(no limit post-mortems yet — they are written when a Claude account hits its 5h/week limit)");
+    if (sub === "show") {
+      const n = Math.max(1, Number(nth) || 1);
+      const x = r.reports[n - 1] || die(`only ${r.reports.length} report(s)`);
+      return console.log(x.markdown || `(no report yet: ${x.error || "pending"})`);
+    }
+    r.reports.forEach((x, i) => {
+      const what = x.summary ? `$${Math.round(x.summary.total)} · ${x.summary.tops}${x.summary.lever ? ` · ${x.summary.lever}` : ""}` : x.error ? `failed: ${x.error}` : "pending";
+      const term = x.terminal ? (x.terminal.session_id ? ` · terminal ${x.terminal.session_id.slice(0, 8)}` : x.terminal.skipped ? ` · no terminal (${x.terminal.skipped})` : x.terminal.error ? " · terminal refused" : "") : "";
+      console.log(`${String(i + 1).padStart(2)}  ${x.resets_at.slice(0, 16).replace("T", " ")}Z  ${x.profile.padEnd(18)} ${x.window.padEnd(4)} ${what}${term}`);
+    });
+    return;
+  }
+  die("usage: mc limits [list] | mc limits show [N] | mc limits postmortem [--profile <name>] [--window 5h|week] [--at <iso>] [--json]");
+}
+
 // ───────────────────────────── machine governor (src/machine.ts) ─────────────────────────────
 
 // How long a heavy slot has been held, for the waiting line. (`mc fleet` has its own, in seconds.)
@@ -1157,6 +1195,7 @@ function askCap(question) {
     if (cmd === "hook") return await hook(pos[1] || "claude", pos[2]);
     if (cmd === "statusline") return await statusline();
     if (cmd === "usage") return await usage("json" in opt);
+    if (cmd === "limits") return await limits(pos[1] || "list", pos[2], opt);
     if (cmd === "whoami") return await whoami("json" in opt);
     // Was it worth opening? Every terminal the daemon opened on its own, per workspace × kind:
     // engaged (the operator typed into it) · useful (done/hand-off without him) · ignored · pending.
