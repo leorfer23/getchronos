@@ -82,9 +82,39 @@ export function claudeTrustTargets(cwd: string, addDirs: string[], dropRoot: str
  * `--dangerously-skip-permissions`, so claude reads those files without an `--add-dir` anyway. The
  * sandbox grant (sandboxWrap's addDirs) stays, and that grant is what actually lets the reads through.
  */
-export function claudeAddDirs(addDirs: string[], skip: Array<string | null | undefined>): string[] {
+export function claudeAddDirs(addDirs: string[], skip: Array<string | null | undefined>, denied: string[] = []): string[] {
   const drop = new Set(skip.filter((d): d is string => !!d).map((d) => path.resolve(d)));
-  return addDirs.filter((d) => !drop.has(path.resolve(d)));
+  return addDirs.filter((d) => !drop.has(path.resolve(d)) && !repoRootDenied(d, denied));
+}
+
+/**
+ * Why claude asks anyway: it keys trust on the folder's git repository, and inside the sandbox that
+ * repository's root can be a folder the sandbox denies — another workspace's repo with this one's
+ * folder nested in it (personal's `Grid Leo/shareout-app` inside ShareOut's `Grid Leo`), or the
+ * daemon's own checkout for the tickets folder. Claude cannot read the root, finds no trust, and shows
+ * "Adding a new directory … trust?" whatever the records say. Reproduced 2026-11-17 on claude 2.1.326:
+ * same records, the dialog with the root denied, none without. Such a folder stays a sandbox grant and
+ * leaves claude's `--add-dir` list (it reads it anyway under --dangerously-skip-permissions).
+ */
+export function repoRootDenied(dir: string, denied: string[]): boolean {
+  if (!denied.length) return false;
+  const root = gitRootOf(dir);
+  if (!root || root === path.resolve(dir)) return false;
+  return denied.some((x) => {
+    const d = path.resolve(x);
+    return root === d || root.startsWith(d + path.sep);
+  });
+}
+
+/** The repository a folder belongs to: the nearest folder at or above it holding `.git`, or null. */
+export function gitRootOf(dir: string): string | null {
+  let d = path.resolve(dir);
+  for (;;) {
+    if (fs.existsSync(path.join(d, ".git"))) return d;
+    const up = path.dirname(d);
+    if (up === d) return null;
+    d = up;
+  }
 }
 
 /**

@@ -940,7 +940,9 @@ export async function openSession(
     // on it, brief unsent). The tickets folder stays a sandbox grant only; claude still asks about it
     // inside the sandbox whatever the record says. Every folder claude does get is trusted first
     // (claude-trust.ts).
-    const cliDirs = backend.name === "claude-code" ? claudeAddDirs(repoDirs, [ticketsDir]) : repoDirs;
+    // Nor any folder whose git root the sandbox denies (claude-trust.ts repoRootDenied): it asks about
+    // those whatever the trust records say.
+    const cliDirs = backend.name === "claude-code" ? claudeAddDirs(repoDirs, [ticketsDir], mode !== "off" ? denyDirs : []) : repoDirs;
     if (backend.name === "claude-code" && ensureTrustedDirs(configDir, claudeTrustTargets(cwd, cliDirs, DROP_ROOT)) === "added")
       console.log(`[terminal] pre-trusted ${cliDirs.length} added dir(s) in ${path.basename(configDir)}`);
     // CLI session id for transcript: prefer agentSessionId (headless continue), else Chronos row id.

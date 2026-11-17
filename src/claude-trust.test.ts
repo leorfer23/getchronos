@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { claudeAddDirs, claudeTrustTargets, ensureBypassAccepted, ensureTrustedCwd, ensureTrustedDirs } from "./claude-trust.js";
+import { claudeAddDirs, claudeTrustTargets, ensureBypassAccepted, ensureTrustedCwd, ensureTrustedDirs, gitRootOf, repoRootDenied } from "./claude-trust.js";
 
 const profile = (state?: unknown) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-trust-"));
@@ -104,4 +104,24 @@ test("a terminal's own drop dir is trusted through the drops root, not one recor
 test("the tickets folder stays out of claude's --add-dir list, the rest keep their order", () => {
   assert.deepEqual(claudeAddDirs(["/wt/repo", "/h/chronos/tickets/acme", "/h/.mc/drops/x"], ["/h/chronos/tickets/acme/"]), ["/wt/repo", "/h/.mc/drops/x"]);
   assert.deepEqual(claudeAddDirs(["/wt/repo"], [null, undefined]), ["/wt/repo"]);
+});
+
+test("a folder whose git root the sandbox denies leaves claude's --add-dir list; its own repo stays", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "mc-trust-root-"));
+  const other = path.join(home, "Grid Leo");             // another workspace's repo…
+  const nested = path.join(other, "shareout-app");       // …with this workspace's folder inside it
+  const own = path.join(home, "own-repo");
+  const plain = path.join(home, "Downloads", "Personal"); // no repo at all
+  for (const d of [path.join(other, ".git"), nested, path.join(own, ".git"), plain]) fs.mkdirSync(d, { recursive: true });
+  assert.equal(gitRootOf(nested), other);
+  assert.equal(gitRootOf(own), own);
+  assert.equal(gitRootOf(plain), null);
+  assert.equal(repoRootDenied(nested, [other]), true);
+  assert.equal(repoRootDenied(nested, [home]), true, "denied through a parent of the root");
+  assert.equal(repoRootDenied(nested, []), false, "no sandbox, nothing to drop");
+  assert.equal(repoRootDenied(own, [other]), false);
+  assert.equal(repoRootDenied(own, [own]), false, "a repo that is its own root is not this case");
+  assert.equal(repoRootDenied(plain, [home]), false);
+  assert.deepEqual(claudeAddDirs([own, nested, plain], [], [other]), [own, plain]);
+  assert.deepEqual(claudeAddDirs([own, nested, plain], []), [own, nested, plain], "unchanged without denies");
 });
