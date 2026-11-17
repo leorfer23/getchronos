@@ -55,6 +55,7 @@ import { routeConfigDir, routeProfileForHost } from "./profile-route.js";
 import { claudeDirFor, loginDeadFor } from "./login-dead.js";
 import { setting, settingOn } from "./settings.js";
 import { dupGoal, tellRobertDup, type DupGoal } from "./dup-goal.js";
+import { accountNotice } from "./account-hold.js";
 
 // Moved to agent-prep.ts (store-free, so `chronos host` runs the same code); re-exported for callers.
 export { excludeChronosArtifacts, gitExcludePath, gitTrackedSync, insideGitRepo, mcSystemText, syncAgentsMd } from "./agent-prep.js";
@@ -602,7 +603,7 @@ export async function openSession(
      *  own drop dir once the row exists and named in its brief. Never from a request body. */
     stagedDrops?: string[] | null;
   },
-): Promise<Session & { duplicate_of?: DupGoal }> {
+): Promise<Session & { duplicate_of?: DupGoal; account_notice?: { warning: string } }> {
   ensurePtyHelper();
   // A terminal opened with a list is still opened with a goal: the first one is what the card, the
   // day's log and `spawn_goal` carry. The rest are queued onto the row right after it is created.
@@ -1145,10 +1146,18 @@ export async function openSession(
   } catch (e: any) {
     console.error("[dup-goal] check failed", e?.message ?? e);
   }
-  if (!dup) return opened;
+  // Its account is out, or nearly through its 5-hour window (src/account-hold.ts)? Same rule: say it.
+  let accountWarning: string | null = null;
+  try {
+    accountWarning = fresh && backend.name === "claude-code" ? accountNotice(configDir) : null;
+  } catch (e: any) {
+    console.error("[account-hold] notice failed", e?.message ?? e);
+  }
+  const withNotice = accountWarning ? { ...opened, account_notice: { warning: accountWarning } } : opened;
+  if (!dup) return withNotice;
   console.warn(`[dup-goal] ${row.id.slice(0, 8)} looks like ${dup.id.slice(0, 8)} (${dup.score.toFixed(2)})`);
   void tellRobertDup(opened, dup).catch((e) => console.error("[dup-goal] Robert notice failed", e?.message ?? e));
-  return { ...opened, duplicate_of: dup };
+  return { ...withNotice, duplicate_of: dup };
 }
 
 /**

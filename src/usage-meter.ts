@@ -194,6 +194,17 @@ export function claudeWall(configDir: string | null | undefined, now = Date.now(
   return w ? { window: WINDOW_LABEL[w.name] ?? w.name, resetsAt: w.resetsAt } : null;
 }
 
+/**
+ * One window of a claude profile as its vendor last reported it, while that window is still the
+ * current one (its reset is ahead). No reading, or a reading from a window that already reset → null.
+ */
+export function claudeWindow(configDir: string | null | undefined, name = "5h", now = Date.now()): UsageWindow | null {
+  const m = load().meters[key({ cli: "claude", scope: profileScope(configDir) })];
+  const w = m?.windows.find((w) => w.name === name);
+  if (!w?.resetsAt || !(Date.parse(w.resetsAt) > now)) return null;
+  return w;
+}
+
 // ── grok: the last billing line in its own log ────────────────────────────────
 
 let grokCache: { mtimeMs: number; size: number; meter: UsageMeter | null } | null = null;

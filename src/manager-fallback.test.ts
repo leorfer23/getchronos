@@ -21,6 +21,8 @@ import {
   resolveManagerFallbacks,
   resolveModelFallback,
   withProviderFallback,
+  wallShortCircuit,
+  LIMIT_PROBE_MS,
 } from "./manager-fallback.js";
 
 test("isProviderLimitError: rate limit / 429 / credits", () => {
@@ -439,9 +441,13 @@ test("withProviderFallback: no fallback installed → the wall itself is the err
     assert.match(e.message, /^You've hit your session limit · resets 2:20pm$/, "the limit as the CLI said it, nothing about grok");
     assert.deepEqual(swaps, []);
     assert.equal(kills, 1, "the walled process still goes: the next turn starts a fresh one");
-    // No cooldown to sit out on another engine: the next turn asks Claude again.
-    await turn();
-    assert.equal(calls, 2);
+    // Nowhere to send the next turn and the wall is known: it fails at once with the wall's own words
+    // instead of spawning the walled CLI again (one real attempt every LIMIT_PROBE_MS, tested below).
+    const held = await turn();
+    assert.match(held.message, /^You've hit your session limit · resets 2:20pm — held until 14:20/);
+    assert.equal(isProviderLimitError(held), true, "callers still read it as a limit");
+    assert.equal(calls, 1, "the walled CLI was not spawned again");
+    assert.deepEqual(swaps, []);
     const auth = await withProviderFallback({
       key: "t-none-auth",
       primary: async () => { throw new Error("Not logged in · Please run /login"); },
@@ -456,4 +462,30 @@ test("withProviderFallback: no fallback installed → the wall itself is the err
     if (savedKey == null) delete process.env.CURSOR_API_KEY; else process.env.CURSOR_API_KEY = savedKey;
     _resetProviderLimitState();
   }
+});
+
+// The vendor's own words on 2026-11-17 — an org spend cap behind a full 5-hour window.
+const ORG_WALL = "You've hit your org's monthly spend limit · ask your admin to raise it · your 5-hour limit resets 2:20pm (America/Buenos_Aires)";
+
+test("markProviderLimited: a clock-style vendor reset ends the cooldown at that reset, not after the flat 90 minutes", () => {
+  _resetProviderLimitState();
+  markProviderLimited("t-clock", ORG_WALL);
+  assert.equal(isProviderLimited("t-clock"), true);
+  const held = wallShortCircuit("t-clock");
+  assert.match(held!, /monthly spend limit/);
+  assert.match(held!, /held until 14:20/);
+  _resetProviderLimitState();
+});
+
+test("wallShortCircuit: holds a walled turn, lets one real attempt through every LIMIT_PROBE_MS, nothing once cleared", () => {
+  _resetProviderLimitState();
+  assert.equal(wallShortCircuit("t-probe"), null, "not walled → go ahead");
+  markProviderLimited("t-probe", ORG_WALL);
+  const t0 = Date.now();
+  assert.ok(wallShortCircuit("t-probe", t0 + 60_000), "a minute after the wall → held");
+  assert.equal(wallShortCircuit("t-probe", t0 + LIMIT_PROBE_MS + 1), null, "probe due → one real attempt");
+  assert.ok(wallShortCircuit("t-probe", t0 + LIMIT_PROBE_MS + 60_000), "right after the probe → held again");
+  clearProviderLimited("t-probe");
+  assert.equal(wallShortCircuit("t-probe", t0 + LIMIT_PROBE_MS + 120_000), null, "a successful turn cleared it");
+  _resetProviderLimitState();
 });

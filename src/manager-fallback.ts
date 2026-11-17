@@ -136,9 +136,20 @@ export function parseResetClock(text: string | null | undefined, now = Date.now(
   return d.getTime();
 }
 
+/** The wall's own words per cooldown key, and when a walled primary was last really asked. */
+const limitedWhy = new Map<string, string>();
+const lastProbe = new Map<string, number>();
+/** With no fallback engine, a walled primary is still asked this often — a raised limit or an early reset shows. */
+export const LIMIT_PROBE_MS = 10 * 60 * 1000;
+
 export function markProviderLimited(key: string, err: unknown): void {
-  const until = parseLimitResetsAtMs(err) ?? Date.now() + DEFAULT_LIMIT_COOLDOWN_MS;
+  const msg = String(err instanceof Error ? err.message : err ?? "");
+  // The vendor writes its reset as a clock ("resets 2:20pm"); our runner writes ISO. Either beats the
+  // flat cooldown, which could hold a turn long after the window was back.
+  const until = parseLimitResetsAtMs(msg) ?? parseResetClock(msg) ?? Date.now() + DEFAULT_LIMIT_COOLDOWN_MS;
   limitedUntil.set(key, until);
+  limitedWhy.set(key, msg.split("\n")[0].trim().slice(0, 240));
+  lastProbe.set(key, Date.now());
 }
 
 export function isProviderLimited(key: string): boolean {
@@ -146,6 +157,8 @@ export function isProviderLimited(key: string): boolean {
   if (u == null) return false;
   if (Date.now() >= u) {
     limitedUntil.delete(key);
+    limitedWhy.delete(key);
+    lastProbe.delete(key);
     return false;
   }
   return true;
@@ -153,6 +166,23 @@ export function isProviderLimited(key: string): boolean {
 
 export function clearProviderLimited(key: string): void {
   limitedUntil.delete(key);
+  limitedWhy.delete(key);
+  lastProbe.delete(key);
+}
+
+/**
+ * The turn to fail at once instead of spawning the walled CLI again, or null when it should go ahead:
+ * not walled, or one real attempt is due (LIMIT_PROBE_MS since the last one).
+ */
+export function wallShortCircuit(key: string, now = Date.now()): string | null {
+  if (!isProviderLimited(key)) return null;
+  if (now - (lastProbe.get(key) ?? 0) >= LIMIT_PROBE_MS) {
+    lastProbe.set(key, now);
+    return null;
+  }
+  const until = limitedUntil.get(key)!;
+  const t = new Date(until).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  return `${limitedWhy.get(key) || "You've hit your limit"} — held until ${t}; Chronos tries again every ${LIMIT_PROBE_MS / 60_000} minutes`;
 }
 
 /** Cooldown key for "this caller's primary MODEL is walled" — distinct from the whole-provider one. */
@@ -171,6 +201,8 @@ export function resolveModelFallback(model?: string | null): string | null {
 /** Test helper — drop all cooldown state. */
 export function _resetProviderLimitState(): void {
   limitedUntil.clear();
+  limitedWhy.clear();
+  lastProbe.clear();
 }
 
 export type FallbackTarget = { backend: string; model: string | null };
@@ -555,7 +587,13 @@ export async function withProviderFallback(opts: WithProviderFallbackOpts): Prom
       limitError,
     });
 
-  // No fallback on this Mac: a cooldown has nowhere to send the turn, so the primary is asked again.
+  // No fallback on this Mac and the account is known walled: asking the walled CLI again spawns a
+  // process that fails at its first request (on 2026-11-17 one account took eight such turns in three
+  // minutes). Answer with the wall at once; one real attempt still goes through every LIMIT_PROBE_MS.
+  if (!fb) {
+    const held = wallShortCircuit(opts.key);
+    if (held) throw new Error(held);
+  }
   if (fb && isProviderLimited(opts.key)) {
     console.warn(
       `[manager-fallback] ${opts.key}: primary still limited → ${fb.backend}${fb.model ? `/${fb.model}` : ""}`,

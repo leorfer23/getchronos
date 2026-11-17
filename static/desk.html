@@ -6195,6 +6195,7 @@ async function spawn(body, onOpened, onFailed) {
     ph.remove();
     if (s?.id && byId(s.id)) select(s.id);
     if (s?.duplicate_of) toast(s.duplicate_of.warning);
+    if (s?.account_notice) toast(s.account_notice.warning);
   } catch (err) { ph.remove(); renderRail(); toast(err.message); }
 }
 // Close every terminal whose goal is ticked: they are done, and the rail is for what is not.

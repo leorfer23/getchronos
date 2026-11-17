@@ -5,6 +5,7 @@ import { onceDecision } from "./once.js";
 import { missedFire } from "./cron-catchup.js";
 import { CONFIG } from "./config.js";
 import { brainAwakeSince } from "./brain-awake.js";
+import { accountHold } from "./account-hold.js";
 import type { Job } from "./types.js";
 
 const tasks = new Map<string, Cron>();
@@ -59,6 +60,15 @@ function fireCron(job: Job, trigger: string): void {
       noteSkip(job.id, "gate", skip);
       return;
     }
+    // The account this job runs on is out, or its 5-hour window is nearly spent (src/account-hold.ts):
+    // a deliberate skip, and one fire at the reset when the next regular fire comes later than that.
+    const hold = accountHold(job);
+    if (hold) {
+      console.log(`[scheduler] hold cron ${job.name} — ${hold.why}`);
+      noteSkip(job.id, "gate", hold.why);
+      deferToReset(job, hold.until);
+      return;
+    }
     const r = dispatch(job.id, trigger);
     if ("error" in r) {
       console.warn(`[scheduler] cron ${job.name} refused: ${r.error}`);
@@ -95,6 +105,41 @@ export function fireCronWhenAwake(job: Job): void {
     const cur = jobs.get(job.id); // disabled or deleted while it waited → no fire
     if (cur?.enabled && cur.cron_expr) fireCronWhenAwake(cur);
   }, wait).unref?.();
+}
+
+/** A held fire runs this long after its account's reset, so the vendor has rolled the window over. */
+const AFTER_RESET_MS = 90_000;
+/** Longer than a 5-hour window: a reset further out (a weekly wall) is left to the regular fires. */
+const MAX_DEFER_MS = 6 * 3_600_000;
+const deferred = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * When one fire at the reset is worth it, and when. Not when the next regular fire comes first (an
+ * hourly monitor just runs on its next tick), and not for a reset too far out or unknown.
+ */
+export function deferDelay(untilIso: string | null, nextRegularIso: string | null, nowMs: number): number | null {
+  const until = untilIso ? Date.parse(untilIso) : NaN;
+  if (!Number.isFinite(until)) return null;
+  const at = Math.max(until, nowMs) + AFTER_RESET_MS;
+  if (at - nowMs > MAX_DEFER_MS) return null;
+  const next = nextRegularIso ? Date.parse(nextRegularIso) : NaN;
+  if (Number.isFinite(next) && next <= at) return null;
+  return at - nowMs;
+}
+
+/** One deferred fire per job; it goes through the same hold checks again when it comes due. */
+function deferToReset(job: Job, untilIso: string | null): void {
+  if (deferred.has(job.id)) return;
+  const wait = deferDelay(untilIso, nextRun(job.id), Date.now());
+  if (wait == null) return;
+  console.log(`[scheduler] ${job.name} runs again in ${Math.round(wait / 60_000)}m, after the reset`);
+  const t = setTimeout(() => {
+    deferred.delete(job.id);
+    const cur = jobs.get(job.id); // disabled, deleted or rescheduled while it waited → no fire
+    if (cur?.enabled && cur.cron_expr) fireCronWhenAwake(cur);
+  }, wait);
+  t.unref?.();
+  deferred.set(job.id, t);
 }
 
 // Rebuild all cron registrations from the jobs table. Called on boot and on any job CRUD.

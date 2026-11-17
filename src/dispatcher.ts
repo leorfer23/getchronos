@@ -9,6 +9,7 @@ import { openSession } from "./terminal.js";
 import { notify, esc } from "./telegram/api.js";
 import { burnHalted } from "./burn-guard.js";
 import { gateDispatch } from "./quota-gate.js";
+import { accountHold, isBackgroundTrigger } from "./account-hold.js";
 import { renderReplay } from "./replay.js";
 import { findHost, hostFor, LOCAL_HOST_ID } from "./hosts/index.js";
 import { RemoteHost } from "./hosts/remote.js";
@@ -104,6 +105,13 @@ export function dispatch(
   // (review:X + its fallback clones + ideas:followups:X) slips under every individual cap.
   const burn = burnHalted();
   if (burn) return { error: burn };
+  // Background work on an account that is out, or nearly through its 5-hour window, waits for the
+  // reset (src/account-hold.ts). Cron fires are held in the scheduler, where the skip is recorded as
+  // deliberate; this catches the dream passes and idea mining that come straight here.
+  if (isBackgroundTrigger(triggerSrc) && !triggerSrc.startsWith("cron")) {
+    const hold = accountHold(job);
+    if (hold) return { error: hold.why };
+  }
 
   // One agent per worktree. Two build runs in the same cwd share a branch and a working tree: they
   // overwrite each other's edits and `git add -A` each other's half-finished work (ACM-63 ran two
