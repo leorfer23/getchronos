@@ -11,7 +11,7 @@ import { SCROLLBACK, ScreenMirror, type Screen } from "./term-screen.js";
 import { ModeTracker, isTerminalReply } from "./term-modes.js";
 import { pasteOf, seedEnterMsFor, ttyCooked, typeSeed } from "./term-seed.js";
 import { sessions, sessionGoals, workspaces, repos, tickets, runs, jobs, notes as notesStore, kv, hosts } from "./store.js";
-import { backendAllowed, getBackend, workspaceBackends } from "./backends/index.js";
+import { backendAllowed, backendOff, getBackend, workspaceBackends } from "./backends/index.js";
 import { ensureWsTicketsDir, sandboxWrap, workspaceSandboxAllow } from "./sandbox.js";
 import { DROP_ROOT, ensureDropDir } from "./drops.js";
 import { claimStaged, dropsBrief } from "./capture.js";
@@ -696,6 +696,9 @@ export async function openSession(
   // Failover stand-ins (`replaces`) are exempt: the degrade ladder is an explicit operator choice
   // (workspace.fallback_backend + CHRONOS_TERMINAL_FALLBACK_BACKENDS) and must not be stranded by the
   // Desk picker's allowlist — same rule as terminal-failover.failoverUsable.
+  // A backend switched off for this install (CHRONOS_BACKENDS_OFF) opens nothing: no workspace, no
+  // failover stand-in and no revive is exempt.
+  if (opts.backend && backendOff(opts.backend)) throw new Error(`\`${opts.backend}\` is switched off on this install (CHRONOS_BACKENDS_OFF)`);
   if (opts.workspace_id && opts.backend && !opts.replaces) {
     const ws0 = workspaces.get(opts.workspace_id);
     if (ws0 && !backendAllowed(ws0.backends, opts.backend)) {

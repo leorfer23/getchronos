@@ -21,6 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { notify, esc } from "./telegram/api.js";
 import { findBin } from "./voice-setup.js";
+import { backendOff } from "./backends/index.js";
 
 export type UsageCli = "claude" | "grok" | "cursor";
 
@@ -258,6 +259,8 @@ function readGrok(file = GROK_LOG()): UsageMeter | null {
  */
 export function cliOnThisMac(cli: UsageCli, env: NodeJS.ProcessEnv = process.env, home = os.homedir()): boolean {
   if (cli === "claude") return true;
+  // A CLI switched off for this install (CHRONOS_BACKENDS_OFF) gets no chip and no 80/95 alerts.
+  if (backendOff(cli === "grok" ? "grok" : "cursor-agent", env)) return false;
   const pinned = (cli === "grok" ? env.CHRONOS_GROK_BIN : env.CHRONOS_CURSOR_BIN)?.trim();
   if (pinned && path.isAbsolute(pinned)) return fs.existsSync(pinned);
   if (cli === "grok") return !!findBin(pinned || "grok", env) || fs.existsSync(path.join(home, ".grok", "bin", "grok"));
