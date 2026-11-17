@@ -13,13 +13,16 @@
  *    looks, and closes it with `mc session close <id> "<what landed>"`.
  *  - The DAEMON refuses any close that would lose something (closeRefusal), whatever Robert decided:
  *    still writing, an open question, a hand-off that still asks the operator for a merge/deploy/review
- *    or says it waits on him, uncommitted or unpushed work, another computer, a Lead with live workers.
+ *    or says it waits on him, uncommitted or unpushed work (read on whichever computer holds the tree),
+ *    a computer that is offline, a cloud terminal, a Lead with live workers.
  */
 import { asks, sessions } from "./store.js";
 import { killSession, sessionActivity } from "./terminal.js";
 import { tickAllGoals } from "./goals.js";
 import { treeStrands, waitsOnOperator } from "./background.js";
 import { LOCAL_HOST_ID } from "./store/hosts.js";
+import { hostOnline } from "./hosts/index.js";
+import { listAllWorktrees } from "./worktrees.js";
 import type { Outcome, Session } from "./types.js";
 import type { Phase } from "./term-status.js";
 
@@ -89,6 +92,8 @@ export type CloseFacts = {
   openAsks: number;
   /** A Lead's live workers (0 for anything else). */
   liveWorkers: number;
+  /** The computer it runs on is connected (always true for this one). */
+  hostOnline: boolean;
 };
 
 const clip = (s: string, n: number) => {
@@ -113,13 +118,13 @@ export function handoffWants(o: Outcome | null | undefined): string | null {
  * tree check (treeStrands) runs after, since it is the one that touches git.
  */
 export function closeRefusal(
-  s: Pick<Session, "auto_close" | "status" | "host_id" | "cloud_agent_id" | "outcome" | "role">,
+  s: Pick<Session, "auto_close" | "status" | "cloud_agent_id" | "outcome" | "role">,
   f: CloseFacts,
 ): string | null {
   if (!s.auto_close) return "auto-close is off for this terminal — only the operator turns it on (the Focus toggle, or `auto-close`)";
   if (s.status !== "live" || !f.live) return "it is not running";
   if (s.cloud_agent_id) return "it is a cloud terminal — the operator closes those";
-  if ((s.host_id || LOCAL_HOST_ID) !== LOCAL_HOST_ID) return "it runs on another computer — the operator closes those";
+  if (!f.hostOnline) return "its computer is offline — try again once it reconnects";
   if (s.role === "lead" && f.liveWorkers > 0) return `it is a Lead with ${f.liveWorkers} live worker(s)`;
   if (!f.quiet) return "still working — its terminal is writing right now";
   if (f.openAsks > 0) return "it has an open question";
@@ -129,11 +134,29 @@ export function closeRefusal(
 
 // ───────────────────────────── the close ─────────────────────────────
 
+/**
+ * treeStrands for a terminal on another computer: its claimed worktree as that computer reports it
+ * (worktrees.ts listAllWorktrees asks every online host). A tree that cannot be found there refuses
+ * the close — unread is not clean.
+ */
+export async function remoteTreeStrands(
+  s: Pick<Session, "host_id" | "worktree_path" | "workspace_id">,
+  list: (ws?: string) => Promise<Array<{ host_id: string; path: string; dirty: boolean; dirty_files: number; unpushed: number }>> = listAllWorktrees,
+): Promise<string | null> {
+  if (!s.worktree_path) return null; // it never claimed one, like the local rule
+  const wt = (await list(s.workspace_id ?? undefined)).find((t) => t.host_id === s.host_id && t.path === s.worktree_path);
+  if (!wt) return "could not read its worktree on that computer";
+  if (wt.dirty) return `${wt.dirty_files} uncommitted file(s) in its worktree`;
+  if (wt.unpushed) return `${wt.unpushed} commit(s) in its worktree not on any remote`;
+  return null;
+}
+
 type Deps = {
   activity?: typeof sessionActivity;
   status?: (id: string) => { phase: Phase } | null;
   strands?: (s: Session) => Promise<string | null>;
   kill?: typeof killSession;
+  hostOnline?: (id: string | null | undefined) => boolean;
 };
 
 /**
@@ -156,10 +179,12 @@ export async function closeWhenDone(
     phase: status(id)?.phase ?? null,
     openAsks: asks.openForSession(id).length,
     liveWorkers: s.role === "lead" ? sessions.workersOf(id, { status: "live" }).length : 0,
+    hostOnline: (deps.hostOnline ?? hostOnline)(s.host_id),
   };
   const pre = closeRefusal(s, facts);
   if (pre) return { refused: pre };
-  const strands = await (deps.strands ?? treeStrands)(s).catch((e) => `could not read its tree: ${String(e?.message ?? e).slice(0, 120)}`);
+  const local = (s.host_id || LOCAL_HOST_ID) === LOCAL_HOST_ID;
+  const strands = await (deps.strands ?? (local ? treeStrands : (x: Session) => remoteTreeStrands(x)))(s).catch((e) => `could not read its tree: ${String(e?.message ?? e).slice(0, 120)}`);
   if (strands) return { refused: strands };
   try {
     if (!s.goal_done_at) tickAllGoals(id);
