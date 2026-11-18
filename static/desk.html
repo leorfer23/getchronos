@@ -3305,7 +3305,7 @@ async function answerDialog(s, i, text) {
 // line, so Talk never sits silent over a busy agent. Images it `mc show`ed land where they arrived.
 // 2026-10-30: Talk has to be more present — "easier to read all my messages plus the talk from
 // the model"; it used to keep only the answer after the last tool call and fold the rest away.
-const T = { id: null, all: false, open: new Set(), pending: null, follow: false, sig: "", shows: "" };
+const T = { id: null, all: false, open: new Set(), pending: [], follow: false, sig: "", shows: "" };
 const TALK_MAX = 80;
 // What it showed, as the hand-off draws its screenshots: click one to see it whole.
 const showsHtml = (list) => list.map((sh) => `<div class="ta-show">${sh.caption ? `<div class="cap">${md(sh.caption)}</div>` : ""}<div class="fx-shots">`
@@ -3360,13 +3360,14 @@ function talkNow(s, items) {
 }
 const actsWord = (g) => (g.acts.length ? foldActs(g.acts.map((a) => a.text)) : "") + (g.errs ? `${g.acts.length ? " · " : ""}${g.errs} failed` : "");
 function focusTalk(s) {
-  if (T.id !== s.id) Object.assign(T, { id: s.id, all: false, open: new Set(), pending: null, follow: false, sig: "", shows: "" });
+  if (T.id !== s.id) Object.assign(T, { id: s.id, all: false, open: new Set(), pending: [], follow: false, sig: "", shows: "" });
   if (T.peek && T.peek.id !== s.id) peekClose(true);
   T.shows = "";
   if (F.id !== s.id) return "";
   const items = talkThread(s);
-  // Your line from the composer, until its own record lands in the transcript.
-  if (T.pending && items.some((x) => x.k === "you" && !x.seed && norm(x.text) === norm(youSaid(T.pending.text)) && (!x.at || x.at >= T.pending.at - 10000))) T.pending = null;
+  // Your lines from the composer, each until its own record lands in the transcript. A list, not one
+  // slot: a second line sent before the first landed used to replace it, and the first left Talk.
+  T.pending = T.pending.filter((p) => !items.some((x) => x.k === "you" && !x.seed && norm(x.text) === norm(youSaid(p.text)) && (!x.at || x.at >= p.at - 10000)));
   // What it said since your last line — the hand-off card checks it so its Result is not printed twice.
   const lastYou = items.map((x) => x.k).lastIndexOf("you");
   T.shows = items.slice(lastYou + 1).filter((x) => x.k === "say").map((x) => x.text).join("\n\n");
@@ -3377,7 +3378,7 @@ function focusTalk(s) {
     + `<span class="sp"></span>`
     + (chat && s.live ? `<button type="button" class="fx-exp" data-ftask title="Ask it to turn this into a task: a goal, a finish line, a hand-off">Make it a task</button>` : "")
     + (chat ? "" : expBtn("talk")) + `</div>`;
-  if (!items.length && !T.pending && !T.peek && !now)
+  if (!items.length && !T.pending.length && !T.peek && !now)
     return s.live ? `<section class="fx fx-talk">${top}<div class="fx-body"><div class="fx-wait">Nothing said yet — what you type below shows here, with its answer under it.</div></div></section>` : "";
   const shown = T.all || items.length <= TALK_MAX ? items : items.slice(-TALK_MAX);
   const when = (at) => (at ? `<time>${esc(TermCompanion.hhmm(at))}</time>` : `<time></time>`);
@@ -3394,12 +3395,14 @@ function focusTalk(s) {
   });
   if (shown.length < items.length) rows.unshift(`<button type="button" class="fx-more tk-earlier" data-tall>↑ ${items.length - shown.length} earlier</button>`);
   else if (T.all && items.length > TALK_MAX) rows.unshift(`<button type="button" class="fx-more tk-earlier" data-tall>only the newest ${TALK_MAX}</button>`);
-  if (T.pending) {
+  if (T.pending.length) {
     // Sent as "send now" (a working Claude): its running step went to the background and it answers in
     // this turn. Any other CLI reads a line typed mid-turn only when its current tool call ends.
-    const why = T.pending.now ? "sent now — what it was running moved to the background; it answers in a moment…"
+    const lastP = T.pending[T.pending.length - 1];
+    const why = lastP.now ? "sent now — what it was running moved to the background; it answers in a moment…"
       : now?.at ? `queued — it reads this when “${clip(now.text, 70)}” ends` : now ? "sent — it reads this in a moment…" : "sent — waiting for its answer…";
-    rows.push(`<div class="tk you">${`<div class="b">${esc(clip(youSaid(T.pending.text), 4000))}</div>`}<time>${esc(TermCompanion.hhmm(T.pending.at))}</time></div><div class="tk wait">${esc(why)}</div>`);
+    for (const p of T.pending) rows.push(`<div class="tk you"><div class="b">${esc(clip(youSaid(p.text), 4000))}</div><time>${esc(TermCompanion.hhmm(p.at))}</time></div>`);
+    rows.push(`<div class="tk wait">${esc(why)}</div>`);
   }
   if (T.peek?.id === s.id) rows.push(peekHtml(T.peek));
   if (now) {
@@ -3418,12 +3421,12 @@ const expBtn = (k) => `<button type="button" class="fx-exp" data-fexp="${k}" tit
 function talkFollow() {
   if (!T.follow) return;
   const box = qs("#story .fx-talk .fx-body"); if (!box) return;
-  const sig = (T.pending ? "p" : "r") + box.scrollHeight;
+  const sig = (T.pending.length ? "p" : "r") + box.scrollHeight;
   if (sig === T.sig) return;
   T.sig = sig;
   FX.pin.set("talk", true);
   pinTo(box, box.scrollHeight);
-  if (!T.pending) T.follow = false;
+  if (!T.pending.length) T.follow = false;
 }
 // A line to the agent from the board. While a Claude terminal is working, it goes as "send now"
 // (Claude Code's Ctrl+X Ctrl+S): whatever it is running — a long command, a subagent — moves to the
@@ -3439,17 +3442,18 @@ function talkSend(s, text, by) {
   const now = sendsNow(s) && !cmd;
   const sent = answer(s.id, { text, enter: true, ...(now ? { now: true } : {}), ...(by ? { by } : {}) });
   if (S.mode === "focus") {
-    if (T.id !== s.id) Object.assign(T, { id: s.id, all: false, open: new Set(), shows: "" });
+    if (T.id !== s.id) Object.assign(T, { id: s.id, all: false, open: new Set(), pending: [], shows: "" });
     // Its answer is drawn in the terminal, not written to the transcript: Talk shows the terminal (peekOpen).
-    if (cmd) { T.pending = null; peekOpen(s, text); }
-    else { peekClose(true); Object.assign(T, { pending: { text, at: Date.now(), now } }); }
+    if (cmd) peekOpen(s, text);
+    else { peekClose(true); T.pending.push({ text, at: Date.now(), now }); }
     Object.assign(T, { follow: true, sig: "" });
     renderStory();
   }
   // A refused line is not "you said": it leaves Talk, and the caller puts it back in the composer.
   return sent.then((ok) => {
     // A bare `auto-close` typed nothing into the agent: there is no answer to wait for.
-    if ((!ok || ok.typed === false) && T.pending?.text === text) { T.pending = null; renderStory(); }
+    const i = T.pending.findLastIndex((p) => p.text === text);
+    if ((!ok || ok.typed === false) && i >= 0) { T.pending.splice(i, 1); renderStory(); }
     if (!ok && T.peek?.cmd === text) peekClose();
     return ok;
   });

@@ -295,6 +295,18 @@ export const claudeLine = (o: any, lineNo: number): FocusEvent[] => {
     if (text.startsWith("<command-")) return []; // slash-command plumbing, not a typed message
     return mkEvents("user", text, lineNo * 1000, ts);
   }
+  // A line typed while it was mid-turn that Claude Code folded into the running turn instead of opening
+  // a new one: the queue drops it (`queue-operation remove`, reason `absorbed_mid_turn`) and the only
+  // record is this attachment — never a `type:"user"` line. The agent read it; without this Talk lost
+  // it (123 lines typed into terminals in a week of transcripts, 2026-11-18). `task-notification` / `peer` are not you.
+  if (o?.type === "attachment" && o.attachment?.type === "queued_command" && !o.isSidechain) {
+    const a = o.attachment;
+    if ((a.origin?.kind ?? "human") !== "human" || (a.commandMode ?? "prompt") !== "prompt") return [];
+    const raw = typeof a.prompt === "string" ? a.prompt : textOf(a.prompt);
+    const text = raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+    if (!text || text.startsWith("<command-")) return [];
+    return mkEvents("user", text, lineNo * 1000, Date.parse(a.timestamp ?? o.timestamp) || undefined);
+  }
   // a tool RESULT: not narration, but the only record of a failure or of a link a command printed.
   if (o?.type === "user" && Array.isArray(o?.message?.content) && !o.isSidechain) return toolResultEvents(o, lineNo);
   if (o?.type !== "assistant" || !Array.isArray(o?.message?.content)) return [];
