@@ -162,7 +162,7 @@ import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type Rober
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
 import { autoCloseWord, closeWhenDone, spawnAutoClose } from "./auto-close.js";
 import { finishedGoal, freshHint, noteGoalSet, routeNewWork, sameGoal, withHandoff } from "./fresh-terminal.js";
-import { leadEventPayload, waitForLeadEvents } from "./robert-drive.js";
+import { leadEventPayload, waitForLeadEvents, wakeShippedElsewhere } from "./robert-drive.js";
 import { fileReport, leadEventLines } from "./lead-report.js";
 import { leadMayAnswer, mayRouteToLead } from "./lead-asks.js";
 import { WAKE_ATTEMPT_CAP, wakeBeaconAgeMs } from "./wake-queue.js";
@@ -892,6 +892,13 @@ export function startServer() {
     sessions.setOutcome(s.id, filed.latest, filed.earlier);
     noteTrialHandoff(s.id); // an analysis's hand-off, counted for the trial on or off (red-team-trial.ts)
     bus.publish({ topic: "session.updated", session_id: s.id });
+    // It shipped these PRs: a terminal of THIS workspace still asking for their merge/deploy may be done
+    // now, and nothing in it moves to say so (robert-drive.ts wakeShippedElsewhere).
+    if (filed.latest.shipped.length) {
+      for (const url of filed.latest.prs) {
+        try { wakeShippedElsewhere(s.workspace_id, url, s.id); } catch (e: any) { console.warn("[robert-drive] shipped-elsewhere:", e?.message ?? e); }
+      }
+    }
     res.status(201).json({ ...filed.latest, earlier: filed.earlier.length });
   });
   // What the agent's PostToolUse hook asks while it works (term-hooks.ts): its board, when it has gone

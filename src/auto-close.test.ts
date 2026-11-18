@@ -19,9 +19,9 @@ process.env.CHRONOS_PORT = String(PORT);
 const { startServer } = await import("./api.js");
 const { CONFIG } = await import("./config.js");
 const { robertToken } = await import("./authz.js");
-const { sessions, workspaces } = await import("./store.js");
-const { autoCloseWord, closeRefusal, closeWhenDone, handoffWants, remoteTreeStrands, spawnAutoClose } = await import("./auto-close.js");
-const { driveSay, reaches } = await import("./robert-drive.js");
+const { continuations, sessionPrs, sessions, workspaces } = await import("./store.js");
+const { autoCloseWord, closeRefusal, closeWhenDone, handoffWants, OPERATOR_TALKING_MS, remoteTreeStrands, shippedElsewhere, spawnAutoClose } = await import("./auto-close.js");
+const { closeJudgment, driveSay, reaches } = await import("./robert-drive.js");
 import type { Outcome } from "./types.js";
 
 const base = `http://127.0.0.1:${PORT}/api`;
@@ -128,6 +128,67 @@ test("closeRefusal: only an auto-close terminal, finished, quiet, asking nothing
   assert.match(closeRefusal({ ...row, outcome: outcome({ ask: "deploy" }) }, facts)!, /deploy/);
 });
 
+test("handoffWants: a merge or deploy it asked for that already happened elsewhere in its workspace is not still wanted", () => {
+  const o = outcome({ ask: "merge+deploy", prs: ["https://github.com/acme/app/pull/317"] });
+  assert.match(handoffWants(o)!, /merge\+deploy/, "nothing known: still asking");
+  assert.equal(handoffWants(o, { merged: true, deployed: true, by: "by terminal 5e8330ae" }), null);
+  assert.match(handoffWants(o, { merged: true, deployed: false, by: "on GitHub" })!, /merged \(on GitHub\).*deploy/, "merged, the deploy still unshipped");
+  assert.equal(handoffWants(outcome({ ask: "merge" }), { merged: true, deployed: false, by: null }), null);
+  assert.match(handoffWants(outcome({ ask: "review" }), { merged: true, deployed: true, by: null })!, /review/, "a read is never shipped elsewhere");
+  assert.match(
+    handoffWants(outcome({ ask: "merge", summary: "Merged. A Slack draft is ready for you." }), { merged: true, deployed: true, by: null })!,
+    /waits on the operator/, "what it says it still needs from him stands",
+  );
+});
+
+test("shippedElsewhere: GitHub's merge, or another terminal's hand-off in the SAME workspace — never another workspace's", () => {
+  const url = "https://github.com/acme/app/pull/317";
+  const me = { id: "me000000-1", workspace_id: "wsA", outcome: outcome({ ask: "merge+deploy", prs: [url] }) } as any;
+  const shipper = (ws: string, shipped: string[], prs = [url]) =>
+    ({ id: `sh${ws}0000-1`, workspace_id: ws, outcome: outcome({ prs, shipped }), outcome_prev: [] }) as any;
+  const none = { merged: false, deployed: false, by: null };
+  assert.deepEqual(shippedElsewhere({ ...me, outcome: outcome({ ask: "merge" }) }, { prState: () => undefined, citing: () => [] }), none, "no PRs: nothing to look up");
+  assert.deepEqual(shippedElsewhere({ ...me, workspace_id: null }, { prState: () => ({ state: "merged", workspace_id: "wsA" }), citing: () => [] }), none, "no workspace: nothing");
+  assert.deepEqual(shippedElsewhere(me, { prState: () => ({ state: "merged", workspace_id: "wsA" }), citing: () => [] }), { merged: true, deployed: false, by: "on GitHub" });
+  assert.equal(shippedElsewhere(me, { prState: () => ({ state: "merged", workspace_id: "wsB" }), citing: () => [] }).merged, false, "a PR row of another workspace speaks for nobody here");
+  assert.deepEqual(
+    shippedElsewhere(me, { prState: () => undefined, citing: () => [shipper("wsA", ["merged #317", "deployed"])] }),
+    { merged: true, deployed: true, by: "by terminal shwsA000" },
+  );
+  assert.deepEqual(shippedElsewhere(me, { prState: () => undefined, citing: () => [shipper("wsB", ["merged #317", "deployed"])] }), none, "another workspace's hand-off is never read as this one's");
+  assert.deepEqual(shippedElsewhere(me, { prState: () => undefined, citing: () => [{ ...me, outcome: outcome({ prs: [url], shipped: ["deployed"] }) }] }), none, "its own hand-off is not elsewhere");
+  assert.deepEqual(shippedElsewhere(me, { prState: () => undefined, citing: () => [shipper("wsA", ["deployed"], ["https://github.com/acme/app/pull/318"])] }), none, "a hand-off about another PR");
+  const two = { ...me, outcome: outcome({ ask: "merge", prs: [url, "https://github.com/acme/app/pull/318"] }) };
+  assert.equal(shippedElsewhere(two, { prState: (u) => (u === url ? { state: "merged", workspace_id: "wsA" } : undefined), citing: () => [] }).merged, false, "every PR, not one of them");
+  const earlier = { ...shipper("wsA", []), outcome_prev: [outcome({ prs: [url], shipped: ["merged", "deployed to prod"] })] };
+  assert.equal(shippedElsewhere(me, { prState: () => undefined, citing: () => [earlier] }).deployed, true, "an earlier hand-off on that terminal counts");
+});
+
+test("sessions.citingPr: only the asked workspace's hand-offs, whatever another workspace says about the same PR", () => {
+  const url = `https://github.com/acme/app/pull/${Date.now() % 100000}`;
+  const a = terminal();
+  const b = sessions.create({ workspace_id: B.id, cwd: tmp, backend: "claude-code", goal: "ship it" } as any);
+  sessions.setOutcome(a.id, outcome({ prs: [url] }));
+  sessions.setOutcome(b.id, outcome({ prs: [url], shipped: ["merged", "deployed"] }));
+  assert.deepEqual(sessions.citingPr(A.id, url).map((s) => s.id), [a.id]);
+  assert.deepEqual(sessions.citingPr(B.id, url).map((s) => s.id), [b.id]);
+  assert.deepEqual(sessions.citingPr(null, url), []);
+});
+
+test("closeRefusal: work it parked to pick back up, or the operator talking to it since its hand-off, keeps it open", () => {
+  const row = { auto_close: true, status: "live", host_id: "local", cloud_agent_id: null, role: "human", outcome: outcome({ at: "2026-11-18T19:00:00.000Z" }) } as any;
+  const facts = { live: true, quiet: true, phase: "review" as const, openAsks: 0, liveWorkers: 0, hostOnline: true };
+  const t = (iso: string) => Date.parse(iso);
+  assert.match(closeRefusal(row, { ...facts, parked: "PR #12 approved" })!, /parked work.*PR #12 approved/);
+  const now = t("2026-11-18T19:20:00.000Z");
+  assert.match(closeRefusal(row, { ...facts, nowMs: now, operatorLastInMs: t("2026-11-18T19:10:00.000Z") })!, /talking to it 10 min ago/);
+  assert.equal(closeRefusal(row, { ...facts, nowMs: now, operatorLastInMs: t("2026-11-18T18:55:00.000Z") }), null, "he spoke before it handed off: that hand-off answers him");
+  assert.equal(closeRefusal(row, { ...facts, nowMs: now + OPERATOR_TALKING_MS, operatorLastInMs: t("2026-11-18T19:10:00.000Z") }), null, "past the window");
+  assert.equal(closeRefusal(row, { ...facts, nowMs: now, operatorLastInMs: null }), null, "the operator closing it himself: no such guard");
+  assert.match(closeRefusal({ ...row, outcome: outcome({ ask: "merge+deploy" }) }, facts)!, /merge\+deploy/);
+  assert.equal(closeRefusal({ ...row, outcome: outcome({ ask: "merge+deploy" }) }, { ...facts, elsewhere: { merged: true, deployed: true, by: null } }), null);
+});
+
 // ── the close ────────────────────────────────────────────────────────────────────────────────
 
 test("closeWhenDone: past every guard it ticks the goal and ends the terminal with the reason", async () => {
@@ -150,6 +211,47 @@ test("closeWhenDone: past every guard it ticks the goal and ends the terminal wi
   assert.deepEqual(r, { refused: "2 uncommitted file(s) in its worktree" });
   assert.equal(killed.length, 1, "a tree that would strand work is never closed");
   assert.equal(sessions.get(dirty.id)!.goal_done_at, null);
+});
+
+test("closeWhenDone: a hand-off its own workspace already shipped closes; another workspace's shipping never counts", async () => {
+  const url = `https://github.com/acme/app/pull/${(Date.now() % 100000) + 1}`;
+  const killed: string[] = [];
+  const deps = {
+    activity: () => ({ live: true, quiet: true, last_out: null, last_in: null, started_at: null }),
+    status: () => ({ phase: "review" as const }),
+    strands: async () => null,
+    kill: (id: string) => { killed.push(id); },
+  };
+  const s = terminal({ auto_close: true });
+  sessions.setOutcome(s.id, outcome({ ask: "merge+deploy", prs: [url] }));
+  const foreign = sessions.create({ workspace_id: B.id, cwd: tmp, backend: "claude-code", goal: "ship it" } as any);
+  sessions.setOutcome(foreign.id, outcome({ prs: [url], shipped: ["merged #1", "deployed"] }));
+  assert.match((await closeWhenDone(s.id, "shipped", "robert", deps) as any).refused, /merge\+deploy/, "Initech shipping it says nothing about Acme");
+  sessionPrs.record({ url, session_id: s.id, workspace_id: A.id, cwd: tmp });
+  sessionPrs.update(url, { state: "merged" });
+  assert.match((await closeWhenDone(s.id, "shipped", "robert", deps) as any).refused, /merged \(on GitHub\).*deploy/, "merged, the deploy unshipped");
+  const shipper = terminal();
+  sessions.setOutcome(shipper.id, outcome({ prs: [url], shipped: ["merged #1", "deployed"] }));
+  assert.deepEqual(await closeWhenDone(s.id, "shipped by the Ship terminal", "robert", deps), { closed: true });
+  assert.deepEqual(killed, [s.id]);
+});
+
+test("closeWhenDone: a parked `mc when` and the operator typing to it after its hand-off keep it open for Robert", async () => {
+  const deps = {
+    activity: () => ({ live: true, quiet: true, last_out: null, last_in: null, started_at: null }),
+    status: () => ({ phase: "review" as const }),
+    strands: async () => null,
+    kill: () => {},
+  };
+  const parked = terminal({ auto_close: true });
+  continuations.create({ workspace_id: A.id, session_id: parked.id, kind: "pr", target: "https://github.com/acme/app/pull/9", until: "merged", label: "PR #9 merged" });
+  assert.match((await closeWhenDone(parked.id, "done", "robert", deps) as any).refused, /parked work.*PR #9 merged/);
+
+  const talked = terminal({ auto_close: true });
+  sessions.setOutcome(talked.id, outcome({ at: new Date(Date.now() - 5 * 60_000).toISOString() }));
+  sessions.addOperatorInputs(talked.id, 1, new Date(Date.now() - 60_000).toISOString());
+  assert.match((await closeWhenDone(talked.id, "done", "robert", deps) as any).refused, /talking to it/);
+  assert.deepEqual(await closeWhenDone(talked.id, "done", "operator", deps), { closed: true }, "his own close is his call");
 });
 
 test("remoteTreeStrands: the tree as its computer reports it; unread is not clean", async () => {
@@ -214,11 +316,15 @@ test("driveSay: an auto-close wake names the close command; a check-only one tel
     assert.match(check, /AUTO-CLOSE IS ON/);
     assert.match(check, /mc session close abcdef12/);
     assert.match(check, /do NOT type into it/);
+    assert.match(check, /Close only when it makes sense/, "he judges closing, not only the tick");
+    assert.match(check, /Any doubt → leave it open/);
     assert.doesNotMatch(check, /DRIVING THE WALL/, "a check, not a hand-over");
     const driven = driveSay({ ...s, auto_close: true, robert: true }, "review", { line: "done" }, words, "Acme");
     assert.match(driven, /mc session close abcdef12/);
     assert.match(driven, /DRIVING THE WALL/);
+    assert.match(driven, /Close only when it makes sense/);
     assert.doesNotMatch(driven, /do NOT type into it/);
+    assert.match(closeJudgment("`close`", false), /draft to review or send/);
   } finally {
     if (prev === undefined) delete process.env.CHRONOS_ROBERT_WATCH_ALL;
     else process.env.CHRONOS_ROBERT_WATCH_ALL = prev;

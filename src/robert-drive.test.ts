@@ -4,7 +4,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { db, leadEvents, sessions, workspaces } from "./store.js";
+import { db, leadEvents, sessionPrs, sessions, workspaces } from "./store.js";
 import { setWakeAsker, setWakeNotifier, setWakePoster, dueRows, TERMINAL_DRIVE_KEY } from "./wake-queue.js";
 import type { TermStatus } from "./term-status.js";
 import {
@@ -32,6 +32,7 @@ import {
   REPORT_SUPPRESS_MS,
   underCaps,
   waitForLeadEvents,
+  wakeShippedElsewhere,
 } from "./robert-drive.js";
 import { fileReport } from "./lead-report.js";
 import { recordApproval } from "./card-approval.js";
@@ -921,4 +922,57 @@ test("a report older than the suppression window no longer stands in for a stop"
   assert.ok(fireIfStill(worker.id, driveKey(worker.id, "your_turn", status.since), NOW));
   await settle();
   assert.deepEqual(leadEvents.recent(lead.id).map((e) => e.kind).sort(), ["report", "turn"]);
+});
+
+// ── a PR shipped elsewhere in the workspace (src/auto-close.ts shippedElsewhere) ──────────────
+
+const handoff = (o: Record<string, unknown>) =>
+  ({ summary: "Fixed and green.", changes: [], proof: [], prs: [], shots: [], ask: "none", shipped: [], at: new Date(NOW - 60 * 60_000).toISOString(), ...o }) as any;
+
+test("wakeShippedElsewhere: a terminal still asking for a merge + deploy another terminal here shipped — Robert is told, once", () => {
+  reset();
+  const url = "https://github.com/acme/app/pull/317";
+  const s = term({ robert: false });
+  writeSetting("robert.close_done", true, s.workspace_id);
+  sessions.setOutcome(s.id, handoff({ ask: "merge+deploy", prs: [url] }));
+  screens.set(s.id, st("review"));
+  const shipper = sessions.create({ workspace_id: s.workspace_id, goal: "ship #317", cwd: "/tmp" } as any);
+  assert.deepEqual(wakeShippedElsewhere(s.workspace_id, url, shipper.id, NOW), [], "nothing shipped yet: its ask still stands");
+  sessions.setOutcome(shipper.id, handoff({ prs: [url], shipped: ["merged #317", "deployed"] }));
+  assert.equal(wakeShippedElsewhere(s.workspace_id, url, shipper.id, NOW).length, 1);
+  const r = rows().at(-1);
+  assert.equal(r.workspace_id, s.workspace_id, "on that workspace's own Robert");
+  const say = JSON.parse(r.payload).say as string;
+  assert.match(say, /ITS PR SHIPPED ELSEWHERE — https:\/\/github.com\/acme\/app\/pull\/317 is merged and deployed \(by terminal/);
+  assert.match(say, /Close only when it makes sense/);
+  assert.deepEqual(wakeShippedElsewhere(s.workspace_id, url, shipper.id, NOW), [], "once per terminal per PR");
+});
+
+test("wakeShippedElsewhere: never across workspaces, never where Robert may not close it, never a deploy nobody here shipped", () => {
+  reset();
+  const url = "https://github.com/acme/app/pull/318";
+  const s = term({ robert: false });
+  sessions.setOutcome(s.id, handoff({ ask: "merge+deploy", prs: [url] }));
+  screens.set(s.id, st("review"));
+  const foreign = term(); // another workspace, same PR URL
+  sessions.setOutcome(foreign.id, handoff({ prs: [url], shipped: ["merged", "deployed"] }));
+  assert.deepEqual(wakeShippedElsewhere(s.workspace_id, url, null, NOW), [], "close-when-done is off here");
+  writeSetting("robert.close_done", true, s.workspace_id);
+  assert.deepEqual(wakeShippedElsewhere(s.workspace_id, url, null, NOW), [], "the other workspace shipping it is not this workspace's news");
+  assert.deepEqual(wakeShippedElsewhere(foreign.workspace_id, url, foreign.id, NOW), [], "nor is a wake for that workspace ever about this terminal");
+  sessionPrs.record({ url, session_id: s.id, workspace_id: s.workspace_id!, cwd: "/tmp" });
+  sessionPrs.update(url, { state: "merged" });
+  assert.deepEqual(wakeShippedElsewhere(s.workspace_id, url, null, NOW), [], "merged on GitHub, but it asked for the deploy too");
+  sessions.setOutcome(s.id, handoff({ ask: "merge", prs: [url] }));
+  assert.equal(wakeShippedElsewhere(s.workspace_id, url, null, NOW).length, 1, "a merge-only ask is met by GitHub's merge");
+  const url2 = "https://github.com/acme/app/pull/319";
+  const working = term({ robert: false });
+  writeSetting("robert.close_done", true, working.workspace_id);
+  sessions.setOutcome(working.id, handoff({ ask: "merge", prs: [url2] }));
+  sessionPrs.record({ url: url2, session_id: working.id, workspace_id: working.workspace_id!, cwd: "/tmp" });
+  sessionPrs.update(url2, { state: "merged" });
+  screens.set(working.id, st("working"));
+  assert.deepEqual(wakeShippedElsewhere(working.workspace_id, url2, null, NOW), [], "still working: not a finished terminal to judge");
+  screens.set(working.id, st("your_turn"));
+  assert.equal(wakeShippedElsewhere(working.workspace_id, url2, null, NOW).length, 1, "the same terminal, stopped");
 });
