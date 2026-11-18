@@ -137,6 +137,17 @@ type PrView = {
 const failAlerted = new Set<string>();
 
 /**
+ * It merged — by hand on GitHub, by another terminal, by this loop: a terminal of the same workspace
+ * whose hand-off still asks for that merge may be done now (robert-drive.ts wakeShippedElsewhere).
+ * Late import: robert-drive pulls in the terminal stack, which this poll does not otherwise need.
+ */
+function wakeMergedHere(wsId: string, url: string): void {
+  void import("./robert-drive.js")
+    .then((m) => m.wakeShippedElsewhere(wsId, url, null))
+    .catch((e) => console.warn(`[automerge] shipped-elsewhere wake for ${url}: ${e?.message ?? e}`));
+}
+
+/**
  * Poll the open rows once, least recently polled first: record what each PR is now, and in an
  * auto-merge workspace merge the green ones. Returns the URLs merged this pass.
  */
@@ -176,6 +187,7 @@ export async function pollSessionPrs(nowMs = Date.now()): Promise<string[]> {
     const state = String(v.state ?? "").toUpperCase();
     if (state === "MERGED" || state === "CLOSED") {
       sessionPrs.update(row.url, { state: state === "MERGED" ? "merged" : "closed" });
+      if (state === "MERGED") wakeMergedHere(row.workspace_id, row.url);
       continue;
     }
     if (state !== "OPEN") { sessionPrs.touch(row.url); continue; }
@@ -215,6 +227,7 @@ export async function pollSessionPrs(nowMs = Date.now()): Promise<string[]> {
     try {
       await gh(["pr", "merge", row.url, "--squash"], cwd, env);
       sessionPrs.update(row.url, { state: "merged", merge_error: null });
+      wakeMergedHere(row.workspace_id, row.url);
       merged.push(row.url);
       await notifyInfo(`✅ auto-merged ${row.url} (${ws.name}, CI green)`).catch(() => {});
     } catch (e: any) {

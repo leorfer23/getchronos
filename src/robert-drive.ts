@@ -42,6 +42,7 @@ import { focusEvents, sessionActivity, sendInput } from "./terminal.js";
 import { signalsOf, statusOf, type TermStatus } from "./term-status.js";
 import { setting, settingOn } from "./settings.js";
 import { closesWhenDone, commandLine } from "./robert-command.js";
+import { handoffWants, shippedElsewhere } from "./auto-close.js";
 import { isShipTerminal } from "./ship-guard.js";
 import { approvalNote, currentApproval } from "./card-approval.js";
 
@@ -211,6 +212,22 @@ export function orphanLeadLine(s: { lead_id?: string | null }): string | null {
   );
 }
 
+/**
+ * What Robert weighs before an auto-close. The operator, 2026-11-18: he must judge "whether closing makes
+ * sense", not only whether the goal was ticked — closing ends the terminal's conversation, so doubt
+ * keeps it open. The daemon still refuses what it can see (src/auto-close.ts closeRefusal); these are
+ * the calls only reading the terminal settles.
+ */
+export function closeJudgment(close: string, checkOnly: boolean): string {
+  return (
+    `Close only when it makes sense, all four: (1) its finish line is met with proof — checks green, the PR merged/deployed if that was the goal; ` +
+    `(2) nothing in its hand-off or last words is still for the operator to act on — a draft to review or send, a product call, a login, a PR not yet merged or deployed; ` +
+    `(3) it did not say it would do something next (a follow-up, a rerun, waiting on CI or a reply); ` +
+    `(4) the operator is not in the middle of a conversation with it. ` +
+    `All four → ${close}. Any doubt → leave it open${checkOnly ? " (do NOT type into it)" : ""} and tell the operator in one line why it stays open — that line is what he reads instead of the terminal.\n`
+  );
+}
+
 /** The card approval that still speaks for this terminal, as Robert's one line — null when there is none. */
 function approvedNote(s: Session, nowMs = Date.now()): string | null {
   const a = currentApproval(s, nowMs);
@@ -249,10 +266,10 @@ export function driveSay(
   const close = `\`mc session close ${id8(s.id)} "<what landed, one line>"\``;
   const autoLine = !autoClose
     ? ""
-    : checkOnly
-      ? `AUTO-CLOSE IS ON — the operator wants this terminal closed once its goal is met, and that check is the only reason you are woken for it (he did not hand it to you). ` +
-        `Goal met with evidence (its finish line, its hand-off's proof) → close it: ${close}. Not met, or anything still waits on him → do NOT type into it; tell the operator in one line what is missing.\n`
-      : `AUTO-CLOSE IS ON — the operator wants this terminal closed once its goal is met. When it is, with evidence, close it with ${close} instead of only ticking it.\n`;
+    : (checkOnly
+        ? `AUTO-CLOSE IS ON — the operator wants this terminal closed once its goal is met, and that check is the only reason you are woken for it (he did not hand it to you). `
+        : `AUTO-CLOSE IS ON — the operator wants this terminal closed once its goal is met, instead of only ticked. `) +
+      closeJudgment(close, checkOnly);
   const follow = checkOnly
     ? `Look first: \`mc session focus ${id8(s.id)}\`. If Chronos refuses the close, it says why — hand that to the operator in one line.`
     : `Follow DRIVING THE WALL in your instructions. Look first: \`mc session focus ${id8(s.id)}\`. Then make the ` +
@@ -886,6 +903,64 @@ export function fireIfStill(sessionId: string, key: string, nowMs = Date.now()):
   global = [...global, nowMs].filter((t) => nowMs - t < HOUR);
   console.log(`[robert-drive] woke Robert: ${id8(sessionId)} ${kind}`);
   return id;
+}
+
+/**
+ * A PR shipped somewhere else in this workspace — another terminal filed it merged/deployed, or GitHub
+ * says it merged — and terminals whose hand-off names it are still sitting on "merge + deploy?". Their
+ * own stop never moves (nothing happened in THEM), so no status re-arms a wake: this is the one that
+ * tells Robert "its ask is met now, judge it". 2026-11-18: a terminal kept asking for a merge + deploy
+ * the Ship terminal had already done, and stayed open all evening.
+ *
+ * Only terminals of THIS workspace (store citingPr is keyed by it, and every row is re-checked), only
+ * the ones that close when done, and only when the daemon itself now reads the hand-off as satisfied
+ * thanks to the rest of the workspace — a wake that closeRefusal would turn down is not sent. Once per
+ * terminal per PR. Returns the wake ids.
+ */
+export function wakeShippedElsewhere(wsId: string | null | undefined, url: string, shipperId: string | null, nowMs = Date.now()): string[] {
+  if (!wsId || !url || !driveEnabled(wsId)) return [];
+  const out: string[] = [];
+  for (const s of sessions.citingPr(wsId, url, { live: true })) {
+    if (s.id === shipperId || s.workspace_id !== wsId || s.status !== "live") continue;
+    if (!closesWhenDone({ auto_close: !!s.auto_close, workspace_id: s.workspace_id })) continue;
+    if (isShipTerminal(s) || operatorOwns(s.id, nowMs) || failoverOwns(s.id)) continue;
+    const st = probe(s.id);
+    if (!st || (st.phase !== "review" && st.phase !== "your_turn")) continue;
+    // Its own words still want him, and the rest of the workspace is what changes that.
+    if (!handoffWants(s.outcome)) continue;
+    const elsewhere = shippedElsewhere(s);
+    if (handoffWants(s.outcome, elsewhere)) continue;
+    const key = `${TERMINAL_DRIVE_KEY}${s.id}:shipped:${url}`;
+    if (robertWakeExists(key)) continue;
+    const mine = perSession.get(s.id) ?? [];
+    const caps = { perSession: setting<number>("robert.per_terminal_hour", s.workspace_id), global: setting<number>("robert.per_hour") };
+    if (!underCaps(mine, global, nowMs, caps)) {
+      console.warn(`[robert-drive] cap reached — ${id8(s.id)} shipped-elsewhere not sent`);
+      continue;
+    }
+    const wsName = workspaces.get(wsId)?.name ?? "?";
+    const what = elsewhere.deployed ? "merged and deployed" : "merged";
+    const id = enqueueWake({
+      topic: "session.review",
+      key,
+      subject: `session:${s.id}`,
+      workspace_id: wsId,
+      payload: {
+        say:
+          `ITS PR SHIPPED ELSEWHERE — ${url} is ${what} (${elsewhere.by ?? "elsewhere in this workspace"}), so the merge/deploy its hand-off still asks for is done. ` +
+          `Judge it as finished on that, not as waiting on the operator.\n` +
+          driveSay(s, "review", st, lastWords(s.id), wsName, null, approvedNote(s, nowMs)),
+        session_id: s.id,
+        kind: "review",
+      },
+    });
+    mine.push(nowMs);
+    perSession.set(s.id, mine.filter((t) => nowMs - t < HOUR));
+    global = [...global, nowMs].filter((t) => nowMs - t < HOUR);
+    console.log(`[robert-drive] woke Robert: ${id8(s.id)} shipped elsewhere (${url})`);
+    out.push(id);
+  }
+  return out;
 }
 
 /** A status landed: arm (or disarm) this terminal's timer. */

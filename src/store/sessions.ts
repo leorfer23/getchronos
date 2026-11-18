@@ -132,6 +132,20 @@ export const sessions = {
     // What it delivered is what a later agent searches for (session-search.ts indexes the hand-off).
     sessionSearchHook.bump(id);
   },
+  /**
+   * Terminals IN THIS WORKSPACE whose hand-off (on top or earlier) names this PR — src/auto-close.ts
+   * shippedElsewhere. The LIKE only narrows; the caller checks the decoded `prs` for the exact URL.
+   * No workspace, no rows: a hand-off in another workspace never speaks for this one.
+   */
+  citingPr(workspace_id: string | null | undefined, url: string, f: { live?: boolean; limit?: number } = {}): Session[] {
+    if (!workspace_id || !url) return [];
+    const like = `%${url}%`;
+    return pubAll(db.prepare(
+      "SELECT " + SESSION_COLS + " FROM sessions s LEFT JOIN tickets t ON t.id = s.ticket_id " +
+      "WHERE s.workspace_id = ? AND (s.outcome LIKE ? OR s.outcome_prev LIKE ?)" + (f.live ? " AND s.status = 'live'" : "") +
+      " ORDER BY s.outcome_at DESC LIMIT ?"
+    ).all(workspace_id, like, like, f.limit ?? 50) as Session[]);
+  },
   /** One more `mc show` on the end of its list (the oldest fall off past MAX_SHOWN). */
   addShown(id: string, show: Shown) {
     const r = db.prepare("SELECT shown FROM sessions WHERE id=?").get(id) as { shown: string | null } | undefined;
