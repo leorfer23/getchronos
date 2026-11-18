@@ -23,6 +23,7 @@ import { isStopped } from "./robert-drive.js";
 import { statusOf, type TermStatus } from "./term-status.js";
 import { settingOn } from "./settings.js";
 import { selfwakeOnce } from "./robert-selfwake.js";
+import { shipGrant, type ShipGrant } from "./robert-command.js";
 
 type Probe = (id: string) => TermStatus | null;
 let probe: Probe = (id) => statusOf(id);
@@ -63,13 +64,17 @@ export function workingSig(wsId: string): string {
  */
 export const SWEEP_RECHECK_MS = 30 * 60_000;
 
-export function sweepSay(wsName: string, working: number, everyMin: number): string {
+export function sweepSay(wsName: string, working: number, everyMin: number, grant: ShipGrant = "off"): string {
+  // Command (robert-command.ts): a finished terminal waiting on a merge word is his to settle here.
+  const command = grant === "off" ? "" :
+    `YOU HOLD THE OPERATOR'S YES IN THIS WORKSPACE for ${grant === "merge+deploy" ? "merges and deploys" : "merges"}: a terminal whose hand-off waits on that word is yours — ` +
+    `review it as he would and \`mc session approve <id> <kind>\` (APPROVE in DRIVING THE WALL), do not leave it for him. `;
   return (
     `PRESENCE SWEEP · ${wsName} — your ${everyMin}-minute check while ${working} terminal(s) here are working. ` +
     `FLEET NOW above is this workspace. For every terminal ask: is it moving toward its goal? ` +
     `A stopped one nobody answered → give it the next step (\`mc session send <id> "..."\`), close it if the goal is met, ` +
     `or hand it to the operator in one line with your recommendation. A working one → look (\`mc session focus <id>\`) ` +
-    `only if it looks stuck, looping, or off its goal. Leave alone anything the operator typed into in the last few minutes. ` +
+    `only if it looks stuck, looping, or off its goal. ` + command + `Leave alone anything the operator typed into in the last few minutes. ` +
     `If nothing needs you, reply with exactly ${QUIET_REPLY} and nothing else.`
   );
 }
@@ -115,7 +120,7 @@ export function sweepOnce(everyMin = CONFIG.robertSweepMin, nowMs = Date.now()):
       key,
       subject: null,
       workspace_id: ws.id,
-      payload: { say: sweepSay(ws.name, working, everyMin), working, sig },
+      payload: { say: sweepSay(ws.name, working, everyMin, shipGrant(ws.id)), working, sig },
     });
     swept.push(ws.id);
   }

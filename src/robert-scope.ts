@@ -161,6 +161,11 @@ export function derivedWriteRefusal(req: express.Request): string | null {
     // What Robert does himself is the wall around Robert (robert-hands.ts: his sandbox and his turn
     // budget). He may put it up; only the operator takes it down — `anything`, or clearing it to inherit.
     if (key === "robert.hands" && String(body.value ?? "").trim() !== "answers") return operatorOnly(`${key} (what Robert may do himself)`);
+    // Command (robert-command.ts): what the operator lets Robert decide in his place is the operator's
+    // grant alone. Robert may give it back (off); he never gives it to himself.
+    if (key === "robert.ship" && String(body.value ?? "off").trim() !== "off") return operatorOnly(`${key} (what Robert may approve in the operator's place)`);
+    if (key === "robert.ship" && body.value === null) return operatorOnly(`${key} (what Robert may approve in the operator's place)`);
+    if (key === "robert.close_done" && body.value !== false) return operatorOnly(`${key} (which terminals Robert may close)`);
     const col = SETTING_COLUMN[key];
     if (col) {
       const wsRef = typeof body.workspace === "string" ? body.workspace : typeof body.workspace_id === "string" ? body.workspace_id : "";

@@ -6,7 +6,9 @@
  *   GET  /sessions/:id/approvals  what he approved on this terminal's cards, oldest first
  *
  * Who: the operator's own hand (ledger-routes.ts operatorHand — his token itself from this Mac, no agent
- * header, `x-mc-operator: 1`). No Robert, Lead, workspace or agent credential approves anything for him.
+ * header, `x-mc-operator: 1`). No Lead, workspace or agent credential approves anything for him. The one
+ * delegate is a workspace's own Robert, where the operator turned on `robert.ship` for that workspace
+ * (robert-command.ts): the same resolution below, recorded and typed as Robert's.
  *
  * What, resolved here — the page only says which button it was:
  *   1. The card. `outcome_at`, when sent, must still be the terminal's newest hand-off: a newer one means
@@ -41,8 +43,11 @@ import { requests, type DecisionItem, type RequestRow } from "./store/requests.j
 import { validate } from "./validation.js";
 import {
   APPROVAL_KINDS, APPROVAL_SURFACES, approvalLine, approvalsOf, movedLine, recordApproval,
-  type ApprovalKind, type ApprovalSurface, type ApprovedPr, type CardApproval, type MovedPr,
+  type ApprovalKind, type ApprovalSurface, type ApprovedBy, type ApprovedPr, type CardApproval, type MovedPr,
 } from "./card-approval.js";
+import { robertApprovalRefusal } from "./robert-command.js";
+import { isOperator, robertScopeOf } from "./authz.js";
+import { forwardedHost } from "./hostlink/brain-link.js";
 import type { Session, Workspace } from "./types.js";
 
 const PR_URL = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)$/;
@@ -65,8 +70,8 @@ const realRead: PrReader = async (ws, url) => {
 };
 
 /** Type one line into the terminal as the operator. null = typed, else why not. */
-export type LineTyper = (s: Session, text: string) => Promise<string | null>;
-const realType: LineTyper = async (s, text) => {
+export type LineTyper = (s: Session, text: string, by?: ApprovedBy) => Promise<string | null>;
+const realType: LineTyper = async (s, text, by = "operator") => {
   // A cloud terminal has no tty: the line becomes its next turn, as POST /sessions/:id/input does it.
   if (s.cloud_agent_id) {
     const { followUpCloudSession } = await import("./desk-cloud.js");
@@ -74,6 +79,8 @@ const realType: LineTyper = async (s, text) => {
     return "error" in r ? r.error : null;
   }
   const { sendInput } = await import("./terminal.js");
+  // Robert's yes is typed as Robert's: the transcript and the operator-input count never call it his hand.
+  if (by === "robert") return sendInput(s.id, { text, enter: true }, "robert", "robert");
   const err = sendInput(s.id, { text, enter: true }, "operator");
   if (err) return err;
   // His hand, counted as POST /input counts the Desk's buttons: he engaged, and any ask of his it answers.
@@ -100,6 +107,8 @@ export type ApproveInput = {
   surface?: ApprovalSurface | null;
   /** The request item the card was built from (the phone's deck): this terminal's, in its workspace. */
   ledger?: { request: string; item: string } | null;
+  /** Who is saying yes. "robert": the workspace's `robert.ship` grant, checked again here (robert-command.ts). */
+  by?: ApprovedBy;
 };
 export type ApproveRefusal = { ok: false; status: number; error: string; moved?: MovedPr[]; told?: boolean };
 export type ApproveResult = { ok: true; approval: CardApproval; line: string } | ApproveRefusal;
@@ -126,6 +135,13 @@ function ownerOf(s: Session, at: string | null): RequestRow | undefined {
 export async function approveCard(s: Session, inp: ApproveInput, nowMs = Date.now()): Promise<ApproveResult> {
   if (s.status !== "live") return refuse(409, "that terminal has ended — nothing was typed");
   const surface: ApprovalSurface = inp.surface === "phone" ? "phone" : "desk";
+  const by: ApprovedBy = inp.by === "robert" ? "robert" : "operator";
+  // Robert's yes exists only inside the operator's grant — checked here, not only at the route, so no
+  // caller can hand this function a "robert" the settings do not back.
+  if (by === "robert") {
+    const why = robertApprovalRefusal(s, inp.kind);
+    if (why) return refuse(403, `${why} — nothing was typed`);
+  }
   const wsId = s.workspace_id ?? null;
   const ws = wsId ? workspaces.get(wsId) ?? null : null;
   const o = s.outcome ?? null;
@@ -207,22 +223,22 @@ export async function approveCard(s: Session, inp: ApproveInput, nowMs = Date.no
 
   if (moved.length) {
     // Never a merge on a moved head: the terminal hands off again, and he approves what is there now.
-    const err = await typeLine(s, movedLine(moved, surface));
+    const err = await typeLine(s, movedLine(moved, surface, by), by);
     bus.publish({
       topic: "session.approval", session_id: s.id, workspace_id: wsId, result: "moved", kind: inp.kind, outcome_at: o?.at ?? null,
-      prs: moved.map((m) => ({ url: m.url, was: m.was, now: m.now })), surface, actor: "operator",
+      prs: moved.map((m) => ({ url: m.url, was: m.was, now: m.now })), surface, actor: by,
     });
     const what = moved.map((m) => `PR #${m.num} was ${m.was.slice(0, 7)}, is ${String(m.now).slice(0, 7)}`).join("; ");
-    return refuse(409, `the head moved since it was put to you (${what}) — nothing was merged; ${err ? `the terminal could not be told (${err})` : "the terminal was told to hand off again"}`, { moved, told: !err });
+    return refuse(409, `the head moved since it was ${by === "robert" ? "handed off" : "put to you"} (${what}) — nothing was merged; ${err ? `the terminal could not be told (${err})` : "the terminal was told to hand off again"}`, { moved, told: !err });
   }
   if (merging && !prs.length) return refuse(409, `nothing left to merge: ${ended.join(", ")} — nothing was typed`);
 
   const approval: CardApproval = {
     id: `ap-${randomBytes(4).toString("hex")}`, session_id: s.id, workspace_id: wsId, outcome_at: o?.at ?? null,
-    kind: inp.kind, prs, approved_by: "operator", surface, at: new Date(nowMs).toISOString(), ledger: null,
+    kind: inp.kind, prs, approved_by: by, surface, at: new Date(nowMs).toISOString(), ledger: null,
   };
   const line = approvalLine(approval);
-  const err = await typeLine(s, line);
+  const err = await typeLine(s, line, by);
   if (err) return refuse(err.startsWith("rate limit") ? 429 : 409, `${err} — nothing was approved`);
   // Typed: from here on it is his decision on record, whatever the ledger makes of it.
   try {
@@ -233,7 +249,7 @@ export async function approveCard(s: Session, inp: ApproveInput, nowMs = Date.no
   recordApproval(approval);
   bus.publish({
     topic: "session.approval", session_id: s.id, workspace_id: wsId, result: "approved", approval_id: approval.id, kind: approval.kind,
-    outcome_at: approval.outcome_at, prs: approval.prs.map((p) => ({ url: p.url, sha: p.sha })), surface, actor: "operator",
+    outcome_at: approval.outcome_at, prs: approval.prs.map((p) => ({ url: p.url, sha: p.sha })), surface, actor: by,
   });
   return { ok: true, approval, line };
 }
@@ -258,8 +274,8 @@ function mirrorToLedger(s: Session, a: CardApproval, r: RequestRow | null): Card
       if (it.status !== "open" && it.status !== "held") continue;
       if (d.target_hash !== p.sha) requests.bindTarget(d.id, p.sha);
       const out = recordDecision({
-        request: r.id, item: it.id, decision: "yes", target_hash: p.sha, by: a.surface,
-        words: `approved ${a.surface === "phone" ? "on the phone's card" : "on the Desk card"} (${a.id}): merge PR #${p.num} at ${p.sha.slice(0, 7)}`,
+        request: r.id, item: it.id, decision: "yes", target_hash: p.sha, by: a.approved_by === "robert" ? "robert" : a.surface,
+        words: `approved ${a.approved_by === "robert" ? "by Robert under the workspace's grant" : a.surface === "phone" ? "on the phone's card" : "on the Desk card"} (${a.id}): merge PR #${p.num} at ${p.sha.slice(0, 7)}`,
       });
       if (out.ok) ids.push(it.id);
     }
@@ -278,12 +294,26 @@ const ApproveSchema = z.object({
 
 export function mountCardApprovalRoutes(api: express.Router): void {
   api.post("/sessions/:id/approve", validate(ApproveSchema), async (req, res) => {
-    if (!operatorHand(req, res)) return;
+    // Who: the operator's own hand — or this workspace's own Robert, where the operator's `robert.ship`
+    // grant covers it (robert-command.ts). Anyone else, a Lead or agent header, the fleet-wide Robert, a
+    // read-only one, or another workspace's Robert gets the refusal operatorHand always gave.
+    const rb = !isOperator(req) && forwardedHost(req) === null ? robertScopeOf(req.get("x-mc-admin")) : null;
+    const agentHeader = !!(req.get("x-mc-lead") || req.get("x-mc-session") || req.get("x-mc-workspace-token"));
+    const s0 = rb && rb.role === "rw" && !agentHeader ? sessions.get(req.params.id) : undefined;
+    const asRobert = !!s0 && !!s0.workspace_id && s0.workspace_id === rb!.ws && robertApprovalRefusal(s0, (req.body as z.infer<typeof ApproveSchema>).kind) === null;
+    if (!asRobert) {
+      // His own workspace's terminal, refused by the grant: say why, so he hands it up with the reason.
+      if (s0 && s0.workspace_id === rb!.ws) return res.status(403).json({ error: `${robertApprovalRefusal(s0, (req.body as z.infer<typeof ApproveSchema>).kind)} — nothing was typed` });
+      if (!operatorHand(req, res)) return;
+    }
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "not found" });
     const b = req.body as z.infer<typeof ApproveSchema>;
     try {
-      const out = await approveCard(s, { kind: b.kind, outcome_at: b.outcome_at, surface: b.surface ?? null, ledger: b.ledger ?? null });
+      // Robert approves the hand-off as it stands — never a ledger item picked by the caller.
+      const out = await approveCard(s, asRobert
+        ? { kind: b.kind, outcome_at: b.outcome_at, by: "robert" }
+        : { kind: b.kind, outcome_at: b.outcome_at, surface: b.surface ?? null, ledger: b.ledger ?? null });
       if (!out.ok) {
         const { ok: _ok, status, ...body } = out;
         return res.status(status).json(body);

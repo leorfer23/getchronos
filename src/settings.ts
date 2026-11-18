@@ -482,6 +482,23 @@ defineSetting({
   help: "A computer offline with work on it, terminals failover could not move, a policy refusal, a logged-out CLI, a host long behind the brain.",
   default: () => process.env.CHRONOS_ROBERT_HOST_WAKES !== "0",
 });
+// Command (src/robert-command.ts): what the operator lets Robert decide in his place, per workspace.
+// Workspace-only on purpose — there is no fleet-wide grant — and the daemon refuses a
+// Robert credential that tries to turn either on (robert-scope.ts derivedWriteRefusal), so he can never
+// raise his own authority.
+defineSetting({
+  key: "robert.ship", group: "Robert", level: "ws", type: "enum",
+  label: "Robert approves hand-offs for you",
+  help: "Off: a terminal that asks for a merge or a deploy waits for your yes. Merge: Robert checks its finish line and proof, then approves the merge of exactly that PR at that commit, as your card button does. Merge + deploy: the deploy too. Terminals opened by the inbox or by Robert on his own always wait for you.",
+  options: () => ["off", "merge", "merge+deploy"],
+  default: () => "off",
+});
+defineSetting({
+  key: "robert.close_done", group: "Robert", level: "ws", type: "bool",
+  label: "Robert closes finished terminals",
+  help: "On: every terminal here counts as auto-close — once its goal is met and nothing waits on you, Robert closes it. Chronos still refuses a close that would lose work.",
+  default: () => false,
+});
 defineSetting({
   key: "robert.per_terminal_hour", group: "Robert", level: "both", type: "int", min: 0, max: 60,
   env: "CHRONOS_ROBERT_DRIVE_PER_TERMINAL_HOUR",
