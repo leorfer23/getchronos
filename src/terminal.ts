@@ -27,6 +27,7 @@ import { ensureTicketWorktree, cleanupWorktree, cleanupRemoteWorktree } from "./
 import { egressBrokered, egressEnforced, egressEnv, egressLocked, egressPolicy } from "./egress.js";
 import { niceWrap } from "./machine.js";
 import { leanClaudeArgs, leanClaudeEnv } from "./lean-prompt.js";
+import { slackWallRules, slackWalled, wallForeignSlack } from "./slack-wall.js";
 import { findHost, hostFor, LOCAL_HOST_ID, type PtyHandle } from "./hosts/index.js";
 import { brainPathsIn, buildRemoteSpawnSpec, profileNameFor } from "./hosts/spawn-spec.js";
 import { hostProfiles, placeTerminal } from "./hosts/candidates.js";
@@ -980,6 +981,8 @@ export async function openSession(
     if (isInboxAuto(row) && backend.name === "claude-code") mergeDeny(iArgs, inboxAutoDenyArgs()[1]);
     // What every request of this terminal re-sends before it has done anything (lean-prompt.ts).
     if (backend.name === "claude-code") iArgs.push(...leanClaudeArgs(configDir, opts.workspace_id ?? null));
+    // A Slack that is not this workspace's own (a shared profile's login) never reaches it (slack-wall.ts).
+    if (backend.name === "claude-code") wallForeignSlack(iArgs, opts.workspace_id ?? null);
     // The one send (no-send.ts): a Slack DM to the operator, when this workspace names his ids — after
     // leanClaudeArgs, so the gate's hook joins the one --settings. Never in a terminal that opened by itself.
     const selfDm = backend.name === "claude-code" && !isInboxAuto(row)
@@ -1082,6 +1085,8 @@ export async function openSession(
       seedEnterMs: seedEnterMsFor(backend.name),
       brainHome: os.homedir(),
       brainPaths: [process.cwd(), configDir],
+      // The host's profile of the same name carries the same shared login: same wall (slack-wall.ts).
+      deny: backend.name === "claude-code" && slackWalled(opts.workspace_id ?? null) ? slackWallRules() : [],
     });
     if (dropped.length) console.warn(`[terminal] remote ${row.id.slice(0, 8)}: not sent to host ${targetHost} (brain-only paths): ${dropped.join(", ")}`);
     // HOSTS.md's rule, checked on every spawn rather than trusted: no brain path reaches a host.
