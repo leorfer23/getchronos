@@ -30,7 +30,7 @@ import { installMcCli, installMcSkill, syncAgentsMd } from "../agent-prep.js";
 import { claudeTrustTargets, ensureBypassAccepted, ensureTrustedDirs } from "../claude-trust.js";
 import { ensureGrokTrustedCwd } from "../grok-trust.js";
 import { installClaudeHooks, installCursorHooks, installGrokHooks } from "../term-hooks.js";
-import { installClaudeSendGate } from "../no-send.js";
+import { installClaudeSendGate, mergeDeny } from "../no-send.js";
 import { sandboxAvailable, sandboxWrap, workspaceSandboxAllow } from "../sandbox.js";
 import { niceWrap } from "../machine.js";
 import { ensureDropDir, saveDrop } from "../drops.js";
@@ -339,6 +339,8 @@ export class HostTerminals {
     if (this.o.prepare !== false) await this.prepare(spec, backend.name, profileDir, cwd, addDirs);
 
     const iArgs = backend.interactiveArgs ? backend.interactiveArgs(spec.model, spec.system, addDirs, spec.cli_session, spec.resume) : [];
+    // The brain's extra denies for this workspace (a Slack that is not its own, slack-wall.ts): into the one flag.
+    if (backend.name === "claude-code" && Array.isArray(spec.deny)) mergeDeny(iArgs, spec.deny.filter((r) => typeof r === "string").join(","));
     const wrapped = sandboxWrap(spec.sandbox.mode, cwd, addDirs, profileDir, denyDirs, backend.bin(), iArgs, egress.locked, shared, allowSecrets);
     const { cmd, cmdArgs } = niceWrap(wrapped.cmd, wrapped.cmdArgs, spec.nice);
 

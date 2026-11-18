@@ -49,6 +49,8 @@ export interface SpawnSpec {
   egress?: EgressPolicy | null;
   /** Standing system text for CLIs with a system-prompt channel (content, not paths). */
   system: string | null;
+  /** Extra claude deny rules for this workspace (slack-wall.ts), merged into the host's one deny flag. */
+  deny?: string[];
   /**
    * Secrets + workspace vars + `mc` identity ONLY. The host supplies HOME/USER/PATH/TMPDIR/SHELL/
    * LANG, the profile env (CLAUDE_CONFIG_DIR…), and MC_API pointing at its own forwarder.
@@ -139,6 +141,8 @@ export type RemoteSpecInput = {
   brainHome: string;
   /** Brain paths OUTSIDE its home that must never reach a host (the chronos checkout, a data dir). */
   brainPaths?: string[];
+  /** Extra claude deny rules (SpawnSpec.deny). */
+  deny?: string[];
 };
 
 /**
@@ -204,6 +208,7 @@ export function buildRemoteSpawnSpec(i: RemoteSpecInput): { spec: SpawnSpec; dro
     sandbox: { mode: i.sandbox.mode, allow, egress_locked: i.sandbox.egressLocked },
     egress: i.egress ?? null,
     system: i.system,
+    ...(i.deny?.length ? { deny: [...i.deny] } : {}),
     env,
     env_home_relative: rel,
     nice: i.nice,

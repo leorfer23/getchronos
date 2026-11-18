@@ -28,6 +28,7 @@ import { askLine, commitTurn, resolveTurnSmart, type Route } from "../thread-rou
 import { robertToken, withoutOperatorToken, type RobertLane } from "../authz.js";
 import { HANDED_OFF, TurnBudget, handOff, robertBuiltinTools, robertHands, robertReadonlyDirs } from "../robert-hands.js";
 import { childEnv } from "../child-env.js";
+import { isSlackServer, slackWalled } from "../slack-wall.js";
 import { claudeGlobalConfig, withClaudeHome } from "../parity-env.js";
 import { send, sendChatAction, esc } from "./api.js";
 import { kb, type Btn } from "./keyboards.js";
@@ -1039,7 +1040,10 @@ export function robertMcp(profileDir: string, wsId: string | null | undefined): 
   } catch {
     // no config dir, or not readable — no servers
   }
-  const picked = Object.fromEntries(Object.entries(servers).filter(([name]) => want.has(name)));
+  // A project's Robert on a profile whose Slack is not his project's own (a shared profile) loads no Slack
+  // at all (slack-wall.ts): its login is another project's. The fleet-wide Robert (no project) keeps his.
+  const walled = slackWalled(wsId);
+  const picked = Object.fromEntries(Object.entries(servers).filter(([name]) => want.has(name) && !(walled && isSlackServer(name, servers[name]))));
   const names = Object.keys(picked);
   if (!names.length) return { allowedTools: [], env };
   return { mcpConfig: JSON.stringify({ mcpServers: picked }), allowedTools: names.map((n) => `mcp__${n}`), env };

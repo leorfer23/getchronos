@@ -90,6 +90,7 @@ import { ensureRoot, mainCheckouts } from "./hostd/resolve.js";
 import { sharedReposBlock } from "./shared-repos.js";
 import { routeConfigDir, routeProfileForHost } from "./profile-route.js";
 import { ensureCursorNoSend, openSlackSelfSend, operatorSlackIds } from "./no-send.js";
+import { slackWallRules, slackWalled, wallForeignSlack } from "./slack-wall.js";
 export { worktreeSandboxDirs };
 
 // Pure decision extracted for unit testing (the real check lives inline in the close handler, where
@@ -417,6 +418,9 @@ export async function execute(job: Job, runId: string): Promise<RunStatus> {
   let child: ProcHandle;
   // cursor has no deny flag: its deny rules and send hook live in its config dir (no-send.ts).
   if (!remote && backend.name === "cursor-agent") ensureCursorNoSend(childEnv(ws).CURSOR_CONFIG_DIR);
+  // A Slack that is not this workspace's own never reaches the run (slack-wall.ts) — before the send
+  // gate, whose opening a deny still beats. A run on another computer carries it in its job (remote spec).
+  if (!remote && backend.name === "claude-code") wallForeignSlack(args, job.workspace_id ?? null);
   // The one send (no-send.ts): a Slack DM to the operator, when this run's workspace names his ids. A run
   // on another computer keeps every send denied (its host builds its own argv).
   const selfDm = !remote && backend.name === "claude-code"
@@ -550,7 +554,11 @@ function remoteProcSpec(
     profile: x.profile,
     job: {
       name: job.name, goal: x.effJob.goal, append_system: x.effJob.append_system ?? null, model: job.model ?? null,
-      allowed_tools: job.allowed_tools ?? null, disallowed_tools: job.disallowed_tools ?? null, max_budget_usd: job.max_budget_usd ?? null,
+      allowed_tools: job.allowed_tools ?? null, max_budget_usd: job.max_budget_usd ?? null,
+      // The host builds the argv from this job: the Slack wall rides in its deny list (slack-wall.ts).
+      disallowed_tools: x.backendName === "claude-code" && slackWalled(job.workspace_id ?? null)
+        ? [job.disallowed_tools, ...slackWallRules()].filter(Boolean).join(",")
+        : job.disallowed_tools ?? null,
     },
     context: x.context,
     sessionId: x.sessionId,
