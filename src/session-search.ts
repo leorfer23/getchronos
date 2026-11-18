@@ -2,8 +2,9 @@ import path from "node:path";
 import { kv, repos, searchIndex, sessionPrs, sessions, sessionSearchHook } from "./store.js";
 import type { Session } from "./types.js";
 
-const BODY_CAP = 4000;
-const REINDEX_KV = "search.session.enriched.v1";
+const BODY_CAP = 6000;
+// v2: the hand-off (what it delivered) joined the body — past terminals are reindexed once to pick it up.
+const REINDEX_KV = "search.session.enriched.v2";
 
 /** Last path segment worth indexing (repo checkout / worktree leaf). */
 function pathLeaf(p: string | null | undefined): string {
@@ -33,6 +34,12 @@ export function sessionSearchBody(s: Session): string {
     s.spawn_goal,
     s.first_prompt,
     s.summary,
+    // What it delivered: the goal says what was asked, the hand-off says what came of it — the file it
+    // read, the rule it added, the number it found. That is what "find yesterday's session about X" means.
+    s.outcome?.summary,
+    ...(s.outcome?.changes ?? []),
+    ...(s.outcome?.proof ?? []),
+    ...(s.outcome?.shipped ?? []),
     sessionTags(s),
     s.worktree_branch,
     s.branch,
@@ -65,6 +72,9 @@ export function indexSession(id: string): void {
     workspace: s.workspace_id ?? "",
     title: `${s.ticket_key ? `${s.ticket_key} ` : ""}${s.goal ?? s.title ?? "chat"}`,
     body: sessionSearchBody(s),
+    // When the terminal was opened, not when this row was last rewritten: a hit shows its date, and
+    // `--since` means "terminals from the last two days", whatever was re-indexed since.
+    ts: s.created_at,
   });
 }
 

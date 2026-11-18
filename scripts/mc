@@ -365,7 +365,9 @@ const HELP = `mc — Mission Control backlog CLI
   mc retro runs [--workspace ID]                          recent weekly retros
   mc retro run [--workspace ID|slug]                      run the retro now (admin; no workspace = every one with it on)
   mc retro context --run ID | apply [--file F]            the retro job's own loop (plan JSON on stdin)
-  mc search "<query>" [--workspace ID] [--kind ticket|session|event|job|skill]
+  mc search "<query>" [--workspace ID] [--kind ticket|session|event|job|skill] [--since 2d|12h|ISO] [--limit N]
+                             full-text search; each hit carries its date and the command that opens it. A past
+                             terminal: --kind session, then "mc session focus <id>" reads what it said and did.
   mc ws list                         list projects  (alias: mc project list)
   mc ws create <slug>                scaffold a new project (identity capsule)
              [--name N] [--kind client|personal] [--git-name N] [--git-email E]
@@ -2766,9 +2768,20 @@ function askCap(question) {
       const qs = new URLSearchParams({ q });
       const wsq = opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
       if (opt.kind) qs.set("kind", opt.kind);
+      // --since 2d | 12h | 30m | an ISO time: only what was indexed after it ("yesterday's session").
+      if (opt.since && opt.since !== "true") {
+        const m = /^(\d+)([mhd])$/.exec(opt.since);
+        qs.set("since", m ? new Date(Date.now() - Number(m[1]) * { m: 60e3, h: 3600e3, d: 86400e3 }[m[2]]).toISOString() : opt.since);
+      }
       const hits = await req("GET", "/search?" + qs.toString());
-      if (!hits.length) return console.log("(no matches)");
-      return console.log(hits.slice(0, 30).map((h) => `${h.kind}\t${(h.title || "").slice(0, 50)}\t${(h.snippet || "").replace(/\s+/g, " ").slice(0, 80)}`).join("\n"));
+      if (!hits.length) return console.log("(no matches)" + (opt.since ? " — try without --since" : "") + (opt.kind ? "" : "; `mc recall \"<topic>\"` also searches memos and lessons"));
+      // Each hit names what to open: without the id and the date a match is a title nobody can follow.
+      const open = { session: (id) => `mc session focus ${id.slice(0, 8)} -n 40`, event: (id) => `mc run get ${id}` };
+      return console.log(hits.slice(0, Number(opt.limit) || 30).map((h) => {
+        const id = String(h.ref_id || "");
+        const how = open[h.kind] ? ` → ${open[h.kind](id)}` : id ? ` (${id.slice(0, 8)})` : "";
+        return `${h.kind}\t${String(h.ts || "").slice(0, 10)}\t${(h.title || "").slice(0, 60)}\t${(h.snippet || "").replace(/\s+/g, " ").slice(0, 100)}${how}`;
+      }).join("\n"));
     }
     if (cmd === "ws" && pos[1] === "create") {
       const slug = pos[2] || die("ws create needs a <slug>");
