@@ -31,6 +31,7 @@ import { proactiveAllowed } from "./proactive-score.js";
 import { assistantName, setting, settingOn } from "./settings.js";
 import { asks, db, inbox, kv, sessionPrs, sessions, workspaces } from "./store.js";
 import { statusOf, type TermStatus } from "./term-status.js";
+import { shipGrant, type ShipGrant } from "./robert-command.js";
 import { enqueueWake, QUIET_REPLY, SWEEP_KEY } from "./wake-queue.js";
 import type { Workspace } from "./types.js";
 
@@ -151,8 +152,12 @@ export function redeemTicket(t: string | null | undefined, nowMs = Date.now()): 
   }
 }
 
-export function selfwakeSay(ws: Pick<Workspace, "id" | "name">, fresh: string[], total: number, ticket = "<ticket>"): string {
+export function selfwakeSay(ws: Pick<Workspace, "id" | "name">, fresh: string[], total: number, ticket = "<ticket>", grant: ShipGrant = "off"): string {
   const shown = fresh.slice(0, 15);
+  // Command (robert-command.ts): a terminal left waiting on a merge word he may give is his to settle.
+  const approve = grant === "off" ? "" :
+    `- APPROVE: a terminal above waits on a ${grant === "merge+deploy" ? "merge or deploy" : "merge"} word and the operator lets you give it in this workspace → ` +
+    `review its hand-off as he would, then \`mc session approve <id> <kind>\` (APPROVE in DRIVING THE WALL). Never for a terminal you or the inbox opened.\n`;
   return (
     `SELF-WAKE · ${ws.name} — nothing is working here, and since your last look this is new ` +
     `(${fresh.length} of ${total} open facts):\n${shown.map((l) => `- ${l}`).join("\n")}` +
@@ -166,9 +171,10 @@ export function selfwakeSay(ws: Pick<Workspace, "id" | "name">, fresh: string[],
     `terminal. Drafts, never sends. The daemon refuses past its caps; a refusal is final for this look.\n` +
     `- NUDGE: a terminal left waiting is waiting on something you may answer under the drive rules → ` +
     `\`mc session send <id> "<next step>"\`.\n` +
+    approve +
     `- QUIET: nothing above clearly moves a goal forward, it is the operator's call with nothing to prepare, a ` +
     `terminal already holds it, or a Standing order says not to → reply exactly ${QUIET_REPLY}.\n` +
-    `Never message the operator, never merge, deploy, send or post. After acting, reply ${QUIET_REPLY} too: ` +
+    `Never message the operator, never merge or deploy with your own hands, never send or post. After acting, reply ${QUIET_REPLY} too: ` +
     `the terminal is the report.`
   );
 }
@@ -224,7 +230,7 @@ export function selfwakeOnce(ws: Workspace, nowMs = Date.now()): string | null {
     key: `${SELFWAKE_KEY}${ws.id}`,
     subject: null,
     workspace_id: ws.id,
-    payload: { say: selfwakeSay(ws, fresh, now.length, issueTicket(ws.id, nowMs)), fresh: fresh.length },
+    payload: { say: selfwakeSay(ws, fresh, now.length, issueTicket(ws.id, nowMs), shipGrant(ws.id)), fresh: fresh.length },
   });
   return null;
 }

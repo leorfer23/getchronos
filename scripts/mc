@@ -365,7 +365,9 @@ const HELP = `mc — Mission Control backlog CLI
   mc retro runs [--workspace ID]                          recent weekly retros
   mc retro run [--workspace ID|slug]                      run the retro now (admin; no workspace = every one with it on)
   mc retro context --run ID | apply [--file F]            the retro job's own loop (plan JSON on stdin)
-  mc search "<query>" [--workspace ID] [--kind ticket|session|event|job|skill]
+  mc search "<query>" [--workspace ID] [--kind ticket|session|event|job|skill] [--since 2d|12h|ISO] [--limit N]
+                             full-text search; each hit carries its date and the command that opens it. A past
+                             terminal: --kind session, then "mc session focus <id>" reads what it said and did.
   mc ws list                         list projects  (alias: mc project list)
   mc ws create <slug>                scaffold a new project (identity capsule)
              [--name N] [--kind client|personal] [--git-name N] [--git-email E]
@@ -480,6 +482,9 @@ const HELP = `mc — Mission Control backlog CLI
   mc session reopen <ID>             reopen an ended terminal on its own transcript (context intact)
   mc session goal <ID> "title" [--kind pr|ui|investigation|qa|product|chat]   retitle SOMEONE ELSE'S card
   mc session done <ID>               tick that terminal's goal off — closes its row in the day's log
+  mc session approve <ID> merge|merge+deploy|deploy   Robert only: approve that terminal's hand-off where the operator
+                                     lets you in its workspace (⚙ Robert approves hand-offs). Bound to its PR at the
+                                     current commit; a refusal says why — hand that up.
   mc session close <ID> "<what landed>"   close an AUTO-CLOSE terminal whose goal you checked is met (Robert /
                                      operator). Refused, with the reason, if it is still working, has an open
                                      question, its hand-off still asks the operator for something, or its tree
@@ -2763,9 +2768,20 @@ function askCap(question) {
       const qs = new URLSearchParams({ q });
       const wsq = opt.workspace || process.env.MC_WORKSPACE; if (wsq) qs.set("workspace", wsq);
       if (opt.kind) qs.set("kind", opt.kind);
+      // --since 2d | 12h | 30m | an ISO time: only what was indexed after it ("yesterday's session").
+      if (opt.since && opt.since !== "true") {
+        const m = /^(\d+)([mhd])$/.exec(opt.since);
+        qs.set("since", m ? new Date(Date.now() - Number(m[1]) * { m: 60e3, h: 3600e3, d: 86400e3 }[m[2]]).toISOString() : opt.since);
+      }
       const hits = await req("GET", "/search?" + qs.toString());
-      if (!hits.length) return console.log("(no matches)");
-      return console.log(hits.slice(0, 30).map((h) => `${h.kind}\t${(h.title || "").slice(0, 50)}\t${(h.snippet || "").replace(/\s+/g, " ").slice(0, 80)}`).join("\n"));
+      if (!hits.length) return console.log("(no matches)" + (opt.since ? " — try without --since" : "") + (opt.kind ? "" : "; `mc recall \"<topic>\"` also searches memos and lessons"));
+      // Each hit names what to open: without the id and the date a match is a title nobody can follow.
+      const open = { session: (id) => `mc session focus ${id.slice(0, 8)} -n 40`, event: (id) => `mc run get ${id}` };
+      return console.log(hits.slice(0, Number(opt.limit) || 30).map((h) => {
+        const id = String(h.ref_id || "");
+        const how = open[h.kind] ? ` → ${open[h.kind](id)}` : id ? ` (${id.slice(0, 8)})` : "";
+        return `${h.kind}\t${String(h.ts || "").slice(0, 10)}\t${(h.title || "").slice(0, 60)}\t${(h.snippet || "").replace(/\s+/g, " ").slice(0, 100)}${how}`;
+      }).join("\n"));
     }
     if (cmd === "ws" && pos[1] === "create") {
       const slug = pos[2] || die("ws create needs a <slug>");
@@ -3821,6 +3837,28 @@ function askCap(question) {
       if (r.status === 409) die(`not closed — ${out.error || "refused"}`);
       if (!r.ok) die(`close failed (${r.status}): ${out.error || r.statusText}`);
       return console.log(`✓ closed ${id.slice(0, 8)} — ${why}`);
+    }
+    // Command (src/robert-command.ts): Robert's yes on a terminal's hand-off, where the operator's
+    // `robert.ship` grant for that workspace covers it. The daemon binds it to the PR and commit and types
+    // the line; a refusal says why, and that reason is what he hands up.
+    if (cmd === "session" && pos[1] === "approve") {
+      const usage = "mc session approve <ID> <merge|merge+deploy|deploy>";
+      const ref = pos[2] || die(usage);
+      const kind = pos[3] || die(usage);
+      if (!["merge", "merge+deploy", "deploy"].includes(kind)) die(usage);
+      const s2 = (await req("GET", "/sessions?status=live")).find((x) => x.id === ref || x.id.startsWith(ref));
+      if (!s2) die(`no live session matching ${ref}`);
+      const r = await fetch(API + "/sessions/" + s2.id + "/approve", {
+        method: "POST",
+        // Robert's own credential (CHRONOS_ADMIN). An agent has none and is refused; the operator uses his card.
+        headers: { "content-type": "application/json", ...(adminToken() ? { "x-mc-admin": adminToken() } : {}) },
+        // The hand-off he looked at, when the list carries it: a newer one since is a new question (409).
+        body: JSON.stringify({ kind, ...(s2.outcome?.at ? { outcome_at: s2.outcome.at } : {}) }),
+      });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) die(`not approved (${r.status}) — ${out.error || r.statusText}`);
+      const prs = (out.approval?.prs || []).map((p) => `#${p.num}${p.sha ? " @" + String(p.sha).slice(0, 7) : ""}`).join(", ");
+      return console.log(`✓ approved ${kind}${prs ? " " + prs : ""} on ${s2.id.slice(0, 8)} (${out.approval?.id}) — the terminal was told`);
     }
     if (cmd === "session" && pos[1] === "kill") {
       const ref = pos[2] || die("session kill needs an ID");

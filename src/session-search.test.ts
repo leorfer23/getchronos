@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { kv, repos, searchIndex, sessionPrs, sessions, sessionSearchHook, workspaces } from "./store.js";
+import { db, kv, repos, searchIndex, sessionPrs, sessions, sessionSearchHook, workspaces } from "./store.js";
 import { indexSession, installSessionSearchHooks, sessionSearchBody } from "./session-search.js";
 
 // Wire the store → FTS hook the same way boot does (tests don't load index.ts).
@@ -121,11 +121,43 @@ test("installSessionSearchHooks reindexes existing rows once", () => {
   });
   sessions.setWorktree(s.id, { path: "/tmp/wt", branch: "feat/pre-enrichment-marker" });
   searchIndex.removeRef(s.id);
-  kv.del("search.session.enriched.v1");
+  kv.del("search.session.enriched.v2");
   installSessionSearchHooks();
   const hits = searchIndex.search("pre-enrichment-marker", { workspace: w.id, kind: "session" });
   assert.ok(hits.some((h) => h.ref_id === s.id));
   // Second call must not throw and must keep the flag.
   installSessionSearchHooks();
-  assert.ok(kv.get("search.session.enriched.v1"));
+  assert.ok(kv.get("search.session.enriched.v2"));
+});
+
+test("what a terminal delivered is findable: its hand-off joins the index when it is filed", () => {
+  const w = mkWs("ss-outcome");
+  const s = sessions.create({ workspace_id: w.id, title: "apply the new rules", goal: "apply the new rules", backend: "claude-code", cwd: "/tmp" });
+  indexSession(s.id);
+  assert.equal(searchIndex.search("08_Allocation_Rules", { workspace: w.id, kind: "session" }).length, 0, "the goal never named the file");
+  sessions.setOutcome(s.id, {
+    summary: "Read 08_Allocation_Rules.md and added Rule D for a blank processor.",
+    changes: ["masters rerun for ten months"], proof: ["row counts tie to the ledger-zeta export"], prs: [], shots: [], ask: "none", shipped: [],
+    at: new Date().toISOString(),
+  } as any);
+  for (const q of ["08_Allocation_Rules", "Rule D blank processor", "ledger-zeta"]) {
+    const hits = searchIndex.search(q, { workspace: w.id, kind: "session" });
+    assert.ok(hits.some((h) => h.ref_id === s.id), `"${q}" should find it, got ${JSON.stringify(hits)}`);
+  }
+  // The wall holds for what was delivered too.
+  const other = mkWs("ss-outcome-b");
+  assert.equal(searchIndex.search("08_Allocation_Rules", { workspace: other.id, kind: "session" }).length, 0);
+});
+
+test("a session hit is dated by when the terminal opened, so --since means recent terminals", () => {
+  const w = mkWs("ss-since");
+  const old = sessions.create({ workspace_id: w.id, title: "quarterly-marker old", goal: "quarterly-marker old", backend: "claude-code", cwd: "/tmp" });
+  db.prepare("UPDATE sessions SET created_at=? WHERE id=?").run("2026-01-05T10:00:00.000Z", old.id);
+  const fresh = sessions.create({ workspace_id: w.id, title: "quarterly-marker new", goal: "quarterly-marker new", backend: "claude-code", cwd: "/tmp" });
+  indexSession(old.id); // re-indexed today, opened in January
+  indexSession(fresh.id);
+  const all = searchIndex.search("quarterly-marker", { workspace: w.id, kind: "session" });
+  assert.equal(all.find((h) => h.ref_id === old.id)?.ts, "2026-01-05T10:00:00.000Z");
+  const recent = searchIndex.search("quarterly-marker", { workspace: w.id, kind: "session", since: new Date(Date.now() - 86_400_000).toISOString() });
+  assert.deepEqual(recent.map((h) => h.ref_id), [fresh.id]);
 });

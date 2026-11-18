@@ -27,6 +27,8 @@ export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
 export const APPROVAL_SURFACES = ["desk", "phone"] as const;
 export type ApprovalSurface = (typeof APPROVAL_SURFACES)[number];
 
+export type ApprovedBy = "operator" | "robert";
+
 /** One PR an approval covers, as GitHub had it at the moment he approved. */
 export type ApprovedPr = {
   url: string;
@@ -47,7 +49,8 @@ export interface CardApproval {
   outcome_at: string | null;
   kind: ApprovalKind;
   prs: ApprovedPr[];
-  approved_by: "operator";
+  /** "robert": he decided it for the operator, where the workspace's `robert.ship` lets him (robert-command.ts). */
+  approved_by: ApprovedBy;
   surface: ApprovalSurface;
   at: string;
   /** The ledger items decided yes with it (src/ledger.ts), when the ledger had any. */
@@ -94,6 +97,9 @@ export function currentApproval(
 
 const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 7) : "?");
 const WHERE: Record<ApprovalSurface, string> = { desk: "on the Desk card", phone: "on the phone's card" };
+/** Who said yes, as the terminal reads it. Robert's is the operator's standing word for this workspace. */
+const whoApproved = (a: Pick<CardApproval, "approved_by" | "surface">): string =>
+  a.approved_by === "robert" ? "Approved by Robert, who decides hand-offs for the operator in this workspace" : `Approved by the operator ${WHERE[a.surface]}`;
 const KIND_WORD: Record<ApprovalKind, string> = { merge: "merge", "merge+deploy": "merge + deploy", deploy: "deploy" };
 const shippedFlags = (xs: string[]) => xs.map((x) => `--shipped "${x}"`).join(" ");
 
@@ -103,7 +109,7 @@ const shippedFlags = (xs: string[]) => xs.map((x) => `--shipped "${x}"`).join(" 
  * command that refuses to merge anything else, what to do if the head moved, and the deploy rule.
  */
 export function approvalLine(a: CardApproval): string {
-  const head = `Approved by the operator ${WHERE[a.surface]} (approval ${a.id}${a.outcome_at ? `, for your hand-off of ${a.outcome_at}` : ""}):`;
+  const head = `${whoApproved(a)} (approval ${a.id}${a.outcome_at ? `, for your hand-off of ${a.outcome_at}` : ""}):`;
   if (a.kind === "deploy") {
     const what = a.prs.length
       ? ` (${a.prs.map((p) => `PR #${p.num}${p.state === "merged" && p.sha ? `, merged as ${short(p.sha)}` : ""}`).join(", ")})`
@@ -121,7 +127,7 @@ export function approvalLine(a: CardApproval): string {
   const shipped = shippedFlags([...open.map((p) => `merged #${p.num}`), ...(deploy ? ["deployed"] : [])]);
   return (
     `${head} merge ${prs} — ${one ? "that PR at exactly that commit" : "those PRs at exactly those commits"} and nothing else, once ${one ? "its" : "their"} checks are green: ` +
-    `${cmds} (with the repo's usual merge method). ${moved}: file a fresh \`mc outcome\` for the new head and wait for his approval. ` +
+    `${cmds} (with the repo's usual merge method). ${moved}: file a fresh \`mc outcome\` for the new head and wait for ${a.approved_by === "robert" ? "a new" : "his"} approval. ` +
     `${deploy ? "Then deploy what you merged." : "Don't deploy."} Then run \`mc outcome ${shipped}\`.`
   );
 }
@@ -129,7 +135,11 @@ export function approvalLine(a: CardApproval): string {
 export type MovedPr = { num: number; url: string; was: string; now: string | null };
 
 /** What the terminal is told instead of a merge when a PR moved since it was put to him: hand off again. */
-export function movedLine(moved: MovedPr[], surface: ApprovalSurface): string {
+export function movedLine(moved: MovedPr[], surface: ApprovalSurface, by: ApprovedBy = "operator"): string {
+  if (by === "robert") {
+    const w = moved.map((m) => `PR #${m.num} was handed off at ${short(m.was)} and GitHub has ${short(m.now)} now`).join("; ");
+    return `Not approved yet: Robert went to approve it for the operator, but the head moved since — ${w}. Do not merge or deploy ${moved.length > 1 ? "them" : "it"}. File a fresh \`mc outcome\` for the new head (say what changed).`;
+  }
   const what = moved.map((m) => `PR #${m.num} was put to him at ${short(m.was)} and GitHub has ${short(m.now)} now`).join("; ");
   return (
     `Not approved yet: the operator said yes ${WHERE[surface]}, but the head moved since — ${what}. ` +
@@ -150,5 +160,6 @@ export function approvalWhat(a: CardApproval): string {
 
 /** Robert's one line about it: who, where, when, what — "✓ the operator approved on the Desk card 3m ago: merge PR #200 @4f1c2d3 (ap-1a2b3c4d)". */
 export function approvalNote(a: CardApproval, nowMs = Date.now()): string {
-  return `✓ the operator approved ${WHERE[a.surface]} ${ago(a.at, nowMs)}: ${approvalWhat(a)} (${a.id})`;
+  const who = a.approved_by === "robert" ? "Robert approved for the operator" : `the operator approved ${WHERE[a.surface]}`;
+  return `✓ ${who} ${ago(a.at, nowMs)}: ${approvalWhat(a)} (${a.id})`;
 }

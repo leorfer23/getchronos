@@ -41,6 +41,7 @@ import { promptTracked } from "./terminal-prompts.js";
 import { focusEvents, sessionActivity, sendInput } from "./terminal.js";
 import { signalsOf, statusOf, type TermStatus } from "./term-status.js";
 import { setting, settingOn } from "./settings.js";
+import { closesWhenDone, commandLine } from "./robert-command.js";
 import { isShipTerminal } from "./ship-guard.js";
 import { approvalNote, currentApproval } from "./card-approval.js";
 
@@ -64,7 +65,7 @@ export const watched = (s: Pick<Session, "robert" | "lead_id" | "workspace_id">)
  * operator never handed it to him. That wake is a check, not a hand-over (driveSay says which).
  */
 export const reaches = (s: Pick<Session, "robert" | "lead_id" | "workspace_id"> & { auto_close?: boolean }, kind: DriveKind): boolean =>
-  kind === "robert" || watched(s) || (!!s.auto_close && kind === "review");
+  kind === "robert" || watched(s) || (closesWhenDone({ auto_close: !!s.auto_close, workspace_id: s.workspace_id }) && kind === "review");
 
 /** Seconds a phase must hold before Robert hears about it. */
 export function graceMs(kind: DriveKind): number {
@@ -217,7 +218,7 @@ function approvedNote(s: Session, nowMs = Date.now()): string | null {
 }
 
 export function driveSay(
-  s: Pick<Session, "id" | "goal" | "spawn_goal" | "workspace_id"> & { lead_id?: string | null; auto_close?: boolean; robert?: boolean },
+  s: Pick<Session, "id" | "goal" | "spawn_goal" | "workspace_id"> & { lead_id?: string | null; auto_close?: boolean; robert?: boolean; created_by?: string | null; tags?: Session["tags"] },
   kind: DriveKind,
   st: Pick<TermStatus, "line">,
   words: { result: string | null; said: string | null },
@@ -241,9 +242,12 @@ export function driveSay(
   const orphan = orphanLeadLine(s);
   // Auto-close (src/auto-close.ts): the operator wants it closed once its goal is met. On a terminal he
   // never handed over, this wake is ONLY that check — Robert looks and closes, or says what is missing.
-  const checkOnly = !!s.auto_close && !watched({ robert: !!s.robert, lead_id: s.lead_id ?? null, workspace_id: s.workspace_id });
+  const autoClose = closesWhenDone({ auto_close: !!s.auto_close, workspace_id: s.workspace_id });
+  // Command (src/robert-command.ts): where the operator lets him, Robert approves the hand-off himself.
+  const command = commandLine({ id: s.id, workspace_id: s.workspace_id, created_by: s.created_by ?? null, tags: s.tags ?? null });
+  const checkOnly = autoClose && !watched({ robert: !!s.robert, lead_id: s.lead_id ?? null, workspace_id: s.workspace_id });
   const close = `\`mc session close ${id8(s.id)} "<what landed, one line>"\``;
-  const autoLine = !s.auto_close
+  const autoLine = !autoClose
     ? ""
     : checkOnly
       ? `AUTO-CLOSE IS ON — the operator wants this terminal closed once its goal is met, and that check is the only reason you are woken for it (he did not hand it to you). ` +
@@ -269,6 +273,7 @@ export function driveSay(
         `never countermand it (no stop, hold or revert) and never say he did not approve it.\n`
       : "") +
     autoLine +
+    command +
     `ITS CARD SAYS: ${st.line || "(nothing)"}\n` +
     (words.result ? `ITS LAST RESULT: ${words.result}\n` : words.said ? `IT LAST SAID: ${words.said}\n` : "") +
     follow + ` Say in one line what you did.`

@@ -129,6 +129,8 @@ export const sessions = {
   setOutcome(id: string, o: Outcome | null, earlier: Outcome[] = []) {
     db.prepare("UPDATE sessions SET outcome=?, outcome_at=?, outcome_prev=? WHERE id=?")
       .run(o ? JSON.stringify(o) : null, o ? o.at : null, o && earlier.length ? JSON.stringify(earlier) : null, id);
+    // What it delivered is what a later agent searches for (session-search.ts indexes the hand-off).
+    sessionSearchHook.bump(id);
   },
   /** One more `mc show` on the end of its list (the oldest fall off past MAX_SHOWN). */
   addShown(id: string, show: Shown) {

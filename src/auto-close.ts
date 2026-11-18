@@ -16,6 +16,7 @@
  *    or says it waits on him, uncommitted or unpushed work (read on whichever computer holds the tree),
  *    a computer that is offline, a cloud terminal, a Lead with live workers.
  */
+import { closesWhenDone } from "./robert-command.js";
 import { asks, sessions } from "./store.js";
 import { killSession, sessionActivity } from "./terminal.js";
 import { tickAllGoals } from "./goals.js";
@@ -118,10 +119,12 @@ export function handoffWants(o: Outcome | null | undefined): string | null {
  * tree check (treeStrands) runs after, since it is the one that touches git.
  */
 export function closeRefusal(
-  s: Pick<Session, "auto_close" | "status" | "cloud_agent_id" | "outcome" | "role">,
+  s: Pick<Session, "auto_close" | "status" | "cloud_agent_id" | "outcome" | "role"> & { workspace_id?: string | null },
   f: CloseFacts,
 ): string | null {
-  if (!s.auto_close) return "auto-close is off for this terminal — only the operator turns it on (the Focus toggle, or `auto-close`)";
+  // His mark on this terminal, or his word for the whole workspace (`robert.close_done`, robert-command.ts).
+  if (!closesWhenDone({ auto_close: s.auto_close, workspace_id: s.workspace_id ?? null }))
+    return "auto-close is off for this terminal — only the operator turns it on (the Focus toggle, `auto-close`, or \"Robert closes finished terminals\" for the workspace)";
   if (s.status !== "live" || !f.live) return "it is not running";
   if (s.cloud_agent_id) return "it is a cloud terminal — the operator closes those";
   if (!f.hostOnline) return "its computer is offline — try again once it reconnects";
