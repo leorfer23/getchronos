@@ -108,8 +108,8 @@ test("the tickets folder stays out of claude's --add-dir list, the rest keep the
 
 test("a folder whose git root the sandbox denies leaves claude's --add-dir list; its own repo stays", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "mc-trust-root-"));
-  const other = path.join(home, "Grid Leo");             // another workspace's repo…
-  const nested = path.join(other, "shareout-app");       // …with this workspace's folder inside it
+  const other = path.join(home, "acme");                 // another workspace's repo…
+  const nested = path.join(other, "globex-app");         // …with this workspace's folder inside it
   const own = path.join(home, "own-repo");
   const plain = path.join(home, "Downloads", "Personal"); // no repo at all
   for (const d of [path.join(other, ".git"), nested, path.join(own, ".git"), plain]) fs.mkdirSync(d, { recursive: true });

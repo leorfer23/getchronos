@@ -90,7 +90,7 @@ export function claudeAddDirs(addDirs: string[], skip: Array<string | null | und
 /**
  * Why claude asks anyway: it keys trust on the folder's git repository, and inside the sandbox that
  * repository's root can be a folder the sandbox denies — another workspace's repo with this one's
- * folder nested in it (personal's `Grid Leo/shareout-app` inside ShareOut's `Grid Leo`), or the
+ * folder nested in it (one workspace's `acme/globex-app` inside another's `acme`), or the
  * daemon's own checkout for the tickets folder. Claude cannot read the root, finds no trust, and shows
  * "Adding a new directory … trust?" whatever the records say. Reproduced 2026-11-17 on claude 2.1.326:
  * same records, the dialog with the root denied, none without. Such a folder stays a sandbox grant and
