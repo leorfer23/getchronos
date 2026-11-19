@@ -5,6 +5,12 @@
 # Scans the tree at HEAD and every commit message in the push range.
 set -euo pipefail
 list="${CHRONOS_OSS_NAMES:-$(git rev-parse --show-toplevel)/.oss-names.local}"
+# A linked worktree has no copy of the gitignored list: without this the check passed there, silently.
+# Fall back to the main checkout's (the folder that holds the shared .git).
+if [ ! -s "$list" ] && [ -z "${CHRONOS_OSS_NAMES:-}" ]; then
+  main="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
+  [ -s "$main/.oss-names.local" ] && list="$main/.oss-names.local"
+fi
 [ -s "$list" ] || exit 0
 pat=$(grep -v '^\s*#' "$list" | grep -v '^\s*$' | paste -sd'|' -)
 [ -n "$pat" ] || exit 0
