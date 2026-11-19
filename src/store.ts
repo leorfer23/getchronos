@@ -55,6 +55,8 @@ export { robertWakes } from "./store/robert-wakes.js";
 export type { RobertWake, NewRobertWake } from "./store/robert-wakes.js";
 export { robertRuns, rollupRuns, ROBERT_RUN_OUTCOMES } from "./store/robert-runs.js";
 export type { RobertRun, NewRobertRun, RobertRunOutcome, RunRollup, RunTotals } from "./store/robert-runs.js";
+export { robertOutbox, OUTBOX_STATUSES } from "./store/robert-outbox.js";
+export type { OutboxRow, OutboxStatus, OutboxWake, NewOutboxRow } from "./store/robert-outbox.js";
 export { leadEvents } from "./store/lead-events.js";
 export type { LeadEvent, NewLeadEvent } from "./store/lead-events.js";
 export { leadSlices, SLICE_STATUSES } from "./store/lead-slices.js";

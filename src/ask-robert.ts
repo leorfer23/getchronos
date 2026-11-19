@@ -24,7 +24,7 @@ import { getAgent } from "./agent-lifecycle.js";
 import { OP_PREFIX } from "./operational-prefix.js";
 import { focusEvents } from "./terminal.js";
 import { askManagerWeb } from "./telegram/agent.js";
-import { postRobertToDesk } from "./robert-desk.js";
+import { sayUnprompted } from "./robert-outbox.js";
 import type { RobertStep } from "./robert-steps.js";
 import { esc, notify, notifyInfo } from "./telegram/api.js";
 import { kb, type Btn } from "./telegram/keyboards.js";
@@ -113,11 +113,13 @@ export async function escalateAsk(
   const cur = asks.get(ask.id);
   if (!cur || cur.status !== "open" || cur.escalated_at) return;
   asks.escalate(cur.id, robertNote);
-  postRobertToDesk({
+  sayUnprompted({
+    source: "triage",
     body: `${desk.line ?? "**A question for you**"}\n\n${askMarker(cur.id)}`,
     ws: cur.workspace_id ?? null,
     steps: desk.steps,
     turn: desk.turn,
+    episode: `ask:${cur.id}`,
   });
   const short = id8(cur.id);
   const options: string[] = (() => {
@@ -161,7 +163,7 @@ export async function triageAsk(askId: string): Promise<void> {
   // Whatever he decides, it goes in the Desk thread with the steps he took to get there.
   const who = ask.asked_by ?? (ask.session_id ? `terminal ${id8(ask.session_id)}` : "an agent");
   const desk = (line: string) =>
-    postRobertToDesk({ body: `${line}\n\n_${who} asked:_ ${ask.question}`, ws: ask.workspace_id ?? null, steps, turn });
+    sayUnprompted({ source: "triage", body: `${line}\n\n_${who} asked:_ ${ask.question}`, ws: ask.workspace_id ?? null, steps, turn, episode: `ask:${ask.id}` });
   try {
     // Model is the Desk pick (getWebModel inside askManagerWeb) — same as a typed chat turn.
     const out = await askManagerWeb(triagePrompt(ask, escalateOnly), undefined, ask.workspace_id ?? null, {

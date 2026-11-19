@@ -1,7 +1,7 @@
 import { bus, type BusEvent } from "./bus.js";
 import { OP_PREFIX } from "./operational-prefix.js";
 import { board, tickets, type BoardPost } from "./store.js";
-import { postRobertToDesk } from "./robert-desk.js";
+import { sayUnprompted } from "./robert-outbox.js";
 import { assistantName } from "./settings.js";
 
 // The board service: publish posts onto the bus and wake @mentioned executives. This is the
@@ -114,8 +114,10 @@ export function setBoardWakeMirror(fn: WakeMirror | null): void {
 }
 
 function defaultMirror(post: BoardPost, reply: string): void {
-  postRobertToDesk({ body: reply, ws: post.workspace_id });
+  // The post's first line names the watch or the wake ("⏱ watch fired — …"): one episode per watch, so
+  // a watch that keeps firing to the same answer is a repeat, not new news.
   const label = post.body.split("\n")[0].slice(0, 120);
+  sayUnprompted({ source: "board", body: reply, ws: post.workspace_id, episode: `${post.kind}:${label}` });
   void import("./telegram/api.js")
     .then(({ notify, esc }) =>
       notify(`👔 <b>${esc(assistantName())}</b> · ${esc(label)}\n\n${esc(reply.slice(0, 3500))}`, undefined, { board: false }),

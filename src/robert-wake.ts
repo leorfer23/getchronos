@@ -3,6 +3,7 @@ import { tickets, workspaces } from "./store.js";
 import { OP_PREFIX } from "./operational-prefix.js";
 import { warmWebManager } from "./telegram/agent.js";
 import { setting } from "./settings.js";
+import { withoutReported } from "./robert-outbox.js";
 
 // Robert's event-triggered triage — ported from the Buzz agent worker when the transport died.
 // Decision events (a review landed, a ticket blocked, a worker asked) wake Robert to say what he'd
@@ -14,10 +15,12 @@ import { setting } from "./settings.js";
 // (the predicate, the model, the prompt).
 
 // A wake is a turn nobody typed: it runs on the model for his automatic turns (robert.wake_model,
-// sonnet unless changed), never on the Desk chat's pick. Heavy keywords still force opus.
+// sonnet unless changed), never on the Desk chat's pick. Heavy keywords still force opus — in the wake
+// itself, never in the block of what he already told (src/robert-outbox.ts): one past line that said
+// "opus" would put every wake in that workspace on opus for a day.
 const HEAVY_RE = /\b(opus|think hard|ultrathink|deep dive|architect|design (?:the|a) (?:system|plan)|plan this properly)\b/i;
 export function robertModelFor(prompt: string): string {
-  return HEAVY_RE.test(prompt) ? "opus" : (setting<string>("robert.wake_model") || "sonnet");
+  return HEAVY_RE.test(withoutReported(prompt)) ? "opus" : (setting<string>("robert.wake_model") || "sonnet");
 }
 
 export type RobertWakeEvent = Extract<BusEvent, { topic: "review.created" | "ticket.updated" | "ask.created" }>;

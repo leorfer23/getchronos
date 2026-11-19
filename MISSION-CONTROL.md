@@ -447,7 +447,7 @@ being silent between "started" and "done".
 
 An agent writes an HTML page (report, comparison, picker, form) and publishes it with `mc artifact
 put|ask`. `--notify` (and every `ask` routed to the operator) posts a `::artifact <id>::` line into
-**Robert's chat for that workspace** (`postRobertToDesk`), which the Desk and the phone render as the
+**Robert's chat for that workspace** (through his outbox, `src/robert-outbox.ts`, under `robert.desk_posts`), which the Desk and the phone render as the
 page's card; Open, or `/desk#artifact=<id>`, shows it in a sandboxed iframe. Every page a terminal
 publishes is also pinned on that terminal's rail (`src/session-artifacts.ts`, `GET /sessions/:id/artifacts`)
 next to its PRs and docs. Inside, `window.chronos`

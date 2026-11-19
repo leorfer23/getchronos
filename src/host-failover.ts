@@ -51,7 +51,7 @@ import { ticketBranch } from "./tickets.js";
 import { renderLinesReplay } from "./replay.js";
 import { originalBrief } from "./terminal-failover.js";
 import { focusEvents, killSession, openSession, resolveCwd, sendInput } from "./terminal.js";
-import { postRobertToDesk } from "./robert-desk.js";
+import { sayUnprompted } from "./robert-outbox.js";
 import { notifyLead } from "./robert-drive.js";
 import { lastActivityState } from "./revive.js";
 import type { Repo, Session } from "./types.js";
@@ -68,8 +68,8 @@ export interface HostFailoverOps {
   open(opts: Parameters<typeof openSession>[0]): Promise<Session>;
   /** End the old terminal for good: row ended with the reason, its brain-side channel dropped. */
   endOld(s: Session, reason: string): void;
-  /** One line in the operator's Desk thread. */
-  post(body: string): void;
+  /** One line in the operator's Desk thread. `about` is what it concerns (`host:<id>`, `session:<id>`). */
+  post(body: string, about?: string): void;
   originWorktree(repoPath: string, branch: string): Promise<string | null>;
   freshWorktree(repo: Repo, sess: Parameters<typeof ensureSessionWorktree>[1]): Promise<{ path: string; branch: string } | null>;
   /** The old terminal's Focus feed, as `kind: text` lines (read from the transcript mirror). */
@@ -91,7 +91,7 @@ const defaultOps: HostFailoverOps = {
     if (h instanceof RemoteHost && held) h.lose(held); // the ordinary exit path: off the wall, session.ended
     else bus.publish({ topic: "session.ended", session_id: s.id });
   },
-  post: (body) => postRobertToDesk({ body, ws: null }),
+  post: (body, about) => void sayUnprompted({ source: "failover", body, ws: null, episode: about ?? null }),
   originWorktree: ensureOriginBranchWorktree,
   freshWorktree: ensureSessionWorktree,
   feed: (id) => focusEvents(id).map((e) => `${e.kind}: ${e.text}`),
@@ -611,7 +611,7 @@ export async function salvageMoved(
   const words = salvageLines(r, { label, title: titleOf(row), standIn: next ? id8(next.id) : null });
   console.log(`[host-failover] salvage of ${id8(row.id)} on ${label}: ${r.status}${r.branch ? ` (${r.branch})` : ""}${r.detail ? ` — ${r.detail}` : ""}`);
   if (words) {
-    try { ops.post(words.desk); } catch (e: any) { console.warn(`[host-failover] Desk line failed: ${e?.message ?? e}`); }
+    try { ops.post(words.desk, `session:${row.id}`); } catch (e: any) { console.warn(`[host-failover] Desk line failed: ${e?.message ?? e}`); }
     if (words.tell && next) {
       const err = ops.tell(next.id, words.tell);
       if (err) console.warn(`[host-failover] could not tell ${id8(next.id)} about ${r.branch}: ${err}`);
@@ -672,7 +672,7 @@ export async function failoverHost(hostId: string, since: number, rows: Session[
         from_host: hostId, to_host: null, to_session_id: null, mode: "stuck", reason: r.why,
       });
     }
-    try { ops.post(line); } catch (e: any) { console.warn(`[host-failover] Desk line failed: ${e?.message ?? e}`); }
+    try { ops.post(line, `host:${hostId}`); } catch (e: any) { console.warn(`[host-failover] Desk line failed: ${e?.message ?? e}`); }
   }
   return results;
 }

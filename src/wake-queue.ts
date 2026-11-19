@@ -22,7 +22,7 @@ import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
 import { kv, robertRuns, robertWakes, tickets, type NewRobertRun, type RobertWake } from "./store.js";
 import type { TurnUsage } from "./usage-meter.js";
-import { postRobertToDesk } from "./robert-desk.js";
+import { sayUnprompted, withReported } from "./robert-outbox.js";
 import type { RobertStep } from "./robert-steps.js";
 import { postToBoard, BOARD_WAKE_MAX_DEPTH } from "./board.js";
 import { notify } from "./telegram/api.js";
@@ -97,7 +97,8 @@ export function wakeBeaconGraceMs(): number {
 }
 
 type WakeAsker = (prompt: string, wsId: string | null, model: string) => Promise<string | { reply: string; steps?: RobertStep[]; turn?: string; engine?: string; usage?: TurnUsage | null }>;
-type WakePoster = (p: { body: string; ticket_id: string | null; workspace_id: string | null; steps?: RobertStep[]; turn?: string; engine?: string }) => void;
+// `wakes`: what the turn answered — the outbox records them and takes its episode from them.
+type WakePoster = (p: { body: string; ticket_id: string | null; workspace_id: string | null; steps?: RobertStep[]; turn?: string; engine?: string; wakes?: Pick<RobertWake, "key" | "topic" | "subject">[] }) => void;
 type WakeNotifier = (text: string) => Promise<unknown>;
 
 // The wake lane: its own warm process and --resume session per workspace (telegram/agent.ts), so a
@@ -108,11 +109,20 @@ let asker: WakeAsker = async (prompt, wsId, model) => {
   return { reply: out.reply, steps: out.steps, turn: out.turn, engine: out.engine, usage: out.usage };
 };
 let poster: WakePoster = (p) => {
-  // Depth pinned to the cap: an automatic triage post must never chain-wake anyone.
-  void postToBoard({ author: "robert", body: p.body, ticket_id: p.ticket_id, workspace_id: p.workspace_id, depth: BOARD_WAKE_MAX_DEPTH });
-  // The Desk never renders the board. What Robert did on his own has to land in the one thread the
-  // operator reads, or a woken Robert looks exactly like a sleeping one.
-  postRobertToDesk({ body: p.body, ws: p.workspace_id, steps: p.steps, turn: p.turn, engine: p.engine });
+  // His outbox writes the line down first (src/robert-outbox.ts), then posts it where it always went:
+  // the board — depth pinned to the cap, an automatic triage post must never chain-wake anyone — and,
+  // because the Desk never renders the board, the one thread the operator reads, or a woken Robert
+  // looks exactly like a sleeping one.
+  sayUnprompted({
+    source: "wake",
+    body: p.body,
+    ws: p.workspace_id,
+    steps: p.steps,
+    turn: p.turn,
+    engine: p.engine,
+    wakes: p.wakes,
+    board: () => void postToBoard({ author: "robert", body: p.body, ticket_id: p.ticket_id, workspace_id: p.workspace_id, depth: BOARD_WAKE_MAX_DEPTH }),
+  });
 };
 let notifier: WakeNotifier = (text) => notify(text);
 
@@ -284,7 +294,8 @@ export async function drainScope(scope: string, nowMs = Date.now()): Promise<Dra
       ledger(rows, wsId, startedMs, { outcome: "dropped" });
       return "idle";
     }
-    const prompt = batchPrompt(rows);
+    // A stateless turn's only memory of what it already said: this workspace's outbox, read back first.
+    const prompt = withReported(batchPrompt(rows), wsId, nowMs);
     // What the turn was asked on and answered, kept outside the try: a turn that answered and then
     // failed to post still spent what it spent.
     let model: string | null = null;
@@ -300,7 +311,7 @@ export async function drainScope(scope: string, nowMs = Date.now()): Promise<Dra
       const quiet = quietSweep(rows, text);
       noteSweepOutcome(scope, rows, quiet, nowMs);
       if (quiet) console.log(`[robert-sweep] ${scope}: quiet`);
-      else if (text || steps?.length) poster({ body: text, ticket_id: rows.length === 1 ? rows[0].subject : null, workspace_id: wsId, steps, turn, engine });
+      else if (text || steps?.length) poster({ body: text, ticket_id: rows.length === 1 ? rows[0].subject : null, workspace_id: wsId, steps, turn, engine, wakes: rows });
       robertWakes.ackIds(ids, WAKE_ATTEMPT_CAP);
       ledger(rows, wsId, startedMs, { ...spent(model, said), outcome: quiet ? "quiet" : text || steps?.length ? "posted" : "empty" });
       return "drained";
