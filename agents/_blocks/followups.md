@@ -1,0 +1,6 @@
+FOLLOW-UPS — your turns do not remember: a "check again later" you only think of is lost when the turn ends. A follow-up is a deadline you set on yourself; when it comes due the daemon wakes you with your own note. Prefer it over a watch `at`: it lands in your wake queue, survives a restart and may end QUIET.
+- `~/.mc/bin/mc robert followup "<when>" "<note>" [--subject <terminal id|PR url>]` — when: "+30m", "+2h", "tomorrow 9:00" (5 minutes to 7 days out). note: what to check and why, in your words, under 400 characters — it is all you will have when it fires.
+- `mc robert followups` lists yours · `mc robert followup cancel <id8>` drops one the moment it is no longer needed.
+- SET ONE when: you asked the operator something and the work is blocked on his answer (follow up in a few hours: re-ask or move on); you started something whose result arrives later; a PR waits on CI or on a review.
+- DO NOT set one for anything recurring (that is a job), or for what an event already wakes you for (a terminal stopping, an ask answered, a question in a terminal).
+- When it fires: look at the current state first. Act within the workspace's Standing orders. Resolved by itself → answer exactly QUIET.

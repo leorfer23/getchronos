@@ -18,6 +18,7 @@ import type express from "express";
 import { callerScope, checkScope, leadScope, spawnRefusal } from "./authz.js";
 import { continuations, db, sessions, workspaces, type Continuation } from "./store.js";
 import { agentLimits, arm, cancel, fireByHand, parseWhen } from "./continuations.js";
+import { followUpAccess } from "./robert-followups.js";
 import type { Session } from "./types.js";
 
 type Req = express.Request;
@@ -119,13 +120,17 @@ export function listRoute(req: Req, res: Res): void {
     if (!s) { res.json([]); return; }
     session_id = s.id;
   }
-  res.json(continuations.list({ workspace_id: ws, session_id, status: status as any, limit: Math.min(Number(req.query.limit ?? 100) || 100, 500) }));
+  // Robert's own follow-ups (on_met robert) are his and the operator's: a terminal's token never lists them.
+  const not_on_met = followUpAccess(scope) ? undefined : ("robert" as const);
+  res.json(continuations.list({ workspace_id: ws, session_id, status: status as any, not_on_met, limit: Math.min(Number(req.query.limit ?? 100) || 100, 500) }));
 }
 
 function load(req: Req, res: Res): Continuation | null {
   const c = continuations.resolve(req.params.id);
   if (!c) { res.status(404).json({ error: "not found" }); return null; }
   if (!checkScope(req, res, c.workspace_id)) return null;
+  // A follow-up Robert set on himself: a terminal of that workspace can neither see, fire nor cancel it.
+  if (c.on_met === "robert" && !followUpAccess(callerScope(req))) { res.status(404).json({ error: "not found" }); return null; }
   return c;
 }
 

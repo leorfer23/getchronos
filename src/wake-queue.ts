@@ -43,11 +43,18 @@ export const TERMINAL_PROMPT_KEY = "terminal-prompt:";
 export const TERMINAL_DRIVE_KEY = "term-drive:";
 /** Key prefix of a presence sweep (src/robert-sweep.ts): one per workspace while its terminals work. */
 export const SWEEP_KEY = "robert-sweep:";
+/** Key prefix of a follow-up Robert set on himself (src/robert-followups.ts): `followup:<continuation id>`. */
+export const FOLLOWUP_KEY = "followup:";
 /** What a sweep answers when nothing needs him. Acked, never posted — the Desk only hears real work. */
 export const QUIET_REPLY = "QUIET";
-/** A turn made only of sweeps that came back QUIET: nothing to show anyone. Pure. */
+/** Wakes that carry their own rules, QUIET included: a presence sweep, and a follow-up he set himself. */
+const ownRules = (key: string): boolean => key.startsWith(SWEEP_KEY) || key.startsWith(FOLLOWUP_KEY);
+/**
+ * A turn made only of sweeps and follow-ups that came back QUIET: nothing to show anyone. Any other
+ * wake in the batch (a stopped terminal, a question) is news, so the turn posts. Pure.
+ */
 export const quietSweep = (rows: Pick<RobertWake, "key">[], text: string): boolean =>
-  rows.length > 0 && rows.every((r) => r.key.startsWith(SWEEP_KEY)) && text.replace(/[`*.\s]/g, "").toUpperCase() === QUIET_REPLY;
+  rows.length > 0 && rows.every((r) => ownRules(r.key)) && text.replace(/[`*.\s]/g, "").toUpperCase() === QUIET_REPLY;
 /**
  * The last sweep of a workspace that found nothing to do: the fleet's shape it saw (robert-sweep.ts
  * workingSig) and when. A sweep over a fleet that has not moved since then would find nothing again,
@@ -206,8 +213,8 @@ export function wakeSection(row: RobertWake): string {
   try {
     say = row.payload ? ((JSON.parse(row.payload) as { say?: string }).say ?? null) : null;
   } catch {}
-  // A sweep or a self-wake carries its own rules, QUIET included; "post one or two lines" would contradict them.
-  if (say && row.key.startsWith(SWEEP_KEY)) return `${OP_PREFIX}${say}${repeat}`;
+  // A sweep or a follow-up carries its own rules, QUIET included; "post one or two lines" would contradict them.
+  if (say && ownRules(row.key)) return `${OP_PREFIX}${say}${repeat}`;
   return (
     `${OP_PREFIX}${say ?? `something happened that needs a call: ${row.topic} (${row.key})`} the operator did NOT ask you ` +
     `anything; you are being woken because this needs a call. Post ONE or TWO lines: what it is, and the call you ` +
