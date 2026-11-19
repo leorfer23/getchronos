@@ -1243,6 +1243,16 @@ export const NewContinuationSchema = z.object({
 });
 export const FireContinuationSchema = z.object({ evidence: z.string().max(2000).nullable().optional(), by: z.string().max(80).nullable().optional() });
 export const CancelContinuationSchema = z.object({ why: z.string().max(400).nullable().optional() });
+// Robert's follow-ups (src/robert-followups.ts). parseFollowUp holds the rules (note ≤400, 5m..7d out, once).
+export const NewRobertFollowUpSchema = z.object({
+  when: z.string().trim().min(1).max(80),
+  note: z.string().max(4000),
+  subject: z.string().max(4000).nullable().optional(),
+  workspace_id: z.string().max(64).nullable().optional(),
+  /** Accepted only to be refused in words: a follow-up never recurs. */
+  every: z.union([z.string().max(40), z.number()]).nullable().optional(),
+  cron: z.string().max(120).nullable().optional(),
+});
 // Workspace triggers (src/ws-triggers.ts, `mc trigger`). Shape only — parseTrigger reads the meaning and
 // says what is wrong in words; resolveTrigger checks every name against the workspace.
 const optText = (n: number) => z.string().max(n).nullable().optional();

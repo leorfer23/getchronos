@@ -13,7 +13,7 @@
  */
 import type express from "express";
 import { ADMIN_REQUIRED, type AnyRobertScope, type FleetScope, type RobertScope } from "./authz.js";
-import { asks, ideas, jots, launches, lessons, repos, reviews, sessions, skills, tickets, watches, workspaces } from "./store.js";
+import { asks, continuations, ideas, jots, launches, lessons, repos, reviews, sessions, skills, tickets, watches, workspaces } from "./store.js";
 import { listStalls } from "./recovery.js";
 
 /** "METHOD /route/:pattern" — Express's req.route.path, as registered in api.ts. */
@@ -33,6 +33,7 @@ export const ROBERT_ADMIN_ROUTES = new Set([
   "POST /workspaces/:id/ideas/generate", "POST /tickets/:id/ideas/generate",
   "POST /tickets/:id/push-status", "POST /tickets/:id/push-hours",
   "GET /watches", "POST /watches", "PATCH /watches/:id", "DELETE /watches/:id",
+  "GET /robert/followups", "POST /robert/followups", "POST /robert/followups/:id/cancel",
   "GET /recovery", "GET /fleet", "GET /costs", "GET /costs/daily", "GET /report",
   "PATCH /lessons/:id", "DELETE /lessons/:id",
 ]);
@@ -50,6 +51,11 @@ const OWNER: Record<string, (id: string) => string | null | undefined> = {
   ideas: (id) => ideas.get(id)?.workspace_id,
   watches: (id) => (watches.get(id) as any)?.workspace_id,
   lessons: (id) => lessons.get(id)?.workspace_id,
+  // The only Robert-allowed /robert/…/:id route is a follow-up's cancel (robert-followups.ts).
+  robert: (id) => {
+    const c = continuations.resolve(id);
+    return c?.on_met === "robert" ? c.workspace_id : undefined;
+  },
   reviews: (id) => {
     const r = reviews.get(id);
     return r?.ticket_id ? tickets.get(r.ticket_id)?.workspace_id : undefined;

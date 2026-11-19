@@ -400,7 +400,7 @@ export async function prBaseline(url: string, wsId: string): Promise<string | nu
  * Arm a continuation. The route has already resolved scope and policy; this writes the row, takes
  * the PR baseline, puts the waiting line on the terminal's card, and wakes the scheduler.
  */
-export async function arm(p: { workspace_id: string; session_id: string | null; spec: WhenSpec; created_by: string; round: number }): Promise<Continuation> {
+export async function arm(p: { workspace_id: string; session_id: string | null; spec: WhenSpec; created_by: string; round: number; subject?: string | null }): Promise<Continuation> {
   const baseline = p.spec.kind === "pr" && p.spec.target ? await prBaseline(p.spec.target, p.workspace_id) : null;
   const c = continuations.create({
     workspace_id: p.workspace_id,
@@ -418,6 +418,7 @@ export async function arm(p: { workspace_id: string; session_id: string | null; 
     created_by: p.created_by,
     next_check_at: p.spec.next_check_at,
     timeout_at: p.spec.timeout_at,
+    subject: p.subject ?? null,
   });
   if (c.session_id && sessions.get(c.session_id)?.status === "live") {
     try { declare(c.session_id, { state: "waiting", label: `⏳ ${c.label}`, on: waitOnFor(c) }); } catch { /* the card is a courtesy */ }
@@ -767,8 +768,10 @@ export type Openers = {
  * (the terminal is mid-turn or mid-question, the seat cap is full) — the row stays `met` and is
  * retried RETRY_MS later. Never two deliveries: markFired is guarded on status.
  */
-export async function deliver(c: Continuation, nowMs = Date.now(), o: Openers = {}): Promise<"typed" | "resumed" | "opened" | null> {
+export async function deliver(c: Continuation, nowMs = Date.now(), o: Openers = {}): Promise<"typed" | "resumed" | "opened" | "woke" | null> {
   if (c.status !== "met") return null;
+  // A follow-up Robert set on himself: a row in his wake queue, no terminal and no network needed.
+  if (c.on_met === "robert") return (await import("./robert-followups.js")).deliverFollowUp(c, nowMs);
   const open = o.open ?? openSession;
   const send = o.send ?? sendInput;
   const phase = o.phase ?? ((id: string) => statusOf(id)?.phase ?? null);
@@ -848,8 +851,9 @@ export async function sweep(nowMs = Date.now(), o: Openers & { dispatch?: typeof
     try {
       if (c.status === "armed") { looked++; await evaluate(c, nowMs, o); }
       const cur = continuations.get(c.id);
-      if (cur?.status === "met" && delivered < DELIVER_PER_SWEEP) {
-        if (await deliver(cur, nowMs, o)) delivered++;
+      // A Robert follow-up is one queued row, not a terminal: it never waits behind the per-pass cap.
+      if (cur?.status === "met" && (cur.on_met === "robert" || delivered < DELIVER_PER_SWEEP)) {
+        if ((await deliver(cur, nowMs, o)) && cur.on_met !== "robert") delivered++;
       }
     } catch (e: any) {
       console.warn(`[when] ${id8(c.id)}`, e?.message ?? e);

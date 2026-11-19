@@ -2888,6 +2888,18 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       CREATE INDEX IF NOT EXISTS idx_robert_runs_ws ON robert_runs(workspace_id, started_at);`),
   },
 
+  {
+    version: 169,
+    name: "continuations.subject — what a follow-up Robert set on himself is about (src/robert-followups.ts)",
+    // A Robert follow-up is a continuation with on_met='robert': kind 'at', no terminal, delivered as a
+    // wake (topic followup) instead of typed into a terminal. subject = the session id or PR url it is
+    // about, shown back to him when it fires. Column check keeps a re-run harmless if parallel work renumbers it.
+    up: (db) => {
+      const cols = db.prepare("SELECT name FROM pragma_table_info('continuations')").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "subject")) db.exec("ALTER TABLE continuations ADD COLUMN subject TEXT");
+    },
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

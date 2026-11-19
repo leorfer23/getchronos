@@ -115,6 +115,7 @@ import * as inboxRoutes from "./inbox-routes.js";
 import * as artifactRoutes from "./artifact-routes.js";
 import * as fileRoutes from "./file-routes.js";
 import * as continuationRoutes from "./continuation-routes.js";
+import * as followupRoutes from "./robert-followup-routes.js";
 import * as wsTriggerRoutes from "./ws-trigger-routes.js";
 import { cockpitRoute } from "./desk-cockpit.js";
 import { inbox } from "./store/inbox.js";
@@ -198,7 +199,7 @@ import {
   NewSkillSchema, PatchSkillSchema, ArchiveSkillSchema,
   NewWorkspaceVarSchema, PatchWorkspaceVarSchema,
   NewIdeaSchema, PromoteIdeaSchema, PromoteIdeasSchema, KillIdeasSchema, GenerateIdeasSchema,
-  NewContinuationSchema, FireContinuationSchema, CancelContinuationSchema,
+  NewContinuationSchema, FireContinuationSchema, CancelContinuationSchema, NewRobertFollowUpSchema,
   NewWsTriggerSchema, PatchWsTriggerSchema,
   NewJotSchema, JotPatchSchema, JotAppendSchema, JotFollowUpSchema, JotResolveSchema, JOT_BODY_MAX, RunJotSchema, ReorderJotsSchema, PlanNextDaySchema, StartDaySchema,
   NewTicketSchema, PatchTicketSchema, TicketLinkSchema, TicketNoteSchema, PushCommentSchema, PushStatusSchema, PushHoursSchema,
@@ -3390,6 +3391,12 @@ export function startServer() {
       res.status(503).json({ error: String(e?.message ?? e) });
     }
   });
+
+  // Robert's follow-ups (src/robert-followups.ts): a deadline he sets on himself, delivered to his wake
+  // queue. His own workspace's credential or the operator's token; never a terminal's.
+  api.post("/robert/followups", requireAdmin, validate(NewRobertFollowUpSchema), followupRoutes.createRoute);
+  api.get("/robert/followups", requireAdmin, followupRoutes.listRoute);
+  api.post("/robert/followups/:id/cancel", requireAdmin, validate(CancelContinuationSchema), followupRoutes.cancelRoute);
 
   api.post("/robert/wakes/:id/ack", requireAdmin, (req, res) => {
     const w = robertWakes.findByIdPrefix(req.params.id) ?? robertWakes.get(req.params.id);

@@ -6398,7 +6398,7 @@ const wsBit = (ws) => (ws ? `<span class="ws" style="color:${wsColor(ws)}">${esc
 function waitRow(c) {
   const what = c.label || (c.kind === "script" ? "script: " + c.target : c.kind === "pr" ? "PR " + (c.target || "").replace(/^https:\/\/github\.com\//, "") + (c.until ? " → " + c.until : "") : c.target || c.kind);
   const then = c.note || c.goal || "";
-  const meta = [wsBit(c.workspace_id), c.session_id ? loopTerm(c.session_id) : `<span>opens a new terminal</span>`];
+  const meta = [wsBit(c.workspace_id), c.session_id ? loopTerm(c.session_id) : `<span>${c.on_met === "robert" ? "wakes Robert" : "opens a new terminal"}</span>`];
   if (c.status === "met") meta.push(`<span class="soon">met — continuing</span>`);
   else if (c.kind === "at") meta.push(`<span class="soon">fires ${esc(loopWhen(c.target))}</span>`);
   else {

@@ -10,7 +10,8 @@ import { now } from "./util.js";
 export type ContinuationKind = "pr" | "terminal" | "ask" | "at" | "script" | "check" | "manual";
 export type ContinuationStatus = "armed" | "met" | "fired" | "cancelled";
 export type ContinuationOutcome = "met" | "timeout" | "manual" | "broken";
-export type ContinuationThen = "auto" | "resume" | "new";
+/** robert = a follow-up Robert set on himself (src/robert-followups.ts): delivered to his wake queue. */
+export type ContinuationThen = "auto" | "resume" | "new" | "robert";
 
 export type Continuation = {
   id: string;
@@ -48,14 +49,16 @@ export type Continuation = {
   met_at: string | null;
   fired_at: string | null;
   fired_session_id: string | null;
-  /** typed (into the live terminal) | resumed (same transcript) | opened (a fresh terminal). */
+  /** typed (into the live terminal) | resumed (same transcript) | opened (a fresh terminal) | woke (Robert's wake queue). */
   fired_how: string | null;
+  /** A Robert follow-up only: the session id or PR url it is about (migration 169). */
+  subject: string | null;
 };
 
 export type NewContinuation = Pick<Continuation, "workspace_id" | "kind" | "label"> &
   Partial<Pick<Continuation,
     "session_id" | "target" | "until" | "note" | "goal" | "on_met" | "every_sec" | "baseline" | "round" |
-    "created_by" | "next_check_at" | "timeout_at">>;
+    "created_by" | "next_check_at" | "timeout_at" | "subject">>;
 
 export const continuations = {
   create(p: NewContinuation): Continuation {
@@ -77,12 +80,13 @@ export const continuations = {
       created_at: now(),
       next_check_at: p.next_check_at ?? null,
       timeout_at: p.timeout_at ?? null,
+      subject: p.subject ?? null,
     };
     db.prepare(
       `INSERT INTO continuations (id,workspace_id,session_id,kind,target,until,label,note,goal,on_met,every_sec,
-        baseline,round,created_by,created_at,next_check_at,timeout_at)
+        baseline,round,created_by,created_at,next_check_at,timeout_at,subject)
        VALUES (@id,@workspace_id,@session_id,@kind,@target,@until,@label,@note,@goal,@on_met,@every_sec,
-        @baseline,@round,@created_by,@created_at,@next_check_at,@timeout_at)`,
+        @baseline,@round,@created_by,@created_at,@next_check_at,@timeout_at,@subject)`,
     ).run(row);
     return this.get(row.id)!;
   },
@@ -99,11 +103,13 @@ export const continuations = {
     return hits.length === 1 ? hits[0] : undefined;
   },
 
-  list(f: { workspace_id?: string; session_id?: string; status?: ContinuationStatus | ContinuationStatus[]; limit?: number } = {}): Continuation[] {
+  list(f: { workspace_id?: string; session_id?: string; status?: ContinuationStatus | ContinuationStatus[]; on_met?: ContinuationThen; not_on_met?: ContinuationThen; limit?: number } = {}): Continuation[] {
     const where: string[] = [];
     const args: Record<string, unknown> = {};
     if (f.workspace_id) { where.push("workspace_id = @workspace_id"); args.workspace_id = f.workspace_id; }
     if (f.session_id) { where.push("session_id = @session_id"); args.session_id = f.session_id; }
+    if (f.on_met) { where.push("on_met = @on_met"); args.on_met = f.on_met; }
+    if (f.not_on_met) { where.push("on_met != @not_on_met"); args.not_on_met = f.not_on_met; }
     if (f.status) {
       const st = Array.isArray(f.status) ? f.status : [f.status];
       where.push(`status IN (${st.map((_, i) => `@st${i}`).join(",")})`);
@@ -168,7 +174,7 @@ export const continuations = {
   },
 
   /** met → fired. Guarded the same way: one delivery per continuation, ever. */
-  markFired(id: string, p: { session_id: string; how: string; at: string }): boolean {
+  markFired(id: string, p: { session_id: string | null; how: string; at: string }): boolean {
     return db.prepare(
       `UPDATE continuations SET status='fired', fired_at=@at, fired_session_id=@session_id, fired_how=@how, next_check_at=NULL
        WHERE id=@id AND status='met'`,

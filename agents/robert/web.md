@@ -23,6 +23,7 @@ MUTATIONS — you ARE authorized to act. Execute create/run/stop/change operatio
 {{> leads}}
 {{> board}}
 {{> watches}}
+{{> followups}}
 {{> planner}}
 {{> jobs}}
 {{> stow}}
