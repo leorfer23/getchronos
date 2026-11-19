@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { db, robertWakes, tickets, workspaces } from "./store.js";
+import { db, robertRuns, robertWakes, tickets, workspaces } from "./store.js";
 import {
   WAKE_ATTEMPT_CAP,
   batchPrompt,
@@ -36,6 +36,7 @@ setWakeNotifier(async (t) => { notified.push(t); });
 
 function reset() {
   db.prepare("DELETE FROM robert_wakes").run();
+  db.prepare("DELETE FROM robert_runs").run();
   db.prepare("DELETE FROM kv").run();
   db.prepare("DELETE FROM tickets").run();
   db.prepare("DELETE FROM workspaces").run();
@@ -314,4 +315,120 @@ test("Robert switched off for a workspace (⚙ Settings): queued wakes drop with
   assert.equal(enqueueBusWake({ topic: "ticket.updated", ticket_id: t, status: "blocked" } as any), null);
   writeSetting("robert.enabled", null, w);
   _resetSettingsCache();
+});
+
+// ── The run ledger: one robert_runs row per turn, whatever it came to ──
+
+const usage = { tokens_in: 12, tokens_out: 80, tokens_cache_read: 4000, tokens_cache_write: 300, cost_usd: 0.031 };
+function ledgerSeams(answer: () => unknown) {
+  posted = [];
+  setWakeAsker(async (prompt) => { asked.push(prompt); return answer() as any; });
+  setWakePoster((p) => { posted.push(p); });
+}
+const lastRun = () => robertRuns.list({ limit: 1 })[0];
+
+test("ledger: a turn that said something is `posted`, with its model, engine, steps and usage", async () => {
+  reset();
+  ledgerSeams(() => ({ reply: "approved TCK-1", steps: [{ at: "x", text: "ran mc" }], engine: "claude/sonnet", usage }));
+  enqueueWake(wake({ key: "ask:a1", topic: "ask.created", subject: "t1" }));
+  enqueueWake(wake({ key: "review:r1", topic: "review.created", subject: "t2" }));
+  assert.equal(await drainScope("default", NOW), "drained");
+  const r = lastRun();
+  assert.equal(r.outcome, "posted");
+  assert.equal(r.workspace_id, null);
+  assert.equal(r.n_wakes, 2);
+  assert.deepEqual(JSON.parse(r.wake_keys), ["ask:a1", "review:r1"]);
+  assert.deepEqual(JSON.parse(r.topics), ["ask.created", "review.created"]);
+  assert.ok(r.model, "the model it was asked on");
+  assert.equal(r.engine, "claude/sonnet");
+  assert.equal(r.steps, 1);
+  assert.equal(r.reply_chars, "approved TCK-1".length);
+  assert.equal(r.tokens_in, 12);
+  assert.equal(r.tokens_out, 80);
+  assert.equal(r.tokens_cache_read, 4000);
+  assert.equal(r.tokens_cache_write, 300);
+  assert.equal(r.cost_usd, 0.031);
+  assert.ok(r.duration_ms >= 0 && r.ended_at >= r.started_at);
+});
+
+test("ledger: a sweep that came back QUIET is `quiet`; no words and no steps is `empty`", async () => {
+  reset();
+  ledgerSeams(() => ({ reply: "QUIET", usage }));
+  enqueueWake(wake({ key: "robert-sweep:default", topic: "robert.sweep", subject: null, payload: { say: "sweep" } }));
+  await drainScope("default", NOW);
+  assert.equal(lastRun().outcome, "quiet");
+  assert.equal(posted.length, 0);
+
+  reset();
+  ledgerSeams(() => "  ");
+  enqueueWake(wake());
+  await drainScope("default", NOW);
+  const r = lastRun();
+  assert.equal(r.outcome, "empty");
+  assert.equal(r.tokens_in, null, "a plain-string answer reports no usage: nulls, never zeros");
+  assert.equal(r.cost_usd, null);
+});
+
+test("ledger: Robert off for the workspace is `dropped`, scoped to it, with no model asked", async () => {
+  reset();
+  const { writeSetting, _resetSettingsCache } = await import("./settings.js");
+  _resetSettingsCache();
+  ledgerSeams(() => "never");
+  const w = ws("acme");
+  enqueueWake(wake({ workspace_id: w }));
+  writeSetting("robert.enabled", false, w);
+  try {
+    assert.equal(await drainScope(w, NOW), "idle");
+    const r = lastRun();
+    assert.equal(r.outcome, "dropped");
+    assert.equal(r.workspace_id, w);
+    assert.equal(r.model, null);
+    assert.equal(asked.length, 0);
+  } finally {
+    writeSetting("robert.enabled", null, w);
+    _resetSettingsCache();
+  }
+});
+
+test("ledger: a thrown turn is `failed` with the error; a turn that answered then failed to post keeps its usage", async () => {
+  reset();
+  ledgerSeams(() => { throw new Error("engine down"); });
+  enqueueWake(wake());
+  assert.equal(await drainScope("default", NOW), "failed");
+  let r = lastRun();
+  assert.equal(r.outcome, "failed");
+  assert.equal(r.error, "engine down");
+  assert.equal(r.tokens_in, null);
+  assert.equal(robertWakes.unacked().length, 1, "the wake stays queued as before");
+
+  reset();
+  ledgerSeams(() => ({ reply: "approve it", engine: "claude/opus", usage }));
+  setWakePoster(() => { throw new Error("board write failed"); });
+  enqueueWake(wake());
+  assert.equal(await drainScope("default", NOW), "failed");
+  r = lastRun();
+  assert.equal(r.outcome, "failed");
+  assert.equal(r.error, "board write failed");
+  assert.equal(r.cost_usd, 0.031, "what the turn spent is still on the row");
+  assert.equal(robertRuns.list().length, 1, "one row per turn, not one per path it took");
+});
+
+test("ledger: a ledger that cannot be written never breaks the turn", async () => {
+  reset();
+  ledgerSeams(() => "approve it");
+  enqueueWake(wake());
+  db.exec("ALTER TABLE robert_runs RENAME TO robert_runs_away");
+  try {
+    assert.equal(await drainScope("default", NOW), "drained");
+    assert.equal(robertWakes.unacked().length, 0, "acked as usual");
+    assert.equal(posted.length, 1);
+  } finally {
+    db.exec("ALTER TABLE robert_runs_away RENAME TO robert_runs");
+  }
+});
+
+test("ledger: nothing due writes nothing", async () => {
+  reset();
+  assert.equal(await drainScope("default", NOW), "idle");
+  assert.equal(robertRuns.list().length, 0);
 });

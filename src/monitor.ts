@@ -5,7 +5,7 @@ import zlib from "node:zlib";
 import { usageSnapshot } from "./usage-meter.js";
 import { CONFIG } from "./config.js";
 import { isClosedTicketStatus, type Workspace } from "./types.js";
-import { db, runs, sessions, sessionPrs, tickets, reviews, workspaces, activity, events, searchIndex, egressLog, steps, messages, jobs, asks, kv, ideas } from "./store.js";
+import { db, runs, sessions, sessionPrs, tickets, reviews, workspaces, activity, events, searchIndex, egressLog, steps, messages, robertRuns, jobs, asks, kv, ideas } from "./store.js";
 import { focusEvents } from "./terminal.js";
 import { buildReport } from "./report.js";
 import { notify } from "./telegram.js";
@@ -365,6 +365,7 @@ function maybeRetentionSweep() {
     egressLog.prune(CONFIG.egress.logCap);
     steps.prune(50_000); // generous cap — a few rows per run, this only bites truly ancient history
     messages.prune(20_000);
+    robertRuns.prune(20_000); // one row per Robert wake turn — a busy day is a few hundred
     pruneMemoryUsage();
   } catch (e: any) {
     console.warn("[monitor] retention sweep", e?.message ?? e);

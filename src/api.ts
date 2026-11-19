@@ -158,7 +158,7 @@ import { keepClip, listClips, clipsDir, wavStats } from "./voice-clips.js";
 import { speak, voiceFor, listVoices, neuralHealth } from "./speak.js";
 import { activeWorkspaceIds, askFleetFanout, askManagerWeb, handFilesTo, warmWebManager, getWebModel, setWebModel, webProfileDir, resetWebConversation, resetExecConversation, type ExecTurnOpts } from "./telegram/agent.js";
 import { askLine, commitTurn, explainRoute, getSticky, resolveTurn, oneRobert, resolveVoiceAsk, setSticky, fansOut } from "./thread-router.js";
-import { robertWakes, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type LeadEvent } from "./store.js";
+import { robertWakes, robertRuns, rollupRuns, leadEvents, leadSlices, memoryRelations, hosts, type RobertWake, type RobertRun, type LeadEvent } from "./store.js";
 import { addGoals, reopenGoal, setGoals, syncGoalMirror, tickAllGoals, tickCurrentGoal } from "./goals.js";
 import { autoCloseWord, closeWhenDone, spawnAutoClose } from "./auto-close.js";
 import { finishedGoal, freshHint, noteGoalSet, routeNewWork, sameGoal, withHandoff } from "./fresh-terminal.js";
@@ -219,7 +219,7 @@ import { machineBrowserBlock, mountBrowserRoutes } from "./resources/browser-rou
 import { mountVpnRoutes } from "./vpn-routes.js";
 import { mountServiceRoutes } from "./service-routes.js";
 import { mountPlaybookRoutes } from "./playbook-routes.js";
-import { mountAlertRoutes } from "./alert-routes.js";
+import { mountAlertRoutes, sinceMs } from "./alert-routes.js";
 import { mountCaptureRoutes } from "./capture-routes.js";
 import { mountStyleRoutes } from "./style-routes.js";
 import { procsView } from "./resources/brain.js";
@@ -3345,6 +3345,39 @@ export function startServer() {
       attempt_cap: WAKE_ATTEMPT_CAP,
       beacon_age_ms: wakeBeaconAgeMs(),
     });
+  });
+
+  // Robert's run ledger (robert_runs): every wake turn, how it ended and what it cost, plus the
+  // window's rollup. Not admin-gated: a workspace token reads its OWN rows only (scope.ws wins over
+  // ?ws=, like every scoped list); the operator and the fleet-wide Robert read every scope, or one
+  // with ?ws=<id|slug|default>.
+  api.get("/robert/runs", (req, res) => {
+    const scope = callerScope(req);
+    if (scope === null) return res.status(401).json({ error: "invalid workspace token" });
+    let wsFilter: string | null | undefined = scope.ws ?? undefined;
+    const ref = typeof req.query.ws === "string" ? req.query.ws.trim() : "";
+    if (scope.ws === null && ref) {
+      if (ref === "default") wsFilter = null;
+      else {
+        const w = workspaces.get(ref) ?? workspaces.getBySlug(ref);
+        if (!w) return res.status(404).json({ error: "workspace not found" });
+        wsFilter = w.id;
+      }
+    }
+    const since = sinceMs(req.query.since ?? "24h");
+    if (since === undefined) return res.status(400).json({ error: "since: 24h, 90m, 7d or an ISO date" });
+    const limit = Math.min(1000, Math.max(1, Number(req.query.limit ?? 200) || 200));
+    const all = robertRuns.list({ since: new Date(since).toISOString(), workspace_id: wsFilter, limit: 0 });
+    const rollup = rollupRuns(all);
+    const slug = (id: string | null) => (id ? workspaces.get(id)?.slug ?? id : "default");
+    const shape = (r: RobertRun) => ({
+      ...r,
+      wake_keys: JSON.parse(r.wake_keys) as string[],
+      topics: JSON.parse(r.topics) as string[],
+      workspace: slug(r.workspace_id),
+    });
+    for (const [id, t] of Object.entries(rollup.by_workspace)) Object.assign(t, { workspace: id === "default" ? "default" : slug(id) });
+    res.json({ since: new Date(since).toISOString(), runs: all.slice(0, limit).map(shape), rollup });
   });
 
   // Robert's self-wake opens at most one terminal through here; the caps are the daemon's, not his.

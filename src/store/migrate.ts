@@ -2855,6 +2855,39 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     },
   },
 
+  {
+    version: 168,
+    name: "robert_runs — one row per wake-queue turn: what it presented, how it ended, what it cost (src/store/robert-runs.ts)",
+    // Written by drainScope (src/wake-queue.ts) for every ending: posted / quiet / empty / dropped / failed.
+    // Token and cost columns stay NULL when the engine reported none — never a guessed number.
+    // workspace_id NULL = the default (fleet-wide) scope. IF NOT EXISTS keeps a re-run harmless if
+    // parallel work renumbers it (169 and 170 are held by other branches in flight).
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS robert_runs (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT,
+        started_at TEXT NOT NULL,
+        ended_at TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        n_wakes INTEGER NOT NULL,
+        wake_keys TEXT NOT NULL,
+        topics TEXT NOT NULL,
+        model TEXT,
+        engine TEXT,
+        outcome TEXT NOT NULL,
+        error TEXT,
+        steps INTEGER NOT NULL DEFAULT 0,
+        reply_chars INTEGER NOT NULL DEFAULT 0,
+        tokens_in INTEGER,
+        tokens_out INTEGER,
+        tokens_cache_read INTEGER,
+        tokens_cache_write INTEGER,
+        cost_usd REAL
+      );
+      CREATE INDEX IF NOT EXISTS idx_robert_runs_started ON robert_runs(started_at);
+      CREATE INDEX IF NOT EXISTS idx_robert_runs_ws ON robert_runs(workspace_id, started_at);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

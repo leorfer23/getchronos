@@ -474,6 +474,8 @@ const HELP = `mc — Mission Control backlog CLI
   mc desk watches                    every standing watch + when the next report is due
   mc robert wakes [--ack <id>]       the durable wake queue: what Robert still owes a turn, what is
                                      parked after too many failures, and whether anything is armed
+  mc robert runs [--since 24h] [--ws <slug>] [--json]   every wake turn Robert ran: per workspace,
+                                     wakes, how they ended (posted/quiet/empty/dropped/failed), tokens, cost
   mc alerts [--since 24h] [--json]   (operator) stuck-work alerts: what he was told, on which channel,
                                      how long after it got stuck, whether he acknowledged it, misses
   mc alerts ack <id>                 (operator) acknowledge one — it stops climbing to Telegram
@@ -3495,6 +3497,29 @@ function askCap(question) {
       ];
       if (q.recent.length) out.push(`last handled: ${q.recent.slice(0, 3).map((w) => w.key).join(", ")}`);
       return console.log(out.join("\n"));
+    }
+    // Robert's run ledger: what his wake turns came to and cost. A workspace token sees its own rows.
+    if (cmd === "robert" && pos[1] === "runs") {
+      const qs = new URLSearchParams({ since: opt.since || "24h", ...(opt.ws ? { ws: opt.ws } : {}) });
+      const q = await req("GET", `/robert/runs?${qs}`);
+      if (opt.json) return console.log(JSON.stringify(q, null, 2));
+      const r = q.rollup;
+      if (!r.runs) return console.log(`(no Robert wake turns since ${q.since.slice(0, 16).replace("T", " ")} UTC)`);
+      const k = (n) => (n >= 1_000_000 ? `${(n / 1e6).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1e3)}k` : String(n));
+      const usd = (c) => (c == null ? "—" : `$${c.toFixed(2)}`);
+      const ends = (o) => ["posted", "quiet", "empty", "dropped", "failed"].filter((x) => o[x]).map((x) => `${o[x]} ${x}`).join(" · ");
+      // Tokens read = fresh input + cache reads + cache writes; a group no turn reported for says so, not "0".
+      const tok = (t) => (t.metered ? `${k(t.tokens.in + t.tokens.cache_read + t.tokens.cache_write)} in / ${k(t.tokens.out)} out` : "no usage reported");
+      const rows = Object.values(r.by_workspace).sort((a, b) => b.runs - a.runs);
+      const w = Math.max(9, ...rows.map((t) => t.workspace.length));
+      const line = (name, t) =>
+        `${name.padEnd(w)}  ${String(t.runs).padStart(5)}  ${String(t.wakes).padStart(5)}  ${usd(t.cost_usd).padEnd(7)}  ${tok(t)} · ${ends(t.by_outcome)}`;
+      return console.log([
+        `${"workspace".padEnd(w)}  turns  wakes  cost     tokens · outcomes`,
+        ...rows.map((t) => line(t.workspace, t)),
+        ...(rows.length > 1 ? [line("total", r)] : []),
+        ...(r.metered < r.runs ? [`(${r.runs - r.metered} turn(s) reported no usage — counted, not priced)`] : []),
+      ].join("\n"));
     }
     // Stuck-work alerts (src/stuck-alerts.ts), from the outside: what the operator was told, how long
     // after it got stuck, on which rung, and what the self-check caught that nothing else did.
