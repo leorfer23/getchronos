@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { artifacts, asks, jobs, runs, sessions, type Artifact, type ArtifactEvent, type AskRoute } from "./store.js";
 import { bus } from "./bus.js";
 import { answerAsk, notifyAskCreated } from "./asks.js";
-import { postRobertToDesk } from "./robert-desk.js";
+import { sayUnprompted } from "./robert-outbox.js";
 import { inRepo } from "./repo-root.js";
 
 export const MAX_HTML_BYTES = 2 * 1024 * 1024;
@@ -133,7 +133,7 @@ export async function publishArtifact(p: PublishInput): Promise<{ artifact: Arti
   }
 
   bus.publish({ topic: "artifact.created", artifact_id: a.id, workspace_id: a.workspace_id, session_id: a.session_id, title: a.title, ask_id: askId });
-  if ((p.question && (p.route ?? "operator") === "operator") || p.notify) postRobertToDesk({ body: artifactMarker(a.id), ws: a.workspace_id });
+  if ((p.question && (p.route ?? "operator") === "operator") || p.notify) postArtifactCard(a);
   return { artifact: a, ask_id: askId };
 }
 
@@ -144,8 +144,13 @@ export function updateArtifact(a: Artifact, html: string, title?: string | null,
   writeVersion(a, v, html);
   const out = artifacts.patch(a.id, { version: v, ...(title ? { title } : {}) })!;
   bus.publish({ topic: "artifact.updated", artifact_id: a.id, workspace_id: a.workspace_id, session_id: a.session_id, version: v });
-  if (notify) postRobertToDesk({ body: artifactMarker(a.id), ws: a.workspace_id });
+  if (notify) postArtifactCard(out);
   return out;
+}
+
+/** The page's card in Robert's thread. It is the same marker for every version, so the version is what makes a new one new news. */
+function postArtifactCard(a: Artifact): void {
+  sayUnprompted({ source: "artifact", body: artifactMarker(a.id), ws: a.workspace_id, episode: `artifact:${a.id}:v${a.version}` });
 }
 
 const parse = (s: string | null): unknown => {

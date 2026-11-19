@@ -47,6 +47,7 @@ const gone = repos.create({ workspace_id: ws.id, name: "ghost", path: path.join(
 
 const opened: any[] = [];
 const posts: string[] = [];
+const abouts: Array<string | undefined> = [];
 const discarded: string[] = [];
 const told: Array<{ id: string; text: string }> = [];
 const MIN = 60_000;
@@ -54,6 +55,7 @@ const MIN = 60_000;
 beforeEach(() => {
   opened.length = 0;
   posts.length = 0;
+  abouts.length = 0;
   sent.length = 0;
   online = false;
   hf.resetHostFailover({ bootAt: Date.now() - 60 * MIN, lastWake: () => null });
@@ -62,7 +64,7 @@ beforeEach(() => {
       opened.push(o);
       return sessions.create({ ...o, id: o.agentSessionId ?? undefined, cwd: o.cwd || "", host_id: o.host_id });
     },
-    post: (b: string) => { posts.push(b); },
+    post: (b: string, about?: string) => { posts.push(b); abouts.push(about); },
     feed: () => ["understanding: fix the importer", "act: edited importer.ts"],
     originWorktree: async () => null,
     freshWorktree: async () => null,
@@ -212,6 +214,7 @@ test("repo on no online computer → stays live, one Desk line saying why, once"
   assert.equal(sessions.get(s.id)!.status, "live");
   assert.equal(posts.length, 1);
   assert.match(posts[0], /could not move HF: "fix the importer" — ghost is not checked out on this Mac or on any online computer that can run it; it stays on m2/);
+  assert.deepEqual(abouts, [`host:${HOST}`], "the line is about the host — its episode in Robert's outbox");
   await hf.sweepHostFailover(now + 5 * MIN);
   assert.equal(posts.length, 1, "said once");
 });
@@ -463,6 +466,7 @@ test("salvageMoved: the host pushes wip/<id8>; the Desk and the stand-in are tol
   assert.deepEqual(frames.map((f) => f.t), ["kill", "release"]);
   assert.equal(posts.length, 1);
   assert.match(posts[0], new RegExp(`m2 is back: HF: "fix the importer" had uncommitted changes and 2 unpushed commits there, now on origin as \`wip/${old.id.slice(0, 8)}\` — told ${next.id.slice(0, 8)}`));
+  assert.deepEqual(abouts, [`session:${old.id}`], "the salvage line is about the terminal");
   assert.equal(told.length, 1);
   assert.equal(told[0].id, next.id);
   assert.match(told[0].text, /git fetch origin wip\//);

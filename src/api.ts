@@ -167,6 +167,7 @@ import { leadEventPayload, waitForLeadEvents, wakeShippedElsewhere } from "./rob
 import { fileReport, leadEventLines } from "./lead-report.js";
 import { leadMayAnswer, mayRouteToLead } from "./lead-asks.js";
 import { WAKE_ATTEMPT_CAP, wakeBeaconAgeMs } from "./wake-queue.js";
+import { outboxRequest } from "./robert-outbox.js";
 import { supervisionGraceMs, supervisionVerdict } from "./supervision-guard.js";
 import { runAgentHeartbeat, runFleetHeartbeat, runHeartbeat, type FleetAgent } from "./heartbeat.js";
 import { parseGates, suggestGates } from "./gates.js";
@@ -3402,6 +3403,15 @@ export function startServer() {
     const w = robertWakes.findByIdPrefix(req.params.id) ?? robertWakes.get(req.params.id);
     if (!w) return res.status(404).json({ error: "no such wake" });
     res.json({ wake: robertWakes.ack(w.id) });
+  });
+
+  // Robert's outbox (src/robert-outbox.ts): what he said on his own and what became of it. The operator
+  // reads every workspace (?ws=<id|slug|default>); a workspace token, or a project's Robert, its own only.
+  api.get("/robert/outbox", (req, res) => {
+    const since = req.query.since ? sinceMs(req.query.since) : undefined;
+    if (req.query.since && since === undefined) return res.status(400).json({ error: "since takes 24h, 90m, 7d or an ISO time" });
+    const r = outboxRequest(callerScope(req), { ws: req.query.ws, sinceMs: since, status: req.query.status, limit: req.query.limit });
+    res.status(r.status).json(r.body);
   });
 
   api.get("/robert/supervision", requireAdmin, (_req, res) => {

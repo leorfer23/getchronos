@@ -25,7 +25,7 @@ import { sweepTriageDeadline } from "./ask-robert.js";
 import { sweepLeadAsks } from "./lead-asks.js";
 import { sweepTerminalPrompts } from "./terminal-prompts.js";
 import { askManagerWeb } from "./telegram/agent.js";
-import { postRobertToDesk } from "./robert-desk.js";
+import { sayUnprompted } from "./robert-outbox.js";
 import type { RobertStep } from "./robert-steps.js";
 import { esc, notify } from "./telegram/api.js";
 
@@ -264,12 +264,14 @@ export async function runWatch(s: Session, final = false): Promise<void> {
     failed = true;
   }
   sessions.addWatchReport(s.id, { state: d.state, body, final, failed });
-  postRobertToDesk({
+  sayUnprompted({
+    source: "watch",
     body: `👁 **${final ? "Watch ended" : "Watch"} · ${(d.goal ?? "terminal").slice(0, 60)}** (${shortId(s.id)})\n${body}`,
     ws: s.workspace_id ?? null,
     steps,
     turn,
     engine,
+    episode: `session:${s.id}`,
   });
   if (final) sessions.setWatch(s.id, { every_min: null });
   bus.publish({ topic: "session.updated", session_id: s.id });

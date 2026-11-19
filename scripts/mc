@@ -481,6 +481,9 @@ const HELP = `mc — Mission Control backlog CLI
                                      5 minutes to 7 days out ("+30m", "tomorrow 9:00"), 20 pending max
   mc robert followups [--all]        pending follow-ups (--all: fired and cancelled too)
   mc robert followup cancel <id8>    drop one that is no longer needed
+  mc robert outbox [--since 24h] [--ws <slug>] [--status held] [--json]
+                                     what Robert said on his own and what became of it: shown in the
+                                     chat, held (desk posts off) or not posted as a repeat
   mc alerts [--since 24h] [--json]   (operator) stuck-work alerts: what he was told, on which channel,
                                      how long after it got stuck, whether he acknowledged it, misses
   mc alerts ack <id>                 (operator) acknowledge one — it stops climbing to Telegram
@@ -3557,6 +3560,35 @@ function askCap(question) {
         ...rows.map((t) => line(t.workspace, t)),
         ...(rows.length > 1 ? [line("total", r)] : []),
         ...(r.metered < r.runs ? [`(${r.runs - r.metered} turn(s) reported no usage — counted, not priced)`] : []),
+      ].join("\n"));
+    }
+    // Robert's outbox (src/robert-outbox.ts): what he said on his own, newest first, and what became of
+    // it. The operator sees every workspace; an agent (its workspace token) sees its own.
+    if (cmd === "robert" && pos[1] === "outbox") {
+      const qs = new URLSearchParams({ since: opt.since || "24h" });
+      if (opt.ws) qs.set("ws", opt.ws);
+      if (opt.status) qs.set("status", opt.status);
+      if (opt.limit) qs.set("limit", opt.limit);
+      const { rows } = await req("GET", `/robert/outbox?${qs}`);
+      if (opt.json) return console.log(JSON.stringify(rows, null, 2));
+      if (!rows.length) return console.log("(Robert said nothing on his own in that window)");
+      const icon = { delivered: "●", held: "○", suppressed: "⊘", failed: "✕", pending: "…" };
+      const said = { delivered: "shown", held: "held", suppressed: "repeat, not posted", failed: "failed", pending: "pending" };
+      const age = (iso) => {
+        const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
+        return m < 60 ? `${m}m` : m < 2880 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
+      };
+      const gist = (b) => {
+        const t = String(b || "").replace(/\s+/g, " ").trim() || "(steps only)";
+        return t.length > 110 ? `${t.slice(0, 109)}…` : t;
+      };
+      const n = (s) => rows.filter((r) => r.status === s).length;
+      return console.log([
+        ...rows.map((r) =>
+          `${icon[r.status] || "?"} ${age(r.created_at).padStart(3)} ${r.workspace || "default"} · ${r.source} · ` +
+          `${said[r.status] || r.status}${r.status === "held" && r.reason ? ` (${r.reason})` : ""} · ${gist(r.body)}`),
+        `${rows.length} said · ${n("delivered")} shown · ${n("held")} held · ${n("suppressed")} repeats not posted` +
+          (n("failed") ? ` · ${n("failed")} failed` : ""),
       ].join("\n"));
     }
     // Stuck-work alerts (src/stuck-alerts.ts), from the outside: what the operator was told, how long

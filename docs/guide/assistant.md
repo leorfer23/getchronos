@@ -52,6 +52,16 @@ You do not need to ask. He wakes when:
 Every wake is capped per terminal and per hour, so he cannot loop. Each switch lives in ⚙ Settings →
 Robert, per project.
 
+## What he said on his own
+
+Everything he says without being asked — a wake's answer, a question he answered or passed to you, a
+watch report, a page's card — is written down first, then posted where it always went. With ⚙ Settings →
+Robert → **Robert posts on his own** off (the default) it does not appear in the chat, but it is kept:
+`mc robert outbox` lists the last day (`--since 2h`, `--ws <project>`, `--status held`, `--json`).
+
+He reads that last day back each time he wakes, so he knows what he already told you. The exact same
+words about the same terminal, PR or question within 6 hours are kept but not posted again.
+
 ## What he never does
 
 - **Send anything — except a Slack DM to you.** No email, comment, review or Slack message to anyone
@@ -85,6 +95,6 @@ Telegram; ids and commands stay `robert`.
 **Under the hood:** persona `agents/robert/` + `agents/_blocks/` · what he does himself
 `src/robert-hands.ts` · his name `src/assistant-routes.ts`, `src/settings.ts` · one per project
 `src/thread-router.ts` · wakes `src/robert-drive.ts`, `src/terminal-prompts.ts`, `src/robert-sweep.ts`, `src/robert-selfwake.ts`,
-`src/wake-queue.ts` · watches `src/watches.ts` · no-send `src/no-send.ts` · lessons `src/lessons.ts` ·
+`src/wake-queue.ts` · what he said on his own `src/robert-outbox.ts` · watches `src/watches.ts` · no-send `src/no-send.ts` · lessons `src/lessons.ts` ·
 ☀️ `src/startday.ts`, 🌙 `src/nextday.ts` · switches `src/settings.ts` ·
 [MISSION-CONTROL.md §5c](../../MISSION-CONTROL.md).

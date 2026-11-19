@@ -15,7 +15,7 @@ import { isReadOnlyRun } from "./runner.js";
 import { reportAgentState } from "./agent-lifecycle.js";
 import { notify, esc } from "./telegram/api.js";
 import { kb, type Btn } from "./telegram/keyboards.js";
-import { postRobertToDesk } from "./robert-desk.js";
+import { sayUnprompted } from "./robert-outbox.js";
 import { askMarker, heldBy, isRobertAsk } from "./robert-asks.js";
 
 function parseOptions(ask: Ask): string[] {
@@ -95,7 +95,7 @@ export async function notifyAskCreated(ask: Ask, job: Job | undefined, opts: { d
   // It is the operator's from the start, so it is a card in the Desk chat too — the live Ask widget,
   // not a sentence he has to scroll back for. Robert's own asks skip this: his reply already carries
   // the card, in the bubble where he asked.
-  if (opts.desk !== false) postRobertToDesk({ body: askMarker(ask.id), ws: ask.workspace_id ?? null });
+  if (opts.desk !== false) sayUnprompted({ source: "ask", body: askMarker(ask.id), ws: ask.workspace_id ?? null, episode: `ask:${ask.id}` });
 
   const card = askCard(ask, job);
   await notify(card.text, card.keyboard, { board: false }).catch((e) =>

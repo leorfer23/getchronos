@@ -2900,6 +2900,36 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
     },
   },
 
+  {
+    version: 170,
+    name: "robert_outbox — one row per thing Robert said on his own, and what became of it (src/robert-outbox.ts)",
+    // Written before the post, settled after: delivered (Desk chat) · held (robert.desk_posts off) ·
+    // suppressed (the same words about the same episode were already told inside the repeat window) ·
+    // failed. Each wake turn reads back its own workspace's told rows (workspace_id IS ?, so the default
+    // thread reads only NULL rows). `body_key` hashes the normalised words; `wakes` is JSON key/topic/
+    // subject, never a payload. IF NOT EXISTS keeps a re-run harmless.
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS robert_outbox (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT,
+        created_at TEXT NOT NULL,
+        source TEXT NOT NULL,
+        body TEXT NOT NULL,
+        body_key TEXT NOT NULL,
+        steps INTEGER NOT NULL DEFAULT 0,
+        wakes TEXT,
+        episode TEXT,
+        turn TEXT,
+        status TEXT NOT NULL,
+        reason TEXT,
+        delivered_at TEXT,
+        channel TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_robert_outbox_ws ON robert_outbox(workspace_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_robert_outbox_episode ON robert_outbox(workspace_id, episode, created_at);
+      CREATE INDEX IF NOT EXISTS idx_robert_outbox_at ON robert_outbox(created_at);`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
