@@ -172,3 +172,26 @@ test("stateless: no --resume, a new process per turn, and prewarm boots the next
     for (const f of [argvFile, spawns]) fs.rmSync(f, { force: true });
   }
 });
+
+// The run ledger (robert_runs) reads a turn's spend off its result line. That line is the process's
+// running total, so only a stateless manager's one-turn process can vouch for one turn; a long-lived
+// process says nothing rather than hand a later turn the sum of every turn before it.
+test("turn usage: a stateless turn reports its own spend; a multi-turn process reports none", async () => {
+  const stateless = new WarmManager({ system: "t", model: "sonnet", turnTimeoutMs: 5_000, maxTurns: 30, stateless: true });
+  const warm = mk();
+  try {
+    const heard: unknown[] = [];
+    await stateless.turn("one", undefined, undefined, undefined, (u) => heard.push(u));
+    await stateless.turn("two", undefined, undefined, undefined, (u) => heard.push(u));
+    const one = { tokens_in: 7, tokens_out: 3, tokens_cache_read: 100, tokens_cache_write: 10, cost_usd: 0.01 };
+    assert.deepEqual(heard, [one, one], "each turn on its own process: its own numbers");
+
+    const fromWarm: unknown[] = [];
+    await warm.turn("one", undefined, undefined, undefined, (u) => fromWarm.push(u));
+    await warm.turn("two", undefined, undefined, undefined, (u) => fromWarm.push(u));
+    assert.deepEqual(fromWarm, []);
+  } finally {
+    stateless.kill();
+    warm.kill();
+  }
+});

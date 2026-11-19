@@ -205,6 +205,29 @@ export function noteClaudeStreamEvent(configDir: string | null | undefined, ev: 
   record({ cli: "claude", scope: profileScope(configDir), windows, at: new Date(now).toISOString(), source: "stream" });
 }
 
+/** What one claude turn spent, as its `result` line reported it. A field the line lacks stays null. */
+export interface TurnUsage {
+  tokens_in: number | null;
+  tokens_out: number | null;
+  tokens_cache_read: number | null;
+  tokens_cache_write: number | null;
+  cost_usd: number | null;
+}
+/**
+ * The usage off a stream-json `result` line. Cumulative for the process (backends/claude.ts says so),
+ * so it is ONE turn's only on a process that runs one turn — the stateless managers.
+ */
+export function turnUsageOf(ev: any): TurnUsage {
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  return {
+    tokens_in: n(ev?.usage?.input_tokens),
+    tokens_out: n(ev?.usage?.output_tokens),
+    tokens_cache_read: n(ev?.usage?.cache_read_input_tokens),
+    tokens_cache_write: n(ev?.usage?.cache_creation_input_tokens),
+    cost_usd: n(ev?.total_cost_usd),
+  };
+}
+
 /**
  * Is this claude profile walled right now? The first window at 100% whose reset is still ahead, per
  * the last reading its vendor gave us. No reading → null (unknown is not walled).

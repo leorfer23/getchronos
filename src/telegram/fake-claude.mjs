@@ -52,7 +52,8 @@ rl.on("line", (line) => {
           ? { type: "result", is_error: true, result: "You're out of usage credits. Switch to another model to continue." }
           : fail
           ? { type: "result", is_error: true, result: "fake failure" }
-          : { type: "result", is_error: false, result: `ok:${i}`, session_id: sessionId }
+          : // usage/cost as the real CLI reports them: the process's running total, not the turn's.
+            { type: "result", is_error: false, result: `ok:${i}`, session_id: sessionId, total_cost_usd: 0.01 * i, usage: { input_tokens: 7 * i, output_tokens: 3 * i, cache_read_input_tokens: 100 * i, cache_creation_input_tokens: 10 * i } }
       ) + "\n"
     );
   }, line.includes("!slow") ? 1500 : 120); // a turn whose text says !slow takes 1.5s

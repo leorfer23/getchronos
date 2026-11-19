@@ -20,7 +20,8 @@
 import { assistantName, settingOn } from "./settings.js";
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
-import { kv, robertWakes, tickets, type RobertWake } from "./store.js";
+import { kv, robertRuns, robertWakes, tickets, type NewRobertRun, type RobertWake } from "./store.js";
+import type { TurnUsage } from "./usage-meter.js";
 import { postRobertToDesk } from "./robert-desk.js";
 import type { RobertStep } from "./robert-steps.js";
 import { postToBoard, BOARD_WAKE_MAX_DEPTH } from "./board.js";
@@ -88,7 +89,7 @@ export function wakeBeaconGraceMs(): number {
   return Math.max(300_000, WAKE_DRAIN_MS + 60_000);
 }
 
-type WakeAsker = (prompt: string, wsId: string | null, model: string) => Promise<string | { reply: string; steps?: RobertStep[]; turn?: string; engine?: string }>;
+type WakeAsker = (prompt: string, wsId: string | null, model: string) => Promise<string | { reply: string; steps?: RobertStep[]; turn?: string; engine?: string; usage?: TurnUsage | null }>;
 type WakePoster = (p: { body: string; ticket_id: string | null; workspace_id: string | null; steps?: RobertStep[]; turn?: string; engine?: string }) => void;
 type WakeNotifier = (text: string) => Promise<unknown>;
 
@@ -97,7 +98,7 @@ type WakeNotifier = (text: string) => Promise<unknown>;
 export const WAKE_LANE = "wake" as const;
 let asker: WakeAsker = async (prompt, wsId, model) => {
   const out = await askManagerWeb(prompt, undefined, wsId, { model, label: "woken", lane: WAKE_LANE });
-  return { reply: out.reply, steps: out.steps, turn: out.turn, engine: out.engine };
+  return { reply: out.reply, steps: out.steps, turn: out.turn, engine: out.engine, usage: out.usage };
 };
 let poster: WakePoster = (p) => {
   // Depth pinned to the cap: an automatic triage post must never chain-wake anyone.
@@ -229,6 +230,24 @@ export function batchPrompt(rows: RobertWake[]): string {
   );
 }
 
+/**
+ * One robert_runs row for a turn that ended (src/store/robert-runs.ts). The ledger is a witness, not
+ * part of the turn: a failed write is logged and swallowed, never thrown into the drain.
+ */
+function ledger(rows: RobertWake[], wsId: string | null, startedMs: number, r: Omit<NewRobertRun, "workspace_id" | "started_at" | "ended_at" | "wakes">): void {
+  try {
+    robertRuns.record({
+      ...r,
+      workspace_id: wsId,
+      started_at: new Date(startedMs).toISOString(),
+      ended_at: new Date().toISOString(),
+      wakes: rows.map((w) => ({ key: w.key, topic: w.topic })),
+    });
+  } catch (e: any) {
+    console.warn("[wake-queue] run ledger write failed:", e?.message ?? e);
+  }
+}
+
 const draining = new Set<string>();
 const parkedAnnounced = new Set<string>();
 
@@ -248,19 +267,27 @@ export async function drainScope(scope: string, nowMs = Date.now()): Promise<Dra
     if (!rows.length) return "idle";
     const wsId = wsOfScope(scope);
     const ids = rows.map((r) => r.id);
+    const startedMs = Date.now();
     robertWakes.claim(ids);
     // Robert switched off for this workspace (⚙ Settings): what queued is dropped, not saved up for
     // one giant turn the moment he is switched back on.
     if (!settingOn("robert.enabled", wsId)) {
       robertWakes.ackIds(ids, WAKE_ATTEMPT_CAP);
       console.log(`[wake-queue] ${scope}: Robert is off here — dropped ${ids.length} wake(s)`);
+      ledger(rows, wsId, startedMs, { outcome: "dropped" });
       return "idle";
     }
     const prompt = batchPrompt(rows);
+    // What the turn was asked on and answered, kept outside the try: a turn that answered and then
+    // failed to post still spent what it spent.
+    let model: string | null = null;
+    let said: Said | null = null;
     try {
-      const out = await asker(prompt, wsId, robertModelFor(prompt));
-      const { reply, steps, turn, engine } = typeof out === "string" ? { reply: out, steps: undefined, turn: undefined, engine: undefined } : out;
+      model = robertModelFor(prompt);
+      const out = await asker(prompt, wsId, model);
+      const { reply, steps, turn, engine, usage } = typeof out === "string" ? { reply: out, steps: undefined, turn: undefined, engine: undefined, usage: undefined } : out;
       const text = (reply || "").trim();
+      said = { engine, usage, steps: steps?.length ?? 0, chars: text.length };
       // A turn that produced no words still happened; acking it is what keeps an empty reply from
       // re-presenting the same wakes every 30 seconds forever.
       const quiet = quietSweep(rows, text);
@@ -268,8 +295,10 @@ export async function drainScope(scope: string, nowMs = Date.now()): Promise<Dra
       if (quiet) console.log(`[robert-sweep] ${scope}: quiet`);
       else if (text || steps?.length) poster({ body: text, ticket_id: rows.length === 1 ? rows[0].subject : null, workspace_id: wsId, steps, turn, engine });
       robertWakes.ackIds(ids, WAKE_ATTEMPT_CAP);
+      ledger(rows, wsId, startedMs, { ...spent(model, said), outcome: quiet ? "quiet" : text || steps?.length ? "posted" : "empty" });
       return "drained";
     } catch (e: any) {
+      ledger(rows, wsId, startedMs, { ...spent(model, said), outcome: "failed", error: String(e?.message ?? e) });
       robertWakes.fail(ids, String(e?.message ?? e));
       console.warn(`[wake-queue] ${scope} turn failed, ${ids.length} wake(s) stay queued:`, e?.message ?? e);
       await surfaceParked(robertWakes.unackedForScope(scope));
@@ -278,6 +307,23 @@ export async function drainScope(scope: string, nowMs = Date.now()): Promise<Dra
   } finally {
     draining.delete(scope);
   }
+}
+
+type Said = { engine?: string; usage?: TurnUsage | null; steps: number; chars: number };
+/** The ledger columns a turn's answer fills — nulls when it never answered or its engine reported nothing. */
+function spent(model: string | null, said: Said | null) {
+  const u = said?.usage;
+  return {
+    model,
+    engine: said?.engine ?? null,
+    steps: said?.steps ?? 0,
+    reply_chars: said?.chars ?? 0,
+    tokens_in: u?.tokens_in ?? null,
+    tokens_out: u?.tokens_out ?? null,
+    tokens_cache_read: u?.tokens_cache_read ?? null,
+    tokens_cache_write: u?.tokens_cache_write ?? null,
+    cost_usd: u?.cost_usd ?? null,
+  };
 }
 
 /** Past the attempt cap a wake stops being retried — so it has to become someone's problem out loud. */

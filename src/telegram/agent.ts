@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { randomUUID } from "node:crypto";
-import { noteClaudeStreamEvent } from "../usage-meter.js";
+import { noteClaudeStreamEvent, turnUsageOf, type TurnUsage } from "../usage-meter.js";
 import { routeConfigDir } from "../profile-route.js";
 import { CONFIG } from "../config.js";
 import { bus, type BusEvent } from "../bus.js";
@@ -1138,6 +1138,7 @@ export class WarmManager {
     resolve: (r: string) => void;
     reject: (e: Error) => void;
     onDelta?: AgentDelta;
+    onUsage?: (u: TurnUsage) => void;
     child: ChildProcess;
   } | null = null;
   private curBlock: string | null = null; // type of the streaming content block (only "text" speaks)
@@ -1286,6 +1287,9 @@ export class WarmManager {
       this.turns++;
       if (p.session_id && this.opts.onSessionId) { this.opts.onSessionId(p.session_id); this.resumeId = p.session_id; }
       const pend = this.takeOwn(child);
+      // The result's usage is a running total (and a --resume'd session may carry its old cost in):
+      // it is this turn's alone only on a stateless process's one turn. Otherwise say nothing.
+      if (this.opts.stateless && this.turns === 1) pend?.onUsage?.(turnUsageOf(p));
       pend?.resolve(typeof p.result === "string" ? p.result : "");
       if (this.opts.stateless && this.child === child) {
         // This conversation is over: the next turn is a new one, on a new process.
@@ -1344,7 +1348,7 @@ export class WarmManager {
     this.child = null;
   }
 
-  private write(text: string, onDelta?: AgentDelta, label = "a turn"): Promise<string> {
+  private write(text: string, onDelta?: AgentDelta, label = "a turn", onUsage?: (u: TurnUsage) => void): Promise<string> {
     return new Promise((resolve, reject) => {
       // Queue serializes turns; still refuse if a turn is somehow mid-flight on this process.
       if (this.pending) {
@@ -1366,6 +1370,7 @@ export class WarmManager {
         resolve: (r) => { done(); resolve(r); },
         reject: (e) => { done(); reject(e); },
         onDelta,
+        onUsage,
         child,
       };
       this.touch(child); // arm the silence watchdog; every CLI line re-arms it
@@ -1393,12 +1398,12 @@ export class WarmManager {
     this.idle.unref?.();
   }
 
-  private async attempt(text: string, onDelta?: AgentDelta, label?: string): Promise<string> {
+  private async attempt(text: string, onDelta?: AgentDelta, label?: string, onUsage?: (u: TurnUsage) => void): Promise<string> {
     // A process spawned for this very turn already read the login fresh: if IT cannot authenticate,
     // a second fresh one will not either. Only a warm process that outlived its token gets a respawn.
     const fresh = !this.child;
     try {
-      return await this.write(text, onDelta, label);
+      return await this.write(text, onDelta, label, onUsage);
     } catch (e: any) {
       if (this.killed) throw e; // aborted mid-turn → surface, don't respawn
       // Session/rate/credit walls won't clear on a same-process retry — surface immediately so
@@ -1415,7 +1420,7 @@ export class WarmManager {
       // The respawn above is what recovers an expired token (a warm process never re-auths, it just
       // keeps erroring). If the fresh process ALSO can't authenticate, the login is genuinely dead —
       // name the profile, since the CLI's "run /login" never says which of the config dirs it means.
-      return this.write(text, onDelta, label).catch((e2: any) => { throw this.authHint(e2); });
+      return this.write(text, onDelta, label, onUsage).catch((e2: any) => { throw this.authHint(e2); });
     }
   }
 
@@ -1432,10 +1437,11 @@ export class WarmManager {
   // `label` names this turn for whoever ends up waiting behind it (see busyWith).
   // `model` switches at the turn boundary, inside the queue: switching eagerly would SIGKILL a turn
   // still in flight on the old model (a wake on haiku, a desk turn on opus).
-  turn(text: string, onDelta?: AgentDelta, label?: string, model?: string): Promise<string> {
+  // `onUsage` hears what the turn spent, when its process can say (see the result handler).
+  turn(text: string, onDelta?: AgentDelta, label?: string, model?: string, onUsage?: (u: TurnUsage) => void): Promise<string> {
     const p = this.queue.then(() => {
       if (model) this.setModel(model);
-      return this.attempt(text, onDelta, label);
+      return this.attempt(text, onDelta, label, onUsage);
     });
     this.queue = p.catch(() => {});
     return p;
@@ -1882,7 +1888,7 @@ export async function askManagerWeb(
   // chat: the operator's own words (the Desk/phone/bar chat, the voice front's hand-over). Only such a
   // turn carries the budget robert.hands sets (robert-hands.ts); `spoken` = its reply is read aloud.
   opts?: { model?: string; voice?: boolean; turn?: string; label?: string; focus?: string | null; lane?: RobertLane; chat?: { words: string; spoken?: boolean } },
-): Promise<{ reply: string; actions: UiAction[]; steps: RobertStep[]; turn: string; engine: string }> {
+): Promise<{ reply: string; actions: UiAction[]; steps: RobertStep[]; turn: string; engine: string; usage: TurnUsage | null }> {
   // Workspaces never mix: a turn the router pinned on a project runs on THAT project's Robert — its
   // own Claude profile, brief, recap and fleet — never on the fleet-wide one holding every client.
   if (!wsId && opts?.focus && workspaces.get(opts.focus)) wsId = opts.focus;
@@ -1927,6 +1933,10 @@ export async function askManagerWeb(
   // model, and a credit-wall downgrade (fable → opus) would never come back.
   const model = opts?.model || getWebModel();
   let engine = engineLabel("claude", model);
+  // What the turn spent (robert_runs). Only a Claude turn on the warm manager reports it; a fallback
+  // engine's answer leaves it null rather than guessed.
+  let usage: TurnUsage | null = null;
+  const heard = (u: TurnUsage) => { usage = u; };
   let loginDead = false; // the primary's Claude login is dead: said first, ahead of the fallback's answer
   kv.set(lk.lastTurnAt, String(Date.now()));
   if (lk.turns) kv.set(lk.turns, String(Number(kv.get(lk.turns) ?? 0) + 1));
@@ -1951,11 +1961,11 @@ export async function askManagerWeb(
   // One cooldown key for both lanes: a wall is the ACCOUNT's, whichever lane hit it first.
   const reply = await withProviderFallback({
     key: acctKey(`web:${key}`, m),
-    primary: () => m.turn(prompt, onDelta, undefined, model).catch(ended),
+    primary: () => m.turn(prompt, onDelta, undefined, model, heard).catch(ended),
     model,
     primaryOn: (alt) => {
       engine = engineLabel("claude", alt);
-      return m.turn(prompt, onDelta, undefined, alt).catch(ended);
+      return m.turn(prompt, onDelta, undefined, alt, heard).catch(ended);
     },
     system: m.system,
     prompt,
@@ -1972,6 +1982,7 @@ export async function askManagerWeb(
     agent: { name: assistantName(), tools: MANAGER_TOOLS },
     onFallback: (fb) => {
       engine = engineLabel(fb.backend, fb.model);
+      usage = null;
       if (/sin login/.test(fb.why)) loginDead = true;
       // Still log for Telegram / activity surfaces that listen to tool deltas — Desk filters it out.
       onDelta?.(fallbackLine(fb), "tool");
@@ -2004,7 +2015,7 @@ export async function askManagerWeb(
         bus.publish({ topic: "agent.step", ws, turn, step, label: opts?.label ?? null });
       },
     });
-    return { reply: out.reply, actions: [], steps, turn, engine };
+    return { reply: out.reply, actions: [], steps, turn, engine, usage };
   }
   // An `ask` directive is a question for the operator: filed as an asks row and swapped for its live
   // card in the reply (src/robert-asks.ts). Late import — the asks layer sits far below the manager.
@@ -2012,7 +2023,7 @@ export async function askManagerWeb(
   const { reply: lifted, actions } = liftRobertAsks(scanUiActions(reply || ""), realWsId ?? opts?.focus ?? null);
   // He must hear why the answer came from another engine: the login needs renewing on the Mac.
   const shown = loginDead ? `${authNotice(text)}\n\n${lifted}` : lifted;
-  return { reply: shown, actions, steps, turn, engine };
+  return { reply: shown, actions, steps, turn, engine, usage };
 }
 
 // ── The named executives (none, while Robert is the only executive) ───────────────────────────────────────────────
