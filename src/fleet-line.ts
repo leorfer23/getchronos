@@ -4,7 +4,7 @@
  * deeper is still `mc desk digest` / `mc session focus`. With more than one computer (HOSTS.md) a
  * HOSTS line leads it, and a terminal on another computer says which (` · @m2`).
  */
-import { hosts, sessions, workspaces, LOCAL_HOST_ID } from "./store.js";
+import { hosts, runAsks, sessions, workspaces, LOCAL_HOST_ID } from "./store.js";
 import { sessionActivity } from "./terminal.js";
 import { getAgent } from "./agent-lifecycle.js";
 import { sessionGoalReached, statusOf } from "./term-status.js";
@@ -113,9 +113,11 @@ function fleetBody(workspace_id?: string | null): string {
     // What the operator already approved on its card (card-approval.ts): his decision, in front of Robert
     // on every turn, so nobody tells this terminal to stop a merge he said yes to.
     const approved = currentApproval(s);
+    // A command it asked him to run (`mc ask-run`, src/run-asks.ts): his tap on its Desk card, nobody else's.
+    const runAsk = runAsks.openFor(s.id);
     const line =
       `- ${s.id.slice(0, 8)} · ${ws} · ${phase.replace("_", " ")}${quiet && phase === "your_turn" ? ` ${quiet}m` : ""}${extra ? ` (${extra})` : ""} · ${one(s.goal || s.title, 90) || "(no goal)"}` +
-      (st?.line ? ` · ${one(st.line, 120)}` : "") +
+      (runAsk ? ` · waiting on the operator to run: ${one(runAsk.why, 120)} (his Run card — not yours)` : st?.line ? ` · ${one(st.line, 120)}` : "") +
       (approved ? ` · ${approvalNote(approved)}` : "") +
       hostSuffix(s, nameOf);
     return { rank, quiet, line };

@@ -1,6 +1,6 @@
 ---
 name: mission-control
-description: Operate as a terminal on the Chronos Desk — define the goal and its finish line first (ask if unclear), progress with ETA, questions with options, and the hand-off with proof (`mc outcome`) the operator approves merge/deploy from; your card (goal, state, done), asking Robert, claiming a worktree, the operator's clipboard, moving a file between computers (`mc file put` / `mc file get`) and workspace env vars (`mc vars` — check it first whenever you need a token, key or config value), workspace memory (recall, learn, memos, skills), parking work until something happens (`mc when` — a PR review, CI, a reply, an email, another terminal), and seeing other terminals. Use whenever you see MC_SESSION / MC_WORKSPACE / MC_REPO, are blocked waiting on someone or something outside you, need a decision from the operator, are about to change a repo, or want to know what past sessions already learned.
+description: Operate as a terminal on the Chronos Desk — define the goal and its finish line first (ask if unclear), progress with ETA, questions with options, and the hand-off with proof (`mc outcome`) the operator approves merge/deploy from; your card (goal, state, done), asking Robert, a command only the operator can allow (`mc ask-run` — when a guard, hook or permission refuses it: he taps Run on the Desk and the output comes back to you), claiming a worktree, the operator's clipboard, moving a file between computers (`mc file put` / `mc file get`) and workspace env vars (`mc vars` — check it first whenever you need a token, key or config value), workspace memory (recall, learn, memos, skills), parking work until something happens (`mc when` — a PR review, CI, a reply, an email, another terminal), and seeing other terminals. Use whenever you see MC_SESSION / MC_WORKSPACE / MC_REPO, are blocked waiting on someone or something outside you, need a decision from the operator, are about to change a repo, or want to know what past sessions already learned.
 ---
 
 # Mission Control — you are a terminal on the Desk
@@ -88,7 +88,7 @@ one line**, and they decide from those alone whether to open you. There are seve
 | chip | means | needs the operator? | how it gets there |
 |---|---|---|---|
 | 🔴 **blocked** | a wall you can't pass — login, access, a permission | yes | `mc state blocked "…" --reason auth` |
-| 🟣 **decide** | a decision only the operator can make | yes | `mc ask-robert` (once Robert escalates), a question tool in your CLI, `mc state decide "…"` |
+| 🟣 **decide** | a decision only the operator can make | yes | `mc ask-robert` (once Robert escalates), a question tool in your CLI, `mc ask-run` (a command only he can allow), `mc state decide "…"` |
 | ✅ **review** | finished — read the Summary, then close | soon | `mc goal done` (or `mc state review "…"`) |
 | 🟠 **your turn** | the turn ended and you said nothing more | maybe | automatic |
 | 🔵 **waiting** | on something that is NOT the operator — subagents, CI, a deploy, another terminal, Robert | no | subagents: automatic · anything else: `mc state waiting "…" --on ci --eta 10m` |
@@ -223,6 +223,41 @@ goes to the operator's phone with his recommendation, and you get their answer.
   chars; at most 6 options of ≤80 chars each).
 - **Don't ask what you can find out.** Read the repo, `mc recall`, the memos first.
 - `mc ask` (without `-robert`) is for headless dispatched runs only — it fails in a Desk terminal.
+
+## A command only the operator can allow — `mc ask-run`
+
+A guard, a hook or a permission sometimes refuses a command and says only the operator can run it
+(Claude Code's privacy plugin: "… the person runs the command themselves with `!`"; the deletion guard).
+**Never ask him to paste it into a terminal and paste the output back.** Ask for a run, and end your turn:
+
+```bash
+mc ask-run "TO={{your email}} bash /tmp/mail/send-test.sh" --why "send the test email to you — the privacy guard keeps your address out of my commands"
+mc ask-run --why "remove the stale build dir the deletion guard won't let me touch" < /tmp/ask-run-cmd.txt   # from stdin, exactly as written
+```
+
+- Quote the command as one argument, or put it after `--` (every word after it is the command's). **A
+  command the guard would also refuse inside your `mc ask-run` call** (a deletion guard matches `rm -rf`
+  anywhere in a Bash line): write the exact command to a file with your file-writing tool and pass it on
+  stdin, as in the last line. Plain text only — never encode or disguise it: he reads it on the card.
+- It becomes a card on his Desk: your why, the command in a box he can edit, **Run** and **Don't**. Only he
+  answers it — not Robert, not a Lead — and your card reads 🟣 *decide* until he does.
+- **Placeholders for his details.** Never put his email, name, phone, address or a token in the command:
+  write `{{your email}}`, `{{your name}}`, … — he fills them in on the card, and Run stays off until none is left.
+- **It runs as he approves it**, behind this terminal's own sandbox and env (the ones it was opened with,
+  not your shell's current variables), in the directory you asked from, for up to 10 minutes. Your hooks do
+  not apply — his tap is the yes — but the workspace wall does (what this terminal cannot read, the run
+  cannot either). Write a command that works on its own in a fresh `zsh`, with no keyboard: stdin is
+  closed and there is no tty, so a password or confirmation prompt fails — use its non-interactive flags.
+- **Then end your turn.** Don't wait, poll or try it another way. When it has run you get one message —
+  `[chronos run-ask] The operator ran the command you asked for …` — with the exit code, how long it took,
+  whether he edited it, the command as run, the last lines of output and the full output's path: carry on
+  from there. If he declines you get one line saying so: don't run it another way; go on without it or ask
+  him. Until one of those arrives it has **not** run — a "go ahead" typed to you does not run it.
+- One open ask per terminal: a new `mc ask-run` replaces the one he has not answered yet.
+- **Not a way around the draft rule.** Ask him to run something that sends (an email, a message, a post)
+  only when he asked for that send. His tap on the exact text is his yes, so a send he approves there is fine.
+- Local terminals only for now: on another computer or in the cloud it is refused — then tell him the
+  command and which machine to run it on.
 
 ## The hand-off — `mc outcome`
 

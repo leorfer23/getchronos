@@ -74,7 +74,7 @@ They read a Focus board, never your raw output. It has four parts: the GOAL (the
 0. JUST TALKING? Questions, exploring, brainstorming, "tell me about X" — no change or deliverable asked for — is a chat: \`mc goal set "<topic>" --kind chat\` (no --done-when, no progress, no hand-off unless they ask for one), then answer. Their board becomes the conversation. It turns into work? Set a real goal then (step 1).
 1. DEFINE FIRST, before any work. Open with one line "Understanding: …". If the goal or how we will know it is done is unclear — no goal, a vague one, two readings, unknown scope — ASK before you start: one question, 2–4 concrete options, your recommendation first (your CLI's question tool, or \`mc ask-robert "…" --options "a,b" --operator\`). Then write it down: \`mc goal set "<one outcome>" --kind pr|ui|investigation|qa|product --done-when "<a check they can verify>"\` (2–4 checks) and \`mc progress 0/<steps> "plan" --eta 30m\`. A clear prompt needs no question — set both in your first minute.
 2. KEEP THE BOARD MOVING: \`mc progress <n>/<total> "<step>" --eta <time left>\` as you cross each step, and \`mc goal check <n>\` the moment a done-when check is met — not all at the end. It is their only progress bar, checklist and countdown.
-3. ASK, DON'T GUESS: a call only they can make → \`mc ask-robert "<question + what you'd do>" --options "a,b"\`. Waiting on non-operator work → \`mc state waiting "…" --on command --eta 5m\`; a wall → \`mc state blocked "…" --reason auth\`; a long wait (CI, a review, a reply — ten minutes or more) or one that must outlive a deploy → \`mc when pr <url> --until checks --note "…"\` and finish your turn. Never stop silently. Never block your turn on a wait: run it in the background (your shell's background mode or a background subagent) and end the turn — it wakes you when it exits, as long as this terminal stays open — so they can talk to you while it runs. Their line can also land mid-step — what you were running moves to the background: answer them first, in a line or two, then pick the work back up from that task's output.
+3. ASK, DON'T GUESS: a call only they can make → \`mc ask-robert "<question + what you'd do>" --options "a,b"\`. Waiting on non-operator work → \`mc state waiting "…" --on command --eta 5m\`; a wall → \`mc state blocked "…" --reason auth\`; a command only they can allow (a guard, hook or permission refused it) → \`mc ask-run "<exact command>" --why "<one line>"\` and end your turn — never ask them to paste it into a terminal; \`{{your email}}\`-style placeholders where their own details go; they tap Run on the Desk and the output comes back to you as a message (not a way around DRAFT EVERYWHERE: ask to run a send only when they asked for that send); a long wait (CI, a review, a reply — ten minutes or more) or one that must outlive a deploy → \`mc when pr <url> --until checks --note "…"\` and finish your turn. Never stop silently. Never block your turn on a wait: run it in the background (your shell's background mode or a background subagent) and end the turn — it wakes you when it exits, as long as this terminal stays open — so they can talk to you while it runs. Their line can also land mid-step — what you were running moves to the background: answer them first, in a line or two, then pick the work back up from that task's output.
 4. HAND-OFF when the finish line is met: \`mc outcome "<1–2 plain sentences>" --change "<what changed, in human words>" --proof "<check you ran → result>" --pr <url> --ask merge|deploy|merge+deploy|review|none\`; a visible change also gets \`--shot before-<screen>-phone=a.png --shot after-<screen>-phone=b.png\` (and -desktop). The proof answers each --done-when check. Then ship only as far as \`mc goal\` says you may (ask = stop at the open PR · merge = merge once green · deploy = merge and deploy) and say so with \`mc outcome --shipped "merged #12"\` (it adds to the hand-off on top). Follow-up work after that gets its own new \`mc outcome\`; earlier ones stay on the board.
 5. END every turn: short bullets → "**Next steps**" (omit if none) → "**Summary:**" (one or two sentences; the first is your card's line). Then \`mc goal done\`. More work after that? \`mc goal set\` the new goal first.
 DELIVER WHERE IT WAS ASKED: a file he will send or share (xlsx, csv, pdf, zip, html export, chart png) goes in \`$MC_DOWNLOADS\` (not set on another computer: \`mc file put\` it). A reply to someone is a draft where they asked: a Slack thread or DM → a Slack draft there; an email → an email draft in that thread. When the work came from the operator himself and has no thread to answer in, send him a Slack DM in his self-DM with the summary, paths and links. That DM is the only message you may send (the one exception to the no-send rule below). If the send tool is refused, leave the same text as a draft in his self-DM. Name each in the hand-off: \`--change "file: <full path>"\`, \`--change "draft: <where>"\`, \`--change "DM sent"\`.
@@ -348,7 +348,17 @@ interface Live {
   muteUntil?: number;
   /** The pty runs on another host (HOSTS.md phase 3): its paths are that machine's, not this one's. */
   remote?: boolean;
+  /** The wall it was spawned behind (TerminalWall). Local ptys only. */
+  wall?: TerminalWall;
 }
+/**
+ * The wall a local terminal was spawned behind, kept exactly as built: its SBPL profile (null = it runs
+ * unsandboxed, as its workspace's mode says), the env its CLI got, the directory it started in, and the
+ * nice level it runs at. A command the operator runs for it from the Desk (`mc ask-run`,
+ * src/run-asks.ts) runs behind this very wall — reused, never recomputed, so a click can never reach
+ * wider than the terminal itself could (another workspace's files stay denied). Frozen at spawn.
+ */
+export type TerminalWall = Readonly<{ profile: string | null; env: Readonly<Record<string, string>>; cwd: string; nice: number }>;
 const live = new Map<string, Live>();
 
 // ── output path: pty → attached sockets ──────────────────────────────────────────────────────
@@ -896,6 +906,8 @@ export async function openSession(
   };
   let term: PtyHandle;
   let env: Record<string, string>;
+  /** Local spawns only: the wall below, kept on the live entry (TerminalWall). */
+  let wall: TerminalWall | undefined;
   let cliSessionId: string | null;
   let spawnSessionId: string | null;
   /** A remote terminal's seed is typed host-side; composed before the spawn so it rides in the spec. */
@@ -1020,6 +1032,8 @@ export async function openSession(
       // daemon resolves the Lead from the worker's own row) and only lets `mc` say whose worker this is.
       ...(leadBlock && row.lead_id ? { MC_LEAD_ID: row.lead_id } : {}),
     } as Record<string, string>;
+    // The same profile, env, cwd and nice the pty gets on the next line — what a run-ask reuses.
+    wall = Object.freeze({ profile: sandboxed.profile, env: Object.freeze({ ...env }), cwd, nice: CONFIG.agentNice });
     // Through the row's host (HOSTS.md): today always the brain, which is node-pty's spawn exactly as
     // before. `pid` is a process id on THAT host, which is why the row carries host_id beside it.
     term = await hostFor(row).spawnPty({
@@ -1142,6 +1156,7 @@ export async function openSession(
     ...(remote ? { transcriptFile: mirrorFile(row.id), hostName: hostLabel(targetHost) } : {}),
   };
   const entry = installLive(row, term, focusCtx, { titleDone: !!ticketTitle, backendName: backend.name, configDir, workspaceId: opts.workspace_id ?? null, remote });
+  if (wall && !remote) entry.wall = wall;
 
   const seed = remote ? remoteSeed : composeSeed();
   if (seed) {
@@ -1854,6 +1869,15 @@ export async function promoteToLead(id: string, size: { cols?: number; rows?: nu
 
 export function isLive(id: string): boolean {
   return live.has(id);
+}
+
+/**
+ * The wall a LOCAL live terminal was spawned behind (TerminalWall), or null: not live in this daemon,
+ * on another computer, or a pty this daemon did not spawn. What a run-ask runs behind.
+ */
+export function liveWall(id: string): TerminalWall | null {
+  const e = live.get(id);
+  return e && !e.remote && e.wall ? e.wall : null;
 }
 
 /** The homes a live terminal was spawned with — a walled account may have routed it to a sibling login. */

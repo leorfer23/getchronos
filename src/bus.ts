@@ -61,6 +61,22 @@ export type BusEvent = (
       prs: Array<{ url: string; sha?: string | null; was?: string; now?: string | null }>;
       surface: string;
     }
+  // A terminal's `mc ask-run` moved (src/run-asks.ts): asked → he ran it (running → ran | failed) or
+  // declined it, or a newer ask superseded it. On every change, so the Desk card follows live; written
+  // to the activity trail like every event. Never the command itself: once he fills in a placeholder it
+  // can hold his own details, and the trail is not where those go.
+  | {
+      topic: "run_ask.updated";
+      run_ask_id: string;
+      session_id: string;
+      workspace_id: string | null;
+      status: string;
+      why: string;
+      exit_code?: number | null;
+      duration_ms?: number | null;
+      edited?: boolean;
+      surface?: string | null;
+    }
   // An agent left a Slack/Gmail draft (draft-notify.ts). Ids only: every bus event is written to the
   // activity table, and a draft's words are the operator's outgoing mail — the phone reads them from
   // GET /api/drafts instead.
