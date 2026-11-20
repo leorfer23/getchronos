@@ -776,10 +776,16 @@ mc prose add --channel jira --draft "<your draft>" "<what he sent instead>"   # 
   The only send allowed: a Slack DM to the operator himself — `slack_send_message` with `channel_id` set to
   `$MC_OPERATOR_SLACK_DM` (his own DM in this workspace's Slack). Empty or unset means no send at all:
   draft. A gate refuses every other channel, person or thread.
-- **Short, human, to the point — always, every workspace.** Every Slack draft (DM or
-  channel), comment and email: the point in the first line, 1–4 short lines, no preamble, recap, headers,
-  bold labels or sign-off. Link the PR/doc instead of pasting it. Reads like a report? Cut it in half.
-  This wins over the voice page on length.
+- **Short, clear, human — always, every workspace.** Every Slack draft (DM or channel), comment and
+  email: line one is the point and reads alone in a phone notification; 1–4 short lines; no preamble,
+  recap, headers, bold labels, sign-off or "Not verified" section; no em dashes, filler ("just wanted
+  to", "happy to help") or model words (leverage, ensure, robust); no run/terminal/commit ids. Link the
+  PR/doc instead of pasting it. Reads like a report? Cut it in half. This wins over the voice page on
+  length. `mc prose --channel slack` prints the full Slack checklist with a good and a bad example.
+- **Slack format: standard Markdown.** The Slack tools (`slack_send_message`, `slack_send_message_draft`)
+  take Markdown and Slack renders it: a list is `- ` lines (real bullets, never a typed `•`), `[text](url)`
+  for links, `**bold**` rarely. Never start a line with an arrow (`-->`, `->`, `→`); an arrow only sits
+  inside a line (`$120K --> $95K`). This wins over the voice page on format.
 - **Before drafting, run `mc prose`.** Match his openings, structure and words. Always English,
   even when his samples or his prompt to you are in another language.
 - **He rewrote your draft? Save the pair** with `--draft`. That gap is the best lesson there is.
