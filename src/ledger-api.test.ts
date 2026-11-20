@@ -77,3 +77,18 @@ test("a terminal's draft hook: a deliverable on its request and a send bound to 
   const unbound = requests.items(req.id).find((i) => i.action === "send" && i.label === "Email draft → x");
   assert.equal(unbound?.target_hash, null);
 });
+
+test("a draft he sends unchanged is never learned back as his prose — not even reformatted by Slack", async () => {
+  const { addSample } = await import("./prose.js");
+  const cedar = mkWs("cedar-prose");
+  const s = sessions.create({ workspace_id: cedar.id, cwd: "/tmp", goal: "weekly numbers", goal_kind: "investigation", created_by: "operator" } as any);
+  const text = "Hey Ana! The refund report is in:\n- **October** USD 95,000 (was 120,000)\n- details in [the PR](https://github.com/acme/x/pull/1)";
+  const r = await call("POST", `/sessions/${s.id}/hook`, { "x-mc-workspace-token": cedar.token }, {
+    event: "draft", label: "Slack draft → D1: Hey Ana!", tool: { name: "mcp__slack__slack_send_message_draft" }, draft: { kind: "slack", to: "D1", text },
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.ok(!addSample(cedar.id, { body: text, channel: "slack" }, "agent").ok, "the draft as written");
+  const readBack = "Hey Ana! The refund report is in:\n• *October* USD 95,000 (was 120,000)\n• details in <https://github.com/acme/x/pull/1|the PR>";
+  assert.ok(!addSample(cedar.id, { body: readBack, channel: "slack" }, "agent").ok, "the same words as Slack hands them back");
+  assert.ok(addSample(cedar.id, { body: "Hey Ana! Refund report is in, October USD 95,000, lmk if it looks off!", channel: "slack" }, "agent").ok, "his own rewrite still counts");
+});

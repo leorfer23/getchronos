@@ -105,7 +105,7 @@ import { ensureSessionWorktree, findClaimRepo, listAllWorktrees, remoteWorktreeB
 import { askRobertEnabled, askerLabel, escalateAsk } from "./ask-robert.js";
 import * as noteSvc from "./notes.js";
 import { forgetMemorySeen, markMemorySeen, memoryNotice, rememberFact } from "./memory-tree.js";
-import { addSample, proseBrief, proseGuide, saveGuide, startLearning } from "./prose.js";
+import { addSample, markPushed, proseBrief, proseGuide, saveGuide, startLearning } from "./prose.js";
 import { proseSamples } from "./store/prose.js";
 import { recall, renderRecall } from "./recall.js";
 import { recordRead, recordRecall, sessionFor, usageRoute } from "./memory-usage.js";
@@ -1092,6 +1092,8 @@ export function startServer() {
     if (req.body.event === "draft") {
       // Kept whole for the phone's approval card (memory only), announced by id.
       const d = recordDraft({ session_id: s.id, workspace_id: s.workspace_id, where: String(s.goal || s.title || "").slice(0, 120), label: String(req.body.label ?? "draft"), ...draftFields(req.body.draft) });
+      // An agent's words, even when he sends them unchanged: never learned back as his prose (prose.ts markPushed).
+      if (d.text) markPushed(d.text);
       bus.publish({ topic: "draft.ready", session_id: s.id, workspace_id: s.workspace_id, draft_id: d.id });
       void notifyDraft({ workspace_id: s.workspace_id, where: `terminal ${s.id.slice(0, 8)}${s.goal ? ` · ${String(s.goal).slice(0, 60)}` : ""}`, label: String(req.body.label ?? "draft") });
       noteDraft(s.id, req.body); // the request ledger: a deliverable, and a `send` he decides (ledger.ts)

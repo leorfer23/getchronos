@@ -15,6 +15,7 @@ import { desktop } from "./notify.js";
 import { events, jobs, runs, workspaces } from "./store.js";
 import { esc, notify } from "./telegram/api.js";
 import { lastVoiceLang } from "./voice-presence.js";
+import { markPushed } from "./prose.js";
 
 /** The draft tools: Slack's draft, Gmail's create/update draft — on any MCP server spelling. */
 export const DRAFT_TOOL_RE = /^mcp__.+__(slack_send_message_draft|create_draft|update_draft)$/;
@@ -118,14 +119,17 @@ export function draftFields(raw: any): Pick<RecentDraft, "kind" | "to" | "channe
 }
 
 /** Every draft tool call in a finished run's event stream (stream-json assistant tool_use items). */
-export function draftsInRun(runId: string): Array<{ tool: string; label: string }> {
-  const out: Array<{ tool: string; label: string }> = [];
+export function draftsInRun(runId: string): Array<{ tool: string; label: string; text: string | null }> {
+  const out: Array<{ tool: string; label: string; text: string | null }> = [];
   for (const e of events.list(runId)) {
     if (!e.payload.includes("tool_use") || !/draft/.test(e.payload)) continue;
     let j: any;
     try { j = JSON.parse(e.payload); } catch { continue; }
     for (const c of j?.message?.content ?? []) {
-      if (c?.type === "tool_use" && DRAFT_TOOL_RE.test(String(c.name))) out.push({ tool: c.name, label: draftLabel(c.name, c.input) });
+      if (!(c?.type === "tool_use" && DRAFT_TOOL_RE.test(String(c.name)))) continue;
+      const i = c.input ?? {};
+      const t = /slack_send_message_draft$/.test(c.name) ? i.message ?? i.text : i.body ?? i.text ?? i.message;
+      out.push({ tool: c.name, label: draftLabel(c.name, c.input), text: typeof t === "string" && t.trim() ? t : null });
     }
   }
   return out;
@@ -138,6 +142,7 @@ export function startDraftNotify(): void {
       const run = runs.get(e.run_id);
       const job = run ? jobs.get(run.job_id) : undefined;
       for (const d of draftsInRun(e.run_id)) {
+        if (d.text) markPushed(d.text); // an agent's words, never learned back as his (prose.ts)
         void notifyDraft({ workspace_id: job?.workspace_id ?? e.workspace_id ?? null, where: `job ${one(job?.name ?? e.job_name ?? e.run_id.slice(0, 8), 60)}`, label: d.label });
       }
     } catch (err) {

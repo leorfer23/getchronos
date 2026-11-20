@@ -98,13 +98,37 @@ export function addSample(workspace_id: string, input: AddSampleInput, origin: P
   return { ok: true, sample };
 }
 
-/** pushComment calls this for every body Chronos sends under the operator's credentials. */
+/**
+ * The words without the formatting around them. An agent's draft says `- **x** [PR](url) "y" #ops`;
+ * after he sends it, Slack hands it back as `• *x* <url|PR> “y” <#C123|ops>`. Both sides of the "ours"
+ * check go through this, so a draft he sent unchanged still matches when the learner reads it back.
+ */
+export function bareText(s: string): string {
+  return (s || "")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+    .replace(/<#[A-Z0-9]+\|([^>\n]+)>/g, "#$1")
+    .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, "$1 $2")
+    .replace(/<([^|>\s]+)\|([^>\n]+)>/g, "$2 $1")
+    .replace(/<(https?:[^>\s]+)>/g, "$1")
+    .replace(/^[ \t>]*(?:[-*•◦▪]|\d+[.)])[ \t]+/gm, "")
+    .replace(/[*_~`]+/g, "");
+}
+
+/**
+ * Every body Chronos puts out under the operator's name: pushComment's tracker comments, and every
+ * Slack/email draft an agent leaves (he often sends one unchanged — it is still an agent's text, and
+ * learning from it taught agents their own habits back as his).
+ */
 export function markPushed(body: string): void {
-  kv.set(PUSHED_KV(proseHash(body)), new Date().toISOString());
+  if (!(body || "").trim()) return;
+  const at = new Date().toISOString();
+  kv.set(PUSHED_KV(proseHash(body)), at);
+  kv.set(PUSHED_KV(proseHash(bareText(body))), at);
 }
 
 function isOurs(body: string): boolean {
-  return !!kv.get(PUSHED_KV(proseHash(body))) || /^\s*Shipped via Chronos:/i.test(body);
+  return !!kv.get(PUSHED_KV(proseHash(body))) || !!kv.get(PUSHED_KV(proseHash(bareText(body)))) || /^\s*Shipped via Chronos:/i.test(body);
 }
 
 /**
@@ -149,15 +173,16 @@ export function saveGuide(workspace_id: string, body: string): { ok: true; note:
 export function proseBrief(workspace_id: string, opts: { channel?: string; about?: string; limit?: number } = {}): string {
   const guide = proseGuide(workspace_id);
   const all = proseSamples.list(workspace_id);
-  if (!guide && !all.length)
-    return `${OUTGOING_RULE}\n\nNo prose learned for this workspace yet. Write plainly and briefly in English, and ask the operator for a message he sent to learn from (\`mc prose add\`).`;
   const channel = opts.channel?.toLowerCase();
+  const rule = !channel || channel === "slack" ? `${OUTGOING_RULE}\n\n${SLACK_CHECKLIST}` : OUTGOING_RULE;
+  if (!guide && !all.length)
+    return `${rule}\n\nNo prose learned for this workspace yet. Write plainly and briefly in English, and ask the operator for a message he sent to learn from (\`mc prose add\`).`;
   const about = opts.about || "";
   const score = (s: ProseSample) =>
     (channel && s.channel === channel ? 2 : 0) + (s.draft ? 0.5 : 0) + (about ? similarity(about, s.body) * 3 : 0) + (s.origin === "agent" ? -0.25 : 0);
   const picks = [...all].sort((a, b) => score(b) - score(a) || b.created_at.localeCompare(a.created_at)).slice(0, opts.limit ?? 4);
   const clip = (s: string, n = 700) => (s.length > n ? s.slice(0, n) + "…" : s);
-  let out = `${OUTGOING_RULE}\n\nWrite as the operator — in English, always, even when his samples are in another language.`;
+  let out = `${rule}\n\nWrite as the operator — in English, always, even when his samples are in another language.`;
   out += guide
     ? `\n\n# ${guide.title} (${guide.slug})\n${guard(guide.body.trim(), "prose-guide", workspace_id)}`
     : "\n\n(No guide learned yet — go by the samples below.)";
@@ -184,12 +209,41 @@ export const VOICE_HEADING =
  * page: models write too much. The page sets the voice; this caps the length, and wins on length.
  */
 export const OUTGOING_RULE =
-  "## Outgoing messages — short, human, to the point (every workspace, always)\n" +
+  "## Outgoing messages — short, clear, human (every workspace, always)\n" +
   "Every Slack message (draft or sent, DM or channel), Jira/ClickUp comment and email:\n" +
-  "- The point in the first line. Then only what the reader needs to know or do.\n" +
-  "- 1–4 short lines. No preamble, no recap, no headers, no bold labels, no sign-off.\n" +
-  "- Plain words, like a person typing. Link the PR/doc instead of pasting it.\n" +
-  "- Reads like a report? Cut it in half. This wins over the voice page on length.";
+  "- Line one is the point (the answer, the ask or the status) and makes sense alone in a phone notification. Then only what the reader needs to know or do.\n" +
+  "- 1–4 short lines. No preamble, no recap of what they said, no headers, no bold labels, no sign-off, no \"Not verified\" or method section.\n" +
+  "- Plain words, like a person typing fast: no em dashes, no filler (\"just wanted to\", \"happy to help\", \"let me know if you have any questions\"), " +
+  "no model words (leverage, ensure, robust, seamless, comprehensive).\n" +
+  "- Nothing internal: no run, terminal or commit ids, no steps you took. Link the PR/doc instead of pasting it.\n" +
+  "- Reads like a report? Cut it in half. This wins over the voice page on length.\n" +
+  "- Slack format: the Slack tools take standard Markdown and Slack renders it. A list is `- ` lines (real bullets, never a typed `•`), " +
+  "`[text](url)` for a link, `**bold**` rarely. Never start a line with an arrow (`-->`, `->`, `→`); an arrow only sits inside a line " +
+  "(`$120K --> $95K`). This wins over the voice page on format.";
+
+/**
+ * How a Slack message is built, beyond the rule: what `mc prose` adds when the channel is Slack (or
+ * not named). Kept out of the system prompt — it is read when a message is being written. Generic on
+ * purpose: no workspace's names or numbers.
+ */
+export const SLACK_CHECKLIST =
+  "## Slack — built to be read in five seconds\n" +
+  "- Shape: line 1 = the point. Then at most 3 short lines, or a `- ` list of 3–5 parallel items. The ask last, as a direct question that names who and by when.\n" +
+  "- A list only for 3+ parallel items: one line each, the same shape (`- <thing> --> <what changed>`), no nesting, no bold label per item. One or two things are a sentence.\n" +
+  "- Numbers: only the ones that answer the question, each with what gives it meaning (`$95K, was $120K`). Not every count you found.\n" +
+  "- Links on the words (`[the PR](url)`), one per thing. Never a list of raw URLs.\n" +
+  "- A thread reply answers exactly what was asked, nothing about how you got there.\n" +
+  "- One caveat at most, inline, and only when it changes what the reader does.\n" +
+  "- Never: \"Here's a quick summary\", \"I wanted to\", \"Great question\", \"Hope this helps\", headers, em dashes, emoji on every line.\n" +
+  "- Last pass: read it as the recipient on a phone and cut every line they would not miss.\n\n" +
+  "Too much:\n" +
+  "> Hi Ana! Here's a quick summary of where things stand. **Status:** The refund report has been rebuilt — it now reads straight from the warehouse, " +
+  "and I ran 3 checks (run 4f2a91) comparing it to the old one. **Next steps:** Let me know if you have any questions or if anything looks off!\n" +
+  "Right:\n" +
+  "> Hey Ana! The refund report is live on the warehouse :white_check_mark:\n" +
+  "> - October matches the old report to the cent\n" +
+  "> - It refreshes every morning at 7\n" +
+  "> [The PR](https://example.com/pr/12) if you want the details. Ok to switch the old one off Friday?";
 
 /**
  * The voice section of every agent's system prompt — the house rule, then exactly one page
@@ -265,6 +319,9 @@ export function learnGoal(ws: Workspace, withSlack: boolean): string {
     `- Language: output is ALWAYS English. If he wrote in another language, carry over tone and rhythm, never the words.\n` +
     `- Length: every agent already carries a fixed house rule — outgoing messages are 1–4 short lines, point first, no preamble, ` +
     `recap, headers or sign-off. The page may ask for shorter, never longer; don't restate the rule.\n` +
+    `- Format: describe structure the way an agent types it. Slack's tools take standard Markdown, so the bullets he types (•) are \`- \` lines. ` +
+    `An arrow he puts inside a line ("• Option 1 --> why", "40s --> 55s") stays inside a line: never tell agents to start lines with an arrow ` +
+    `or to use one as a bullet.\n` +
     `- End with "## Exemplars": 1–2 SHORT verbatim English samples that best show the voice (trim, never rewrite). None if he has no English samples.\n\n` +
     `Never include secrets, customer data, names of people outside the team, or anything from another workspace. ` +
     `If there are fewer than 5 usable samples, write only what the evidence supports and say so in one line at the top.`

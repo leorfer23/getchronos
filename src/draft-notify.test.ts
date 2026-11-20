@@ -56,7 +56,7 @@ test("a finished run's drafts are found in its event stream", () => {
     { type: "tool_use", name: "mcp__slack__slack_read_channel", input: {} },
   ] } });
   events.add(r.id, "assistant", JSON.parse(payload));
-  assert.deepEqual(draftsInRun(r.id), [{ tool: "mcp__slack__slack_send_message_draft", label: "Slack draft → #team: EOW update" }]);
+  assert.deepEqual(draftsInRun(r.id), [{ tool: "mcp__slack__slack_send_message_draft", label: "Slack draft → #team: EOW update", text: "EOW update" }]);
 });
 
 test("Desk terminals get a PostToolUse hook on the draft tools", () => {

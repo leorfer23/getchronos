@@ -8,7 +8,7 @@ import { decayLessons, publishLesson, recordLesson } from "./lessons.js";
 import { updateNote } from "./notes.js";
 import { CONFIG } from "./config.js";
 import {
-  GUIDE_CAP, GUIDE_SLUG, OUTGOING_RULE, VOICE_HEADING, addSample, harvestComments, learnDue, learnGoal, markPushed, proseBlock, proseBrief, proseGuide, saveGuide,
+  GUIDE_CAP, GUIDE_SLUG, OUTGOING_RULE, SLACK_CHECKLIST, bareText, VOICE_HEADING, addSample, harvestComments, learnDue, learnGoal, markPushed, proseBlock, proseBrief, proseGuide, saveGuide,
 } from "./prose.js";
 import type { ExternalTask } from "./connectors/types.js";
 
@@ -118,6 +118,34 @@ test("every agent and every mc prose brief carries the short-message rule exactl
   assert.ok(agentContext(w.id).indexOf(OUTGOING_RULE) < agentContext(w.id).indexOf(VOICE_HEADING), "the rule comes before the page");
   assert.equal(once(proseBrief(w.id, { channel: "slack" })), 1);
   assert.match(learnGoal(w, false), /may ask for shorter, never longer/, "the learner never writes a page that loosens it");
+});
+
+test("Slack format: Markdown lists, never an arrow as a bullet — in the rule and in what the learner is told", () => {
+  const w = mkWs("prose-format");
+  assert.match(OUTGOING_RULE, /standard Markdown/);
+  assert.match(OUTGOING_RULE, /A list is `- ` lines/);
+  assert.match(OUTGOING_RULE, /Never start a line with an arrow/);
+  assert.match(learnGoal(w, false), /never tell agents to start lines with an arrow/);
+});
+
+test("the Slack checklist rides in `mc prose` for Slack (or no channel), never in the system prompt", () => {
+  const w = mkWs("prose-checklist");
+  assert.ok(proseBrief(w.id).includes(SLACK_CHECKLIST), "no samples yet, no channel named");
+  addSample(w.id, { body: MINE }, "operator");
+  assert.ok(proseBrief(w.id, { channel: "slack" }).includes(SLACK_CHECKLIST));
+  assert.ok(!proseBrief(w.id, { channel: "jira" }).includes(SLACK_CHECKLIST), "a Jira comment gets the rule, not the Slack shape");
+  assert.ok(proseBrief(w.id, { channel: "jira" }).includes(OUTGOING_RULE));
+  assert.ok(!agentContext(w.id).includes(SLACK_CHECKLIST), "the prompt carries the short rule only");
+  const right = SLACK_CHECKLIST.split("Right:\n")[1];
+  assert.ok(right && !right.includes("—") && !right.includes("**"), "the good example follows its own rules");
+});
+
+test("bareText: an agent's Markdown and Slack's read-back of it are the same words", () => {
+  const md = "Done :white_check_mark:\n- **Volume** --> warehouse, \"publish pending\" in #ops\n1. see [PR](https://x.y/1) and `tbl_name` & that's it";
+  const slack = "Done :white_check_mark:\n• *Volume* --> warehouse, “publish pending” in <#C0123ABC|ops>\n1. see <https://x.y/1|PR> and tbl_name &amp; that’s it";
+  assert.equal(bareText(md), bareText(slack));
+  assert.match(bareText(md), /Volume --> warehouse/, "an arrow inside a line is kept");
+  assert.equal(bareText("--> starts with an arrow"), "--> starts with an arrow", "an arrow is not a list marker");
 });
 
 test("the learner's goal asks for an English guide and names Slack only when connected", () => {
