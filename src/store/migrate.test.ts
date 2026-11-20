@@ -372,3 +372,29 @@ test("migration 162: inbox rows already filed get their thread key from what the
   assert.deepEqual(row("loose"), { thread_key: null, merged_into: null }, "nothing names its thread: it stands alone");
   db.close();
 });
+
+test("migration 171: run_asks on a fresh DB — one open ask per terminal, and its asks go with the terminal", () => {
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+  migrate(db);
+  const cols = (db.prepare("SELECT name FROM pragma_table_info('run_asks')").all() as Array<{ name: string }>).map((c) => c.name);
+  assert.deepStrictEqual(cols, [
+    "id", "session_id", "workspace_id", "command", "why", "cwd", "status", "command_run", "edited", "exit_code", "output_path",
+    "duration_ms", "tail", "note", "decided_by", "surface", "created_at", "decided_at", "finished_at",
+  ]);
+  const ts = "2026-11-20T00:00:00.000Z";
+  db.prepare(`INSERT INTO workspaces (id,slug,name,config_dir,created_at,updated_at) VALUES ('ws1','acme','Acme','/tmp/acme',@ts,@ts)`).run({ ts });
+  db.prepare(`INSERT INTO sessions (id,workspace_id,role,cwd,status,created_at) VALUES ('s1','ws1','human','/tmp','live',@ts)`).run({ ts });
+  const put = db.prepare(`INSERT INTO run_asks (id,session_id,workspace_id,command,why,status,created_at) VALUES (@id,'s1','ws1','ls','look',@status,@ts)`);
+  put.run({ id: "a1", status: "open", ts });
+  assert.throws(() => put.run({ id: "a2", status: "open", ts }), /UNIQUE/, "a second open ask on one terminal is refused");
+  put.run({ id: "a3", status: "superseded", ts });
+  put.run({ id: "a4", status: "ran", ts });
+  const row = db.prepare("SELECT status, edited, exit_code FROM run_asks WHERE id = 'a1'").get() as any;
+  assert.deepEqual({ ...row }, { status: "open", edited: 0, exit_code: null });
+  assert.throws(() => put.run({ id: "a5", status: "open", ts: null }), /NOT NULL/);
+  assert.throws(() => db.prepare(`INSERT INTO run_asks (id,session_id,command,why,created_at) VALUES ('x','no-such-terminal','ls','look',?)`).run(ts), /FOREIGN KEY/);
+  db.prepare("DELETE FROM sessions WHERE id = 's1'").run();
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM run_asks").get() as any).n, 0, "gone with its terminal");
+  db.close();
+});

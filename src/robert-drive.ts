@@ -33,7 +33,7 @@
  */
 import { CONFIG } from "./config.js";
 import { bus, type BusEvent } from "./bus.js";
-import { asks, db, leadEvents, leadSlices, sessions, workspaces, type LeadEvent } from "./store.js";
+import { asks, db, leadEvents, leadSlices, runAsks, sessions, workspaces, type LeadEvent } from "./store.js";
 import type { Session } from "./types.js";
 import { enqueueWake, TERMINAL_DRIVE_KEY } from "./wake-queue.js";
 import { failoverOwns } from "./terminal-failover.js";
@@ -109,6 +109,8 @@ export function driveKind(
     hasWorkspace: boolean;
     hasGoal: boolean;
     openAsk: boolean;
+    /** It asked the operator to run a command (`mc ask-run`, src/run-asks.ts) and he has not answered. */
+    openRunAsk?: boolean;
     declared: string | null;
     promptTracked: boolean;
     /** This stopped terminal is itself a Lead (LEADS.md), not a plain worker. */
@@ -125,6 +127,9 @@ export function driveKind(
 ): DriveKind | null {
   // No client or no goal = the operator's own scratch window: nothing for Robert to judge against.
   if (!ctx.hasWorkspace || !ctx.hasGoal) return null;
+  // A command it asked the operator to run is his card and nobody else's: no one but him can run or
+  // decline it, so no one — Robert, a Lead — is woken to have a go at it, whatever its phase says.
+  if (ctx.openRunAsk) return null;
   switch (st.phase) {
     case "review":
       return "review";
@@ -435,6 +440,7 @@ function context(s: Session) {
     hasWorkspace: !!s.workspace_id,
     hasGoal: !!goalOf(s),
     openAsk: asks.openForSession(s.id).length > 0,
+    openRunAsk: !!runAsks.openFor(s.id),
     declared: signalsOf(s.id).declared?.state ?? null,
     promptTracked: promptTracked(s.id),
     isLead,

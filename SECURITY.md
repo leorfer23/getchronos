@@ -59,6 +59,14 @@ round, a client profile whose hook or MCP server runs a script in `~/.claude` th
 `GET /api/isolation/audit` (admin) lists those — names and paths, never values — with what to change
 (`src/profile-audit.ts`). It reports; it does not fix.
 
+**Run-asks** (`mc ask-run`, `src/run-asks.ts`): a Desk terminal whose hook or guard refused a command
+only the operator can allow asks him to run it, on a card. Only his own hand runs or declines it — the
+admin token itself from this Mac, no agent header, `x-mc-operator: 1`; no Robert, Lead or workspace
+credential, and no delegation — on the exact text he sees (every `{{placeholder}}` filled, nothing
+invisible or direction-changing in it), behind that terminal's own Seatbelt profile and env exactly as
+they were built at its spawn, never wider, for at most ten minutes. The agent's hooks do not apply: his
+tap is the decision. Terminals on this Mac only.
+
 **The owner gate** (`src/phone-gate.ts`) runs before every page, route and WebSocket. Tailscale serve
 proxies to loopback, so a phone's request looks like a local process's — and a tailnet can hold other
 people. Anything that arrives through Tailscale gets in only when its identity header is the account

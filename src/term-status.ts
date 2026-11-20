@@ -18,7 +18,7 @@
  * same answer instead of each re-deriving it from raw events.
  */
 import { bus } from "./bus.js";
-import { db, asks, sessions } from "./store.js";
+import { db, asks, runAsks, sessions } from "./store.js";
 import { heldBy, holderAsks, isOperatorsAsk } from "./robert-asks.js";
 import { clearAgentOverlay, getAgent, reportAgentState } from "./agent-lifecycle.js";
 import { focusEvents, isLive, sessionActivity, sessionMenu, sessionPrompt, sessionScreen } from "./terminal.js";
@@ -166,6 +166,11 @@ export type ResolveInput = {
   prompt: DeskPrompt | null;
   /** An open `mc ask-robert` / `mc ask-lead` from this terminal. */
   ask: { question: string; options: string[]; escalated: boolean; route?: string } | null;
+  /**
+   * An open `mc ask-run` (src/run-asks.ts): a command only the operator can run for it. His card and
+   * his alone — the terminal reads decide while it is open, whatever else it said.
+   */
+  runAsk?: { why: string } | null;
   /** A block the daemon itself set (stall supervisor, auth wall) — not the agent's declaration. */
   daemonBlock: { label: string | null; reason: string | null } | null;
   demandInspection: boolean;
@@ -240,6 +245,7 @@ export function resolve(inp: ResolveInput): Omit<TermStatus, "since"> {
   const stopped = hooked ? !working : inp.quiet;
 
   const opts = (o: string[]) => (o.length ? ` (${o.slice(0, 4).join(" / ")})` : "");
+  if (inp.runAsk) return out("decide", "run? " + inp.runAsk.why);
   if (inp.ask?.escalated) return out("decide", inp.ask.question + opts(inp.ask.options));
   if (sig.asking) return out("decide", sig.asking.question + opts(sig.asking.options));
   if (d?.state === "decide") return out("decide", d.label || "needs a decision");
@@ -416,7 +422,9 @@ export function statusOf(id: string, now = Date.now()): TermStatus | null {
   const held = holderAsks(id);
   const own = asks.openForSession(id);
   const open = held[0] ?? own[0];
-  const mine = held.length + own.filter((a) => isOperatorsAsk(a)).length;
+  // A command it asked him to run (`mc ask-run`) is one more thing that is his to answer.
+  const runAsk = runAsks.openFor(id);
+  const mine = held.length + own.filter((a) => isOperatorsAsk(a)).length + (runAsk ? 1 : 0);
   const n = narrationOf(id);
   const sig = load(id);
   const r = resolve({
@@ -438,6 +446,7 @@ export function statusOf(id: string, now = Date.now()): TermStatus | null {
           route: open.route,
         }
       : null,
+    runAsk: runAsk ? { why: runAsk.why } : null,
     daemonBlock: agent?.state === "blocked" ? { label: agent.state_label, reason: agent.blocked_reason } : null,
     demandInspection: !!agent?.demand_inspection,
     frozenMs: frozenFor(s, sig, act.last_out, now),
@@ -695,6 +704,8 @@ export function startTermStatus() {
         if (sid) refreshSoon(sid);
         return;
       }
+      case "run_ask.updated":
+        return refreshSoon(e.session_id);
       case "focus.event": {
         const n = narr.get(e.session_id);
         if (n && take(n, e.event)) refreshSoon(e.session_id, 1000);

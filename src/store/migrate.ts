@@ -2930,6 +2930,44 @@ CREATE INDEX IF NOT EXISTS idx_robert_wakes_subject ON robert_wakes(subject);`),
       CREATE INDEX IF NOT EXISTS idx_robert_outbox_at ON robert_outbox(created_at);`),
   },
 
+  {
+    version: 171,
+    name: "run_asks — a command a terminal asked the operator to run, and what became of it (src/run-asks.ts)",
+    // `mc ask-run`: written open by the terminal itself, run or declined only by the operator's hand.
+    // `command` is what the agent asked for, `command_run` what he actually ran (he may edit it on the
+    // card), `edited` whether that went beyond filling in its {{placeholders}}. `tail` is the end of the
+    // output as it was when the run finished — the card's copy, kept here so nothing the agent later
+    // writes into its drop dir can change what he saw; the full output is the file at `output_path`.
+    // `note`: why it was declined or failed, in one line. The partial unique index is the one-open-ask-
+    // per-terminal rule (a new ask supersedes the open one first). IF NOT EXISTS keeps a re-run harmless
+    // if parallel work renumbers it.
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS run_asks (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        workspace_id TEXT,
+        command TEXT NOT NULL,
+        why TEXT NOT NULL,
+        cwd TEXT,
+        status TEXT NOT NULL DEFAULT 'open',
+        command_run TEXT,
+        edited INTEGER NOT NULL DEFAULT 0,
+        exit_code INTEGER,
+        output_path TEXT,
+        duration_ms INTEGER,
+        tail TEXT,
+        note TEXT,
+        decided_by TEXT,
+        surface TEXT,
+        created_at TEXT NOT NULL,
+        decided_at TEXT,
+        finished_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_asks_session ON run_asks(session_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_run_asks_status ON run_asks(status, workspace_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_run_asks_one_open ON run_asks(session_id) WHERE status = 'open';`),
+  },
+
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

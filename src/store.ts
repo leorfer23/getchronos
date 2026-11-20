@@ -63,6 +63,8 @@ export { leadSlices, SLICE_STATUSES } from "./store/lead-slices.js";
 export type { LeadSlice, SliceStatus, SlicePatch } from "./store/lead-slices.js";
 export { asks } from "./store/asks.js";
 export type { Ask, AskRoute, AskStatus, NewAsk } from "./store/asks.js";
+export { runAsks, RUN_ASK_STATUSES } from "./store/run-asks.js";
+export type { RunAsk, RunAskStatus, NewRunAsk } from "./store/run-asks.js";
 export { messages } from "./store/messages.js";
 export type { RunMessage, NewRunMessage } from "./store/messages.js";
 export { searchIndex } from "./store/search.js";

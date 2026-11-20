@@ -434,12 +434,14 @@ export function sandboxWrap(
   readonlyDirs: string[] = [],
   allowSecrets: string[] = [],
   ro: ProfileOpts = {}
-): { cmd: string; cmdArgs: string[] } {
+): { cmd: string; cmdArgs: string[]; profile: string | null } {
   const profile = buildProfile(mode, cwd, addDirs, configDir, denyDirs, lockEgress, readonlyDirs, allowSecrets, ro);
   if (!profile) {
     if (mode !== "off" && !sandboxAvailable())
       console.warn(`[sandbox] '${mode}' requested but sandbox-exec unavailable — running unsandboxed`);
-    return { cmd: bin, cmdArgs: args };
+    return { cmd: bin, cmdArgs: args, profile: null };
   }
-  return { cmd: SANDBOX_EXEC, cmdArgs: ["-p", profile, bin, ...args] };
+  // `profile` rides along for a caller that must put something else behind the very same wall later
+  // (a Desk terminal's run-asks, src/run-asks.ts) — reused as built, never rebuilt.
+  return { cmd: SANDBOX_EXEC, cmdArgs: ["-p", profile, bin, ...args], profile };
 }

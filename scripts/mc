@@ -544,6 +544,11 @@ const HELP = `mc — Mission Control backlog CLI
                                      knows the goal and answers in seconds, and passes up what only
                                      Robert or the operator can settle. Falls back to Robert if it
                                      does not answer, or ends. Default --wait 10
+  mc ask-run "<exact command>" --why "<one line>"   (in a Desk TERMINAL) a command a guard, hook or permission
+                                     refused that only the operator can allow: it goes to his Desk as a card, he
+                                     taps Run, it runs behind THIS terminal's sandbox and the output comes back to
+                                     you as a message — end your turn. {{your email}}-style placeholders where his
+                                     own details go (he fills them in). --why "…" -- <words…> or stdin also work.
   mc artifact put <page.html|-> [--title T] [--notify] [--id <id8>]   publish an HTML page for the operator
                                      (a report, a comparison, a dashboard). --notify puts its card in the Desk
                                      chat; --id publishes a NEW VERSION of that page. Prints the page's link:
@@ -1049,6 +1054,48 @@ const heldFor = (ms) => (ms < 60_000 ? Math.round(ms / 1000) + "s" : ms < 3_600_
  * Parsed from raw argv, before parse()/--help: everything after `--` belongs to the command, flags
  * and all. Fail-open by design — a daemon that is down must never stop an agent running its tests.
  */
+// `mc ask-run` (src/run-asks.ts): a command only the operator can allow — a guard, a hook or a permission
+// refused it and says he must run it himself. Instead of "please paste this into a terminal", it becomes a
+// card on his Desk: he fills in any {{placeholder}}, taps Run (or Don't), it runs behind THIS terminal's
+// own sandbox and env, and the output comes back as a message typed into this terminal.
+const ASK_RUN_USAGE =
+  'usage: mc ask-run "<exact command>" --why "<one line: why only the operator can run it>"\n' +
+  '       mc ask-run --why "…" -- <command words…>    (everything after -- is the command, as is)\n' +
+  '       mc ask-run --why "…" < cmd.txt              (the command from stdin: quotes and newlines survive)\n' +
+  "Where his own details go (an email, a name, a token) write a placeholder like {{your email}} — he fills it in on the card.";
+/** Only --why is mc's; every other word is the command's (an unknown --flag included), and `--` ends mc's part. */
+function askRunArgs(argv) {
+  let why = null, rest = null, help = false;
+  const words = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--") { rest = argv.slice(i + 1); break; }
+    if (a === "--why") { why = argv[++i] ?? ""; continue; }
+    if (a.startsWith("--why=")) { why = a.slice(6); continue; }
+    if ((a === "--help" || a === "-h") && !words.length) { help = true; continue; }
+    words.push(a);
+  }
+  return { why, command: (rest ?? words).join(" "), help };
+}
+async function askRun(argv) {
+  const { why, command: given, help } = askRunArgs(argv);
+  if (help) return console.log(ASK_RUN_USAGE);
+  const sid = process.env.MC_SESSION || die("mc ask-run only works inside a Desk terminal (MC_SESSION is set by the daemon) — tell the operator the command instead");
+  let command = given;
+  if (!command.trim() || command.trim() === "-") command = (await readStdin()).replace(/\s+$/, "");
+  if (!command.trim()) die("no command\n" + ASK_RUN_USAGE);
+  if (!why || !why.trim()) die('say why only the operator can run it: --why "<one line>"\n' + ASK_RUN_USAGE);
+  if (command.length > 8000) die("the command is over 8000 characters — write it to a script file and ask to run that");
+  if (why.trim().length > 300) die("--why is one line (≤300 characters)");
+  const a = await req("POST", `/sessions/${encodeURIComponent(sid)}/run-asks`, { command, why: why.trim(), cwd: process.cwd() });
+  const ph = [...new Set(command.match(/\{\{[^{}]*\}\}/g) || [])];
+  console.log(
+    `asked the operator to run it (ask ${String(a.id).slice(0, 8)})${a.superseded?.length ? " — it replaces your earlier ask" : ""}. ` +
+    `He runs it from his Desk${ph.length ? ` after filling in ${ph.join(", ")}` : ""}, behind this terminal's sandbox, and the ` +
+    "output comes back to you as a message. End your turn now: don't wait, poll, or run it another way."
+  );
+}
+
 async function heavy(argv) {
   const at = argv.indexOf("--");
   // `--` is mandatory and is what makes `mc heavy -- npm test -- --help` reach npm intact. Without it
@@ -1192,6 +1239,8 @@ function askCap(question) {
   if (process.argv[2] === "heavy") return await heavy(process.argv.slice(3));
   // Same for `mc browser run -- <cmd> --help`.
   if (process.argv[2] === "browser" && process.argv[3] === "run") return await browserRun(process.argv.slice(4));
+  // …and `mc ask-run`: the command is the agent's own words, flags and all — only --why is mc's.
+  if (process.argv[2] === "ask-run" || process.argv[2] === "askrun") return await askRun(process.argv.slice(3)).catch((e) => die(e.message || String(e)));
   const { pos, opt, multi } = parse(process.argv.slice(2));
   // `workspace` is what the schema and the API call it, and renaming a column that is a foreign key
   // in nineteen tables buys nothing. But most people have one of these per repo or per product, not

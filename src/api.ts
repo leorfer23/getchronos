@@ -88,6 +88,7 @@ import { noteVoiceTrace, voiceTraces } from "./voice-trace.js";
 import { mountLedgerRoutes } from "./ledger-routes.js";
 import { mountExecutorRoutes } from "./executor-routes.js";
 import { mountCardApprovalRoutes } from "./card-approval-routes.js";
+import { mountRunAskRoutes } from "./run-ask-routes.js";
 import { assistantRoutes } from "./assistant-routes.js";
 import { robertGateFor } from "./robert-scope.js";
 import { homeWorkspace } from "./robert-hands.js";
@@ -2575,6 +2576,8 @@ export function startServer() {
   mountExecutorRoutes(api);
   // The operator's yes on a hand-off card, bound to the PR and the commit it covers (src/card-approval.ts).
   mountCardApprovalRoutes(api);
+  // A command a terminal asked the operator to run (`mc ask-run`): Run / Don't on its Desk card, his hand only (src/run-asks.ts).
+  mountRunAskRoutes(api);
 
   api.get("/stats", requireAdmin, (_req, res) => {
     const days = (n: number) => new Date(Date.now() - n * 86400000).toISOString();

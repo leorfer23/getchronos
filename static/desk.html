@@ -611,6 +611,22 @@
   .fx-q.ship .q { display:flex; align-items:baseline; gap:10px; font-size:16px; }
   .fx-q.ship .spin { font-style:normal; color:var(--accent); font-size:18px; width:18px; text-align:center; }
   .fx-q.ship .q span { font-weight:500; color:var(--muted); font-size:14px; }
+  /* A command it asked you to run (`mc ask-run`): its why, the command in a box you can edit, Run / Don't;
+     then "running…" and its exit code with the end of the output. Theme tokens only. */
+  .fx-q.runask .q { font-size:15.5px; }
+  .fx-q.runask textarea { display:block; width:100%; box-sizing:border-box; margin-top:7px; padding:8px 10px; border-radius:8px; border:1px solid var(--line);
+    background:var(--surface-2); color:var(--ink); font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:13.5px; line-height:1.45; resize:vertical; min-height:3.4em; max-height:18em; }
+  .fx-q.runask textarea:focus { outline:0; border-color:var(--accent); }
+  .fx-q.runask .ra-note { margin-top:5px; font-size:12.5px; color:var(--muted); overflow-wrap:anywhere; }
+  .fx-q.runask .ra-note.left { color:var(--p-decide,var(--warn)); font-weight:650; }
+  .fx-q.runask .ra-where code { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:12px; color:var(--ink); }
+  .fx-q.runask .fx-opts button[disabled] { cursor:default; background:var(--surface); border-color:var(--line); color:var(--faint); }
+  .fx-q.runask.running .who b, .fx-q.runask.done .who b { color:var(--ok); }
+  .fx-q.runask.failed .who b { color:var(--danger); }
+  .fx-q.runask.running .q, .fx-q.runask.done .q, .fx-q.runask.failed .q { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:13.5px; font-weight:500; }
+  .fx-q.runask .spin { font-style:normal; color:var(--accent); margin-right:8px; }
+  .fx-q.runask pre.ra-tail { margin:7px 0 0; padding:7px 10px; border-radius:8px; background:var(--surface-2); color:var(--ink); font-family:ui-monospace,"SF Mono",Menlo,monospace;
+    font-size:12.5px; line-height:1.4; white-space:pre-wrap; overflow-wrap:anywhere; max-height:11em; overflow-y:auto; }
   /* Talk: a chat — your lines on the right, everything it says on the left, each with its time; what it
      ran between two messages is one quiet line; while it works, what it is on now is the last line. */
   .fx-talk .fx-body { display:flex; flex-direction:column; gap:12px; }
@@ -2300,6 +2316,7 @@
 <script src="/desk-artifacts.js"></script>
 <script src="/voice-alerts.js"></script>
 <script src="/ask-card.js"></script>
+<script src="/run-ask.js"></script>
 <script src="/artifact-view.js"></script>
 <script src="/desk-cockpit.js"></script>
 <script src="/desk-phone.js"></script>
@@ -2324,8 +2341,8 @@ const qsa = (s, r = document) => [...r.querySelectorAll(s)];
 const LOCK = DeskScope.get();
 const api = (p, opts) => {
   const headers = { "content-type": "application/json", ...(TOKEN ? { "x-mc-admin": TOKEN } : {}), ...(opts?.headers || {}) };
-  // Closing a terminal and a playbook run's OK are operator-only: this header is the Desk's hand (src/authz.ts).
-  if (/\/(?:sessions\/[^/]+\/kill|desk\/close-done|playbook-runs\/[^/]+\/ok)$/.test(String(p).split("?")[0])) headers["x-mc-operator"] = "1";
+  // Closing a terminal, a playbook run's OK and a run-ask's Run / Don't are operator-only: this header is the Desk's hand (src/authz.ts).
+  if (/\/(?:sessions\/[^/]+\/kill|desk\/close-done|playbook-runs\/[^/]+\/ok|run-asks\/[^/]+\/(?:run|decline))$/.test(String(p).split("?")[0])) headers["x-mc-operator"] = "1";
   return fetch("/api" + p, {
   ...opts,
   headers,
@@ -3566,6 +3583,9 @@ function openDecisions(s) {
   const asks = D.id === s.id ? D.asks : [];
   const open = [];
   if (!s.live) return open;
+  // A command it asked you to run (`mc ask-run`): what it is blocked on, so it leads the dock.
+  const ra = RA.open.get(s.id);
+  if (ra) open.push(RunAsk.cardHtml(ra, D.drafts.has("run:" + ra.id) ? D.drafts.get("run:" + ra.id) : null));
   for (const a of asks) {
     if (a.status !== "open") continue;
     const who = a.for_operator
@@ -3712,6 +3732,8 @@ function focusDock(s) {
   const rows = openDecisions(s);
   const ho = handoffDock(s);
   const urgent = rows.length > 0 || needOf(s)?.k === "approve" || !!SHIPPING.get(s.id);
+  const ran = raResultHtml(s);
+  if (ran) rows.push(ran);
   if (ho) rows.push(ho);
   return `<section class="fx-dock${urgent ? " on" : ""}" data-keep="dock" style="--dk:${NEED_COLOR[needOf(s)?.k] || (SHIPPING.get(s.id) ? "var(--accent)" : "var(--p-decide)")}">`
     + (rows.length ? rows.join("") : `<div class="dk-none">Nothing needs you right now${phaseOf(s) === "working" ? " — it's working" : ""}.</div>`)
@@ -3773,7 +3795,8 @@ function renderStory() {
   const body = qs("#story");
   const act = document.activeElement;
   const typing = act?.matches?.("#story input[data-atext]") ? { sel: `input[data-atext="${CSS.escape(act.dataset.atext)}"]`, pos: act.selectionStart }
-    : act?.matches?.("#story input[data-dtext]") ? { sel: "input[data-dtext]", pos: act.selectionStart } : null;
+    : act?.matches?.("#story input[data-dtext]") ? { sel: "input[data-dtext]", pos: act.selectionStart }
+    : act?.matches?.("#story textarea[data-rcmd]") ? { sel: `textarea[data-rcmd="${CSS.escape(act.dataset.rcmd)}"]`, pos: act.selectionStart, end: act.selectionEnd, top: act.scrollTop } : null;
   const same = FX.id === s.id;
   if (!same) Object.assign(FX, { id: s.id, exp: FX.exp === "act" ? "act" : null, hopen: new Set(), scroll: new Map(), zoom: new Set(), actAll: false, pin: new Map() });
   // Where each scrolling card was. Talk, Decided and Activity follow their newest line instead while
@@ -3806,7 +3829,7 @@ function renderStory() {
   if (same) body.scrollTop = storyTop;
   tidyLinks(body);
   shotsHydrate(s, body);
-  if (typing) { const el = body.querySelector(typing.sel); if (el) { el.focus(); el.setSelectionRange(typing.pos, typing.pos); } }
+  if (typing) { const el = body.querySelector(typing.sel); if (el) { el.focus(); el.setSelectionRange(typing.pos, typing.end ?? typing.pos); if (typing.top) el.scrollTop = typing.top; } }
   talkFollow();
 }
 function focusExpand(k) {
@@ -3868,6 +3891,7 @@ qs("#story").addEventListener("load", (e) => {
 qs("#story").addEventListener("input", (e) => {
   const t = e.target.closest("input[data-atext]"); if (t) D.drafts.set(t.dataset.atext, t.value);
   const d = e.target.closest("input[data-dtext]"); if (d) D.drafts.set("dialog", d.value);
+  const r = e.target.closest("textarea[data-rcmd]"); if (r) raTyped(r);
 });
 qs("#story").addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
@@ -3884,6 +3908,9 @@ qs("#story").addEventListener("keydown", (e) => {
 });
 qs("#story").addEventListener("click", (e) => {
   const s = S.active && byId(S.active); if (!s) return;
+  const rr = e.target.closest("[data-rrun]"); if (rr) return runAskRun(s, rr.dataset.rrun);
+  const rn = e.target.closest("[data-rno]"); if (rn) return runAskDecline(s, rn.dataset.rno);
+  const rh = e.target.closest("[data-rhide]"); if (rh) { RA.hidden.add(rh.dataset.rhide); return renderStory(); }
   const a = e.target.closest("[data-aans]"); if (a) return answerAskFromFocus(s, a.dataset.aans, a.dataset.v);
   const dq = e.target.closest("[data-dopt]"); if (dq) return answerDialog(s, Number(dq.dataset.dopt), null);
   const pk = e.target.closest("[data-pkkey]");
@@ -3913,6 +3940,101 @@ qs("#story").addEventListener("click", (e) => {
     if (APPROVE_KINDS.has(ok.dataset.ok)) approveHandoff(s, ok.dataset.ok);
   }
 });
+// ── run-asks (`mc ask-run`, src/run-asks.ts): a command a terminal asked you to run ──────────────────
+// RA.open: terminal → its open ask (the dock's card). RA.last: terminal → its newest run you started
+// (running, or finished — shown with its exit code until hidden or RunAsk.RECENT_MS old). Loaded whole on
+// every bus (re)connect, and per terminal on each run_ask.updated.
+const RA = { open: new Map(), last: new Map(), hidden: new Set(), busy: new Set() };
+function raTake(sid, asks) {
+  const open = asks.find((a) => a.status === "open");
+  if (open) RA.open.set(sid, open); else RA.open.delete(sid);
+  const last = asks.find((a) => a.status === "running" || a.status === "ran" || a.status === "failed");
+  if (last) RA.last.set(sid, last); else RA.last.delete(sid);
+}
+function raPaint(sid) {
+  const s = byId(sid); if (!s) return;
+  if (S.active === sid && S.mode === "focus") renderStory();
+  repaint(s);
+}
+async function raLoadAll() {
+  try {
+    const r = await api("/run-asks?state=live");
+    // Each terminal with an ask open or running now, or that had one when the socket went down: read it whole.
+    const sids = new Set((r.asks || []).map((a) => a.session_id));
+    for (const sid of RA.open.keys()) sids.add(sid);
+    for (const [sid, a] of RA.last) if (a.status === "running") sids.add(sid);
+    for (const sid of sids) raLoad(sid);
+  } catch {
+    // An older daemon has no run-asks: nothing to draw.
+  }
+}
+async function raLoad(sid) {
+  try {
+    const r = await api("/sessions/" + sid + "/run-asks?limit=5");
+    raTake(sid, r.asks || []);
+    raPaint(sid);
+  } catch {}
+}
+function raResultHtml(s) {
+  const a = RA.last.get(s.id);
+  return a && !RA.hidden.has(a.id) ? RunAsk.resultHtml(a) || "" : "";
+}
+// Typing in the box: its draft survives the board's repaints, and Run / the note follow what is left
+// to fill in — in place, so the caret never moves.
+function raTyped(el) {
+  const id = el.dataset.rcmd;
+  D.drafts.set("run:" + id, el.value);
+  const card = el.closest("[data-runask]"); if (!card) return;
+  const btn = card.querySelector("[data-rrun]");
+  if (btn) { btn.disabled = !RunAsk.canRun(el.value); btn.title = btn.disabled ? "fill in every {{…}} first" : ""; }
+  const n = RunAsk.noteOf(el.value), note = card.querySelector("[data-rnote]");
+  if (note) { note.textContent = n.text; note.classList.toggle("left", n.left); }
+}
+// Run: exactly what is in the box. The daemon refuses a {{ left in it, an ask that is no longer open, or
+// a terminal that is not a live pty on this Mac — and runs it behind that terminal's own sandbox.
+async function runAskRun(s, id) {
+  const a = RA.open.get(s.id);
+  if (!a || a.id !== id || RA.busy.has(id)) return;
+  const box = qs(`#story textarea[data-rcmd="${CSS.escape(id)}"]`);
+  const command = box ? box.value : D.drafts.has("run:" + id) ? D.drafts.get("run:" + id) : a.command;
+  if (!RunAsk.canRun(command)) return toast("fill in every {{…}} first");
+  RA.busy.add(id);
+  try {
+    const r = await api("/run-asks/" + id + "/run", { method: "POST", headers: { "x-mc-operator": "1" }, body: JSON.stringify({ command, surface: "desk" }) });
+    RA.open.delete(s.id); RA.last.set(s.id, r); RA.hidden.delete(id); D.drafts.delete("run:" + id);
+    S.answered.set(s.id, Date.now()); S.notifyCount.delete(s.id);
+    renderCounts(); syncBadge();
+    raPaint(s.id);
+    toast("running · the output goes back to the terminal");
+  } catch (err) {
+    toast(String(errMsg(err)).slice(0, 200));
+    raLoad(s.id);
+  } finally {
+    RA.busy.delete(id);
+  }
+}
+// Don't: one line goes to the terminal saying you declined, with what you add here (optional).
+async function runAskDecline(s, id) {
+  const a = RA.open.get(s.id);
+  if (!a || a.id !== id || RA.busy.has(id)) return;
+  const reason = prompt("Don't run it. Anything to tell it? (optional)", "");
+  if (reason === null) return;
+  RA.busy.add(id);
+  try {
+    const r = await api("/run-asks/" + id + "/decline", { method: "POST", headers: { "x-mc-operator": "1" }, body: JSON.stringify({ reason: reason.trim() || null, surface: "desk" }) });
+    RA.open.delete(s.id); D.drafts.delete("run:" + id);
+    S.answered.set(s.id, Date.now()); S.notifyCount.delete(s.id);
+    renderCounts(); syncBadge();
+    raPaint(s.id);
+    toast(r?.told ? "declined · it was told" : "declined · the terminal could not be told");
+  } catch (err) {
+    toast(String(errMsg(err)).slice(0, 200));
+    raLoad(s.id);
+  } finally {
+    RA.busy.delete(id);
+  }
+}
+
 // One approval from the hand-off's dock: which button, and which hand-off the card was drawn from. The
 // daemon refuses a card that moved under you (a newer hand-off, a PR whose head changed — then it asks the
 // terminal to hand off again) and answers with exactly what was approved: the PR and the commit.
@@ -9595,12 +9717,14 @@ const BUS_TOPICS = [
   "artifact.created", "artifact.updated", "artifact.event",
   "service.changed", "service.alarm", "alert.raised", "playbook.run",
   "inbox.updated", "settings.changed", "budget.warn",
-  "ws_trigger.updated", "ws_trigger.fired",
+  "ws_trigger.updated", "ws_trigger.fired", "run_ask.updated",
 ].join(",");
 function connectBus() {
   if (!TOKEN) return;
   const ws = new WebSocket(`${WS_SCHEME}//${location.host}/ws?token=${encodeURIComponent(TOKEN)}&topics=${encodeURIComponent([BUS_TOPICS, ...DW.extra].join(","))}`);
   DW.sock = ws;
+  // Every (re)connect: what may have moved while the socket was down.
+  ws.addEventListener("open", () => raLoadAll());
   ws.onmessage = (ev) => {
     let e; try { e = JSON.parse(ev.data); } catch { return; }
     if (!DeskScope.passes(e, LOCK)) return;
@@ -9617,6 +9741,8 @@ function connectBus() {
     }
     if (e.topic === "host.online" || e.topic === "host.offline" || e.topic === "host.updated" || e.topic === "host.inventory") return loadHostsSoon();
     if (e.topic === "inbox.updated") return loadInboxSoon();
+    // A terminal asked you to run a command, or a run you started moved on: its card follows.
+    if (e.topic === "run_ask.updated") return raLoad(e.session_id);
     // Renamed from another page (the welcome in another tab, ⚙ Settings elsewhere): say the new name here too.
     if (e.topic === "settings.changed") { if (e.key === "assistant.name") AssistantName.refresh(); return; }
     if (e.topic === "session.activity") {
