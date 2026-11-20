@@ -214,3 +214,57 @@ test("indented rows above a menu are the question's, not an option's", () => {
   assert.equal(p.options![0].detail, undefined);
   assert.match(p.question, /staging is down today/);
 });
+
+// Claude Code 2.1.329's AskUserQuestion with multiSelect, captured from a live TUI (2026-11-20). Each
+// box is "[✔] label" / "[ ] label"; the last box is its free-text row; an unnumbered "Submit" (or
+// "Next" when more questions follow) sits under it, and the cursor walks through that row too.
+const MULTI = (cursor: string, row = "Submit") => [
+  "────────────────────────────────────────────────────────────────────────────────────────────────────",
+  "←  ☒ Build  ✔ Submit  →",
+  "",
+  "Which options do you want to include in the build?",
+  "",
+  `${cursor === "1" ? "❯" : " "} 1. [✔] Alpha`,
+  "         First option in the build set.",
+  `${cursor === "2" ? "❯" : " "} 2. [ ] Bravo`,
+  "         Second option in the build set.",
+  `${cursor === "3" ? "❯" : " "} 3. [ ] Type something`,
+  `${cursor === "submit" ? "❯" : " "}    ${row}`,
+  "────────────────────────────────────────────────────────────────────────────────────────────────────",
+  `${cursor === "4" ? "❯" : " "} 4. Chat about this`,
+  "",
+  "Enter to select · ↑/↓ to navigate · Esc to cancel",
+];
+
+test("a multi-select: each box's tick, its label without the box, and the Submit row counted from the cursor", () => {
+  const p = detectPrompt(MULTI("1"))!;
+  assert.equal(p.kind, "select");
+  assert.equal(p.question, "Which options do you want to include in the build?");
+  assert.deepEqual(p.options!.map((o) => [o.label, o.offset, o.checked]), [
+    ["Alpha", 0, true], ["Bravo", 1, false], ["Type something", 2, false], ["Chat about this", 4, undefined],
+  ]);
+  assert.equal(p.options![0].detail, "First option in the build set.");
+  assert.deepEqual(p.submit, { label: "Submit", offset: 3 });
+});
+
+test("the cursor on the Submit row: still a menu, every offset counted from that row", () => {
+  // It used to end the menu there: no option had the cursor and the frame read as no menu at all.
+  const p = detectPrompt(MULTI("submit"))!;
+  assert.equal(p.kind, "select");
+  assert.deepEqual(p.options!.map((o) => o.offset), [-3, -2, -1, 1]);
+  assert.deepEqual(p.submit, { label: "Submit", offset: 0 });
+  assert.deepEqual(detectPrompt(MULTI("4", "Next"))!.submit, { label: "Next", offset: -1 });
+});
+
+test("its review screen is a plain menu: Submit answers / Cancel", () => {
+  const p = detectPrompt(["←  ☒ Build  ✔ Submit  →", "", "Review your answers", " ", " ● Which options do you want?", "   → Alpha, Charlie", "", "❯ 1. Submit answers", "  2. Cancel"])!;
+  assert.deepEqual(p.options!.map((o) => [o.label, o.offset]), [["Submit answers", 0], ["Cancel", 1]]);
+  assert.equal(p.submit, undefined);
+});
+
+test("a description that reads 'Next' under a plain option is not a Submit row", () => {
+  const p = detectPrompt(["Pick one", "", "❯ 1. Go on", "     Next", "  2. Stop"])!;
+  assert.deepEqual(p.options!.map((o) => [o.label, o.offset]), [["Go on", 0], ["Stop", 1]]);
+  assert.equal(p.submit, undefined);
+  assert.equal(p.options![0].checked, undefined);
+});

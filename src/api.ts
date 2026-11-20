@@ -96,7 +96,7 @@ import { isShipTerminal } from "./ship-guard.js";
 import { analyticsWithDelta, RANGE_PRESETS } from "./analytics.js";
 import { getBackend, listBackends, workspaceBackends } from "./backends/index.js";
 import { cloudRunFor, cloudSessionState, cloudVisibleRepos, followUpCloudSession, openCloudSession, wantsCloudBackend } from "./desk-cloud.js";
-import { openSession, resumeOpts, promoteToLead, leadPromotionError, attach, refreshClient, writeTo, resize, killSession, closeOutSession, focusEvents, isLive, operatorSaidAt, sendInput, sessionActivity, sessionPrompt, sessionScreen, setClientRate, continueFromRun } from "./terminal.js";
+import { openSession, resumeOpts, promoteToLead, leadPromotionError, attach, refreshClient, writeTo, resize, killSession, closeOutSession, focusEvents, isLive, operatorSaidAt, sendInput, inputAllowed, noteInput, sessionActivity, sessionPrompt, sessionScreen, setClientRate, continueFromRun } from "./terminal.js";
 import { sessionUsage, snapshotUsage } from "./session-usage.js";
 import { applyHook, declare as declareStatus, sessionGoalReached, setProgress, signalsOf, statusOf } from "./term-status.js";
 import { parseEvery, watchView } from "./desk-watch.js";
@@ -179,6 +179,7 @@ import { RepoGitError, resolveRepoGitFields } from "./repo-git.js";
 import type { GoalKind, LessonState, Session } from "./types.js";
 import { redactConnectorConfig, publicTrigger } from "./redact.js";
 import { sharedRepoViews } from "./shared-repos.js";
+import { answerDialog } from "./dialog-answer.js";
 import { checkToken, operatorOrFleet, operatorOrRobertOf, robertIdentity, robertScopeOf, setRobertGate, requireAdmin, tokenlessGate, tokenlessMode, tokenlessReport, tokenOk, callerScope, checkScope, checkRepoScope, forwardedGate, leadMayType, leadScope, operatorMayCloseTerminal, spawnRefusal, type LeadScope } from "./authz.js";
 import { wsByIdOrSlug, wsRefs } from "./ws-ref.js";
 import { auditProfiles } from "./profile-audit.js";
@@ -188,7 +189,7 @@ import { resolveHostRef, sessionHostOffline } from "./remote-terminals.js";
 import { invalidateWatchCache, prepareWatch } from "./watches.js";
 import {
   validate,
-  OpenSessionSchema, ResizeSchema, SessionPatchSchema, CloseWhenDoneSchema, SessionGoalsSchema, SessionGoalPatchSchema, SessionInputSchema, SessionStatusSchema, SessionProgressSchema, SessionHookSchema, UsageReportSchema,
+  OpenSessionSchema, ResizeSchema, SessionPatchSchema, CloseWhenDoneSchema, SessionGoalsSchema, SessionGoalPatchSchema, SessionInputSchema, SessionDialogSchema, SessionStatusSchema, SessionProgressSchema, SessionHookSchema, UsageReportSchema,
   AgentNameSchema, AgentReportSchema, AgentWaitSchema,
   NewNoteSchema, PatchNoteSchema, LearnSchema, RememberSchema, ProseSampleSchema, ProseGuideSchema, AgentMemoryAppendSchema, BriefAppendSchema, BriefRewriteSchema, AgentMemoryRewriteSchema, StowSchema,
   WorklogEntrySchema, WorklogBackfillSchema, ProactiveOpenSchema,
@@ -1190,6 +1191,32 @@ export function startServer() {
     if (admin && (req.body.by || "operator") === "operator" && submitted)
       void operatorAnswered(s.id, req.body.text ?? "").catch((e) => console.warn("[ask-in-terminal]", e?.message ?? e));
     res.json({ ok: true, ...(freshRefused ? { fresh_refused: freshRefused } : {}), ...(autoClose !== undefined ? { auto_close: autoClose } : {}) });
+  });
+  // Its question dialog (Claude Code's AskUserQuestion), answered from the Desk card or composer: the
+  // ticks and/or its own words, walked in by reading its screen after every key (src/dialog-answer.ts)
+  // — a multi-select takes no single key run. The operator's hand only: the admin token, none of the
+  // Robert/Lead doors /input has. One walk per terminal at a time: two would interleave their keys.
+  const dialogWalks = new Set<string>();
+  api.post("/sessions/:id/dialog", validate(SessionDialogSchema), async (req, res) => {
+    if (!tokenOk(req.get("x-mc-admin"), CONFIG.adminToken))
+      return res.status(403).json({ error: "answering a terminal's question is the operator's (x-mc-admin)" });
+    const s = sessions.get(req.params.id);
+    if (!s || !isLive(s.id) || s.cloud_agent_id) return res.status(404).json({ error: "that terminal is not live here" });
+    if (dialogWalks.has(s.id)) return res.status(409).json({ error: "already answering it — one moment" });
+    if (!inputAllowed(s.id)) return res.status(429).json({ error: "rate limit — too many inputs this minute" });
+    noteInput(s.id);
+    dialogWalks.add(s.id);
+    try {
+      const r = await answerDialog(s.id, { picks: req.body.picks, text: req.body.text ?? null });
+      if (!r.ok) return res.status(409).json({ error: r.error });
+      const said = [r.picked.join(", "), r.text ? `“${r.text}”` : ""].filter(Boolean).join(" · ");
+      bus.publish({ topic: "session.input", session_id: s.id, by: "operator", text: `<answered: ${said}>`.slice(0, 200), workspace_id: s.workspace_id ?? null });
+      noteOperatorInput(s.id);
+      void operatorAnswered(s.id, said).catch((e) => console.warn("[ask-in-terminal]", e?.message ?? e));
+      res.json(r);
+    } finally {
+      dialogWalks.delete(s.id);
+    }
   });
   // A file dragged from Finder onto this terminal on the Desk (or an image pasted into it): raw
   // bytes in, an absolute path out, which the page then types in as a word. The handlers live in

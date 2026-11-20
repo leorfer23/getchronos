@@ -607,6 +607,10 @@
   .fx-choice:hover:not([disabled]) { border-color:var(--accent); background:var(--accent-soft); }
   .fx-choice.best { border-color:var(--accent); }
   .fx-choice[disabled] { cursor:default; opacity:.6; }
+  /* A multi-select: each answer ticks on the card; one Submit sends them all (src/dialog-answer.ts). */
+  .fx-choice.tick b::before { content:"☐ "; color:var(--muted); font-weight:400; }
+  .fx-choice.tick.on { border-color:var(--accent); background:var(--accent-soft); }
+  .fx-choice.tick.on b::before { content:"☑ "; color:var(--accent); }
   /* Shipping: merge/deploy was approved and it is on it — a turning glyph off the page's 1Hz clock. */
   .fx-q.ship .q { display:flex; align-items:baseline; gap:10px; font-size:16px; }
   .fx-q.ship .spin { font-style:normal; color:var(--accent); font-size:18px; width:18px; text-align:center; }
@@ -3250,6 +3254,7 @@ const plainLine = (t) => String(t || "").replace(/[*_`#>]/g, "").replace(/\s+/g,
 // (s.prompt) says which question is showing and which keys pick each answer — the same keys a
 // person would press. "Type something." is that menu's free-text row; "Chat about this" closes it.
 const TYPE_RE = /^type something\.?$/i, CHAT_RE = /^chat about this\.?$/i, REC_RE = /\s*\(recommended\)\s*$/i;
+const ASK_TOOL_RE = /^(AskUserQuestion|ask_user_question|ask_user)$/i;
 function dialogOf(s, p, ph) {
   const menu = p && p.kind === "select" ? p.options || [] : [];
   const all = D.id === s.id && Array.isArray(D.dialog) ? D.dialog : [];
@@ -3260,26 +3265,47 @@ function dialogOf(s, p, ph) {
   if (at < 0 && all.length === 1 && (!menu.length || all[0].options.some((o) => menu.some((m) => norm(m.label).slice(0, 28) === norm(o.label).slice(0, 28))))) at = 0;
   const q = at >= 0 ? all[at] : null;
   const find = (label) => menu.findIndex((m) => norm(m.label).slice(0, 28) === norm(label).slice(0, 28));
-  const choices = q
+  // A multi-select's boxes come off the screen as `checked`; its last box is "Type something" (or the
+  // words typed into it), and the unnumbered Submit/Next row under it is `p.submit`.
+  const boxes = menu.filter((o) => typeof o.checked === "boolean");
+  const multi = !!q?.multi || boxes.length > 0;
+  const choices = (q
     ? q.options.map((o) => ({ label: o.label, detail: o.description || "", i: find(o.label) }))
-    : menu.map((o, i) => ({ label: o.label, detail: o.detail || "", i })).filter((c) => !TYPE_RE.test(c.label) && !CHAT_RE.test(c.label));
+    : (multi ? boxes.slice(0, -1) : menu).map((o) => ({ label: o.label, detail: o.detail || "", i: menu.indexOf(o) })).filter((c) => !TYPE_RE.test(c.label) && !CHAT_RE.test(c.label)))
+    .map((c) => ({ ...c, on: c.i >= 0 && menu[c.i].checked === true }));
+  const own = multi && boxes.length ? boxes[boxes.length - 1] : null;
   return {
-    question: q ? q.question : p?.question || "", header: q?.header || "", multi: !!q?.multi,
+    question: q ? q.question : p?.question || "", header: q?.header || "", multi,
     n: at + 1, of: all.length, choices, onScreen: menu.length > 0,
-    type: menu.findIndex((o) => TYPE_RE.test(o.label)), chat: menu.findIndex((o) => CHAT_RE.test(o.label)),
+    type: multi ? (own ? menu.indexOf(own) : -1) : menu.findIndex((o) => TYPE_RE.test(o.label)),
+    chat: menu.findIndex((o) => CHAT_RE.test(o.label)),
+    next: p?.submit?.label === "Next",
   };
 }
-function dialogHtml(d) {
-  const btns = d.choices.map((c) => {
-    const rec = REC_RE.test(c.label), ok = c.i >= 0 && !d.multi;
-    return `<button type="button" class="fx-choice${rec ? " best" : ""}" ${ok ? `data-dopt="${c.i}"` : `disabled title="not on its screen yet — open the terminal (⌘E)"`}>`
+// The ticks you made on a multi-select's card, per terminal and question, until it is answered.
+const DPICK = new Map(), DBUSY = new Set();
+const pickKey = (s, d) => s.id + "|" + norm(d.question).slice(0, 120);
+function picksOf(s, d) {
+  const k = pickKey(s, d);
+  if (!DPICK.has(k)) DPICK.set(k, new Set(d.choices.filter((c) => c.on).map((c) => c.label)));
+  return DPICK.get(k);
+}
+function dialogHtml(d, s) {
+  // A multi-select: each answer ticks here (no keys yet); Submit sends the ticks and your words in one
+  // go, walked in by the daemon (POST /sessions/:id/dialog). A single-select answers on the click.
+  const picks = d.multi && s ? picksOf(s, d) : null, busy = !!s && DBUSY.has(s.id);
+  const btns = d.choices.map((c, k) => {
+    const rec = REC_RE.test(c.label), on = !!picks?.has(c.label);
+    const act = d.multi ? `data-dtick="${k}" aria-pressed="${on}"` : c.i >= 0 ? `data-dopt="${c.i}"` : `disabled title="not on its screen yet — open the terminal (⌘E)"`;
+    return `<button type="button" class="fx-choice${d.multi ? " tick" : ""}${on ? " on" : ""}${rec ? " best" : ""}" ${act}>`
       + `<b>${esc(c.label.replace(REC_RE, ""))}</b>${rec ? `<em>recommended</em>` : ""}${c.detail ? `<span>${esc(c.detail)}</span>` : ""}</button>`;
   }).join("");
   const extra = [];
-  if (d.type >= 0 && !d.multi) extra.push(`<input data-dtext="${d.type}" value="${esc(D.drafts.get("dialog") || "")}" placeholder="or answer in your own words · ⏎" autocomplete="off">`);
+  if (d.multi) extra.push(`<button type="button" class="go" data-dsubmit${busy ? " disabled" : ""}>${busy ? "Sending…" : d.next ? "Next question →" : `Submit${picks?.size ? ` (${picks.size})` : ""}`}</button>`);
+  if (d.type >= 0 || d.multi) extra.push(`<input data-dtext="${d.type}" value="${esc(D.drafts.get("dialog") || "")}" placeholder="${d.multi ? "and/or in your own words" : "or answer in your own words"} · ⏎" autocomplete="off">`);
   if (d.chat >= 0) extra.push(`<button type="button" data-dopt="${d.chat}" title="Close the question and talk it through">Talk it over first</button>`);
-  if (d.multi || !d.onScreen) extra.push(`<button type="button" data-fterm>Open the terminal (⌘E)</button>`);
-  const who = [`<b>It asked you</b>`, d.header ? esc(d.header) : "", d.of > 1 && d.n > 0 ? `question ${d.n} of ${d.of}` : "", d.multi ? "several can be picked — pick them in the terminal" : ""].filter(Boolean).join(" · ");
+  if (!d.onScreen) extra.push(`<button type="button" data-fterm>Open the terminal (⌘E)</button>`);
+  const who = [`<b>It asked you</b>`, d.header ? esc(d.header) : "", d.of > 1 && d.n > 0 ? `question ${d.n} of ${d.of}` : "", d.multi ? "pick any, then Submit" : ""].filter(Boolean).join(" · ");
   return `<div class="fx-q dialog"><div class="who">${who}</div><div class="q">${esc(d.question)}</div>`
     + (btns ? `<div class="fx-choices">${btns}</div>` : "") + (extra.length ? `<div class="fx-opts">${extra.join("")}</div>` : "") + `</div>`;
 }
@@ -3314,6 +3340,32 @@ async function answerDialog(s, i, text) {
   }
   // One answer or the last of several: you stay on the terminal you answered (stayAfter).
   stayAfter(s, "answered");
+}
+// A multi-select's Submit, or words for its question from the card or the composer: the daemon ticks,
+// types and submits by reading its screen (src/dialog-answer.ts). Resolves to the error text, or null.
+async function dialogSubmit(s, d, text) {
+  const picks = d.multi ? [...picksOf(s, d)] : [];
+  if (!picks.length && !text) { toast("tick at least one, or write your own"); return "nothing picked"; }
+  if (DBUSY.has(s.id)) return "busy";
+  DBUSY.add(s.id); renderStory();
+  S.answered.set(s.id, Date.now()); S.notifyCount.delete(s.id); renderCounts(); syncBadge();
+  try {
+    const r = await api("/sessions/" + s.id + "/dialog", { method: "POST", body: JSON.stringify({ ...(picks.length ? { picks } : {}), ...(text ? { text } : {}) }) });
+    DPICK.delete(pickKey(s, d)); D.drafts.delete("dialog");
+    toast(r?.next ? "answered — on to its next question" : "answered");
+    stayAfter(s, "answered");
+    return null;
+  } catch (e) {
+    S.answered.delete(s.id);
+    const m = errMsg(e); toast(String(m).slice(0, 160)); return m;
+  } finally { DBUSY.delete(s.id); renderStory(); }
+}
+/** The question dialog open on this terminal right now, if it takes words (else null). */
+function openDialog(s) {
+  if (!s?.live || s.state === "working" || s.status?.permission && !ASK_TOOL_RE.test(s.status.permission.tool || "")) return null;
+  const p = s.prompt && typeof s.prompt === "object" ? s.prompt : null;
+  const d = dialogOf(s, p, phaseOf(s));
+  return d && (d.multi || d.type >= 0) ? d : null;
 }
 
 // ③ Talk: the conversation as a chat — every line you sent it (right) and everything it said back
@@ -3597,10 +3649,11 @@ function openDecisions(s) {
       + `<div class="fx-opts">${(a.options || []).map((o, i) => `<button type="button" data-aans="${esc(a.id)}" data-v="${esc(o)}" class="${i === 0 ? "go" : ""}">${esc(o)}</button>`).join("")}`
       + `<input data-atext="${esc(a.id)}" value="${esc(draft)}" placeholder="${(a.options || []).length ? "or say something else" : "your answer"} · ⏎" autocomplete="off"></div></div>`);
   }
-  const perm = s.status?.permission;
+  // Claude's PermissionRequest for its own question dialog is not a tool to allow (an older `mc` sent it).
+  const perm = s.status?.permission && !ASK_TOOL_RE.test(s.status.permission.tool || "") ? s.status.permission : null;
   const dlg = !perm && s.state !== "working" ? dialogOf(s, p, ph) : null;
   if (perm) open.push(permissionHtml(perm));
-  else if (dlg) open.push(dialogHtml(dlg));
+  else if (dlg) open.push(dialogHtml(dlg, s));
   else if ((s.state === "waiting" || s.state === "blocked") && p?.question && p.kind !== "turn") {
     let opts = "";
     if (p.kind === "select" && p.options?.length) opts = p.options.map((o, i) => `<button type="button" data-fopt="${i}" class="${i === 0 ? "go" : i === p.options.length - 1 && p.options.length > 1 ? "no" : ""}"><kbd>${i === 0 ? "y" : i === 1 ? "a" : i === p.options.length - 1 ? "n" : ""}</kbd>${esc(o.label)}</button>`).join("");
@@ -3899,7 +3952,8 @@ qs("#story").addEventListener("keydown", (e) => {
   if (d) {
     e.preventDefault(); e.stopPropagation();
     const s = S.active && byId(S.active), text = d.value.trim();
-    if (s && text) answerDialog(s, Number(d.dataset.dtext), text);
+    const dl = s && openDialog(s);
+    if (s && text) { if (dl?.multi) dialogSubmit(s, dl, text); else answerDialog(s, Number(d.dataset.dtext), text); }
     return;
   }
   const t = e.target.closest("input[data-atext]"); if (!t) return;
@@ -3913,6 +3967,16 @@ qs("#story").addEventListener("click", (e) => {
   const rh = e.target.closest("[data-rhide]"); if (rh) { RA.hidden.add(rh.dataset.rhide); return renderStory(); }
   const a = e.target.closest("[data-aans]"); if (a) return answerAskFromFocus(s, a.dataset.aans, a.dataset.v);
   const dq = e.target.closest("[data-dopt]"); if (dq) return answerDialog(s, Number(dq.dataset.dopt), null);
+  const dt = e.target.closest("[data-dtick]");
+  if (dt) {
+    const dl = openDialog(s), c = dl?.choices[Number(dt.dataset.dtick)]; if (!c) return;
+    const set = picksOf(s, dl); if (!set.delete(c.label)) set.add(c.label);
+    return renderStory();
+  }
+  if (e.target.closest("[data-dsubmit]")) {
+    const dl = openDialog(s); if (!dl) return toast("that question is gone from its screen");
+    return dialogSubmit(s, dl, (qs("#story input[data-dtext]")?.value || "").trim() || null);
+  }
   const pk = e.target.closest("[data-pkkey]");
   if (pk && T.peek) { input(T.peek.id, { key: pk.dataset.pkkey }); T.peek.w?.soon(); return focusSay(); }
   if (e.target.closest("[data-pkx]")) { peekClose(); return focusSay(); }
@@ -4920,6 +4984,14 @@ qs("#composer").addEventListener("submit", async (e) => {
   const id = S.active;
   say.value = ""; say.style.height = "auto";
   const s = byId(id);
+  // Its question dialog is open: a line typed into the terminal would be dropped and its Enter would
+  // tick whatever row the cursor is on, leaving the question open. The line answers the question.
+  const dl = openDialog(s);
+  if (dl) {
+    const err = await dialogSubmit(s, dl, text);
+    if (!err) return draftSet(id, "");
+    if (!/no question on its screen/.test(err)) { draftSet(id, text); if (S.active === id && !say.value) { say.value = text; say.dispatchEvent(new Event("input")); } return; }
+  }
   const ok = s?.live ? await talkSend(s, text) : await answer(id, { text, enter: true });
   if (ok) return draftSet(id, "");
   // Not sent: the words go back — into the box if you are still here and it is empty, and into this

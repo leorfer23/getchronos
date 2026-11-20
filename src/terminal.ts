@@ -1438,6 +1438,12 @@ export function sessionScreen(id: string): Screen | null {
   if (!e) return null;
   try { return e.screen.snapshot(); } catch { return null; }
 }
+/** The frame once every byte written so far is parsed — for reading a TUI back right after a key (dialog-answer.ts). */
+export async function settledScreen(id: string): Promise<Screen | null> {
+  const e = live.get(id);
+  if (!e) return null;
+  try { await e.screen.settle(); return live.get(id) === e ? e.screen.snapshot() : null; } catch { return null; }
+}
 
 /** A socket sets its own frame pace — the pane you are reading wants 16ms, one across the wall 250. */
 export function setClientRate(id: string, ws: WebSocket, ms: unknown) {

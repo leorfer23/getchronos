@@ -35,6 +35,8 @@ export type PromptOption = {
   offset: number;
   /** The description printed under the option (AskUserQuestion), as one line. */
   detail?: string;
+  /** A multi-select row ("[✔] Alpha" / "[ ] Alpha"): ticked on screen right now. Absent on a plain menu. */
+  checked?: boolean;
 };
 
 export type DeskPrompt = {
@@ -43,6 +45,12 @@ export type DeskPrompt = {
   question: string;
   /** Select prompts only. Absent on a y/n, a free question, a finished turn. */
   options?: PromptOption[];
+  /**
+   * A multi-select's own unnumbered row under its last box: "Submit" (the only or last question — it
+   * opens the review screen) or "Next" (more questions follow). Enter on a box only ticks it; this row
+   * is how the answer moves on. Offset counted from the cursor like an option's.
+   */
+  submit?: { label: string; offset: number };
 };
 
 /** How much of the scrollback to read: a prompt is at the bottom, and a TUI repaints whole frames. */
@@ -87,6 +95,10 @@ const CHROME_RE = /^(?:[─━═┄╌\-_=]{3,}|[│┃╭╮╰╯└┘┌┐
 
 // Inside a menu: an option's description (indented under its label) and a horizontal rule.
 const DETAIL_RE = /^\s{4,}\S/;
+/** A multi-select box at the start of an option's label: "[✔] Alpha", "[ ] Alpha". */
+const BOX_RE = /^\[([ ✔✓xX×])\]\s+(.*)$/;
+/** A multi-select's Submit/Next row: no ordinal, its own line, the cursor may sit on it. */
+const SUBMIT_ROW_RE = /^\s*(?:([❯>▶›])\s*)?(Submit|Next)\s*$/;
 const RULE_RE = /^[─━═┄╌\-_=]{3,}$/;
 const TABS_RE = /^[←\s]*[☐☒✔]\s/;
 
@@ -109,18 +121,24 @@ export function detectPrompt(screen: string | string[]): DeskPrompt | null {
   // Select: read the option rows up from the bottom, skipping chrome under them. Claude Code's
   // AskUserQuestion prints each option's description on the rows under it and a rule above its last
   // option ("Chat about this"); both sit INSIDE the menu, so neither ends it.
-  const opts: Array<{ n: number; label: string; cursor: boolean; detail: string }> = [];
+  type Row = { n: number; label: string; cursor: boolean; detail: string; checked?: boolean };
+  const opts: Row[] = [];
+  // A multi-select's Submit/Next row, and the option right under it (rows are read bottom-up).
+  let submit: { label: string; cursor: boolean; above: Row } | null = null;
   let i = lines.length - 1;
   let detail: string[] = [];
   while (i >= 0 && CHROME_RE.test(lines[i].trim())) i--;
   while (i >= 0) {
     const m = OPTION_RE.exec(lines[i]);
     if (m) {
-      opts.unshift({ n: Number(m[1]), label: m[2], cursor: CURSOR_RE.test(lines[i]), detail: detail.join(" ") });
+      const box = BOX_RE.exec(m[2]);
+      opts.unshift({ n: Number(m[1]), label: box ? box[2] : m[2], cursor: CURSOR_RE.test(lines[i]), detail: detail.join(" "), ...(box ? { checked: box[1] !== " " } : {}) });
       detail = [];
       i--;
       continue;
     }
+    const sub: RegExpExecArray | null = opts.length && !submit && !detail.length ? SUBMIT_ROW_RE.exec(lines[i]) : null;
+    if (sub) { submit = { label: sub[2], cursor: !!sub[1], above: opts[0] }; i--; continue; }
     if (opts.length && !detail.length && RULE_RE.test(lines[i].trim())) { i--; continue; }
     if (DETAIL_RE.test(lines[i])) { detail.unshift(lines[i].trim()); i--; continue; }
     break;
@@ -128,11 +146,17 @@ export function detectPrompt(screen: string | string[]): DeskPrompt | null {
   if (detail.length) i += detail.length; // indented rows above the menu are not an option's — give them back
   // Two or more consecutive ordinals starting at 1 is a menu; a lone "1." is a list item in prose.
   if (opts.length >= 2 && opts[0].n === 1 && opts.every((o, k) => o.n === k + 1)) {
-    const cur = Math.max(0, opts.findIndex((o) => o.cursor));
+    // The Submit row is a row the cursor walks through (↓ from the last box lands on it), so the
+    // options under it sit one further down. Only a box's row has one: anything else is a description.
+    let at = submit ? opts.indexOf(submit.above) : -1;
+    if (at < 1 || opts[at - 1].checked === undefined) { at = -1; submit = null; }
+    const pos = (k: number) => (at >= 0 && k >= at ? k + 1 : k);
+    const cur = submit?.cursor ? at : pos(Math.max(0, opts.findIndex((o) => o.cursor)));
     return {
       kind: "select",
       question: questionAbove(lines, i, opts.some((o) => o.detail) ? 6 : 3),
-      options: opts.map((o, k) => ({ label: o.label, offset: k - cur, ...(o.detail ? { detail: o.detail.slice(0, 400) } : {}) })),
+      options: opts.map((o, k) => ({ label: o.label, offset: pos(k) - cur, ...(o.detail ? { detail: o.detail.slice(0, 400) } : {}), ...(o.checked !== undefined ? { checked: o.checked } : {}) })),
+      ...(submit ? { submit: { label: submit.label, offset: at - cur } } : {}),
     };
   }
 
