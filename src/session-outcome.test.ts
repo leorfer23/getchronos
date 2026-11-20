@@ -320,7 +320,11 @@ test("mc hook claude PermissionRequest posts a tool ask naming the command; grok
   const bash = await s.run(["hook", "claude"], ev({ tool_name: "Bash", tool_input: { command: "mkdir -p probe-dir && date > probe-dir/stamp.txt", description: "Create probe-dir and write date stamp" } }));
   const edit = await s.run(["hook", "claude"], ev({ tool_name: "Edit", tool_input: { file_path: "/repo/src/a.ts", old_string: "a", new_string: "b" } }));
   const grok = await s.run(["hook", "grok"], ev({ tool_name: "Bash", tool_input: { command: "ls" } }));
+  // Its own question dialog fires PermissionRequest too: nothing is posted — the PreToolUse before it
+  // already handed the questions over, and a tool ask would turn the card into a Permission card.
+  const askq = await s.run(["hook", "claude"], ev({ tool_name: "AskUserQuestion", tool_input: { questions: [{ question: "Which?", multiSelect: true, options: [{ label: "A" }, { label: "B" }] }] } }));
   s.close();
+  assert.equal(askq.code, 0, askq.stderr);
   assert.equal(bash.code, 0, bash.stderr);
   assert.equal(bash.stdout, "", "no decision: claude shows its own menu");
   const posts = s.hits.filter((h) => h.url.endsWith("/sessions/sess-1/hook")).map((h) => h.body);
@@ -331,6 +335,7 @@ test("mc hook claude PermissionRequest posts a tool ask naming the command; grok
   assert.deepEqual(posts[1].tool, { name: "Edit", input: "/repo/src/a.ts" });
   assert.equal(posts[1].question, "Allow Edit: /repo/src/a.ts?");
   assert.deepEqual(posts[2], { event: "ask", question: "allow Bash?", options: ["yes", "no"], kind: "permission" });
+  assert.equal(posts.length, 3, "the AskUserQuestion request posts nothing");
 });
 
 // ── mc show: images on Focus mid-work (2026-10-28: an agent listed screenshot paths and opened Finder) ──

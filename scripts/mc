@@ -817,6 +817,10 @@ async function hook(backend, mode) {
   // Claude's fires only when it opens its "Do you want to proceed?" menu, and that menu stays until
   // someone answers it. Its pending tool's ⏺ blinks the whole time, so the pty never goes quiet and
   // the screen-read prompt never comes: this hook is how Focus learns there is something to approve.
+  // Claude fires PermissionRequest for AskUserQuestion too, right after its PreToolUse handed over the
+  // questions whole. That is the question dialog, not a tool to allow: saying nothing keeps the dialog
+  // card (each question, a button per answer) instead of a "Permission" card over its raw JSON.
+  else if (name === "permissionrequest" && backend === "claude" && /^(AskUserQuestion|ask_user_question|ask_user)$/i.test(tool)) ev = null;
   else if (name === "permissionrequest" && backend === "claude") {
     const t = permTool(tool, input);
     ev = { event: "ask", kind: "tool", question: `Allow ${t.name}${t.about ? ": " + t.about : t.input ? ": " + t.input : ""}?`.slice(0, 300), options: [], tool: t };

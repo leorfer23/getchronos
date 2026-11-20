@@ -235,6 +235,34 @@ test("claude's permission menu: decide while its menu is on screen, the menu rid
   }
 });
 
+// 2026-11-20: Claude fires PermissionRequest for AskUserQuestion too, right after PreToolUse handed the
+// questions over. It replaced the dialog with a "Permission · AskUserQuestion" card over the raw JSON,
+// whose buttons only ticked boxes — the question never went and the card never left.
+test("claude's PermissionRequest for its own question dialog keeps the dialog: no tool ask, no Permission card", () => {
+  const s = mk();
+  setMenuProbe(() => ({ live: true, menu: null }));
+  try {
+    const questions = [{ question: "Which should I build?", header: "Build", multi: true, options: [{ label: "Alpha" }, { label: "Bravo" }] }];
+    applyHook(s.id, { event: "prompt" }, NOW);
+    applyHook(s.id, { event: "ask", question: "Which should I build?", options: ["Alpha", "Bravo"], questions }, NOW + 1000);
+    applyHook(s.id, { event: "ask", kind: "tool", question: "Allow AskUserQuestion: {\"questions\":[…]}?", options: [], tool: { name: "AskUserQuestion", input: "{\"questions\":[…]}" } }, NOW + 1100);
+    const sig = signalsOf(s.id);
+    assert.equal(sig.asking?.kind, undefined, "still the question, not a tool to allow");
+    assert.deepEqual(sig.asking?.questions, questions, "the questions stay whole for the card");
+    assert.equal(permissionOf(s.id, sig), null, "no Permission card");
+    assert.equal(resolve(base({}, sig)).phase, "decide");
+    // Answered in the terminal (or from the card): PostToolUse says so and the card goes.
+    applyHook(s.id, { event: "answered" }, NOW + 5000);
+    assert.equal(signalsOf(s.id).asking, null);
+    // With nothing before it (its PreToolUse lost), still a plain question — never a tool ask.
+    applyHook(s.id, { event: "ask", kind: "tool", question: "Allow AskUserQuestion?", options: [], tool: { name: "AskUserQuestion" } }, NOW + 9000);
+    assert.equal(signalsOf(s.id).asking?.kind, undefined);
+    assert.equal(permissionOf(s.id, signalsOf(s.id)), null);
+  } finally {
+    setMenuProbe(null);
+  }
+});
+
 test("the hook route keeps grok's permission tag and an AskUserQuestion's questions", () => {
   const body = SessionHookSchema.parse({ event: "ask", question: "allow Bash?", options: ["yes", "no"], kind: "permission", questions: [{ question: "q?", options: [{ label: "a", description: "d" }] }] });
   assert.equal(body.kind, "permission");

@@ -601,6 +601,8 @@ export type HookEvent =
   | { event: "answered" }
   | { event: "session_end" };
 
+/** Claude Code's own question dialog, by the tool name its hooks give. */
+const ASK_TOOL_RE = /^(AskUserQuestion|ask_user_question|ask_user)$/i;
 export function applyHook(id: string, h: HookEvent, now = Date.now()): TermStatus | null {
   const sig: Signals = { ...load(id), subagents: { ...(load(id).subagents ?? {}) } };
   let cleared = false;
@@ -642,15 +644,21 @@ export function applyHook(id: string, h: HookEvent, now = Date.now()): TermStatu
       // permission" Notification. The question it already handed over is still the one on screen: keep
       // it, or the card says "needs your permission" and nobody can tell what to decide.
       const prev = sig.asking;
-      const bare = !h.kind && !h.options?.length && !h.questions?.length;
+      // Claude's PermissionRequest for its own question dialog (an `mc` older than the one that drops
+      // it): that is the question already handed over by PreToolUse, not a tool to allow. Kept as a
+      // plain question — a "tool" ask would turn the card into a Permission card over the raw JSON.
+      const dialog = h.kind === "tool" && ASK_TOOL_RE.test(h.tool?.name ?? "");
+      if (dialog && prev && !prev.kind) break;
+      const ask = dialog ? { event: "ask" as const, question: "It asked you a question", options: [] as string[] } : h;
+      const bare = !ask.kind && !ask.options?.length && !ask.questions?.length;
       if (bare && prev && (prev.kind === "tool" || (!prev.kind && (prev.options.length || prev.questions?.length)))) break;
       sig.asking = {
-        question: clip(h.question, 300), options: (h.options ?? []).map((o) => clip(o, 60)).slice(0, 6), at: now,
-        ...(h.kind ? { kind: h.kind } : {}),
-        ...(h.questions?.length ? { questions: h.questions } : {}),
-        ...(h.kind === "tool" && h.tool ? { tool: h.tool } : {}),
+        question: clip(ask.question, 300), options: (ask.options ?? []).map((o) => clip(o, 60)).slice(0, 6), at: now,
+        ...(ask.kind ? { kind: ask.kind } : {}),
+        ...(ask.questions?.length ? { questions: ask.questions } : {}),
+        ...(ask.kind === "tool" && ask.tool ? { tool: ask.tool } : {}),
       };
-      if (h.kind === "tool") watchMenu(id);
+      if (ask.kind === "tool") watchMenu(id);
       break;
     }
     case "answered":

@@ -75,6 +75,7 @@ test("operator-only routes refuse a workspace token, a Lead token and no token a
     ["POST", `/repos/${repo.id}/shares`, { workspace_id: B.id }],
     ["DELETE", `/repos/${repo.id}/shares/${B.id}`],
     ["POST", `/sessions/${s.id}/drop`, {}],
+    ["POST", `/sessions/${s.id}/dialog`, { picks: ["Alpha"] }],
   ];
   for (const [method, p, body] of routes) {
     for (const [who, h] of [["workspace A", asA], ["Lead of A", asLeadA], ["nobody", json]] as const) {
@@ -87,6 +88,10 @@ test("operator-only routes refuse a workspace token, a Lead token and no token a
     const r = await call("GET", p, admin);
     assert.equal(r.status, 200, `GET ${p} as operator: ${r.status}`);
   }
+  // Its question dialog: the operator gets past the guard (this terminal has no live pty here, so 404 says so).
+  const dlg = await call("POST", `/sessions/${s.id}/dialog`, admin, { picks: ["Alpha"] });
+  assert.equal(dlg.status, 404, JSON.stringify(dlg.json));
+  assert.match(dlg.json?.error ?? "", /not live/);
 });
 
 test("per-terminal routes: the owning workspace gets in, another workspace gets the 404 a missing id gets", async () => {

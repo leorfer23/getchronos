@@ -243,6 +243,18 @@ export const SessionShowSchema = z.object({
   shots: z.array(z.object({ name: z.string().max(80), label: z.string().max(80).optional() })).min(1).max(12),
 });
 
+/**
+ * Answering a terminal's question dialog (AskUserQuestion) from the Desk — src/dialog-answer.ts: the
+ * options to have ticked (by label), and/or its own words for "Type something".
+ */
+export const SessionDialogSchema = z
+  .object({
+    picks: z.array(z.string().min(1).max(300)).max(12).optional(),
+    text: z.string().max(4000).nullable().optional(),
+  })
+  .strict()
+  .refine((b) => (b.picks?.length ?? 0) > 0 || !!b.text?.trim(), { message: "pick an answer, or write your own" });
+
 // Typing into someone else's terminal. `text` is a line (Enter follows unless enter:false); `key` is
 // one named keystroke, so callers never hand-roll escape sequences.
 export const SessionInputSchema = z
